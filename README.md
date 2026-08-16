@@ -1,8 +1,6 @@
-<!-- logo pending design; uncomment once docs/images/dsh-crew-logo.png exists
 <p align="center">
   <img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" />
 </p>
--->
 
 <h1 align="center">DSH Crew</h1>
 
@@ -16,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.md"><b>English</b></a> &middot; <a href="./README.zh.md">简体中文</a>
+  <a href="./README.md"><b>English</b></a> &middot; <a href="./README.zh.md">简体中文</a> &middot; <a href="./README.zh-TW.md">繁體中文</a> &middot; <a href="./README.ja.md">日本語</a> &middot; <a href="./README.ko.md">한국어</a> &middot; <a href="./README.fr.md">Français</a> &middot; <a href="./README.es.md">Español</a> &middot; <a href="./README.de.md">Deutsch</a> &middot; <a href="./README.pt.md">Português</a> &middot; <a href="./README.ru.md">Русский</a> &middot; <a href="./README.hi.md">हिन्दी</a> &middot; <a href="./README.tr.md">Türkçe</a> &middot; <a href="./README.th.md">ไทย</a> &middot; <a href="./README.vi.md">Tiếng Việt</a> &middot; <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
 <p align="center">
