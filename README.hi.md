@@ -128,15 +128,15 @@ dsh web
 
 `link:` प्रोटोकॉल प्रोफ़ाइल डिपेंडेंसी को इस रिपॉज़िटरी से symlink करता है, इसलिए हर rebuild तुरंत दिखता है।
 
-### DeepSeek क्रेडेंशियल सेट करें
+### DeepSeek क्रेडेंशियल सेट करें (केवल standalone)
 
-[platform.deepseek.com](https://platform.deepseek.com) से API key लें और `~/.config/dsh-crew/.env` में लिखें:
+hub mode में — ऊपर दिया गया इंस्टॉलेशन — worker DSH इंस्टेंस के अंदर चलते हैं और उन्हीं DeepSeek क्रेडेंशियल का उपयोग करते हैं जो DSH इंस्टेंस में पहले से कॉन्फ़िगर हैं। कुछ और सेट करने की आवश्यकता नहीं है।
+
+केवल standalone fallback को अपनी key की आवश्यकता है: Claude Code / Codex से DSH इंस्टेंस चलाए बिना डिस्पैच करने से एक अलग प्रक्रिया के रूप में worker runtime लॉन्च होता है। [platform.deepseek.com](https://platform.deepseek.com) से API key प्राप्त करें और इसे `~/.config/dsh-crew/.env` में लिखें:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime के अपने क्रेडेंशियल होते हैं, जो DSH वेब ऐप से अलग हैं।
 
 ### जाँच
 
@@ -144,7 +144,7 @@ worker runtime के अपने क्रेडेंशियल होत�
 node scripts/smoke.mjs
 ```
 
-लगभग दस सेकंड में `smoke test passed — configuration OK` दिखना चाहिए। विफलता पर कारण छपता है; आमतौर पर key गायब या अमान्य होती है।
+smoke test standalone path को ही जाँचता है, इसलिए इसे ऊपर दी गई key चाहिए। लगभग दस सेकंड में `smoke test passed — configuration OK` दिखना चाहिए। विफलता पर कारण छपता है; आमतौर पर key गायब या अमान्य होती है।
 
 फिर Settings → DSH Crew खोलकर Claude Code / Codex इंटीग्रेशन एक क्लिक में इंस्टॉल करें।
 

@@ -128,15 +128,15 @@ dsh web
 
 โปรโตคอล `link:` จะ symlink dependency ของโปรไฟล์มาที่รีโพนี้ ทำให้ผลการ rebuild เห็นได้ทันที
 
-### ตั้งค่าข้อมูลรับรองของ DeepSeek
+### ตั้งค่าข้อมูลรับรองของ DeepSeek (เฉพาะ standalone)
 
-ขอ API key จาก [platform.deepseek.com](https://platform.deepseek.com) แล้วเขียนลงใน `~/.config/dsh-crew/.env`:
+ในโหมด hub — การติดตั้งข้างบน — worker รันภายใน DSH instance และใช้ข้อมูลรับรอง DeepSeek ที่มีการตั้งค่าไว้แล้ว ไม่ต้องตั้งค่าอะไรเพิ่มเติม
+
+เฉพาะ standalone fallback เท่านั้นที่ต้องใช้ key ของตัวเอง: การส่งงานจาก Claude Code / Codex โดยไม่มี DSH instance ทำงานจะเปิดตัว worker runtime เป็นกระบวนการแยกต่างหาก ขอ API key จาก [platform.deepseek.com](https://platform.deepseek.com) และเขียนลงใน `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime ใช้ข้อมูลรับรองของตัวเอง แยกจากเว็บแอป DSH
 
 ### ตรวจสอบ
 
@@ -144,7 +144,7 @@ worker runtime ใช้ข้อมูลรับรองของตัว�
 node scripts/smoke.mjs
 ```
 
-ภายในราวสิบวินาทีควรเห็น `smoke test passed — configuration OK` หากล้มเหลวจะพิมพ์สาเหตุออกมา ส่วนใหญ่คือ key ยังไม่ได้ใส่หรือไม่ถูกต้อง
+smoke test ออกแบบมาเพื่อทดสอบ standalone path ดังนั้นจึงต้องใช้ key ข้างบน ภายในราวสิบวินาทีควรเห็น `smoke test passed — configuration OK` หากล้มเหลวจะพิมพ์สาเหตุออกมา ส่วนใหญ่คือ key ยังไม่ได้ใส่หรือไม่ถูกต้อง
 
 จากนั้นเปิด การตั้งค่า → DSH Crew แล้วติดตั้งการเชื่อมต่อ Claude Code / Codex ได้ในคลิกเดียว
 

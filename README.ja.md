@@ -128,15 +128,15 @@ dsh web
 
 `link:` プロトコルはプロファイルの依存をこのリポジトリへシンボリックリンクするため、再ビルドが即座に反映されます。
 
-### DeepSeek の認証情報を設定
+### DeepSeek の認証情報を設定（スタンドアロン専用）
 
-[platform.deepseek.com](https://platform.deepseek.com) で API キーを取得し、`~/.config/dsh-crew/.env` に書きます:
+hub モード — 上記のインストール — では、worker は DSH インスタンス内で実行され、すでに設定されている DSH の DeepSeek 認証情報を使用します。追加の設定は不要です。
+
+スタンドアロン フォールバックのみが独自のキーを必要とします。DSH インスタンスが実行されていない状態で Claude Code / Codex からディスパッチすると、worker ランタイムが個別のプロセスとして起動します。[platform.deepseek.com](https://platform.deepseek.com) から API キーを取得し、`~/.config/dsh-crew/.env` に書きます:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime は DSH Web アプリとは独立した認証情報を使います。
 
 ### 動作確認
 
@@ -144,7 +144,7 @@ worker runtime は DSH Web アプリとは独立した認証情報を使いま�
 node scripts/smoke.mjs
 ```
 
-十数秒で `smoke test passed — configuration OK` が出れば設定完了です。失敗時は原因が表示されます（多くはキー未設定か無効）。
+smoke テストはスタンドアロン パスを実行するため、上記のキーが必要です。十数秒で `smoke test passed — configuration OK` が出れば設定完了です。失敗時は原因が表示されます。通常はキーが未設定か無効です。
 
 その後、設定 → DSH Crew から Claude Code / Codex 連携をワンクリックで導入します。
 

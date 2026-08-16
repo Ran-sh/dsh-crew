@@ -128,15 +128,15 @@ dsh web
 
 `link:` protokolü profil bağımlılığını bu depoya sembolik olarak bağlar; böylece her rebuild anında görünür.
 
-### DeepSeek kimlik bilgilerini yapılandırın
+### DeepSeek kimlik bilgilerini yapılandırın (yalnızca standalone)
 
-[platform.deepseek.com](https://platform.deepseek.com) adresinden bir API key alın ve `~/.config/dsh-crew/.env` dosyasına yazın:
+Hub modunda — yukarıdaki kurulum — worker'lar DSH örneğinin içinde çalışır ve zaten yapılandırılmış olan DeepSeek kimlik bilgilerini kullanır. Başka bir şey ayarlamaya gerek yok.
+
+Yalnızca standalone geri dönüş yolu kendi anahtarına ihtiyaç duyar: DSH örneği çalışmıyorken Claude Code / Codex'ten iş gönderdiğinizde worker runtime ayrı bir işlem olarak başlatılır. [platform.deepseek.com](https://platform.deepseek.com) adresinden bir API key alın ve `~/.config/dsh-crew/.env` dosyasına yazın:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime, DSH web uygulamasından bağımsız kendi kimlik bilgilerini kullanır.
 
 ### Doğrulama
 
@@ -144,7 +144,7 @@ worker runtime, DSH web uygulamasından bağımsız kendi kimlik bilgilerini kul
 node scripts/smoke.mjs
 ```
 
-Yaklaşık on saniye içinde `smoke test passed — configuration OK` görmelisiniz. Hata durumunda nedeni yazdırılır; genellikle key eksiktir ya da geçersizdir.
+Smoke test, standalone yolunu test eder, bu nedenle yukarıdaki anahtara gerek duyar. Yaklaşık on saniye içinde `smoke test passed — configuration OK` görmelisiniz. Hata durumunda nedeni yazdırılır; genellikle key eksiktir ya da geçersizdir.
 
 Ardından Ayarlar → DSH Crew bölümünden Claude Code / Codex entegrasyonlarını tek tıkla kurun.
 

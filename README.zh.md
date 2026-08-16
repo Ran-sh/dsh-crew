@@ -128,15 +128,15 @@ dsh web
 
 `link:` 协议把 profile 依赖软链到本仓库，改完重新构建即时可见。
 
-### 配置 DeepSeek 凭据
+### 配置 DeepSeek 凭据（standalone 模式专用）
 
-从 [platform.deepseek.com](https://platform.deepseek.com) 取 API key，写入 `~/.config/dsh-crew/.env`：
+在 hub 模式下 — 即上面的安装方式 — worker 运行在 DSH 实例内部，使用 DSH 实例已配置的 DeepSeek 凭据。无需额外设置。
+
+仅 standalone 回落方案需要自己的 key：从 Claude Code / Codex 派发任务而没有 DSH 实例运行时，会启动一个独立的 worker runtime 进程。从 [platform.deepseek.com](https://platform.deepseek.com) 取 API key，写入 `~/.config/dsh-crew/.env`：
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime 有自己的一套凭据，与 DSH Web 应用相互独立。
 
 ### 自检
 
@@ -144,7 +144,7 @@ worker runtime 有自己的一套凭据，与 DSH Web 应用相互独立。
 node scripts/smoke.mjs
 ```
 
-十几秒内看到 `smoke test passed — configuration OK` 即配置成功。失败会打印具体原因，通常是 key 未填或无效。
+smoke 测试走的是 standalone 路径，所以需要上面的 key。十几秒内看到 `smoke test passed — configuration OK` 即配置成功。失败会打印具体原因，通常是 key 未填或无效。
 
 然后打开 设置 → DSH Crew，一键装好 Claude Code / Codex 集成。
 

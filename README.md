@@ -128,15 +128,15 @@ dsh web
 
 The `link:` protocol symlinks the profile dependency to this repository, so rebuilds are visible immediately.
 
-### Configure DeepSeek credentials
+### Configure DeepSeek credentials (standalone only)
 
-Obtain an API key from [platform.deepseek.com](https://platform.deepseek.com) and write it to `~/.config/dsh-crew/.env`:
+In hub mode — the installation above — workers run inside the DSH instance and use the DeepSeek credentials it is already configured with. Nothing else to set up.
+
+Only the standalone fallback needs a key of its own: dispatching from Claude Code / Codex with no DSH instance running launches a worker runtime as a separate process. Obtain an API key from [platform.deepseek.com](https://platform.deepseek.com) and write it to `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-The worker runtime keeps its own credentials, independent of the DSH web app.
 
 ### Verify
 
@@ -144,7 +144,7 @@ The worker runtime keeps its own credentials, independent of the DSH web app.
 node scripts/smoke.mjs
 ```
 
-Within about ten seconds you should see `smoke test passed — configuration OK`. On failure the reason is printed; usually the key is missing or invalid.
+The smoke test exercises the standalone path, so it needs the key above. Within about ten seconds you should see `smoke test passed — configuration OK`. On failure the reason is printed; usually the key is missing or invalid.
 
 Then open Settings → DSH Crew and install the Claude Code / Codex integrations with one click.
 

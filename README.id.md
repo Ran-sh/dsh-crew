@@ -128,15 +128,15 @@ dsh web
 
 Protokol `link:` menautkan dependensi profil ke repositori ini, sehingga hasil rebuild langsung terlihat.
 
-### Konfigurasikan kredensial DeepSeek
+### Konfigurasikan kredensial DeepSeek (hanya standalone)
 
-Ambil API key di [platform.deepseek.com](https://platform.deepseek.com) lalu tulis ke `~/.config/dsh-crew/.env`:
+Dalam hub mode — instalasi di atas — worker berjalan di dalam instance DSH dan menggunakan kredensial DeepSeek yang sudah dikonfigurasi. Tidak perlu setup apa pun.
+
+Hanya fallback standalone yang memerlukan key sendiri: ketika dispatch dari Claude Code / Codex tanpa instance DSH yang berjalan, worker runtime diluncurkan sebagai proses terpisah. Ambil API key di [platform.deepseek.com](https://platform.deepseek.com) lalu tulis ke `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime memakai kredensial sendiri, terpisah dari aplikasi web DSH.
 
 ### Verifikasi
 
@@ -144,7 +144,7 @@ worker runtime memakai kredensial sendiri, terpisah dari aplikasi web DSH.
 node scripts/smoke.mjs
 ```
 
-Dalam sekitar sepuluh detik akan muncul `smoke test passed — configuration OK`. Jika gagal, alasannya dicetak; biasanya key belum diisi atau tidak valid.
+Smoke test menggunakan standalone path, jadi memerlukan key di atas. Dalam sekitar sepuluh detik akan muncul `smoke test passed — configuration OK`. Jika gagal, alasannya dicetak; biasanya key belum diisi atau tidak valid.
 
 Lalu buka Pengaturan → DSH Crew dan pasang integrasi Claude Code / Codex dengan sekali klik.
 

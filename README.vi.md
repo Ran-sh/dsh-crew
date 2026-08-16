@@ -128,15 +128,15 @@ dsh web
 
 Giao thức `link:` tạo symlink phụ thuộc của profile tới kho này, nên mỗi lần build lại đều thấy ngay.
 
-### Cấu hình thông tin xác thực DeepSeek
+### Cấu hình thông tin xác thực DeepSeek (chỉ standalone)
 
-Lấy API key tại [platform.deepseek.com](https://platform.deepseek.com) và ghi vào `~/.config/dsh-crew/.env`:
+Trong hub mode — cài đặt ở trên — worker chạy bên trong instance DSH và sử dụng thông tin xác thực DeepSeek đã được cấu hình. Không cần setup thêm gì.
+
+Chỉ fallback standalone cần key riêng: khi dispatch từ Claude Code / Codex mà không có instance DSH đang chạy, nó sẽ khởi động worker runtime như một process riêng. Lấy API key tại [platform.deepseek.com](https://platform.deepseek.com) và ghi vào `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime dùng thông tin xác thực riêng, độc lập với ứng dụng web DSH.
 
 ### Kiểm tra
 
@@ -144,7 +144,7 @@ worker runtime dùng thông tin xác thực riêng, độc lập với ứng d�
 node scripts/smoke.mjs
 ```
 
-Trong khoảng mười giây bạn sẽ thấy `smoke test passed — configuration OK`. Nếu lỗi, lý do sẽ được in ra; thường là thiếu key hoặc key không hợp lệ.
+Smoke test dùng standalone path, vì vậy cần key ở trên. Trong khoảng mười giây bạn sẽ thấy `smoke test passed — configuration OK`. Nếu lỗi, lý do sẽ được in ra; thường là thiếu key hoặc key không hợp lệ.
 
 Sau đó mở Cài đặt → DSH Crew và cài tích hợp Claude Code / Codex chỉ với một cú nhấp.
 

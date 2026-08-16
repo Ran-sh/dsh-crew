@@ -128,15 +128,15 @@ dsh web
 
 `link:` 프로토콜은 프로필 의존성을 이 저장소로 심볼릭 링크하므로 다시 빌드하면 바로 반영됩니다.
 
-### DeepSeek 자격 증명 설정
+### DeepSeek 자격 증명 설정(standalone 전용)
 
-[platform.deepseek.com](https://platform.deepseek.com)에서 API 키를 받아 `~/.config/dsh-crew/.env`에 씁니다:
+hub mode에서 — 위 설치 방식에서 — worker는 DSH instance 내부에서 실행되고 이미 설정된 DSH의 DeepSeek 자격 증명을 사용합니다. 추가 설정이 필요하지 않습니다.
+
+standalone 폴백만 자체 키가 필요합니다. DSH instance가 실행 중이 아닐 때 Claude Code / Codex에서 dispatch하면 worker runtime이 별도 프로세스로 시작됩니다. [platform.deepseek.com](https://platform.deepseek.com)에서 API 키를 받아 `~/.config/dsh-crew/.env`에 씁니다:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
-
-worker runtime은 DSH 웹 앱과 별개의 자격 증명을 사용합니다.
 
 ### 확인
 
@@ -144,7 +144,7 @@ worker runtime은 DSH 웹 앱과 별개의 자격 증명을 사용합니다.
 node scripts/smoke.mjs
 ```
 
-십여 초 안에 `smoke test passed — configuration OK`가 보이면 설정 완료입니다. 실패하면 원인이 출력되며, 보통 키가 없거나 유효하지 않습니다.
+smoke 테스트는 standalone 경로를 실행하므로 위의 키가 필요합니다. 십여 초 안에 `smoke test passed — configuration OK`가 보이면 설정 완료입니다. 실패하면 원인이 출력되며, 보통 키가 없거나 유효하지 않습니다.
 
 그다음 설정 → DSH Crew에서 Claude Code / Codex 통합을 한 번에 설치합니다.
 
