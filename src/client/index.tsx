@@ -40,6 +40,11 @@ const COPY = {
     testTip: '按当前填写的内容实测：API 会检查可达性与鉴权并真发一次视觉请求；CLI 会检查可执行文件并真跑一次视觉命令。生图只校验配置，不实际出图。',
     testPass: '连通正常', testFail: '连通失败',
     staleHub: '本 DSH 实例还在跑旧版插件，缺少该接口 —— 重启 DSH 后再试',
+    emptyResponse: (path: string, status: number) => `${path} → HTTP ${status}，响应为空`,
+    badJson: (path: string, body: string) => `${path} → 非 JSON 响应: ${body}`,
+    refreshModels: '重新从 CLI 获取模型列表',
+    presetDefault: (id?: string) => `default · 跟随 DSH${id ? ` (${id})` : ''}`,
+    progressTip: (t: string, turn: number, step: number, calls: number | string) => `耗时 ${t} · 第${turn}轮第${step}步 · ${calls} 次工具调用`,
     confirmDeleteProvider: (n: string) => `删除自定义 provider「${n}」？`,
     needName: '⚠ 名称必填', needCmd: '⚠ 视觉/生图命令至少填一条',
     needBaseUrl: '⚠ Base URL 必填', needModels: '⚠ 模型列表至少填一个',
@@ -98,6 +103,11 @@ const COPY = {
     testTip: 'Probes what is currently filled in: API checks reachability and auth then makes one real vision call; CLI checks the executable then runs the vision command once. Image generation is only validated, never actually run.',
     testPass: 'Connection OK', testFail: 'Connection failed',
     staleHub: 'This DSH instance is still running an older build of the plugin and lacks this route — restart DSH and retry',
+    emptyResponse: (path: string, status: number) => `${path} → HTTP ${status}, empty response`,
+    badJson: (path: string, body: string) => `${path} → non-JSON response: ${body}`,
+    refreshModels: 'Re-fetch the model list from the CLI',
+    presetDefault: (id?: string) => `default · follow DSH${id ? ` (${id})` : ''}`,
+    progressTip: (t: string, turn: number, step: number, calls: number | string) => `${t} elapsed · turn ${turn}, step ${step} · ${calls} tool calls`,
     confirmDeleteProvider: (n: string) => `Delete custom provider "${n}"?`,
     needName: '⚠ Name is required', needCmd: '⚠ Fill in at least one command',
     needBaseUrl: '⚠ Base URL is required', needModels: '⚠ Add at least one model',
@@ -241,7 +251,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [status, setStatus] = useState<any>(null);
   const [config, setConfig] = useState<any>(null);
   const [dynModels, setDynModels] = useState<Record<string, Array<{ value: string; label?: string }>>>({});
-  const [presetOptions, setPresetOptions] = useState<Array<{ value: string; label?: string }>>([{ value: 'default', label: 'default · 跟随 DSH' }]);
+  const [presetOptions, setPresetOptions] = useState<Array<{ value: string; label?: string }>>([{ value: 'default' }]);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [provForm, setProvForm] = useState<{
@@ -263,14 +273,18 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (text === '') {
       throw new Error(res.status === 404 || res.status === 405
         ? `${copy.staleHub}（${path} → HTTP ${res.status}）`
-        : `${path} → HTTP ${res.status}，响应为空`);
+        : copy.emptyResponse(path, res.status));
     }
-    try { return JSON.parse(text); } catch { throw new Error(`${path} → 非 JSON 响应: ${text.slice(0, 160)}`); }
+    try { return JSON.parse(text); } catch { throw new Error(copy.badJson(path, text.slice(0, 160))); }
   }, [copy]);
-  const get = useCallback(async (path: string) => readJson(await fetch(`${API}${path}`, { cache: 'no-store' }), path), [readJson]);
-  const post = useCallback(async (path: string, body: any) => readJson(await fetch(`${API}${path}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-  }), path), [readJson]);
+  /** Every request carries the active locale: the panel is the authority on it
+   * (DSH's setting may be unset), and the hub localizes its own strings from it. */
+  const withLang = useCallback((path: string) => `${API}${path}${path.includes('?') ? '&' : '?'}lang=${locale === 'zh' ? 'zh' : 'en'}`, [locale]);
+  const get = useCallback(async (path: string) => readJson(await fetch(withLang(path), { cache: 'no-store' }), path), [readJson, withLang]);
+  const post = useCallback(async (path: string, body: any) => readJson(await fetch(withLang(path), {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...body, lang: locale === 'zh' ? 'zh' : 'en' }),
+  }), path), [readJson, withLang, locale]);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -279,7 +293,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (s.ok) setStatus(s.status);
       if (c.ok) setConfig((prev: any) => prev ?? c.config);
       if (pr.ok) setPresetOptions([
-        { value: 'default', label: `default · 跟随 DSH${pr.defaultId ? ` (${pr.defaultId})` : ''}` },
+        { value: 'default', label: copy.presetDefault(pr.defaultId) },
         ...(pr.presets ?? []).map((x: any) => ({ value: x.id, label: x.name ?? x.id })),
       ]);
     } catch { /* instance restarting */ }
@@ -537,7 +551,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   }} />
               )}
               {modelAdd === null && (config.vision_provider === 'grok' || config.vision_provider === 'agy') && (
-                <button type="button" title="重新从 CLI 获取模型列表" disabled={busy}
+                <button type="button" title={copy.refreshModels} disabled={busy}
                   style={{ ...S.btn, padding: '3px 8px', flexShrink: 0 }}
                   onClick={() => {
                     const p = config.vision_provider;
@@ -687,7 +701,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                     <td style={S.tight}><span style={S.chip(job.source === 'claude-code' || job.source === 'codex')}>{sourceLabel(job.source)}</span></td>
                     <td style={S.tight}>{job.tier}/{job.effort}</td>
                     <td style={{ ...S.tight, textAlign: 'center' as const }} title={`${job.status}${job.currentTool ? ` · ${job.currentTool}` : ''}`}><span style={{ color, cursor: 'default' }}>●</span></td>
-                    <td style={{ ...S.tight, ...S.mono }} title={`耗时 ${elapsed(job.startedAt, job.endedAt)} · 第${job.turn}轮第${job.step}步 · ${job.toolCalls}次工具调用`}>{elapsed(job.startedAt, job.endedAt)} {job.turn}.{job.step} {job.toolCalls ?? '-'}t</td>
+                    <td style={{ ...S.tight, ...S.mono }} title={copy.progressTip(elapsed(job.startedAt, job.endedAt), job.turn, job.step, job.toolCalls ?? '-')}>{elapsed(job.startedAt, job.endedAt)} {job.turn}.{job.step} {job.toolCalls ?? '-'}t</td>
                     <td style={{ ...S.tight, ...S.mono }}>{job.tokens ? `${ktok(job.tokens.input)}/${ktok(job.tokens.output)}` : '-'}</td>
                     <td
                       style={{ ...S.cell, position: 'relative' }}

@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { describeFile } from './multimodal.mjs';
+import { tr } from './i18n.mjs';
 
 const VISION_PROVIDER = 'deepseek-vision';
 const DELEGATE = 'deepseek-official';
@@ -25,13 +26,17 @@ const ATTACH_DIR = join(homedir(), '.config', 'dsh-crew', 'attachments');
 
 const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
 
-const TRANSCRIPT_PREFIX = (name) => `[图片「${name}」已由视觉桥转写]`;
+const TRANSCRIPT_PREFIX = (name) => tr(`[图片「${name}」已由视觉桥转写]`, `[Image "${name}" transcribed by the vision bridge]`);
+// Both locales' prefixes must be recognised: the user may switch language after
+// a transcription was written, and re-transcribing would duplicate it.
+const TRANSCRIPT_MARKERS = ['[图片「', '[Image "'];
 
-/** True when `block` is the transcription this route wrote for `imageBlock`. */
+/** True when `block` is a transcription this route wrote for `imageBlock`. */
 function isTranscriptFor(block, imageBlock) {
   if (block?.type !== 'text' || typeof block.text !== 'string') return false;
   const name = imageBlock?.attachment?.name;
-  return block.text.startsWith(name ? TRANSCRIPT_PREFIX(name) : '[图片「');
+  if (name && (block.text.startsWith(`[图片「${name}」`) || block.text.startsWith(`[Image "${name}"`))) return true;
+  return TRANSCRIPT_MARKERS.some((m) => block.text.startsWith(m));
 }
 
 /**
@@ -43,7 +48,7 @@ function stripImages(content) {
   if (!Array.isArray(content)) return content;
   if (!content.some((b) => b?.type === 'image')) return content;
   const out = content.filter((b) => b?.type !== 'image');
-  return out.length > 0 ? out : [{ type: 'text', text: '[图片已由视觉桥转写，详见随后的描述]' }];
+  return out.length > 0 ? out : [{ type: 'text', text: tr('[图片已由视觉桥转写，详见随后的描述]', '[image transcribed by the vision bridge — see the description that follows]') }];
 }
 
 export function installVisionRoute(ctx, getConfig) {
@@ -51,7 +56,7 @@ export function installVisionRoute(ctx, getConfig) {
   const disposers = [];
 
   const adapter = {
-    providerInfo: (p) => ({ id: p, name: 'DeepSeek (视觉)' }),
+    providerInfo: (p) => ({ id: p, name: tr('DeepSeek (视觉)', 'DeepSeek (Vision)') }),
     providerRetryPolicy: () => undefined,
     async listModels(p) {
       const models = await llm.listModels(DELEGATE);
@@ -104,11 +109,14 @@ export function installVisionRoute(ctx, getConfig) {
           const path = join(ATTACH_DIR, `${sha}.${ext}`);
           if (!existsSync(path)) writeFileSync(path, stored.data);
           const name = block.attachment?.name ?? `${sha}.${ext}`;
-          const desc = await describeFile(getConfig, path,
-            '详细描述这张图片：整体内容、布局结构、可见文字（逐字）、颜色与显著元素。');
+          const desc = await describeFile(getConfig, path, tr(
+            '详细描述这张图片：整体内容、布局结构、可见文字（逐字）、颜色与显著元素。',
+            'Describe this image in detail: overall content, layout, any visible text (verbatim), colours and notable elements.'));
           content.push({
             type: 'text',
-            text: `${TRANSCRIPT_PREFIX(name)}\n${desc}\n[原图: ${path} — 需要更多细节可用 describe_image 工具带具体问题查看]`,
+            text: `${TRANSCRIPT_PREFIX(name)}\n${desc}\n${tr(
+              `[原图: ${path} — 需要更多细节可用 describe_image 工具带具体问题查看]`,
+              `[Original: ${path} — for more detail, ask the describe_image tool a specific question]`)}`,
           });
         } catch (err) {
           // Same prefix as a successful transcription so the dedup check above
@@ -116,7 +124,7 @@ export function installVisionRoute(ctx, getConfig) {
           // fresh failure notice on every step.
           content.push({
             type: 'text',
-            text: `${TRANSCRIPT_PREFIX(block.attachment?.name ?? '图片')}\n[转写失败: ${err?.message ?? err}]`,
+            text: `${TRANSCRIPT_PREFIX(block.attachment?.name ?? tr('图片', 'image'))}\n${tr(`[转写失败: ${err?.message ?? err}]`, `[transcription failed: ${err?.message ?? err}]`)}`,
           });
         }
       }

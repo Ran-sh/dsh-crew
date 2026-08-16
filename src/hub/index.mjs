@@ -47,6 +47,17 @@ function userMessage(text) {
 export const name = 'dsh-crew';
 export const inject = ['agents', 'sessions', 'agentDefaultModel', 'tools', 'llm', 'attachments'];
 
+// Optional: the host's durable locale preference seeds server-side strings
+// before the panel is ever opened. Absent preference means "browser decides".
+function seedLangFromHost(ctx) {
+  try {
+    const pref = ctx.settings?.get?.('locale')?.preference;
+    if (pref) setLang(pref);
+  } catch { /* settings service absent or shaped differently — keep the default */ }
+}
+
+import { setLang } from '../i18n.mjs';
+
 const ROUTE_BASE = '/_dsh/dsh-crew';
 const TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -245,6 +256,16 @@ function sendJson(res, status, value, headers = {}) {
   });
   res.end(body);
 }
+/**
+ * The panel is the authority on the active locale (DSH's setting may be unset,
+ * leaving it to the browser), so it tags requests with ?lang= / body.lang and
+ * the hub adopts it. Conversation-side paths with no request behind them —
+ * pasted-image transcription — then follow the same language.
+ */
+function adoptLang(value) {
+  if (value === 'zh' || value === 'en') setLang(value);
+}
+
 async function readBody(req, limit = 64 * 1024) {
   let body = '';
   for await (const chunk of req) {
@@ -257,6 +278,7 @@ async function readBody(req, limit = 64 * 1024) {
 // ---------- plugin entry ----------
 
 export async function apply(ctx) {
+  seedLangFromHost(ctx);
   const hub = new WorkerRegistry(ctx);
   try {
     const { readGlobalConfig } = await import('../install/install.mjs');
@@ -338,7 +360,10 @@ export async function apply(ctx) {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         try {
           const { readGlobalConfig, writeGlobalConfig } = await import(`../install/install.mjs?t=${Date.now()}`);
-          if (req.method === 'GET') return sendJson(res, 200, { ok: true, config: readGlobalConfig() });
+          if (req.method === 'GET') {
+            adoptLang(new URL(req.url, 'http://localhost').searchParams.get('lang'));
+            return sendJson(res, 200, { ok: true, config: readGlobalConfig() });
+          }
           if (req.method === 'POST') return sendJson(res, 200, { ok: true, config: writeGlobalConfig(await readBody(req)) });
           return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
         } catch (err) {
@@ -374,9 +399,11 @@ export async function apply(ctx) {
           const url = new URL(req.url, 'http://localhost');
           const provider = url.searchParams.get('provider');
           const force = url.searchParams.get('refresh') === '1';
+          const lang = url.searchParams.get('lang');
+          adoptLang(lang);
           const { listVisionModels } = await import('../multimodal.mjs');
           const { readGlobalConfig } = await import('../install/install.mjs');
-          return sendJson(res, 200, { ok: true, models: await listVisionModels(provider, force, () => readGlobalConfig()) });
+          return sendJson(res, 200, { ok: true, models: await listVisionModels(provider, force, () => readGlobalConfig(), lang) });
         } catch (err) {
           return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
         }
@@ -391,8 +418,9 @@ export async function apply(ctx) {
         try {
           // The entry comes from the panel form so unsaved edits can be probed.
           const entry = await readBody(req);
+          adoptLang(entry?.lang);
           const { testProvider } = await import('../multimodal.mjs');
-          const result = await testProvider(entry);
+          const result = await testProvider(entry, entry?.lang);
           return sendJson(res, 200, { ok: true, result });
         } catch (err) {
           return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
