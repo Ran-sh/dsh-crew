@@ -110,43 +110,43 @@ Claude Code / Codex (orchestrator, keeps its own model)
 </p>
 <p align="center"><sub>DSH Crew 패널에서 본 같은 실행: 각 작업을 디스패치한 호스트, tier와 effort, 실시간 진행 상황과 토큰 사용량.</sub></p>
 
-## 준비
+## 설치
 
-### 1. 의존성 설치
-
-```bash
-pnpm install
-```
-
-sandbox/pty에서 native module 문제가 보고되면 한 번 실행하세요:
+npm에서 DSH 프로필로 설치:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. DeepSeek API 자격 증명 구성
-
-구성 디렉터리를 만듭니다:
+소스 트리에서 로컬 개발하려면:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-[platform.deepseek.com](https://platform.deepseek.com)에서 API key를 받고 `~/.config/dsh-crew/.env`를 만든 후 다음을 작성하세요:
+`link:` 프로토콜은 프로필 의존성을 이 저장소로 심볼릭 링크하므로 다시 빌드하면 바로 반영됩니다.
+
+### DeepSeek 자격 증명 설정
+
+[platform.deepseek.com](https://platform.deepseek.com)에서 API 키를 받아 `~/.config/dsh-crew/.env`에 씁니다:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(worker runtime은 web DSH와 독립적인 자체 credential 시스템을 사용합니다. 이 key는 `.env`에서 읽기 전용이며 다른 곳에 기록되지 않습니다)
+worker runtime은 DSH 웹 앱과 별개의 자격 증명을 사용합니다.
 
-### 3. 구성 확인
+### 확인
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-약 10초 안에 `smoke test passed — configuration OK`가 표시되면 설정이 성공한 것입니다. 실패하면 구체적인 이유가 출력됩니다. 일반적인 문제는 API key가 없거나 잘못된 경우입니다.
+십여 초 안에 `smoke test passed — configuration OK`가 보이면 설정 완료입니다. 실패하면 원인이 출력되며, 보통 키가 없거나 유효하지 않습니다.
+
+그다음 설정 → DSH Crew에서 Claude Code / Codex 통합을 한 번에 설치합니다.
 
 ## 배경 및 용어
 

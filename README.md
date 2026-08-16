@@ -110,43 +110,43 @@ Dispatch fans out. Below, eighteen workers translate this README in parallel: th
 </p>
 <p align="center"><sub>The DSH Crew panel sees the same run from the harness side: which host dispatched each job, its tier and effort, live progress and token usage.</sub></p>
 
-## Preparation
+## Install
 
-### 1. Install dependencies
-
-```bash
-pnpm install
-```
-
-If sandbox/pty reports native module issues, run once:
+Install into a DSH profile from npm:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. Configure DeepSeek API credentials
-
-Create configuration directory:
+Or, for local development straight from the source tree:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Obtain API key from [platform.deepseek.com](https://platform.deepseek.com), create `~/.config/dsh-crew/.env` and write:
+The `link:` protocol symlinks the profile dependency to this repository, so rebuilds are visible immediately.
+
+### Configure DeepSeek credentials
+
+Obtain an API key from [platform.deepseek.com](https://platform.deepseek.com) and write it to `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(The worker runtime uses its own credential system independent of web DSH; this key is read-only from `.env` and never written elsewhere)
+The worker runtime keeps its own credentials, independent of the DSH web app.
 
-### 3. Verify configuration
+### Verify
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Within ~10 seconds you should see `smoke test passed — configuration OK` indicating successful setup. On failure, specific reasons are printed; common issues are missing or invalid API key.
+Within about ten seconds you should see `smoke test passed — configuration OK`. On failure the reason is printed; usually the key is missing or invalid.
+
+Then open Settings → DSH Crew and install the Claude Code / Codex integrations with one click.
 
 ## Background and terminology
 

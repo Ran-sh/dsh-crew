@@ -110,43 +110,43 @@ Claude Code / Codex (orchestrator, keeps its own model)
 </p>
 <p align="center"><sub>Панель DSH Crew показывает тот же запуск со стороны harness: какой хост отправил задачу, её tier и effort, прогресс и расход токенов.</sub></p>
 
-## Подготовка
+## Установка
 
-### 1. Установка зависимостей
-
-```bash
-pnpm install
-```
-
-Если песочница/pty сообщает о проблемах с нативными модулями, выполните один раз:
+Установить из npm в профиль DSH:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. Настройка учётных данных DeepSeek API
-
-Создайте директорию конфигурации:
+Или для локальной разработки прямо из исходников:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Получите API-ключ на [platform.deepseek.com](https://platform.deepseek.com), создайте `~/.config/dsh-crew/.env` и запишите:
+Протокол `link:` делает симлинк зависимости профиля на этот репозиторий, поэтому пересборка видна сразу.
+
+### Настроить учётные данные DeepSeek
+
+Получите API-ключ на [platform.deepseek.com](https://platform.deepseek.com) и запишите его в `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(Рантайм воркера использует собственную систему учётных данных, независимую от веб-DSH; этот ключ только читается из `.env` и больше нигде не записывается)
+Worker runtime использует собственные учётные данные, независимые от веб-приложения DSH.
 
-### 3. Проверка конфигурации
+### Проверка
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-В течение ~10 секунд вы должны увидеть `smoke test passed — configuration OK`, что означает успешную настройку. При сбое выводятся конкретные причины; частые проблемы — отсутствующий или неверный API-ключ.
+Примерно через десять секунд должно появиться `smoke test passed — configuration OK`. При ошибке печатается причина; обычно ключ отсутствует или недействителен.
+
+Затем откройте Настройки → DSH Crew и установите интеграции Claude Code / Codex одним щелчком.
 
 ## Контекст и терминология
 

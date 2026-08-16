@@ -110,43 +110,43 @@ Dağıtım yatayda büyür. Aşağıda on sekiz worker bu README'yi paralel olar
 </p>
 <p align="center"><sub>DSH Crew paneli aynı çalışmayı harness tarafından gösterir: her işi hangi host gönderdi, tier ve effort değerleri, canlı ilerleme ve token kullanımı.</sub></p>
 
-## Hazırlık
+## Kurulum
 
-### 1. Bağımlılıkları Kurun
-
-```bash
-pnpm install
-```
-
-Sandbox/pty yerel modül sorunları bildirirse bir kez çalıştırın:
+npm üzerinden bir DSH profiline kurun:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. DeepSeek API Kimlik Bilgilerini Yapılandırın
-
-Yapılandırma dizinini oluşturun:
+Ya da kaynak ağacından yerel geliştirme için:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-API anahtarını [platform.deepseek.com](https://platform.deepseek.com) adresinden alın, `~/.config/dsh-crew/.env` dosyasını oluşturun ve yazın:
+`link:` protokolü profil bağımlılığını bu depoya sembolik olarak bağlar; böylece her rebuild anında görünür.
+
+### DeepSeek kimlik bilgilerini yapılandırın
+
+[platform.deepseek.com](https://platform.deepseek.com) adresinden bir API key alın ve `~/.config/dsh-crew/.env` dosyasına yazın:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(Worker runtime, web DSH'den bağımsız kendi kimlik bilgisi sistemini kullanır; bu anahtar yalnızca `.env`'den okunur ve başka bir yere asla yazılmaz)
+worker runtime, DSH web uygulamasından bağımsız kendi kimlik bilgilerini kullanır.
 
-### 3. Yapılandırmayı Doğrulayın
+### Doğrulama
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Yaklaşık 10 saniye içinde başarılı kurulumu gösteren `smoke test passed — configuration OK` çıktısını görmelisiniz. Hata durumunda belirli nedenler yazdırılır; yaygın sorunlar eksik veya geçersiz API anahtarıdır.
+Yaklaşık on saniye içinde `smoke test passed — configuration OK` görmelisiniz. Hata durumunda nedeni yazdırılır; genellikle key eksiktir ya da geçersizdir.
+
+Ardından Ayarlar → DSH Crew bölümünden Claude Code / Codex entegrasyonlarını tek tıkla kurun.
 
 ## Arka Plan ve Terminoloji
 

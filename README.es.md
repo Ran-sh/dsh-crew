@@ -110,43 +110,43 @@ El despacho se reparte. Abajo, dieciocho workers traducen este README en paralel
 </p>
 <p align="center"><sub>El panel de DSH Crew muestra la misma ejecución desde el harness: qué host despachó cada trabajo, su tier y effort, el progreso en vivo y el uso de tokens.</sub></p>
 
-## Preparación
+## Instalación
 
-### 1. Instalar dependencias
-
-```bash
-pnpm install
-```
-
-Si sandbox/pty informa de problemas con módulos nativos, ejecuta una vez:
+Instalar desde npm en un perfil de DSH:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. Configurar las credenciales de la API de DeepSeek
-
-Crea el directorio de configuración:
+O, para desarrollo local desde el código fuente:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Obtén una clave API en [platform.deepseek.com](https://platform.deepseek.com), crea `~/.config/dsh-crew/.env` y escribe:
+El protocolo `link:` enlaza la dependencia del perfil a este repositorio, así cada rebuild se ve de inmediato.
+
+### Configurar credenciales de DeepSeek
+
+Obtén una API key en [platform.deepseek.com](https://platform.deepseek.com) y escríbela en `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(El runtime del worker usa su propio sistema de credenciales, independiente del DSH web; esta clave solo se lee de `.env` y nunca se escribe en otro lugar)
+El worker runtime mantiene sus propias credenciales, independientes de la app web de DSH.
 
-### 3. Verificar la configuración
+### Verificar
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-En unos 10 segundos deberías ver `smoke test passed — configuration OK`, lo que indica una configuración correcta. Si falla, se imprimen los motivos concretos; los problemas habituales son una clave API ausente o inválida.
+En unos diez segundos deberías ver `smoke test passed — configuration OK`. Si falla, se imprime el motivo; normalmente la key falta o no es válida.
+
+Luego abre Ajustes → DSH Crew e instala las integraciones de Claude Code / Codex con un clic.
 
 ## Contexto y terminología
 

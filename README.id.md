@@ -110,43 +110,43 @@ Dispatch bisa melebar. Di bawah ini delapan belas worker menerjemahkan README in
 </p>
 <p align="center"><sub>Panel DSH Crew melihat eksekusi yang sama dari sisi harness: host mana yang mengirim setiap job, tier dan effort-nya, progres langsung, dan pemakaian token.</sub></p>
 
-## Persiapan
+## Instalasi
 
-### 1. Pasang Dependensi
-
-```bash
-pnpm install
-```
-
-Jika sandbox/pty melaporkan masalah modul native, jalankan sekali:
+Pasang dari npm ke sebuah profil DSH:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. Konfigurasi Kredensial API DeepSeek
-
-Buat direktori konfigurasi:
+Atau, untuk pengembangan lokal langsung dari kode sumber:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Dapatkan API key dari [platform.deepseek.com](https://platform.deepseek.com), buat `~/.config/dsh-crew/.env` lalu tulis:
+Protokol `link:` menautkan dependensi profil ke repositori ini, sehingga hasil rebuild langsung terlihat.
+
+### Konfigurasikan kredensial DeepSeek
+
+Ambil API key di [platform.deepseek.com](https://platform.deepseek.com) lalu tulis ke `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(Runtime worker memakai sistem kredensialnya sendiri yang independen dari DSH web; kunci ini hanya dibaca dari `.env` dan tidak pernah ditulis ke tempat lain)
+worker runtime memakai kredensial sendiri, terpisah dari aplikasi web DSH.
 
-### 3. Verifikasi Konfigurasi
+### Verifikasi
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Dalam ~10 detik Anda seharusnya melihat `smoke test passed — configuration OK` yang menandakan penyiapan berhasil. Jika gagal, alasan spesifik akan dicetak; masalah yang umum terjadi adalah API key hilang atau tidak valid.
+Dalam sekitar sepuluh detik akan muncul `smoke test passed — configuration OK`. Jika gagal, alasannya dicetak; biasanya key belum diisi atau tidak valid.
+
+Lalu buka Pengaturan → DSH Crew dan pasang integrasi Claude Code / Codex dengan sekali klik.
 
 ## Latar Belakang dan Terminologi
 

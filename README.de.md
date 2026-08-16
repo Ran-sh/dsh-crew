@@ -110,43 +110,43 @@ Dispatch lässt sich breit auffächern. Unten übersetzen achtzehn Worker dieses
 </p>
 <p align="center"><sub>Das DSH-Crew-Panel zeigt denselben Lauf von der Harness-Seite: welcher Host welchen Job gestartet hat, Tier und Effort, Fortschritt und Tokenverbrauch.</sub></p>
 
-## Vorbereitung
+## Installation
 
-### 1. Abhängigkeiten installieren
-
-```bash
-pnpm install
-```
-
-Falls Sandbox/PTY Probleme mit nativen Modulen meldet, einmal ausführen:
+Aus npm in ein DSH-Profil installieren:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. DeepSeek-API-Zugangsdaten konfigurieren
-
-Konfigurationsverzeichnis erstellen:
+Oder für lokale Entwicklung direkt aus dem Quellbaum:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Holen Sie sich einen API-Schlüssel von [platform.deepseek.com](https://platform.deepseek.com), erstellen Sie `~/.config/dsh-crew/.env` und tragen Sie ein:
+Das `link:`-Protokoll verlinkt die Profilabhängigkeit auf dieses Repository, sodass Rebuilds sofort sichtbar sind.
+
+### DeepSeek-Zugangsdaten konfigurieren
+
+Hole einen API-Key auf [platform.deepseek.com](https://platform.deepseek.com) und schreibe ihn in `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(Die Worker-Runtime verwendet ein eigenes Credential-System unabhängig vom Web-DSH; dieser Schlüssel wird nur aus `.env` gelesen und niemals woanders geschrieben)
+Die Worker-Runtime hat eigene Zugangsdaten, unabhängig von der DSH-Web-App.
 
-### 3. Konfiguration überprüfen
+### Prüfen
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Innerhalb von ~10 Sekunden sollten Sie `smoke test passed — configuration OK` sehen, was auf eine erfolgreiche Einrichtung hinweist. Bei Fehlern werden konkrete Gründe ausgegeben; häufige Ursachen sind ein fehlender oder ungültiger API-Schlüssel.
+Nach etwa zehn Sekunden sollte `smoke test passed — configuration OK` erscheinen. Bei Fehlern wird der Grund ausgegeben; meist fehlt der Key oder er ist ungültig.
+
+Öffne danach Einstellungen → DSH Crew und installiere die Claude-Code-/Codex-Integrationen mit einem Klick.
 
 ## Hintergrund und Begriffe
 

@@ -110,43 +110,43 @@ Claude Code / Codex (orchestrator, keeps its own model)
 </p>
 <p align="center"><sub>แผง DSH Crew แสดงการรันเดียวกันจากฝั่ง harness: host ใดส่งงานไหน tier และ effort ความคืบหน้าแบบเรียลไทม์ และการใช้ token</sub></p>
 
-## การเตรียมการ
+## การติดตั้ง
 
-### 1. ติดตั้ง dependencies
-
-```bash
-pnpm install
-```
-
-หาก sandbox/pty รายงานปัญหา native module ให้รันครั้งเดียว:
+ติดตั้งจาก npm ลงในโปรไฟล์ DSH:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. ตั้งค่า credentials ของ DeepSeek API
-
-สร้างไดเรกทอรี configuration:
+หรือสำหรับการพัฒนาในเครื่องจากซอร์ส:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-รับ API key จาก [platform.deepseek.com](https://platform.deepseek.com) สร้าง `~/.config/dsh-crew/.env` แล้วเขียน:
+โปรโตคอล `link:` จะ symlink dependency ของโปรไฟล์มาที่รีโพนี้ ทำให้ผลการ rebuild เห็นได้ทันที
+
+### ตั้งค่าข้อมูลรับรองของ DeepSeek
+
+ขอ API key จาก [platform.deepseek.com](https://platform.deepseek.com) แล้วเขียนลงใน `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(worker runtime ใช้ระบบ credential ของตัวเองแยกจาก web DSH; key นี้ถูกอ่านจาก `.env` เท่านั้นและไม่ถูกเขียนไปที่อื่น)
+worker runtime ใช้ข้อมูลรับรองของตัวเอง แยกจากเว็บแอป DSH
 
-### 3. ตรวจสอบ configuration
+### ตรวจสอบ
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-ภายใน ~10 วินาที คุณควรเห็น `smoke test passed — configuration OK` ซึ่งแสดงว่าตั้งค่าเรียบร้อย หากล้มเหลวจะพิมพ์เหตุผลเฉพาะออกมา ปัญหาที่พบบ่อยคือ API key หายไปหรือไม่ถูกต้อง
+ภายในราวสิบวินาทีควรเห็น `smoke test passed — configuration OK` หากล้มเหลวจะพิมพ์สาเหตุออกมา ส่วนใหญ่คือ key ยังไม่ได้ใส่หรือไม่ถูกต้อง
+
+จากนั้นเปิด การตั้งค่า → DSH Crew แล้วติดตั้งการเชื่อมต่อ Claude Code / Codex ได้ในคลิกเดียว
 
 ## ความเป็นมาและคำศัพท์
 

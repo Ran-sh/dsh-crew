@@ -110,43 +110,43 @@ Claude Code / Codex（協調器，保留自己的模型）
 </p>
 <p align="center"><sub>DSH Crew 面板從 harness 一側看同一次執行：每個任務由哪個宿主分派、tier 與 effort、即時進度與 token 用量。</sub></p>
 
-## 準備
+## 安裝
 
-### 1. 安裝依賴項
-
-```bash
-pnpm install
-```
-
-如果 sandbox/pty 回報原生模組問題，執行一次：
+從 npm 裝進 DSH profile：
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. 設定 DeepSeek API 認證
-
-建立設定目錄：
+或者從原始碼樹本機開發：
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-從 [platform.deepseek.com](https://platform.deepseek.com) 取得 API 金鑰，建立 `~/.config/dsh-crew/.env` 並寫入：
+`link:` 協定把 profile 相依軟連結到本儲存庫，改完重新建置即時可見。
+
+### 設定 DeepSeek 憑證
+
+從 [platform.deepseek.com](https://platform.deepseek.com) 取得 API key，寫入 `~/.config/dsh-crew/.env`：
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-（worker runtime 使用自己的認證系統，獨立於 web DSH；此金鑰是唯讀的，不會寫入其他地方）
+worker runtime 有自己的一套憑證，與 DSH Web 應用彼此獨立。
 
-### 3. 驗證設定
+### 自我檢查
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-約 10 秒內應看到 `smoke test passed — configuration OK` 指示設定成功。失敗時會列印具體原因；常見問題是遺失或無效的 API 金鑰。
+十幾秒內看到 `smoke test passed — configuration OK` 即設定成功。失敗會印出具體原因，通常是 key 未填或無效。
+
+接著開啟 設定 → DSH Crew，一鍵裝好 Claude Code / Codex 整合。
 
 ## 背景與術語
 

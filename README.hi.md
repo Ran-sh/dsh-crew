@@ -110,43 +110,43 @@ Claude Code / Codex (orchestrator, keeps its own model)
 </p>
 <p align="center"><sub>DSH Crew पैनल वही रन harness की तरफ़ से दिखाता है: कौन-सा होस्ट किस job को भेजा, उसका tier और effort, लाइव प्रगति और token खपत।</sub></p>
 
-## तैयारी
+## इंस्टॉल
 
-### 1. निर्भरताएं स्थापित करें
-
-```bash
-pnpm install
-```
-
-यदि sandbox/pty नेटिव मॉड्यूल समस्याओं की रिपोर्ट करता है, एक बार चलाएं:
+npm से DSH प्रोफ़ाइल में इंस्टॉल करें:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. DeepSeek API क्रेडेंशियल कॉन्फ़िगर करें
-
-कॉन्फ़िगरेशन निर्देशिका बनाएं:
+या, सोर्स ट्री से लोकल डेवलपमेंट के लिए:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-API key को [platform.deepseek.com](https://platform.deepseek.com) से प्राप्त करें, `~/.config/dsh-crew/.env` बनाएं और लिखें:
+`link:` प्रोटोकॉल प्रोफ़ाइल डिपेंडेंसी को इस रिपॉज़िटरी से symlink करता है, इसलिए हर rebuild तुरंत दिखता है।
+
+### DeepSeek क्रेडेंशियल सेट करें
+
+[platform.deepseek.com](https://platform.deepseek.com) से API key लें और `~/.config/dsh-crew/.env` में लिखें:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(कार्यकर्ता रनटाइम वेब DSH से स्वतंत्र अपनी क्रेडेंशियल प्रणाली का उपयोग करता है; यह key `.env` से केवल-पढ़ने योग्य है और कभी अन्यत्र नहीं लिखा जाता)
+worker runtime के अपने क्रेडेंशियल होते हैं, जो DSH वेब ऐप से अलग हैं।
 
-### 3. कॉन्फ़िगरेशन सत्यापित करें
+### जाँच
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-लगभग 10 सेकंड के भीतर आपको `smoke test passed — configuration OK` दिखना चाहिए जो सफल सेटअप का संकेत देता है। विफलता पर, विशिष्ट कारण मुद्रित होते हैं; सामान्य समस्याएं गायब या अमान्य API key हैं।
+लगभग दस सेकंड में `smoke test passed — configuration OK` दिखना चाहिए। विफलता पर कारण छपता है; आमतौर पर key गायब या अमान्य होती है।
+
+फिर Settings → DSH Crew खोलकर Claude Code / Codex इंटीग्रेशन एक क्लिक में इंस्टॉल करें।
 
 ## पृष्ठभूमि और शब्दावली
 

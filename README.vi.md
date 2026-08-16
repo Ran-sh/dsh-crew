@@ -110,43 +110,43 @@ Việc dispatch có thể trải rộng. Bên dưới, mười tám worker dịc
 </p>
 <p align="center"><sub>Bảng DSH Crew nhìn cùng lần chạy đó từ phía harness: host nào đã gửi mỗi job, tier và effort của nó, tiến độ trực tiếp và lượng token.</sub></p>
 
-## Chuẩn bị
+## Cài đặt
 
-### 1. Cài đặt dependencies
-
-```bash
-pnpm install
-```
-
-Nếu sandbox/pty báo vấn đề native module, chạy một lần:
+Cài từ npm vào một profile DSH:
 
 ```bash
-pnpm approve-builds
+dsh plugin --profile web add @zseven-w/dsh-crew@latest
+dsh web
 ```
 
-### 2. Cấu hình thông tin xác thực DeepSeek API
-
-Tạo thư mục cấu hình:
+Hoặc, để phát triển cục bộ ngay từ mã nguồn:
 
 ```bash
-mkdir -p ~/.config/dsh-crew
+dsh plugin --profile web add link:/path/to/dsh-crew
+dsh web
 ```
 
-Lấy API key từ [platform.deepseek.com](https://platform.deepseek.com), tạo `~/.config/dsh-crew/.env` và ghi:
+Giao thức `link:` tạo symlink phụ thuộc của profile tới kho này, nên mỗi lần build lại đều thấy ngay.
+
+### Cấu hình thông tin xác thực DeepSeek
+
+Lấy API key tại [platform.deepseek.com](https://platform.deepseek.com) và ghi vào `~/.config/dsh-crew/.env`:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-(Runtime của worker dùng hệ thống credential riêng độc lập với web DSH; key này chỉ được đọc từ `.env` và không bao giờ được ghi ra nơi khác)
+worker runtime dùng thông tin xác thực riêng, độc lập với ứng dụng web DSH.
 
-### 3. Xác minh cấu hình
+### Kiểm tra
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Trong khoảng 10 giây bạn sẽ thấy `smoke test passed — configuration OK`, nghĩa là thiết lập thành công. Nếu thất bại, nguyên nhân cụ thể sẽ được in ra; vấn đề phổ biến là API key bị thiếu hoặc không hợp lệ.
+Trong khoảng mười giây bạn sẽ thấy `smoke test passed — configuration OK`. Nếu lỗi, lý do sẽ được in ra; thường là thiếu key hoặc key không hợp lệ.
+
+Sau đó mở Cài đặt → DSH Crew và cài tích hợp Claude Code / Codex chỉ với một cú nhấp.
 
 ## Bối cảnh và thuật ngữ
 
