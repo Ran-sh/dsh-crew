@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **Длительные задачи**: у CC есть лимиты таймаута для вызовов MCP (`MCP_TOOL_TIMEOUT` настраивается); для долгих задач оркестратор может использовать `dsh_spawn_worker` + опрос через `dsh_worker_result(wait_seconds)`
 - **Локальная разработка и отладка**: `claude --plugin-dir /path/to/dsh-crew` для временной загрузки
 
+
+### Команды сессии
+
+Переопределяют глобальные значения только для текущей сессии и применяются на уровне инструмента, а не через промпт:
+
+| Команда | Что делает |
+|---|---|
+| `/dsh-crew:config` | Показать или задать значения по умолчанию для сессии: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<секунды>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Включить или выключить диспетчеризацию в этой сессии (выключено — жёсткий запрет: инструмент отказывает) |
+| `/dsh-crew:status` | Статус worker-задач в реальном времени: tier, прогресс, токены, текущий инструмент |
+
 ## Codex
 
 ### Установка
@@ -205,6 +216,16 @@ cp codex/agents/*.toml ~/.codex/agents/    # global or project-level .codex/agen
 
 - В интерактивном TUI выберите "spawn ds-pro to ...", чтобы отправить задачи; панели Active/Done показывают прогресс
 - Режим `codex exec` также может напрямую вызывать `dsh_run_worker`
+
+
+### Команды сессии
+
+Для Codex устанавливаются те же два промпта:
+
+| Команда | Что делает |
+|---|---|
+| `/dsh-config` | Показать или задать значения по умолчанию для сессии: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<секунды>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Статус worker-задач в реальном времени: tier, прогресс, токены, текущий инструмент |
 
 ## Инструменты MCP
 

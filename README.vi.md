@@ -177,6 +177,17 @@ Cả hai làm cùng một việc: đăng ký marketplace cục bộ (thư mục 
 - **Tác vụ chạy lâu**: CC có giới hạn timeout trên các lời gọi MCP (`MCP_TOOL_TIMEOUT` có thể điều chỉnh), tác vụ dài có thể để orchestrator dùng `dsh_spawn_worker` + polling `dsh_worker_result(wait_seconds)`
 - **Phát triển và gỡ lỗi cục bộ**: `claude --plugin-dir /path/to/dsh-crew` để tải tạm thời
 
+
+### Lệnh phiên
+
+Chỉ ghi đè giá trị mặc định toàn cục cho phiên hiện tại, và được thực thi ở tầng công cụ chứ không dựa vào prompt:
+
+| Lệnh | Tác dụng |
+|---|---|
+| `/dsh-crew:config` | Xem hoặc đặt mặc định của phiên: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<giây>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Bật hoặc tắt dispatch cho phiên này (tắt là công tắc cứng: công cụ sẽ từ chối) |
+| `/dsh-crew:status` | Trạng thái trực tiếp của job worker: tier, tiến độ, token, công cụ hiện tại |
+
 ## Codex
 
 ### Cài đặt
@@ -205,6 +216,16 @@ Các role file được cấu hình sẵn với:
 
 - Trong TUI tương tác, chọn "spawn ds-pro to ..." để điều phối tác vụ; các panel Active/Done hiển thị tiến trình
 - Chế độ `codex exec` cũng có thể gọi trực tiếp `dsh_run_worker`
+
+
+### Lệnh phiên
+
+Phía Codex cài đúng hai prompt tương ứng:
+
+| Lệnh | Tác dụng |
+|---|---|
+| `/dsh-config` | Xem hoặc đặt mặc định của phiên: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<giây>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Trạng thái trực tiếp của job worker: tier, tiến độ, token, công cụ hiện tại |
 
 ## Công cụ MCP
 

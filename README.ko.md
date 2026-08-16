@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **장기 실행 작업**: CC에는 MCP 호출에 대한 timeout 제한이 있습니다(`MCP_TOOL_TIMEOUT`으로 조정 가능). 긴 작업은 orchestrator가 `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` polling을 사용할 수 있습니다
 - **로컬 개발 및 디버깅**: `claude --plugin-dir /path/to/dsh-crew`로 임시 로드할 수 있습니다
 
+
+### 세션 명령
+
+현재 세션에만 전역 기본값을 덮어쓰며, 프롬프트가 아니라 도구 계층에서 강제됩니다:
+
+| 명령 | 동작 |
+|---|---|
+| `/dsh-crew:config` | 이 세션의 기본값 조회·설정: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<초>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | 이 세션의 디스패치 켜기·끄기 (끄기는 하드 스위치로 도구가 거부) |
+| `/dsh-crew:status` | worker 작업 실시간 상태: tier, 진행, 토큰, 현재 도구 |
+
 ## Codex
 
 ### 설치
@@ -205,6 +216,16 @@ role 파일에는 다음이 기본 구성되어 있습니다:
 
 - 대화형 TUI에서 "spawn ds-pro to ..."를 선택하여 작업을 dispatch합니다. Active/Done panel에 progress가 표시됩니다
 - `codex exec` mode에서도 `dsh_run_worker`를 직접 호출할 수 있습니다
+
+
+### 세션 명령
+
+Codex 쪽에도 동일한 두 프롬프트가 설치됩니다:
+
+| 명령 | 동작 |
+|---|---|
+| `/dsh-config` | 이 세션의 기본값 조회·설정: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<초>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | worker 작업 실시간 상태: tier, 진행, 토큰, 현재 도구 |
 
 ## MCP 도구
 

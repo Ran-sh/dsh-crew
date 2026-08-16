@@ -177,6 +177,17 @@ Ambas hacen lo mismo: registrar el marketplace local (el directorio padre `dsh-p
 - **Tareas de larga duración**: CC impone límites de timeout a las llamadas MCP (`MCP_TOOL_TIMEOUT` ajustable); en tareas largas, el orchestrator puede usar `dsh_spawn_worker` + polling con `dsh_worker_result(wait_seconds)`
 - **Desarrollo local y depuración**: `claude --plugin-dir /path/to/dsh-crew` para cargar temporalmente
 
+
+### Comandos de sesión
+
+Solo anulan los valores globales de la sesión actual y se aplican en la capa de herramientas, no por prompt:
+
+| Comando | Qué hace |
+|---|---|
+| `/dsh-crew:config` | Mostrar o fijar los valores por defecto de la sesión: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<segundos>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Activar o desactivar el despacho en esta sesión (desactivado es un interruptor duro: la herramienta rechaza) |
+| `/dsh-crew:status` | Estado en vivo de los jobs worker: tier, progreso, tokens, herramienta actual |
+
 ## Codex
 
 ### Instalación
@@ -205,6 +216,16 @@ Los archivos de rol vienen preconfigurados con:
 
 - En la TUI interactiva, selecciona "spawn ds-pro to ..." para despachar tareas; los paneles Active/Done muestran el progreso
 - El modo `codex exec` también puede llamar directamente a `dsh_run_worker`
+
+
+### Comandos de sesión
+
+Para Codex se instalan los mismos dos prompts:
+
+| Comando | Qué hace |
+|---|---|
+| `/dsh-config` | Mostrar o fijar los valores por defecto de la sesión: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<segundos>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Estado en vivo de los jobs worker: tier, progreso, tokens, herramienta actual |
 
 ## Herramientas MCP
 

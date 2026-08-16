@@ -177,6 +177,17 @@ Keduanya melakukan hal yang sama: mendaftarkan marketplace lokal (direktori indu
 - **Tugas berdurasi panjang**: CC punya batas timeout pada panggilan MCP (`MCP_TOOL_TIMEOUT` dapat disesuaikan), untuk tugas panjang orchestrator dapat memakai polling `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)`
 - **Pengembangan dan debugging lokal**: `claude --plugin-dir /path/to/dsh-crew` untuk memuat sementara
 
+
+### Perintah sesi
+
+Hanya menimpa nilai default global untuk sesi saat ini, dan ditegakkan di lapisan tool, bukan lewat prompt:
+
+| Perintah | Fungsinya |
+|---|---|
+| `/dsh-crew:config` | Tampilkan atau setel default sesi: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<detik>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Nyalakan atau matikan dispatch untuk sesi ini (mati adalah saklar keras: tool menolak) |
+| `/dsh-crew:status` | Status langsung job worker: tier, progres, token, tool saat ini |
+
 ## Codex
 
 ### Instalasi
@@ -205,6 +216,16 @@ File role sudah dikonfigurasi sebelumnya dengan:
 
 - Di TUI interaktif, pilih "spawn ds-pro to ..." untuk mengirim tugas; panel Active/Done menampilkan progres
 - Mode `codex exec` juga dapat memanggil `dsh_run_worker` secara langsung
+
+
+### Perintah sesi
+
+Untuk Codex dipasang dua prompt yang sama:
+
+| Perintah | Fungsinya |
+|---|---|
+| `/dsh-config` | Tampilkan atau setel default sesi: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<detik>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Status langsung job worker: tier, progres, token, tool saat ini |
 
 ## Tool MCP
 

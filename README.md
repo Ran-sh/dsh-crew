@@ -177,6 +177,17 @@ Both do the same thing: register local marketplace (parent directory `dsh-plugin
 - **Long-running tasks**: CC has timeout limits on MCP calls (`MCP_TOOL_TIMEOUT` adjustable), long tasks can have orchestrator use `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` polling
 - **Local development and debugging**: `claude --plugin-dir /path/to/dsh-crew` to temporarily load
 
+
+### Session commands
+
+These override the global defaults for the current session only, and are enforced at the tool layer rather than by prompting:
+
+| Command | What it does |
+|---|---|
+| `/dsh-crew:config` | Show or set this session's defaults: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<seconds>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Turn dispatch for this session on or off (off is a hard switch: the tool refuses) |
+| `/dsh-crew:status` | Live status of worker jobs: tier, progress, tokens, current tool |
+
 ## Codex
 
 ### Installation
@@ -205,6 +216,16 @@ Role files come pre-configured with:
 
 - In interactive TUI, select "spawn ds-pro to ..." to dispatch tasks; Active/Done panels show progress
 - `codex exec` mode can also directly call `dsh_run_worker`
+
+
+### Session commands
+
+The same two prompts are installed for Codex:
+
+| Command | What it does |
+|---|---|
+| `/dsh-config` | Show or set this session's defaults: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<seconds>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Live status of worker jobs: tier, progress, tokens, current tool |
 
 ## MCP tools
 

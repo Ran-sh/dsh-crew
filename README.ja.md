@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **長時間実行タスク**: CC には MCP 呼び出しのタイムアウト制限があります (`MCP_TOOL_TIMEOUT` で調整可能)。長時間のタスクでは、orchestrator が `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` のポーリングを使用できます
 - **ローカル開発とデバッグ**: `claude --plugin-dir /path/to/dsh-crew` で一時的にロードできます
 
+
+### セッションコマンド
+
+現在のセッションのみグローバル既定値を上書きします。プロンプト任せではなくツール層で強制されます:
+
+| コマンド | 動作 |
+|---|---|
+| `/dsh-crew:config` | このセッションの既定値を表示・設定: `tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | このセッションのディスパッチを有効／無効にする（無効はハードスイッチでツールが拒否） |
+| `/dsh-crew:status` | worker ジョブの実況: tier、進捗、トークン、実行中のツール |
+
 ## Codex
 
 ### インストール
@@ -205,6 +216,16 @@ cp codex/agents/*.toml ~/.codex/agents/    # global or project-level .codex/agen
 
 - 対話型 TUI で「spawn ds-pro to ...」を選択してタスクをディスパッチします。Active/Done パネルに進捗が表示されます
 - `codex exec` モードでも `dsh_run_worker` を直接呼び出せます
+
+
+### セッションコマンド
+
+Codex 側にも同じ 2 つのプロンプトが入ります:
+
+| コマンド | 動作 |
+|---|---|
+| `/dsh-config` | このセッションの既定値を表示・設定: `tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-status` | worker ジョブの実況: tier、進捗、トークン、実行中のツール |
 
 ## MCP ツール
 

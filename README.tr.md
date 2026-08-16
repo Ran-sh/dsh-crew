@@ -177,6 +177,17 @@ Her ikisi de aynı şeyi yapar: yerel marketplace'i kaydeder (üst dizin `dsh-pl
 - **Uzun süren görevler**: CC'nin MCP çağrılarında zaman aşımı limitleri vardır (`MCP_TOOL_TIMEOUT` ayarlanabilir); uzun görevlerde orchestrator, `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` yoklama kullanabilir
 - **Yerel geliştirme ve hata ayıklama**: geçici olarak yüklemek için `claude --plugin-dir /path/to/dsh-crew`
 
+
+### Oturum komutları
+
+Genel varsayılanları yalnızca geçerli oturum için geçersiz kılar ve prompt ile değil, araç katmanında uygulanır:
+
+| Komut | Ne yapar |
+|---|---|
+| `/dsh-crew:config` | Oturumun varsayılanlarını göster ya da ayarla: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<saniye>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | Bu oturumda dağıtımı aç ya da kapat (kapalı sert bir anahtardır: araç reddeder) |
+| `/dsh-crew:status` | Worker işlerinin canlı durumu: tier, ilerleme, token, geçerli araç |
+
 ## Codex
 
 ### Kurulum
@@ -205,6 +216,16 @@ Role dosyaları şunlarla önceden yapılandırılmıştır:
 
 - Etkileşimli TUI'de görev göndermek için "spawn ds-pro to ..." seçeneğini seçin; Active/Done panelleri ilerlemeyi gösterir
 - `codex exec` modu ayrıca doğrudan `dsh_run_worker` çağırabilir
+
+
+### Oturum komutları
+
+Codex için de aynı iki prompt kurulur:
+
+| Komut | Ne yapar |
+|---|---|
+| `/dsh-config` | Oturumun varsayılanlarını göster ya da ayarla: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<saniye>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | Worker işlerinin canlı durumu: tier, ilerleme, token, geçerli araç |
 
 ## MCP araçları
 

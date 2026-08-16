@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **長時間執行的工作**：CC 在 MCP 呼叫上有逾時限制（`MCP_TOOL_TIMEOUT` 可調），長工作可讓協調器使用 `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` 輪詢
 - **本機開發與除錯**：`claude --plugin-dir /path/to/dsh-crew` 以暫時載入
 
+
+### 工作階段命令
+
+只覆寫目前工作階段的全域預設值，且在工具層執行，不靠提示詞自覺：
+
+| 命令 | 作用 |
+|---|---|
+| `/dsh-crew:config` | 檢視或設定本階段預設值：`tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | 開關本階段的分派（關閉是硬開關，工具層直接拒絕） |
+| `/dsh-crew:status` | worker 任務即時狀態：tier、進度、tokens、目前工具 |
+
 ## Codex
 
 ### 安裝
@@ -205,6 +216,16 @@ cp codex/agents/*.toml ~/.codex/agents/    # 全域或專案級 .codex/agents/
 
 - 在互動式 TUI 中，選擇「生成 ds-pro 到...」以分派工作；Active/Done 面板顯示進度
 - `codex exec` 模式也可直接呼叫 `dsh_run_worker`
+
+
+### 工作階段命令
+
+Codex 端裝的是同樣兩條 prompt：
+
+| 命令 | 作用 |
+|---|---|
+| `/dsh-config` | 檢視或設定本階段預設值：`tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-status` | worker 任務即時狀態：tier、進度、tokens、目前工具 |
 
 ## MCP 工具
 

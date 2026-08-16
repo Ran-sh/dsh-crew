@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **超长任务**：CC 对 MCP 调用有超时限制（`MCP_TOOL_TIMEOUT` 可调），长任务可让 orchestrator 用 `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` 轮询
 - **本地开发调试**：`claude --plugin-dir /path/to/dsh-crew` 临时加载
 
+
+### 会话命令
+
+只覆盖当前会话的全局默认值，且在工具层执法，不靠提示词自觉：
+
+| 命令 | 作用 |
+|---|---|
+| `/dsh-crew:config` | 查看或设置本会话默认值：`tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | 开关本会话的派发（关闭是硬开关，工具层直接拒绝） |
+| `/dsh-crew:status` | worker 任务实时状态：档位、进度、tokens、当前工具 |
+
 ## Codex
 
 ### 安装
@@ -205,6 +216,16 @@ cp codex/agents/*.toml ~/.codex/agents/    # 全局或项目级 .codex/agents/
 
 - 交互 TUI 里选 "spawn ds-pro to ..." 派发任务，Active/Done 面板显示进度
 - `codex exec` 模式也可直接调 `dsh_run_worker`
+
+
+### 会话命令
+
+Codex 侧装的是同样两条 prompt：
+
+| 命令 | 作用 |
+|---|---|
+| `/dsh-config` | 查看或设置本会话默认值：`tier=flash\|pro`、`effort=off\|high\|max`、`mode=auto\|hub\|standalone`、`timeout=<秒>`、`policy=auto\|flash-only\|pro-only`、`escalate=true\|false`、`reset` |
+| `/dsh-status` | worker 任务实时状态：档位、进度、tokens、当前工具 |
 
 ## MCP 工具
 

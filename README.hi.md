@@ -177,6 +177,17 @@ node scripts/smoke.mjs
 - **लंबे समय चलने वाले कार्य**: CC के पास MCP कॉल पर समय सीमा है (`MCP_TOOL_TIMEOUT` समायोज्य), लंबे कार्य ऑर्केस्ट्रेटर को `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` पोलिंग का उपयोग कर सकते हैं
 - **स्थानीय विकास और डिबगिंग**: `claude --plugin-dir /path/to/dsh-crew` अस्थायी रूप से लोड करने के लिए
 
+
+### सेशन कमांड
+
+ये केवल मौजूदा सेशन के लिए ग्लोबल डिफ़ॉल्ट को ओवरराइड करते हैं और प्रॉम्प्ट नहीं, टूल लेयर पर लागू होते हैं:
+
+| कमांड | क्या करता है |
+|---|---|
+| `/dsh-crew:config` | इस सेशन के डिफ़ॉल्ट देखें या सेट करें: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<सेकंड>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-crew:on` · `/dsh-crew:off` | इस सेशन में डिस्पैच चालू या बंद करें (बंद एक हार्ड स्विच है: टूल मना कर देता है) |
+| `/dsh-crew:status` | worker jobs की लाइव स्थिति: tier, प्रगति, tokens, मौजूदा टूल |
+
 ## Codex
 
 ### स्थापना
@@ -205,6 +216,16 @@ cp codex/agents/*.toml ~/.codex/agents/    # global or project-level .codex/agen
 
 - इंटरैक्टिव TUI में, "spawn ds-pro to ..." का चयन करें कार्य डिस्पैच करने के लिए; Active/Done पैनल प्रगति दिखाते हैं
 - `codex exec` मोड भी सीधे `dsh_run_worker` कॉल कर सकता है
+
+
+### सेशन कमांड
+
+Codex के लिए वही दो प्रॉम्प्ट इंस्टॉल होते हैं:
+
+| कमांड | क्या करता है |
+|---|---|
+| `/dsh-config` | इस सेशन के डिफ़ॉल्ट देखें या सेट करें: `tier=flash\|pro`, `effort=off\|high\|max`, `mode=auto\|hub\|standalone`, `timeout=<सेकंड>`, `policy=auto\|flash-only\|pro-only`, `escalate=true\|false`, `reset` |
+| `/dsh-status` | worker jobs की लाइव स्थिति: tier, प्रगति, tokens, मौजूदा टूल |
 
 ## MCP उपकरण
 
