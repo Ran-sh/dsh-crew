@@ -5,3 +5,6 @@ node_modules/
 
 # Local machine state, never part of the plugin:
 # credentials live in ~/.config/dsh-crew/.env
+
+# logo design iterations stay local
+docs/images/dsh-crew-logo-v*.png
