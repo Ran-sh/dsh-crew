@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Aktuelles Plugin-Release: <code>0.1.0</code> &middot; Getestet mit DSH <code>0.1.0-rc.6</code></sub>
+  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Aktuelles Plugin-Release: <code>0.1.0-rc.1</code> &middot; Getestet mit DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 <br />
 
 <p align="center">
-  <img src="./docs/images/dsh-crew-overview.png" alt="DSH Crew — settings page" width="100%" />
+  <img src="./docs/images/dsh-crew-overview.png" alt="DSH Crew — Einstellungsseite" width="100%" />
 </p>
 <p align="center"><sub>Die Einstellungsseite von DSH Crew — Host-Integrationen, Dispatch-Richtlinie, Ausführung und die multimodale Brücke</sub></p>
 
@@ -98,12 +98,12 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## Ein Lauf, zwei Ansichten
 
-Dispatch lässt sich breit auffächern. Unten übersetzen achtzehn Worker dieses README parallel: Der Host zählt sie als eigene Subagents, während das Harness sie als echte Sessions ausführt.
+Dispatch lässt sich breit auffächern. Unten übersetzen achtzehn Worker dieses README parallel: Der Host zählt sie als eigene Subagenten, während das Harness sie als echte Sessions ausführt.
 
 <p align="center">
   <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
 </p>
-<p align="center"><sub>Claude Code sieht dsh-crew-Worker als native Subagents; das Statusline-Segment zeigt laufende Tiers, verstrichene Zeit und Tokens.</sub></p>
+<p align="center"><sub>Claude Code sieht dsh-crew-Worker als native Subagenten; das Statusline-Segment zeigt laufende Tiers, verstrichene Zeit und Tokens.</sub></p>
 
 <p align="center">
   <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
@@ -152,7 +152,7 @@ Innerhalb von ~10 Sekunden sollten Sie `smoke test passed — configuration OK` 
 
 - **DSH** (DeepSeek Harness): DeepSeeks Open-Source-Agent-Harness, ein Code-Agent in Web-UI-Form, ähnlich wie Claude Code, aber mit DeepSeek-Modellen.
 - **MCP** (Model Context Protocol): Das KI-Tool-Integrationsprotokoll von Anthropic; ermöglicht es LLMs, externe Tools und Datenquellen sicher aufzurufen.
-- **Cordis-Bundle**: Das Plugin-Format von DSH; dieses Projekt kann eigenständig als MCP-Dienst laufen oder als Hub-Modus in DSH Web installiert werden.
+- **Cordis-Bundle**: Das Plugin-Format von DSH; dieses Projekt kann standalone als MCP-Dienst laufen oder als Hub-Modus in DSH Web installiert werden.
 - **tier**: Fähigkeitsstufe — welcher Slot aus DSHs konfiguriertem Modell-Roster einem Worker zugewiesen wird. `flash` ist schnell und günstig (einfache Aufgaben), `pro` denkt intensiver nach (komplexe Probleme). Derzeit sind sie DeepSeek V4 Flash und V4 Pro zugeordnet; Modelle in DSH austauschen, und hier ändert sich nichts.
 - **worker**: Der DSH-Agent, der die Arbeit erledigt — eine vollständige Sitzung mit eigenen Tools, eigener Sandbox und eigenem Preset, kein bloßer Modellaufruf.
 - **effort**: Reasoning-Stärke, `off` = kein Reasoning, `high` = hoher Reasoning-Einsatz, `max` = maximaler Reasoning-Einsatz.

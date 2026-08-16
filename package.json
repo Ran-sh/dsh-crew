@@ -1,6 +1,6 @@
 {
   "name": "@zseven-w/dsh-crew",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "main": "./src/hub/index.mjs",
@@ -122,6 +122,11 @@
     "README.*.md",
     "docs/images/dsh-crew-logo.png",
     "docs/images/dsh-crew-overview.png",
+    "docs/images/dsh-crew-host.png",
+    "docs/images/dsh-crew-jobs.png",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
