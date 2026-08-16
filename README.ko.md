@@ -96,6 +96,20 @@ Claude Code / Codex (orchestrator, keeps its own model)
                  └─ DeepSeek V4 Flash / Pro (DSH SDK, event stream → progress and token stats)
 ```
 
+## 한 번의 실행, 두 개의 관점
+
+디스패치는 넓게 펼칠 수 있습니다. 아래에서는 18개의 worker가 이 README를 병렬로 번역합니다. 호스트는 이들을 자신의 서브에이전트로 세고, harness는 실제 세션으로 실행합니다.
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
+</p>
+<p align="center"><sub>Claude Code에서 dsh-crew worker는 네이티브 서브에이전트로 보입니다. statusline 세그먼트가 실행 중인 tier, 경과 시간, 토큰을 표시합니다.</sub></p>
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
+</p>
+<p align="center"><sub>DSH Crew 패널에서 본 같은 실행: 각 작업을 디스패치한 호스트, tier와 effort, 실시간 진행 상황과 토큰 사용량.</sub></p>
+
 ## 준비
 
 ### 1. 의존성 설치

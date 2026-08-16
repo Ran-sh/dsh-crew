@@ -96,6 +96,20 @@ Claude Code / Codex (orchestrator, keeps its own model)
                  └─ DeepSeek V4 Flash / Pro (DSH SDK, event stream → progress and token stats)
 ```
 
+## Один запуск, два взгляда
+
+Диспетчеризация масштабируется вширь. Ниже восемнадцать worker'ов параллельно переводят этот README: хост считает их своими субагентами, а harness выполняет их как настоящие сессии.
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
+</p>
+<p align="center"><sub>В Claude Code worker'ы dsh-crew выглядят как нативные субагенты; сегмент statusline показывает работающие tier'ы, время и токены.</sub></p>
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
+</p>
+<p align="center"><sub>Панель DSH Crew показывает тот же запуск со стороны harness: какой хост отправил задачу, её tier и effort, прогресс и расход токенов.</sub></p>
+
 ## Подготовка
 
 ### 1. Установка зависимостей

@@ -96,6 +96,20 @@ Claude Code / Codex（orchestrator，模型不变）
                  └─ DeepSeek V4 Flash / Pro（DSH SDK，事件流 → 进度与 token 统计）
 ```
 
+## 一次派发，两个视角
+
+派发是可以铺开的。下面这次，18 个 worker 并行翻译这份 README：宿主把它们算作自己的子代理，harness 则把它们当作真实会话来跑。
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
+</p>
+<p align="center"><sub>Claude Code 里，dsh-crew worker 就是原生子代理；状态栏段实时显示在跑的档位、耗时与 token。</sub></p>
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
+</p>
+<p align="center"><sub>DSH Crew 面板从 harness 一侧看同一次运行：每个任务由哪个宿主派出、档位与推理强度、实时进度与 token 消耗。</sub></p>
+
 ## 准备
 
 ### 1. 安装依赖

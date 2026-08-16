@@ -96,6 +96,20 @@ Claude Code / Codex (orchestrator, keeps its own model)
                  └─ DeepSeek V4 Flash / Pro (DSH SDK, event stream → progress and token stats)
 ```
 
+## Một lần chạy, hai góc nhìn
+
+Việc dispatch có thể trải rộng. Bên dưới, mười tám worker dịch song song tài liệu README này: host đếm chúng như subagent của chính nó, còn harness chạy chúng như những phiên thực sự.
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
+</p>
+<p align="center"><sub>Trong Claude Code, worker của dsh-crew hiện ra như subagent gốc; đoạn statusline theo dõi tier đang chạy, thời gian trôi qua và token.</sub></p>
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
+</p>
+<p align="center"><sub>Bảng DSH Crew nhìn cùng lần chạy đó từ phía harness: host nào đã gửi mỗi job, tier và effort của nó, tiến độ trực tiếp và lượng token.</sub></p>
+
 ## Chuẩn bị
 
 ### 1. Cài đặt dependencies

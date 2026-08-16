@@ -96,6 +96,20 @@ Claude Code / Codex（協調器，保留自己的模型）
                  └─ DeepSeek V4 Flash / Pro（DSH SDK，事件流 → 進度和代幣統計）
 ```
 
+## 一次分派，兩個視角
+
+分派是可以鋪開的。下面這次，18 個 worker 並行翻譯這份 README：宿主把它們算作自己的子代理，harness 則把它們當作真實工作階段來跑。
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-host.png" alt="Claude Code" width="100%" />
+</p>
+<p align="center"><sub>Claude Code 裡，dsh-crew worker 就是原生子代理；狀態列區段即時顯示執行中的 tier、耗時與 token。</sub></p>
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-jobs.png" alt="DSH Crew" width="100%" />
+</p>
+<p align="center"><sub>DSH Crew 面板從 harness 一側看同一次執行：每個任務由哪個宿主分派、tier 與 effort、即時進度與 token 用量。</sub></p>
+
 ## 準備
 
 ### 1. 安裝依賴項
