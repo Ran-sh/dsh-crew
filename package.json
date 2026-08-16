@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "main": "./src/hub/index.mjs",
-  "description": "DSH bundle + Claude Code / Codex integration: delegate subtasks to DeepSeek-powered DSH worker agents with native progress UI",
+  "description": "DeepSeek Harness plugin: dispatch work to DSH agents from Claude Code / Codex, as native subagents with live progress",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

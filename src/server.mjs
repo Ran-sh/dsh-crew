@@ -76,7 +76,7 @@ async function resolveMode() {
 
 server.registerTool('dsh_run_worker', {
   title: 'Run DSH worker (blocking)',
-  description: 'Delegate a task to a DeepSeek-powered DSH coding worker and wait for its final result. Use tier=flash for simple tasks, tier=pro for harder ones. Blocks until the worker finishes.',
+  description: 'Delegate a task to a DSH (DeepSeek Harness) coding agent and wait for its final result. The worker is a full DSH agent with its own tools and sandbox. Use tier=flash for simple tasks, tier=pro for harder ones. Blocks until the worker finishes.',
   inputSchema: {
     task: z.string().describe('Full task description for the worker, self-contained'),
     tier: tierSchema,
@@ -139,7 +139,7 @@ server.registerTool('dsh_worker_config', {
 
 server.registerTool('dsh_spawn_worker', {
   title: 'Spawn DSH worker (async)',
-  description: 'Start a DSH coding worker in the background and return immediately with a job id. Use dsh_worker_status / dsh_worker_result to follow up. Good for fanning out several workers in parallel.',
+  description: 'Start a DSH (DeepSeek Harness) coding agent in the background and return immediately with a job id. Use dsh_worker_status / dsh_worker_result to follow up. Good for fanning out several workers in parallel.',
   inputSchema: {
     task: z.string(),
     tier: tierSchema,

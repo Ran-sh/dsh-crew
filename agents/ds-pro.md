@@ -1,6 +1,6 @@
 ---
 name: ds-pro
-description: DeepSeek V4 Pro worker (runs inside DSH). Delegate harder subtasks - multi-file changes, debugging, refactors, anything needing real reasoning.
+description: DSH (DeepSeek Harness) worker on the pro tier - stronger reasoning. Delegate harder subtasks: multi-file changes, debugging, refactors, anything needing real analysis.
 model: haiku
 ---
 

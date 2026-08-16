@@ -7,8 +7,8 @@
 <h1 align="center">DSH Crew</h1>
 
 <p align="center">
-  <strong>Delegate subtasks from Claude Code / Codex to DeepSeek V4 Flash / Pro workers — without giving up the host's native subagent UI.</strong><br />
-  <sub>Native Progress UI &bull; Tier Policy &amp; Escalation &bull; In-Host Worker Sessions &bull; Vision &amp; Image Generation &bull; One-Click Install</sub>
+  <strong>A <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> plugin: dispatch work to DSH agents from Claude Code / Codex, without giving up the host's native subagent UI.</strong><br />
+  <sub>Native Progress UI &bull; Tier Policy &amp; Escalation &bull; In-Host DSH Sessions &bull; Vision &amp; Image Generation &bull; One-Click Install</sub>
 </p>
 
 <p align="center">
@@ -32,7 +32,9 @@
 
 ## Why DSH Crew
 
-You already tell Claude Code or Codex to "hand this to DeepSeek". DSH Crew makes that a real dispatch: the orchestrator keeps its own model, the work runs on a DeepSeek-driven DSH agent with its own tools and sandbox, and the host still shows it as a native subagent with live progress.
+DSH Crew is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) — an open-source agent harness. It makes DSH agents dispatchable from Claude Code and Codex: the orchestrator keeps its own model, the work runs on a real DSH agent with that harness's tools, sandbox, presets and session history, and the host still shows it as a native subagent with live progress.
+
+What runs the work is a DSH agent, not a bare model call. Tiers (`flash` / `pro`) select how much capability that agent gets from the harness's configured roster — DeepSeek V4 Flash and V4 Pro today — so a change of model in DSH needs no change here.
 
 <table>
 <tr>
@@ -54,16 +56,16 @@ Workers appear as regular subagents in Claude Code / Codex — dispatch count, r
 <tr>
 <td width="50%">
 
-### 🏛️ In-Host Worker Sessions
+### 🏛️ In-Host DSH Sessions
 
-With the bundle installed in a DSH profile, each worker runs as a first-class session inside the host: visible in the Web UI, grouped by working directory, with its own Agent preset per tier. Without DSH running, dispatch falls back to a standalone runtime.
+With the bundle installed in a DSH profile, each worker is a first-class DSH session: visible in the Web UI, grouped by working directory, mounted with the Agent preset you choose per tier. Without DSH running, dispatch falls back to a standalone DSH runtime, so CI and headless environments still work.
 
 </td>
 <td width="50%">
 
 ### 👁️ Vision and Image Generation
 
-DeepSeek is text-only. `describe_image` and `generate_image` borrow the eyes and brush of the CLIs you already have — Claude, Codex, Grok, Antigravity — or of any OpenAI-compatible API you configure. Pasted images stay visible in the conversation and reach the model as text.
+DSH's models are text-only. `describe_image` and `generate_image` borrow the eyes and brush of the CLIs you already have — Claude, Codex, Grok, Antigravity — or of any OpenAI-compatible API you configure. Pasted images stay visible in the conversation and reach the model as text.
 
 </td>
 </tr>
@@ -139,7 +141,8 @@ Within ~10 seconds you should see `smoke test passed — configuration OK` indic
 - **DSH** (DeepSeek Harness): DeepSeek's open-source agent harness, a code agent in Web UI form, similar to Claude Code but driving DeepSeek models.
 - **MCP** (Model Context Protocol): Anthropic's AI tool integration protocol, enables LLMs to safely call external tools and data sources.
 - **Cordis bundle**: DSH's plugin format; this project can run standalone as an MCP service or install into DSH Web as hub mode.
-- **tier**: workload tier, `flash` = V4 Flash (fast, cost-effective, suitable for simple tasks), `pro` = V4 Pro (strong reasoning, suitable for complex problems).
+- **tier**: capability tier — which slot of DSH's configured model roster a worker gets. `flash` is fast and cheap (simple tasks), `pro` reasons harder (complex problems). Today they map to DeepSeek V4 Flash and V4 Pro; swap models in DSH and nothing changes here.
+- **worker**: the DSH agent doing the work — a full session with its own tools, sandbox and preset, not a bare model call.
 - **effort**: reasoning strength, `off` = no reasoning, `high` = high reasoning investment, `max` = maximum reasoning investment.
 
 ## Claude Code

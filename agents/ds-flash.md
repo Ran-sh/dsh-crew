@@ -1,6 +1,6 @@
 ---
 name: ds-flash
-description: DeepSeek V4 Flash worker (runs inside DSH). Delegate simple, well-scoped subtasks - mechanical edits, small scripts, lookups, straightforward fixes. Cheap and fast.
+description: DSH (DeepSeek Harness) worker on the flash tier - fast and cheap. Delegate simple, well-scoped subtasks: mechanical edits, small scripts, lookups, straightforward fixes.
 model: haiku
 ---
 

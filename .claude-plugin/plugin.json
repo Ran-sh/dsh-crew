@@ -1,6 +1,8 @@
 {
   "name": "dsh-crew",
   "version": "0.1.0",
-  "description": "Delegate subtasks to DeepSeek-powered DSH workers (V4 Flash / V4 Pro) as native subagents with live progress",
-  "author": { "name": "ZSeven-W" }
+  "description": "Dispatch subtasks to DeepSeek Harness (DSH) agents as native subagents with live progress",
+  "author": {
+    "name": "ZSeven-W"
+  }
 }

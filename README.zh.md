@@ -7,8 +7,8 @@
 <h1 align="center">DSH Crew</h1>
 
 <p align="center">
-  <strong>让 Claude Code / Codex 把子任务派给 DeepSeek V4 Flash / Pro worker —— 同时保留宿主原生的子代理界面。</strong><br />
-  <sub>原生进度 UI &bull; 档位策略与失败升档 &bull; worker 会话进宿主 &bull; 视觉与生图 &bull; 一键安装</sub>
+  <strong><a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> 插件：在 Claude Code / Codex 里把活派给 DSH agent，同时保留宿主原生的子代理界面。</strong><br />
+  <sub>原生进度 UI &bull; 档位策略与失败升档 &bull; DSH 会话进宿主 &bull; 视觉与生图 &bull; 一键安装</sub>
 </p>
 
 <p align="center">
@@ -32,7 +32,9 @@
 
 ## 为什么用 DSH Crew
 
-你本来就会跟 Claude Code 或 Codex 说"这个交给 DeepSeek 做"。DSH Crew 把这句话变成真正的派发：orchestrator 的模型不变，活由 DeepSeek 驱动的 DSH agent 去干（自带工具与沙箱），而宿主里它仍然是一个带实时进度的原生子代理。
+DSH Crew 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH，开源 agent harness）的插件，它让 DSH agent 可以从 Claude Code 与 Codex 里被派活：orchestrator 的模型不变，活由真正的 DSH agent 去干——用的是这套 harness 的工具、沙箱、预设与会话历史——而在宿主里它仍然是一个带实时进度的原生子代理。
+
+干活的是 DSH agent，不是一次裸的模型调用。档位（`flash` / `pro`）决定这个 agent 从 harness 已配置的模型阵容里拿到多强的能力（目前是 DeepSeek V4 Flash 与 V4 Pro）——DSH 那边换模型，这边不用改。
 
 <table>
 <tr>
@@ -54,16 +56,16 @@ worker 在 Claude Code / Codex 里就是普通子代理——派了几个、跑�
 <tr>
 <td width="50%">
 
-### 🏛️ worker 会话跑在宿主里
+### 🏛️ DSH 会话跑在宿主里
 
-把 bundle 装进 DSH profile 后，每个 worker 都是 host 内的一等公民会话：出现在 Web UI 列表、按工作目录归组、两个档位各挂各的 Agent 预设。DSH 没在跑时，派发自动回落到独立 runtime。
+把 bundle 装进 DSH profile 后，每个 worker 都是一等公民的 DSH 会话：出现在 Web UI 列表、按工作目录归组、按档位挂上你指定的 Agent 预设。DSH 没在跑时，派发自动回落到独立的 DSH runtime，CI 与无界面环境照样可用。
 
 </td>
 <td width="50%">
 
 ### 👁️ 视觉与生图
 
-DeepSeek 是纯文本模型。`describe_image` 和 `generate_image` 借用你本机已登录的 CLI——Claude、Codex、Grok、Antigravity——或你自己配置的任意 OpenAI 兼容 API。会话里贴的图会留在原地正常显示，模型读到的是转写文本。
+DSH 用的模型是纯文本的。`describe_image` 和 `generate_image` 借用你本机已登录的 CLI——Claude、Codex、Grok、Antigravity——或你自己配置的任意 OpenAI 兼容 API。会话里贴的图会留在原地正常显示，模型读到的是转写文本。
 
 </td>
 </tr>
@@ -139,7 +141,8 @@ node scripts/smoke.mjs
 - **DSH**（DeepSeek Harness）：DeepSeek 的开源 agent harness，Web UI 形态的编码代理，类似 Claude Code 但驱动 DeepSeek 模型。
 - **MCP**（Model Context Protocol）：Anthropic 的 AI 工具接入协议，让 LLM 安全调用外部工具与数据源。
 - **Cordis bundle**：DSH 的插件格式，本项目既可作独立 MCP 服务，也可装进 DSH Web 成为 hub 模式。
-- **tier**：工作量档次，`flash` = V4 Flash（快速省成本，适合简单任务），`pro` = V4 Pro（推理能力强，适合复杂问题）。
+- **tier**：能力档位，决定 worker 从 DSH 已配置的模型阵容里拿到哪一档——`flash` 快而省（适合简单任务），`pro` 推理强（适合复杂问题）。当前对应 DeepSeek V4 Flash 与 V4 Pro；DSH 换模型，这边不用改。
+- **worker**：被派去干活的 DSH agent —— 一个完整的会话，自带工具、沙箱与预设，不是一次裸的模型调用。
 - **effort**：推理强度，`off` = 不用推理，`high` = 高投入推理，`max` = 最大推理投入。
 
 ## Claude Code
