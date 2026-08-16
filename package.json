@@ -1,0 +1,93 @@
+{
+  "name": "dsh-crew",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/hub/index.mjs",
+  "description": "DSH bundle + Claude Code / Codex integration: delegate subtasks to DeepSeek-powered DSH worker agents with native progress UI",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "mcp": "node src/server.mjs",
+    "build:client": "tsdown src/client/index.tsx --format cjs --platform browser --target es2022 --tsconfig tsconfig.client.json --deps.never-bundle react --deps.never-bundle react/jsx-runtime --deps.never-bundle react-dom --deps.never-bundle react-dom/client --out-dir .client-build --clean --logLevel warn && node scripts/build-client.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "zod": "^3.24.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@deepseek-ai/dsh-subprocess-local",
+      "koffi",
+      "node-pty"
+    ]
+  },
+  "exports": {
+    ".": "./src/hub/index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-bash-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-observation-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sdk-client": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.12.0",
+    "typescript": "^5.6.0",
+    "@types/react": "^18.3.0",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-presets": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-bash-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-observation-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sdk-client": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6"
+  }
+}

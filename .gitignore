@@ -1,0 +1,7 @@
+node_modules/
+.client-build/
+*.log
+.DS_Store
+
+# Local machine state, never part of the plugin:
+# credentials live in ~/.config/dsh-crew/.env

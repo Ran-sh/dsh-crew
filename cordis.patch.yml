@@ -1,0 +1,4 @@
+# dsh-crew bundle patch: mounts the workers-hub host plugin into the profile.
+- insert:
+    - id: dsh-crew-hub
+      name: dsh-crew
