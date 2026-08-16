@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-El smoke test recorre la ruta standalone, por lo que necesita la key anterior. En unos diez segundos deberías ver `smoke test passed — configuration OK`. Si falla, se imprime el motivo; normalmente la key falta o no es válida.
+El smoke test despacha una tarea económica por el camino disponible — el hub si una instancia de DSH está en ejecución, en caso contrario standalone — e imprime cuál se utilizó. En unos diez segundos deberías ver `smoke test passed — configuration OK`. Si falla, se imprime el motivo, limitado al camino que fue probado.
 
 Luego abre Ajustes → DSH Crew e instala las integraciones de Claude Code / Codex con un clic.
 

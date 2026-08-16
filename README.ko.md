@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-smoke 테스트는 standalone 경로를 실행하므로 위의 키가 필요합니다. 십여 초 안에 `smoke test passed — configuration OK`가 보이면 설정 완료입니다. 실패하면 원인이 출력되며, 보통 키가 없거나 유효하지 않습니다.
+smoke 테스트는 사용 가능한 경로를 통해 저렴한 job을 dispatch합니다 — DSH instance가 실행 중이면 hub, 그렇지 않으면 standalone — 그리고 사용한 경로를 출력합니다. 약 십 초 안에 `smoke test passed — configuration OK`가 표시되어야 합니다. 실패하면 테스트된 경로에 한정된 오류 이유가 출력됩니다.
 
 그다음 설정 → DSH Crew에서 Claude Code / Codex 통합을 한 번에 설치합니다.
 

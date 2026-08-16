@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-Smoke test dùng standalone path, vì vậy cần key ở trên. Trong khoảng mười giây bạn sẽ thấy `smoke test passed — configuration OK`. Nếu lỗi, lý do sẽ được in ra; thường là thiếu key hoặc key không hợp lệ.
+Smoke test dispatch một job rẻ qua path nào khả dụng — hub khi instance DSH đang chạy, standalone nếu không — và in ra path nào được sử dụng. Trong khoảng mười giây bạn sẽ thấy `smoke test passed — configuration OK`. Nếu lỗi, lý do sẽ được in ra và giới hạn trong path được kiểm tra.
 
 Sau đó mở Cài đặt → DSH Crew và cài tích hợp Claude Code / Codex chỉ với một cú nhấp.
 

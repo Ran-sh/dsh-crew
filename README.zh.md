@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-smoke 测试走的是 standalone 路径，所以需要上面的 key。十几秒内看到 `smoke test passed — configuration OK` 即配置成功。失败会打印具体原因，通常是 key 未填或无效。
+smoke 测试会挑一条可用的路径派一个廉价任务——DSH 实例在跑就走 hub，否则走 standalone——并打印实际用的是哪条。十几秒内看到 `smoke test passed — configuration OK` 即配置成功。失败会打印具体原因，且只针对实际测的那条路径。
 
 然后打开 设置 → DSH Crew，一键装好 Claude Code / Codex 集成。
 

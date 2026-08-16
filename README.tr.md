@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-Smoke test, standalone yolunu test eder, bu nedenle yukarıdaki anahtara gerek duyar. Yaklaşık on saniye içinde `smoke test passed — configuration OK` görmelisiniz. Hata durumunda nedeni yazdırılır; genellikle key eksiktir ya da geçersizdir.
+Smoke test, mevcut yol üzerinden ucuz bir iş gönderir — bir DSH örneği çalışıyorsa hub, aksi halde standalone — ve hangisini kullandığını yazdırır. Yaklaşık on saniye içinde `smoke test passed — configuration OK` görmelisiniz. Hata durumunda nedeni yazdırılır; bu neden test edilen yola özgüdür.
 
 Ardından Ayarlar → DSH Crew bölümünden Claude Code / Codex entegrasyonlarını tek tıkla kurun.
 

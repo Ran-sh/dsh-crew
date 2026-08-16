@@ -144,7 +144,7 @@ DEEPSEEK_API_KEY=sk-...
 node scripts/smoke.mjs
 ```
 
-smoke テストはスタンドアロン パスを実行するため、上記のキーが必要です。十数秒で `smoke test passed — configuration OK` が出れば設定完了です。失敗時は原因が表示されます。通常はキーが未設定か無効です。
+smoke テストは利用可能なパスを通じて 1 つの安い job をディスパッチします — DSH インスタンスが実行されているときは hub、それ以外は standalone — そして使用したパスを表示します。十数秒で `smoke test passed — configuration OK` が表示されるはずです。失敗時は理由が表示され、テストされたパスに限定されます。
 
 その後、設定 → DSH Crew から Claude Code / Codex 連携をワンクリックで導入します。
 
