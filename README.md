@@ -1,239 +1,321 @@
-# DSH Crew
+<!-- logo pending design; uncomment once docs/images/dsh-crew-logo.png exists
+<p align="center">
+  <img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" />
+</p>
+-->
 
-<!-- logo: assets/logo.png（设计中，待补） -->
+<h1 align="center">DSH Crew</h1>
 
-把子任务派给 **DeepSeek V4 Flash / V4 Pro** 驱动的 **DSH worker**，同时保留 Claude Code / Codex 的**原生子代理进度 UI**。
+<p align="center">
+  <strong>Delegate subtasks from Claude Code / Codex to DeepSeek V4 Flash / Pro workers — without giving up the host's native subagent UI.</strong><br />
+  <sub>Native Progress UI &bull; Tier Policy &amp; Escalation &bull; In-Host Worker Sessions &bull; Vision &amp; Image Generation &bull; One-Click Install</sub>
+</p>
 
-![DSH Crew 设置页](assets/settings-panel.png)
+<p align="center">
+  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Current plugin release: <code>0.1.0</code> &middot; Tested with DSH <code>0.1.0-rc.6</code></sub>
+</p>
 
-*上图为 DSH 设置页里的 DSH Crew 配置面板。*
+<p align="center">
+  <a href="./README.md"><b>English</b></a> &middot; <a href="./README.zh.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+</p>
+
+<br />
+
+<p align="center">
+  <img src="./docs/images/dsh-crew-overview.png" alt="DSH Crew — settings page" width="100%" />
+</p>
+<p align="center"><sub>The DSH Crew settings page — host integrations, dispatch policy, execution and the multimodal bridge</sub></p>
+
+## Why DSH Crew
+
+You already tell Claude Code or Codex to "hand this to DeepSeek". DSH Crew makes that a real dispatch: the orchestrator keeps its own model, the work runs on a DeepSeek-driven DSH agent with its own tools and sandbox, and the host still shows it as a native subagent with live progress.
+
+<table>
+<tr>
+<td width="50%">
+
+### 🧵 Native Progress UI
+
+Workers appear as regular subagents in Claude Code / Codex — dispatch count, running step, tool calls and token usage all show up in the host's own task panel, plus a claude-hud statusline segment: `⚙dsh 1▶pro 2m14s 21.7k/606 ✓3`.
+
+</td>
+<td width="50%">
+
+### 🎚️ Tier Policy and Escalation
+
+`flash` for mechanical work, `pro` for reasoning, `effort` from `off` to `max`. `tier_policy` can clamp every dispatch to one tier at the tool layer, and `escalate_on_failure` retries a failed flash run once on pro — based on evidence, not on guessing difficulty up front.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🏛️ In-Host Worker Sessions
+
+With the bundle installed in a DSH profile, each worker runs as a first-class session inside the host: visible in the Web UI, grouped by working directory, with its own Agent preset per tier. Without DSH running, dispatch falls back to a standalone runtime.
+
+</td>
+<td width="50%">
+
+### 👁️ Vision and Image Generation
+
+DeepSeek is text-only. `describe_image` and `generate_image` borrow the eyes and brush of the CLIs you already have — Claude, Codex, Grok, Antigravity — or of any OpenAI-compatible API you configure. Pasted images stay visible in the conversation and reach the model as text.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🔌 Custom Providers
+
+Bring your own endpoint (Base URL + API key + models) or a local command template. Each provider has a connectivity test that checks reachability and auth, then makes one real vision call so you find out now, not mid-task.
+
+</td>
+<td width="50%">
+
+### 📦 One-Click Install
+
+The settings page installs and updates the Claude Code plugin and the Codex role files for you — marketplace registration, permission allowlist, HUD wiring, absolute paths rendered for this machine — and restores them just as easily. Every settings file is backed up first.
+
+</td>
+</tr>
+</table>
+
+## How it works
 
 ```
-Claude Code / Codex (orchestrator，模型随宿主选择)
-  └─ ds-flash / ds-pro  ← 原生子代理壳（进度显示在任务 UI）
+Claude Code / Codex (orchestrator, keeps its own model)
+  └─ ds-flash / ds-pro  ← native subagent shell (progress shows in the host's task UI)
        └─ MCP: dsh_run_worker(tier, effort, cwd)
-            └─ dsh-jsonrpc-agent runtime (worker.cordis.yml)
-                 └─ DeepSeek V4 Flash / Pro（DSH SDK，事件流→进度/token 统计）
+            ├─ hub reachable → session inside DSH (visible in the Web UI, grouped by cwd)
+            └─ otherwise     → dsh-jsonrpc-agent runtime (worker.cordis.yml)
+                 └─ DeepSeek V4 Flash / Pro (DSH SDK, event stream → progress and token stats)
 ```
 
-## 功能一览
+## Preparation
 
-- **原生进度 UI**：子代理派发、执行进度、token 统计实时显示在 Claude Code / Codex 的任务面板
-- **灵活档位选择**：Flash（快速、经济）/ Pro（强推理），按任务需要选模型
-- **推理强度配置**：effort 可选 `off` / `high` / `max`，满足不同复杂度需求
-- **预设与失败升档**：按 tier 挂载 Agent 预设，支持任务失败自动升档重试
-- **Hub 模式**：worker 会话显示在 DSH Web UI，按工作目录归类管理
-- **可视化配置**：DSH 设置页集中配置多模态、Provider、API 凭据等
-- **多模态桥接**：
-  - 看图（`describe_image`）：借用 Claude / Codex / Grok / Antigravity 视觉能力
-  - 出图（`generate_image`）：调用 Codex / Grok / Antigravity 生图 API 或自定义 CLI
-  - 会话贴图：DSH 里贴图自动转文字供模型理解
-  - 自定义 Provider：支持 OpenAI 兼容 API 与本地命令，附连通测试
-- **状态栏实时段**：Claude Code statusline 显示运行中的 worker 档位、耗时、token 统计（需 claude-hud）
-
-## 准备
-
-### 1. 安装依赖
+### 1. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-若沙箱/pty 报原生模块问题，跑一次：
+If sandbox/pty reports native module issues, run once:
 
 ```bash
 pnpm approve-builds
 ```
 
-### 2. 配置 DeepSeek API 凭据
+### 2. Configure DeepSeek API credentials
 
-建立配置目录：
+Create configuration directory:
 
 ```bash
 mkdir -p ~/.config/dsh-crew
 ```
 
-从 [platform.deepseek.com](https://platform.deepseek.com) 获取 API key，创建 `~/.config/dsh-crew/.env` 写入：
+Obtain API key from [platform.deepseek.com](https://platform.deepseek.com), create `~/.config/dsh-crew/.env` and write:
 
 ```
 DEEPSEEK_API_KEY=sk-...
 ```
 
-（worker runtime 独立于 Web 版 DSH 的凭据体系；这个 key 只读 `.env`，不会写进别处）
+(The worker runtime uses its own credential system independent of web DSH; this key is read-only from `.env` and never written elsewhere)
 
-### 3. 验证配置
+### 3. Verify configuration
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-十几秒内看到 `smoke test passed — configuration OK` 即表示配置成功。失败时会打印具体原因，常见是 API key 未填或无效。
+Within ~10 seconds you should see `smoke test passed — configuration OK` indicating successful setup. On failure, specific reasons are printed; common issues are missing or invalid API key.
 
-## 背景与术语
+## Background and terminology
 
-- **DSH**（DeepSeek Harness）：DeepSeek 的开源 agent harness，Web UI 形态的编码代理，类似 Claude Code 但驱动 DeepSeek 模型。
-- **MCP**（Model Context Protocol）：Anthropic 的 AI 工具接入协议，让 LLM 安全调用外部工具与数据源。
-- **Cordis bundle**：DSH 的插件格式，本项目既可作独立 MCP 服务，也可装进 DSH Web 成为 hub 模式。
-- **tier**：工作量档次，`flash` = V4 Flash（快速省成本，适合简单任务），`pro` = V4 Pro（推理能力强，适合复杂问题）。
-- **effort**：推理强度，`off` = 不用推理，`high` = 高投入推理，`max` = 最大推理投入。
+- **DSH** (DeepSeek Harness): DeepSeek's open-source agent harness, a code agent in Web UI form, similar to Claude Code but driving DeepSeek models.
+- **MCP** (Model Context Protocol): Anthropic's AI tool integration protocol, enables LLMs to safely call external tools and data sources.
+- **Cordis bundle**: DSH's plugin format; this project can run standalone as an MCP service or install into DSH Web as hub mode.
+- **tier**: workload tier, `flash` = V4 Flash (fast, cost-effective, suitable for simple tasks), `pro` = V4 Pro (strong reasoning, suitable for complex problems).
+- **effort**: reasoning strength, `off` = no reasoning, `high` = high reasoning investment, `max` = maximum reasoning investment.
 
 ## Claude Code
 
-### 安装
+### Installation
 
-一键安装（二选一）：
+One-click installation (choose one):
 
-- **DSH 设置页**（已装 hub 模式时）：设置 → DSH Crew → "安装到 Claude Code"
-- **命令行**：`node src/install/cli.mjs all`
+- **DSH settings page** (when hub mode is installed): Settings → DSH Crew → "Install to Claude Code"
+- **Command line**: `node src/install/cli.mjs all`
 
-两者做同样的事：注册本地 marketplace（父目录 `dsh-plugins/` 为 marketplace 根） + `claude plugin install` + MCP 工具权限白名单 + claude-hud worker 状态段配置（改动前自动备份 settings.json，幂等）。**安装后重启会话生效**。
+Both do the same thing: register local marketplace (parent directory `dsh-plugins/` as marketplace root) + `claude plugin install` + MCP tool permission allowlist + claude-hud worker status segment config (auto-backup settings.json before changes, idempotent). **Restart the session after installation for changes to take effect.**
 
-### 使用
+### Usage
 
-- 直接在对话中说 "把 X 派给 ds-flash" 或 "把 X 派给 ds-pro"，子代理会执行任务
-- 派发数量与实时进度显示在 Claude Code 的任务 UI
-- **HUD 状态栏段**：`⚙dsh 1▶pro 2m14s 21.7k/606 ✓3`（当前档位 / 耗时 / token 占用 / 完成计数）
-  - 本地开发用 `statusline/statusline.sh` 或 `statusline/worker-segment.sh` 可独立集成
-- **超长任务**：CC 对 MCP 调用有超时限制（`MCP_TOOL_TIMEOUT` 可调），长任务可让 orchestrator 用 `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` 轮询
-- **本地开发调试**：`claude --plugin-dir /path/to/dsh-crew` 临时加载
+- Directly in conversation, say "dispatch X to ds-flash" or "dispatch X to ds-pro", and subagent executes the task
+- Dispatch count and real-time progress shown in Claude Code task UI
+- **HUD status line segment**: `⚙dsh 1▶pro 2m14s 21.7k/606 ✓3` (current tier / elapsed time / token usage / completion count)
+  - For local development, `statusline/statusline.sh` or `statusline/worker-segment.sh` can be independently integrated
+- **Long-running tasks**: CC has timeout limits on MCP calls (`MCP_TOOL_TIMEOUT` adjustable), long tasks can have orchestrator use `dsh_spawn_worker` + `dsh_worker_result(wait_seconds)` polling
+- **Local development and debugging**: `claude --plugin-dir /path/to/dsh-crew` to temporarily load
 
 ## Codex
 
-### 安装
+### Installation
 
-推荐用安装器（自动按本机路径渲染，并复制 `/dsh-config`、`/dsh-status` 命令）：
+Recommended to use the installer (auto-renders paths for this machine, copies `/dsh-config`, `/dsh-status` commands):
 
 ```bash
 node src/install/cli.mjs codex
 ```
 
-或手工复制（复制后需自行修改路径）：
+Or manually copy (requires manual path modification after copying):
 
 ```bash
-cp codex/agents/*.toml ~/.codex/agents/    # 全局或项目级 .codex/agents/
+cp codex/agents/*.toml ~/.codex/agents/    # global or project-level .codex/agents/
 ```
 
-角色文件内已预配：
+Role files come pre-configured with:
 
-- MCP server 挂载配置
-- `default_tools_approval_mode = "approve"`（**必须**，否则 exec 模式下工具调用被自动取消）
+- MCP server mounting configuration
+- `default_tools_approval_mode = "approve"` (**required**, otherwise tool calls are auto-cancelled in exec mode)
 - `tool_timeout_sec = 3600`
 
-**注意**：手工复制时，role 文件中 `args` 的绝对路径需按实际安装位置修改；用安装器则无需手改。
+**Note**: When manually copying, absolute paths in the `args` field must be updated to match actual installation location; the installer handles this automatically.
 
-### 使用
+### Usage
 
-- 交互 TUI 里选 "spawn ds-pro to ..." 派发任务，Active/Done 面板显示进度
-- `codex exec` 模式也可直接调 `dsh_run_worker`
+- In interactive TUI, select "spawn ds-pro to ..." to dispatch tasks; Active/Done panels show progress
+- `codex exec` mode can also directly call `dsh_run_worker`
 
-## MCP 工具
+## MCP tools
 
-| 工具 | 说明 |
+| Tool | Description |
 |---|---|
-| `dsh_run_worker` | 阻塞式派任务（`tier`: flash/pro，`effort`: off/high/max，`cwd`），等返回结果 |
-| `dsh_spawn_worker` | 异步派发任务，返回 job id（用于并行 fan-out） |
-| `dsh_worker_status` | 查询全部 job 的实时进度（turn/step/当前工具/token） |
-| `dsh_worker_result` | 取结果，可指定 `wait_seconds` 等待 |
-| `dsh_worker_cancel` | 取消指定 job，终止其 runtime 进程 |
+| `dsh_run_worker` | Synchronous task dispatch (`tier`: flash/pro, `effort`: off/high/max, `cwd`), waits for result |
+| `dsh_spawn_worker` | Asynchronous task dispatch, returns job id (for parallel fan-out) |
+| `dsh_worker_status` | Query real-time progress of all jobs (turn/step/current tool/token) |
+| `dsh_worker_result` | Fetch result, can specify `wait_seconds` to wait |
+| `dsh_worker_cancel` | Cancel specified job, terminate its runtime process |
 
-进度同时镜像到 `~/.config/dsh-crew/status.d/`（每个写入方一个分片文件，statusline / 外部监控可读）。
+Progress is simultaneously mirrored to `~/.config/dsh-crew/status.d/` (one shard file per writer, can be read by statusline / external monitoring).
 
-## 多模态：视觉与生图
+## Multimodal: vision and image generation
 
-**DeepSeek 是纯文本模型**，不支持图片输入与生图输出。本插件通过 MCP 工具把这两项能力外借过来：
+**DeepSeek is a text-only model** and does not support image input or generation. This plugin sources these capabilities externally through MCP tools:
 
-| 工具 | 说明 |
+| Tool | Description |
 |---|---|
-| `describe_image` | 看图回答问题（截图、设计稿、图表等），结果按 provider + 模型 + 图片 + 问题缓存 |
-| `generate_image` | 按文字描述出图，保存到指定绝对路径；输出为平面位图（需要图层编辑用 OpenPencil） |
+| `describe_image` | Answer questions by viewing images (screenshots, designs, charts, etc.), results cached by provider + model + image + question |
+| `generate_image` | Generate image from text description, save to specified absolute path; output is flat bitmap (requires OpenPencil for layer editing) |
 
-**会话贴图**：在 DSH 里把模型切到 `DeepSeek (视觉) ◉` 即可直接贴图。图片会留在会话里正常显示，插件在其后附上一段转写文字，并在发送前把图片剥离——你看图、模型读字。
+**Session image pasting**: In DSH, switch model to `DeepSeek (vision) ◉` to directly paste images. Images remain in session and display normally; the plugin appends transcribed text after them and strips images before sending—you see the image, the model reads the text.
 
-### 配置
+### Configuration
 
-在 **DSH 设置页 → DSH Crew → 多模态**（或直接编辑 `~/.config/dsh-crew/config.json`）配置：
+In **DSH settings page → DSH Crew → Multimodal** (or directly edit `~/.config/dsh-crew/config.json`):
 
-**视觉 provider**（看图）：
+**Vision provider** (image viewing):
 
-- `claude-code`（默认，用 haiku，便宜）
-- `codex`（用 GPT，可指定具体模型）
-- `grok`（用 Grok）
-- `agy`（Antigravity）
-- `自定义`（OpenAI 兼容 API 或本地命令）
-- `off`（禁用）
+- `claude-code` (default, uses haiku, inexpensive)
+- `codex` (uses GPT, can specify specific model)
+- `grok` (uses Grok)
+- `agy` (Antigravity)
+- `custom` (OpenAI-compatible API or local command)
+- `off` (disabled)
 
-**生图 provider**（出图）：
+**Image generation provider** (image generation):
 
-- `codex`（`$imagegen`，gpt-image-2）
-- `agy`（Nano Banana）
-- `grok`（Imagine）
-- `自定义`（OpenAI 兼容 API 或本地命令）
-- `off`（禁用）
+- `codex` (`$imagegen`, gpt-image-2)
+- `agy` (Nano Banana)
+- `grok` (Imagine)
+- `custom` (OpenAI-compatible API or local command)
+- `off` (disabled)
 
-### 自定义 Provider
+### Custom provider
 
-两种接入方式：
+Two integration methods:
 
-**API**：任何 OpenAI 兼容端点
-- 填 Base URL、API Key、模型列表
-- 视觉走 `/chat/completions` 图片 base64 内联
-- 生图走 `/images/generations`
-- **必须填"生图模型"才具备生图能力**，否则该 provider 只出现在视觉选择里
+**API**: Any OpenAI-compatible endpoint
+- Fill Base URL, API Key, model list
+- Vision uses `/chat/completions` with inline base64 images
+- Image generation uses `/images/generations`
+- **Must specify "image generation model" to have generation capability**, otherwise provider only appears in vision selection
 
-**CLI**：本地命令模板，占位符经安全引用后代入
-- 视觉：`{image} {question} {model}` → stdout 作为答案
-- 生图：`{prompt} {output} {size}` → 命令须写出文件到 `{output}`
-- 两条命令至少填一条；填了哪条就具备哪项能力
+**CLI**: Local command template, placeholders substituted with safe references
+- Vision: `{image} {question} {model}` → stdout as answer
+- Image generation: `{prompt} {output} {size}` → command must write file to `{output}`
+- Fill at least one command; whichever is filled determines capability
 
-**连通测试**：每个自定义 provider 都有测试按钮
-- API：检查端点可达性、鉴权，真发一次视觉请求验证
-- CLI：检查可执行文件，真跑一次命令验证
-- 生图：仅校验配置，不实际出图
+**Connectivity test**: Each custom provider has a test button
+- API: Check endpoint reachability, auth, send real vision request to verify
+- CLI: Check executable file, run real command to verify
+- Image generation: Validate config only, no actual image output
 
-**借用的订阅 CLI**（claude / codex / grok / agy）需要你本机已登录，插件不会替你绕过它们的权限。
+**Borrowed subscription CLIs** (claude / codex / grok / agy) require you to be logged in locally; the plugin won't bypass their permissions for you.
 
-## Hub 模式
+## Hub mode
 
-本包同时是合法的 DSH bundle（`dsh.bundle` + `cordis.patch.yml`）。执行 `dsh plugin add dsh-crew` 装进 DSH Web profile 后：
+This package is also a valid DSH bundle (`dsh.bundle` + `cordis.patch.yml`). After installing into DSH Web profile with `dsh plugin add dsh-crew`:
 
-- **Worker 会话一等公民化**：以 first-class session 运行在 DSH host 里（`agents.create` + per-session model/effort waterfall + 默认 preset），出现在 Web UI 会话列表，随时可点开围观完整执行过程
-- **按工作目录归类**：Web UI 中按 cwd 管理 worker 会话
-- **Loopback API**：
-  - `POST/GET /_dsh/dsh-crew/jobs`：spawn 任务、列表、长轮询结果、cancel
-  - `GET /_dsh/dsh-crew/ping`：健康探测（MCP shim 靠它判断 hub 是否在跑）
-  - `POST /_dsh/dsh-crew/install`：一键安装 Claude Code / Codex 集成（即 `src/install/` 的后端）
-- **自动探测**：CC/Codex 的 MCP shim 自动探测 hub（`DSH_CREW_HUB` 环境变量，默认 `http://127.0.0.1:3080`）
-  - DSH Web 在跑 → job 进 hub 模式（`mode: "hub"`）
-  - 没跑 → 回落 standalone runtime
+- **Worker sessions become first-class citizens**: run as first-class sessions in DSH host (`agents.create` + per-session model/effort waterfall + default preset), appear in Web UI session list, can be opened anytime to view complete execution
+- **Organize by working directory**: manage worker sessions by cwd in Web UI
+- **Loopback API**:
+  - `POST/GET /_dsh/dsh-crew/jobs`: spawn tasks, list, long-poll results, cancel
+  - `GET /_dsh/dsh-crew/ping`: health check (MCP shim uses this to detect if hub is running)
+  - `POST /_dsh/dsh-crew/install`: one-click install Claude Code / Codex integration (backend of `src/install/`)
+- **Auto-detection**: CC/Codex's MCP shim auto-detects hub (`DSH_CREW_HUB` env var, default `http://127.0.0.1:3080`)
+  - DSH Web running → jobs enter hub mode (`mode: "hub"`)
+  - Not running → fall back to standalone runtime
 
-## 方案选择与限制
+## Solution selection and limitations
 
-### 日常订阅用户 → 壳 subagent 方案（推荐）
+### Regular subscribers → shell subagent approach (recommended)
 
-- **现状**：Claude Code 壳子代理用 haiku 中转，每次派发多花几百~几千 token
-- **权衡**：用少量 Anthropic token 换取原生任务 UI、进度实时显示、无需额外配置
-- **建议**：如果你已订阅 Claude Pro 或用 Claude Code，用这套——省事且透明
+- **Current state**: Claude Code subagent shell uses haiku as intermediary; each dispatch adds hundreds to thousands of tokens
+- **Trade-off**: Use small amount of Anthropic token in exchange for native task UI, real-time progress display, no extra configuration
+- **Recommendation**: If you already subscribe to Claude Pro or use Claude Code, use this approach—convenient and transparent
 
-### 按量付费 / CI 环境 → Router 直连方案
+### Pay-as-you-go / CI environments → direct router approach
 
-- **现状**：Claude Code 子代理的 frontmatter 不支持直连第三方模型；本仓库 scratchpad 里的 router 实验方案需要 API-key 凭据的 Claude Code，但订阅 OAuth 会被 Anthropic 上游 403
-- **建议**：
-  - 如果用 API-key 凭据（非 OAuth）且想省 Anthropic token，可在本地跑 router 直连 DeepSeek
-  - CI 环境通常也是 API-key，该方案更经济（全部用 DeepSeek token）
-  - 需要自行测试 router 集成（非官方支持）
+- **Current state**: Claude Code subagent frontmatter doesn't support direct third-party model connection; this repo's router experiment in scratchpad requires API-key credentials for Claude Code, but subscription OAuth is blocked upstream by Anthropic with 403
+- **Recommendation**:
+  - If using API-key credentials (not OAuth) and want to save Anthropic tokens, can run local router for direct DeepSeek connection
+  - CI environments typically also use API keys; this approach is more economical (all DeepSeek tokens)
+  - Requires self-testing of router integration (not officially supported)
 
-### 跑着 DSH Web → Hub 模式自动启用
+### Running DSH Web → hub mode auto-enabled
 
-- **现状**：若 `dsh plugin add dsh-crew` 装进 DSH Web profile，job 以一等公民会话跑在 host 里，出现在 Web UI 会话列表
-- **建议**：本地开发迭代时推荐启用 hub 模式，worker 进度可在 Web UI 完整围观；跨机器协作或无 Web UI 环境用 Claude Code / Codex 壳方案
+- **Current state**: If `dsh plugin add dsh-crew` installed into DSH Web profile, jobs run as first-class sessions in host, appear in Web UI session list
+- **Recommendation**: During local development iteration, recommend enabling hub mode; worker progress can be fully observed in Web UI; for cross-machine collaboration or environments without Web UI, use Claude Code / Codex shell approach
 
-### 已知事项
+### Known items
 
-- Codex 角色理论上可试 `model_provider` 直指 DeepSeek（未验证）；本桥不依赖它
-- 生图输出为平面位图，需要分层编辑用 OpenPencil
-- **运行时依赖**：仅 `@modelcontextprotocol/sdk` 与 `zod`；`@deepseek-ai/*` 为 peerDependencies（由 DSH 宿主提供）
-- **Codex 必须配置**：`default_tools_approval_mode = "approve"`，否则工具调用被自动取消
+- Codex role can theoretically try `model_provider` pointing directly to DeepSeek (unverified); this bridge doesn't depend on it
+- Image generation output is flat bitmap; layer editing requires OpenPencil
+- **Runtime dependencies**: Only `@modelcontextprotocol/sdk` and `zod`; `@deepseek-ai/*` are peerDependencies (provided by DSH host)
+- **Codex must configure**: `default_tools_approval_mode = "approve"`, otherwise tool calls are auto-cancelled
 
----
+## Develop
 
-架构决策、实现细节与踩坑记录不随仓库分发，见团队文档中心的 **dsh-plugin** 页。
+```bash
+pnpm install
+node_modules/.bin/tsdown src/client/index.tsx --format cjs --platform browser \
+  --target es2022 --tsconfig tsconfig.client.json --out-dir .client-build --clean
+node scripts/build-client.mjs   # wraps the bundle for the DSH module loader
+node scripts/smoke.mjs          # dispatches one real flash task end to end
+```
+
+Runtime dependencies are only `@modelcontextprotocol/sdk` and `zod`; every `@deepseek-ai/*` package is a peer dependency provided by the DSH host, which keeps the plugin inside the host's single module realm.
+
+## Ecosystem
+
+- [DSH Noema](https://github.com/ZSeven-W/dsh-noema) — long-term memory for DSH
+- [DSH OpenPencil](https://github.com/ZSeven-W/dsh-openpencil) — inspect and edit `.op` design documents inside a conversation
+
+## License
+
+MIT

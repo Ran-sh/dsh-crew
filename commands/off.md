@@ -1,5 +1,5 @@
 ---
-description: 关闭本会话的 DSH worker 派发（硬开关，工具层拒绝）
+description: Disable DSH worker dispatch for this session (hard switch, enforced at the tool layer)
 ---
 
-调用 `dsh_worker_config` 工具，参数 `{"enabled": false}`。然后用一句话确认：本会话 worker 派发已关闭（`/dsh-crew:on` 恢复），期间所有派发请求会在工具层被拒绝。不要做任何其他事。
+Call the `dsh_worker_config` tool with `{"enabled": false}`. Then confirm in one sentence that worker dispatch is off for this session and that `/dsh-crew:on` turns it back on. Reply in the language the user is writing in. Do nothing else.

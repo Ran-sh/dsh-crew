@@ -1,5 +1,5 @@
 {
-  "name": "dsh-crew",
+  "name": "@zseven-w/dsh-crew",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -89,5 +89,39 @@
     "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZSeven-W/dsh-crew.git"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "claude-code",
+    "codex",
+    "subagent",
+    "worker",
+    "multimodal",
+    "plugin",
+    "agent"
+  ],
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "agents",
+    "commands",
+    "codex",
+    "statusline",
+    "cordis.patch.yml",
+    "worker.cordis.yml",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "README.*.md",
+    "docs/images/dsh-crew-logo.png",
+    "docs/images/dsh-crew-overview.png",
+    "LICENSE"
+  ]
 }

@@ -1,5 +1,5 @@
 ---
-description: 恢复本会话的 DSH worker 派发
+description: Re-enable DSH worker dispatch for this session
 ---
 
-调用 `dsh_worker_config` 工具，参数 `{"enabled": true}`。然后用一句话确认已恢复，并附上当前默认配置（tier/effort/mode）。不要做任何其他事。
+Call the `dsh_worker_config` tool with `{"enabled": true}`. Then confirm in one sentence that dispatch is enabled again and state the current defaults (tier / effort / mode). Reply in the language the user is writing in. Do nothing else.

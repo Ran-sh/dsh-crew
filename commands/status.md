@@ -1,5 +1,5 @@
 ---
-description: 查看 DSH worker 任务实时状态
+description: Show live status of DSH worker jobs
 ---
 
-调用 `dsh_worker_status` 工具，把结果整理成紧凑的中文表格：任务 id、档位/effort、状态（含当前工具）、进度（turn.step / 工具调用数）、tokens（in/out）、任务摘要。没有任务时说"当前没有 worker 任务"。不要做任何其他事。
+Call the `dsh_worker_status` tool and present the result as one compact table: job id, tier/effort, status (including the current tool), progress (turn.step / tool calls), tokens, task summary. If there are no jobs, say so in one line. Reply in the language the user is writing in. Do nothing else.
