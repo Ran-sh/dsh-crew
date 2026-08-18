@@ -7,6 +7,11 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
+import { normalizeGlobalConfig, chooseDefaultTier } from '../policy.mjs';
+
+// policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
+// here is safe for the profile-realm discipline: it never pulls in package
+// copies that would duplicate module realms.
 
 // No @deepseek-ai imports here on purpose: this plugin is loaded into the
 // profile realm, and importing our own package copies would create duplicate
@@ -284,6 +289,10 @@ export async function apply(ctx) {
     const { readGlobalConfig } = await import('../install/install.mjs');
     hub.getConfig = () => readGlobalConfig();
   } catch {}
+  // Backend policy enforcement for the hub jobs route: mirrors the MCP
+  // server's resolver. No session scope exists here (the MCP layer already
+  // enforced its own), so the check uses the global config only.
+  const policyCheck = (tier) => chooseDefaultTier(normalizeGlobalConfig(hub.getConfig?.() ?? {}), tier, {});
   const disposers = [];
 
   // Multimodal bridge: register describe_image / generate_image for the DS
@@ -339,6 +348,11 @@ export async function apply(ctx) {
           }
           if (req.method === 'POST' && parts.length === 0) {
             const payload = await readBody(req);
+            // Same policy resolver as the MCP server (src/server.mjs): disabled
+            // tiers and the subagents master switch are hard-enforced here too,
+            // so the hub path can never start a worker the MCP layer refused.
+            const decision = policyCheck(payload?.tier);
+            if (!decision.ok) return sendJson(res, 400, { ok: false, error: decision.error.message, code: decision.error.policyCode });
             const job = await hub.spawn(payload);
             return sendJson(res, 200, { ok: true, job: hub.view(job) });
           }
