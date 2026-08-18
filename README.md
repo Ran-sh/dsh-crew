@@ -157,6 +157,54 @@ Then open Settings → DSH Crew and install the Claude Code / Codex integrations
 - **worker**: the DSH agent doing the work — a full session with its own tools, sandbox and preset, not a bare model call.
 - **effort**: reasoning strength, `off` = no reasoning, `high` = high reasoning investment, `max` = maximum reasoning investment.
 
+## Agent Orchestration
+
+DSH Crew is configurable from **Settings → DSH Crew → Agent Orchestration** (stored in `~/.config/dsh-crew/config.json`, read by new CC / Codex sessions as defaults).
+
+### Enable Subagents
+
+Master switch for worker dispatch. When off, `dsh_run_worker` / `dsh_spawn_worker` **refuse dispatch at the tool layer** (error code `SUBAGENTS_DISABLED`) — this is hard-enforced in the backend, not a prompt. The configuration is kept; re-enable to restore.
+
+### Tier states
+
+Each tier has a state, enforced by the backend for every dispatch (blocking and async, hub and standalone alike):
+
+- **Disabled** — dispatch to this tier is refused (`TIER_DISABLED`). Disabling one tier never silently starts the other: `default_tier` pointing at a disabled tier is skipped, and a tier left without any usable tier returns `NO_AUTO_TIER` / `NO_WORKER_TIER`.
+- **Manual** — the tier is callable, but only when the user (or the orchestrator on the user's behalf) explicitly names the tier or picks the corresponding `ds-flash` / `ds-pro` subagent. It is never chosen as the automatic default and never used for automatic escalation or automatic review.
+- **Auto** — the orchestrator may delegate to this tier automatically.
+
+**Manual is a routing convention, not a mind reader.** The MCP backend cannot reliably prove whether a `tier=pro` call was the user's explicit choice or the model's own decision, so Manual means "excluded from backend automation + clearly described as manual in the host routing guidance" — nothing more.
+
+### Collaboration modes
+
+| Mode | Flash | Pro | Automatic escalation | Automatic Pro review |
+|---|---|---|---|---|
+| `flash-only` | Auto | Disabled | never | never |
+| `pro-only` | Disabled | Auto | n/a | never |
+| `balanced` (default) | Auto | Auto | only if `escalate_on_failure` is on | only if `pro_reviews_flash` is on |
+| `review-pipeline` | Auto | Auto | only if `escalate_on_failure` is on | always |
+| `custom` | per `flash_state` / `pro_state` | per `flash_state` / `pro_state` | per `escalate_on_failure` | per `pro_reviews_flash` |
+
+When only one tier is Auto, that tier carries all normal delegatable coding work regardless of its default roles — a Flash-only setup can implement anything.
+
+### Responsibilities (roles)
+
+`flash_roles` and `pro_roles` are routing guidance (who is good at what), not a keyword classifier. Allowed roles: `implementation`, `simple_fix`, `tests`, `search_inspection`, `architecture`, `complex_debugging`, `refactor`, `code_review`. Defaults: Flash covers implementation / simple fixes / tests / search; Pro covers architecture / complex debugging / refactor / review / implementation.
+
+### Main Agent Mode
+
+`direct-allowed` / `coordinator-first` / `dispatcher-only` describe how the orchestrator should prefer to work. **This is host routing guidance, not a security boundary** — a Crew MCP backend cannot stop Claude Code or Codex from editing files, running shell commands or using the host's other tools. `dispatcher-only` means "prefer planning, dispatch, review and final integration", not "the host's tools are disabled".
+
+### Policy precedence
+
+Highest to lowest: session `enabled` → global `subagents_enabled` → session `tier_policy` hard clamp (`flash-only` / `pro-only`) → collaboration preset → custom tier states → explicitly requested tier → `default_tier` → the single Auto tier → error. `dsh_run_worker` and `dsh_spawn_worker` share one resolver; the hub jobs API enforces the same policy.
+
+Legacy `tier_policy` remains fully supported: old configs migrate automatically (`flash-only` → Flash Only, `pro-only` → Pro Only, `auto` → Balanced), and `/dsh-crew:config` / `/dsh-config` keep accepting `policy=…` as a session clamp.
+
+### Review Pipeline
+
+With `review-pipeline` (blocking dispatch), a successful Flash implementation is followed by **one** automatic Pro review — never more than one, and only while Pro is Auto. The review task receives the original task, the workspace and the Flash result summary, and is instructed to review only (no file edits) unless the user asks for fixes. The implementation result is never overwritten by the review; a failed review returns implementation success + review failure and lets the orchestrator decide. **Async dispatch (`dsh_spawn_worker`) keeps its original single-job behavior** — ask the worker for a review explicitly if you want one. "Review only" is prompt guidance; there is no read-only sandbox in this project (see limitations).
+
 ## Claude Code
 
 ### Installation
@@ -248,6 +296,18 @@ Progress is simultaneously mirrored to `~/.config/dsh-crew/status.d/` (one shard
 | `describe_image` | Answer questions by viewing images (screenshots, designs, charts, etc.), results cached by provider + model + image + question |
 | `generate_image` | Generate image from text description, save to specified absolute path; output is flat bitmap (requires OpenPencil for layer editing) |
 
+### Capability switches
+
+**Enable Crew Vision** and **Enable Image Generation** (Settings → DSH Crew → Multimodal) really control registration:
+
+- `vision_enabled = false` → the Crew `describe_image` tool is **not registered** and the Crew vision route (the `deepseek-vision` adapter + pasted-image transcription) is **not installed**.
+- `imagegen_enabled = false` → the Crew `generate_image` tool is **not registered**.
+- `provider = off` also counts as unavailable even when the switch is on.
+- Turning a capability off never erases the stored provider/model — re-enabling restores the previous setup.
+- Because tool registration happens at DSH boot, **the switches take effect after a DSH restart** (the UI shows this hint).
+
+This is how you run Crew side-by-side with your own vision plugin (e.g. `dsh-vision`): switch Crew Vision / Image Generation off and keep only the worker dispatch.
+
 **Session image pasting**: In DSH, switch model to `DeepSeek (vision) ◉` to directly paste images. Images remain in session and display normally; the plugin appends transcribed text after them and strips images before sending—you see the image, the model reads the text.
 
 ### Configuration
@@ -334,6 +394,15 @@ This package is also a valid DSH bundle (`dsh.bundle` + `cordis.patch.yml`). Aft
 - Image generation output is flat bitmap; layer editing requires OpenPencil
 - **Runtime dependencies**: Only `@modelcontextprotocol/sdk` and `zod`; `@deepseek-ai/*` are peerDependencies (provided by DSH host)
 - **Codex must configure**: `default_tools_approval_mode = "approve"`, otherwise tool calls are auto-cancelled
+- **Main Agent Mode is not a host-tool sandbox**: the Crew backend cannot restrict the host's own edit/shell tools; it is routing guidance only
+- **Manual tiers cannot be distinguished from model-chosen tiers** with certainty: the backend enforces "no automatic selection / escalation / review", and the host guidance says "only when the user explicitly asks"
+- **Automatic Pro review is prompt guidance for read-only review** — no read-only sandbox exists in this project
+- **Async dispatch does not chain an automatic review**; review-pipeline semantics apply to blocking `dsh_run_worker`
+- **No file-level write locking**: workers dispatched in parallel may touch the same files; prevent overlapping writes by scoping tasks (future work)
+
+## Fork note
+
+This repository is a customized fork of [ZSeven-W/dsh-crew](https://github.com/ZSeven-W/dsh-crew), adding configurable Crew orchestration (subagent switches, tier states, collaboration modes, main agent mode, responsibilities, review pipeline) and real multimodal capability switches on top of the original MIT-licensed work. The original install, hub and standalone dispatch chain is unchanged.
 
 ## Develop
 
