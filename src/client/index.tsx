@@ -20,6 +20,33 @@ const COPY = {
     confirmRestore: (name: string) => `确定从 ${name} 移除 dsh-crew 集成？（settings 会先备份）`,
     globalConfig: '全局配置',
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
+    orchestration: 'Agent 编排',
+    enableSubagents: '启用子 Agent',
+    enableSubagentsHint: '总开关。关闭后 dsh_run_worker / dsh_spawn_worker 在工具层拒绝派发（配置保留，重新开启即恢复）。',
+    subagentsKept: '配置已保留',
+    mainAgentMode: '主 Agent 模式',
+    mainAgentModeDesc: { 'direct-allowed': '直接允许 · 可自己做，也可委派', 'coordinator-first': '协调优先 · 先规划、拆分、委派，再检查验证', 'dispatcher-only': '仅派发 · 尽量只做规划、派发、审查与整合' },
+    mainAgentModeHint: '这是宿主路由指引，不是对宿主自身工具的硬限制。',
+    collaborationMode: '协作模式',
+    collaborationModeDesc: { 'flash-only': 'Flash Only · 只用 Flash', 'pro-only': 'Pro Only · 只用 Pro', balanced: 'Balanced · 双 Auto', 'review-pipeline': 'Review Pipeline · Flash 实现 + Pro 复审', custom: 'Custom · 完全手动' },
+    tierCardFlash: 'DeepSeek V4 Flash', tierCardPro: 'DeepSeek V4 Pro',
+    tierState: '状态',
+    tierStateDesc: { disabled: '禁用', manual: '手动（仅用户点名时可用）', auto: '自动（orchestrator 可自动委派）' },
+    stateManagedByPreset: '由协作模式管理',
+    statePresetHint: '切到 Custom 可单独配置各档状态。',
+    responsibilities: '职责',
+    responsibilitiesHint: '路由指引，仅用于描述分工；只剩一个 Auto 档时它承担全部可委派工作。',
+    roleLabels: { implementation: '代码实现', simple_fix: '简单修复', tests: '测试', search_inspection: '搜索 / 检查', architecture: '架构', complex_debugging: '复杂调试', refactor: '重构', code_review: '代码审查' },
+    routing: '路由',
+    proReviewsFlash: 'Pro 复审 Flash 改动',
+    proReviewsFlashHint: 'Flash 成功后自动追加一次 Pro 复审（仅 blocking 派发）',
+    proReviewsLocked: 'Review Pipeline 模式固定开启',
+    enableCrewVision: '启用 Crew 视觉',
+    enableCrewVisionHint: '关闭后不注册 Crew 的 describe_image 与视觉 route（可与你的 dsh-vision 等共存）。',
+    enableImagegen: '启用生图',
+    enableImagegenHint: '关闭后不注册 Crew 的 generate_image。',
+    capRestartHint: '该开关改变工具注册，需重启 DSH 生效',
+    capDisabledNote: 'Crew 工具/route 已禁用（重启 DSH 后生效）',
     tier: '默认档位', effort: '默认推理', mode: '执行模式', timeout: '默认超时(秒)', hubUrl: 'Hub 地址',
     tierPolicy: '档位策略', escalate: '失败升档',
     tierPolicyDesc: { auto: 'auto · orchestrator 自选', 'flash-only': '只用 flash', 'pro-only': '只用 pro' },
@@ -83,6 +110,33 @@ const COPY = {
     confirmRestore: (name: string) => `Remove the dsh-crew integration from ${name}? (settings are backed up first)`,
     globalConfig: 'Global configuration',
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
+    orchestration: 'Agent orchestration',
+    enableSubagents: 'Enable Subagents',
+    enableSubagentsHint: 'Master switch. When off, dsh_run_worker / dsh_spawn_worker refuse dispatch at the tool layer (the configuration is kept; re-enable to restore).',
+    subagentsKept: 'Configuration kept',
+    mainAgentMode: 'Main Agent Mode',
+    mainAgentModeDesc: { 'direct-allowed': 'Direct Allowed · implement directly or delegate', 'coordinator-first': 'Coordinator First · plan, decompose, delegate, verify', 'dispatcher-only': 'Dispatcher Only · plan, dispatch, review, integrate' },
+    mainAgentModeHint: 'Host routing guidance — not a hard restriction on the host\'s own tools.',
+    collaborationMode: 'Collaboration Mode',
+    collaborationModeDesc: { 'flash-only': 'Flash Only', 'pro-only': 'Pro Only', balanced: 'Balanced', 'review-pipeline': 'Review Pipeline · implement + review', custom: 'Custom' },
+    tierCardFlash: 'DeepSeek V4 Flash', tierCardPro: 'DeepSeek V4 Pro',
+    tierState: 'State',
+    tierStateDesc: { disabled: 'Disabled', manual: 'Manual (only when the user names this tier)', auto: 'Auto (the orchestrator may delegate to it)' },
+    stateManagedByPreset: 'managed by the collaboration mode',
+    statePresetHint: 'Switch to Custom to configure each tier state separately.',
+    responsibilities: 'Responsibilities',
+    responsibilitiesHint: 'Routing guidance describing the split of work; with a single Auto tier left, that tier carries all delegatable coding work.',
+    roleLabels: { implementation: 'Code implementation', simple_fix: 'Simple fixes', tests: 'Tests', search_inspection: 'Search / inspection', architecture: 'Architecture', complex_debugging: 'Complex debugging', refactor: 'Refactoring', code_review: 'Code review' },
+    routing: 'Routing',
+    proReviewsFlash: 'Pro reviews Flash changes',
+    proReviewsFlashHint: 'Automatically follow a successful Flash run with one Pro review (blocking dispatch only)',
+    proReviewsLocked: 'always on in Review Pipeline mode',
+    enableCrewVision: 'Enable Crew Vision',
+    enableCrewVisionHint: 'When off, the Crew describe_image tool and vision route are not registered (coexist with your own dsh-vision or other plugins).',
+    enableImagegen: 'Enable Image Generation',
+    enableImagegenHint: 'When off, the Crew generate_image tool is not registered.',
+    capRestartHint: 'This switch changes tool registration and takes effect after a DSH restart',
+    capDisabledNote: 'Crew tool/route disabled (effective after DSH restart)',
     tier: 'Default tier', effort: 'Default effort', mode: 'Mode', timeout: 'Timeout (s)', hubUrl: 'Hub URL',
     tierPolicy: 'Tier policy', escalate: 'Escalate on failure',
     tierPolicyDesc: { auto: 'auto · orchestrator picks', 'flash-only': 'flash only', 'pro-only': 'pro only' },
@@ -482,6 +536,93 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
       <div style={S.section}>{copy.globalConfig}</div>
       {config && (<>
+        {(() => {
+          const mode = config.collaboration_mode ?? 'balanced';
+          const nonCustom = mode !== 'custom';
+          const presetStates = { 'flash-only': { flash: 'auto', pro: 'disabled' }, 'pro-only': { flash: 'disabled', pro: 'auto' }, balanced: { flash: 'auto', pro: 'auto' }, 'review-pipeline': { flash: 'auto', pro: 'auto' }, custom: null } as Record<string, { flash: string; pro: string } | null>;
+          const states = nonCustom ? presetStates[mode] : null;
+          const effState = (tier: string) => states ? states[tier] : (tier === 'flash' ? config.flash_state : config.pro_state) ?? 'auto';
+          const roleOptions = ['implementation', 'simple_fix', 'tests', 'search_inspection', 'architecture', 'complex_debugging', 'refactor', 'code_review'] as const;
+          const roleKeys = (tier: string) => {
+            const arr = tier === 'flash' ? (config.flash_roles ?? []) : (config.pro_roles ?? []);
+            const set = new Set(arr);
+            return { arr: roleOptions.filter((r) => set.has(r)), set, save: (list: string[]) => field(tier === 'flash' ? 'flash_roles' : 'pro_roles', list) };
+          };
+          const tierCard = (tier: string, card: { t: string; d: string }) => (
+            <div style={S.block}>
+              <div>
+                <div style={S.settingTitle}>{card.t}</div>
+                <div style={S.settingDesc}>{card.d}</div>
+              </div>
+              <div style={S.blockGrid}>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.tierState}</span>
+                  {nonCustom ? (
+                    <div style={{ fontSize: 12.5, padding: '3px 8px', borderRadius: 5, border: '1px solid rgba(128,128,128,0.35)', opacity: 0.8 }}>
+                      {effState(tier) === 'auto' ? copy.tierStateDesc.auto : copy.tierStateDesc.disabled}（{copy.stateManagedByPreset}）
+                    </div>
+                  ) : (
+                    <CustomSelect value={tier === 'flash' ? (config.flash_state ?? 'auto') : (config.pro_state ?? 'auto')}
+                      onChange={(v) => field(tier === 'flash' ? 'flash_state' : 'pro_state', v)}
+                      options={(['disabled', 'manual', 'auto'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} />
+                  )}
+                </label>
+                <label style={S.field}><span style={S.fieldLabel}>{tier === 'flash' ? copy.presetFlash : copy.presetPro}</span>
+                  <CustomSelect value={tier === 'flash' ? (config.preset_flash ?? 'default') : (config.preset_pro ?? 'default')}
+                    onChange={(v) => field(tier === 'flash' ? 'preset_flash' : 'preset_pro', v)} options={presetOptions} /></label>
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+                {copy.statePresetHint}{' '}{copy.responsibilitiesHint}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '3px 14px' }}>
+                {roleOptions.map((r) => {
+                  const k = roleKeys(tier);
+                  const on = k.set.has(r);
+                  return (
+                    <label key={r} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                      <input type="checkbox" checked={on} onChange={() => {
+                        k.save(on ? k.arr.filter((x) => x !== r) : [...k.arr, r]);
+                      }} />
+                      <span>{copy.roleLabels[r]}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+          return (<>
+            <div style={S.group}>{copy.orchestration}</div>
+            {block({ t: copy.orchestration, d: copy.enableSubagentsHint }, (<>
+              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }} title={copy.enableSubagentsHint}>
+                <input type="checkbox" checked={!!config.subagents_enabled} onChange={(e) => field('subagents_enabled', e.target.checked)} />
+                <span style={{ fontSize: 12.5 }}>{config.subagents_enabled === false ? copy.subagentsKept : copy.enableSubagents}</span>
+              </label>
+            </>), false)}
+            {block({ t: copy.mainAgentMode, d: copy.mainAgentModeHint }, (<>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.mainAgentMode}</span>
+                <CustomSelect value={config.main_agent_mode ?? 'coordinator-first'}
+                  onChange={(v) => field('main_agent_mode', v)}
+                  options={(['direct-allowed', 'coordinator-first', 'dispatcher-only'] as const).map((m) => ({ value: m, label: copy.mainAgentModeDesc[m] }))} /></label>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.collaborationMode}</span>
+                <CustomSelect value={mode}
+                  onChange={(v) => field('collaboration_mode', v)}
+                  options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
+            </>))}
+            {tierCard('flash', { t: copy.tierCardFlash, d: 'deepseek-v4-flash · fast and cheap' })}
+            {tierCard('pro', { t: copy.tierCardPro, d: 'deepseek-v4-pro · stronger reasoning' })}
+            <div style={S.group}>{copy.routing}</div>
+            {block({ t: copy.routing, d: '' }, (<>
+              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={copy.escalateHint}>
+                <input type="checkbox" checked={!!config.escalate_on_failure} onChange={(e) => field('escalate_on_failure', e.target.checked)} />
+                <span style={{ fontSize: 12 }}>{copy.escalate}</span></label>
+              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={mode === 'review-pipeline' ? copy.proReviewsLocked : copy.proReviewsFlashHint}>
+                <input type="checkbox" disabled={mode === 'review-pipeline'}
+                  checked={mode === 'review-pipeline' ? true : !!config.pro_reviews_flash}
+                  onChange={(e) => field('pro_reviews_flash', e.target.checked)} />
+                <span style={{ fontSize: 12 }}>{copy.proReviewsFlash}{mode === 'review-pipeline' ? `（${copy.proReviewsLocked}）` : ''}</span></label>
+            </>))}
+          </>);
+        })()}
+
         <div style={S.group}>{copy.groupDispatch}</div>
         {block(copy.cardDispatch, (<>
           <label style={S.field}><span style={S.fieldLabel}>{copy.tier}</span>
@@ -520,6 +661,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
         <div style={S.group}>{copy.groupMultimodal}</div>
         {block(copy.cardMM, (<>
+          <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, gridColumn: '1 / -1' }} title={copy.capRestartHint}>
+            <input type="checkbox" checked={!!config.vision_enabled} onChange={(e) => field('vision_enabled', e.target.checked)} />
+            <span style={{ fontSize: 12.5 }}>{copy.enableCrewVision}</span>
+            {config.vision_enabled === false && <span style={{ fontSize: 11, opacity: 0.55 }}>{copy.capDisabledNote}</span>}
+          </label>
           <label style={S.field}><span style={S.fieldLabel}>{copy.visionProvider}</span>
             <CustomSelect value={config.vision_provider}
               onChange={(p) => {
@@ -571,6 +717,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   onClick={removeCurrentModel}>−</button>
               )}
             </div></label>
+          <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, gridColumn: '1 / -1' }} title={copy.capRestartHint}>
+            <input type="checkbox" checked={!!config.imagegen_enabled} onChange={(e) => field('imagegen_enabled', e.target.checked)} />
+            <span style={{ fontSize: 12.5 }}>{copy.enableImagegen}</span>
+            {config.imagegen_enabled === false && <span style={{ fontSize: 11, opacity: 0.55 }}>{copy.capDisabledNote}</span>}
+          </label>
           <label style={S.field}><span style={S.fieldLabel}>{copy.imagegenProvider}</span>
             <CustomSelect value={config.imagegen_provider} onChange={(v) => field('imagegen_provider', v)}
               options={imagegenProviderOptions} /></label>

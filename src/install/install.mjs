@@ -49,6 +49,30 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   tier_policy: 'auto',
   // When a blocking flash run fails, retry the same task once on pro.
   escalate_on_failure: false,
+  // ---- configurable-crew orchestration (see src/policy.mjs) ----
+  // Master switch for the whole worker dispatch path (hard, backend-enforced).
+  subagents_enabled: true,
+  // flash-only | pro-only | balanced | review-pipeline | custom
+  collaboration_mode: 'balanced',
+  // direct-allowed | coordinator-first | dispatcher-only (host routing
+  // guidance — the Crew MCP backend cannot restrict the host's own tools).
+  main_agent_mode: 'coordinator-first',
+  // Per-tier state: disabled | manual | auto. Owned by the collaboration
+  // preset unless collaboration_mode is "custom".
+  flash_state: 'auto',
+  pro_state: 'auto',
+  // Roles per tier: routing guidance only, not a keyword classifier.
+  flash_roles: ['implementation', 'simple_fix', 'tests', 'search_inspection'],
+  pro_roles: ['architecture', 'complex_debugging', 'refactor', 'code_review', 'implementation'],
+  // Automatic Pro review after a successful Flash run (review-pipeline forces
+  // this on; balanced/custom only when this flag is set).
+  pro_reviews_flash: false,
+  // ---- configurable-crew multimodal switches ----
+  // False = the Crew describe_image tool and vision route are not registered
+  // at DSH boot (takes effect after a DSH restart). Provider/model values are
+  // kept untouched so re-enabling restores the previous setup.
+  vision_enabled: true,
+  imagegen_enabled: true,
   // Multimodal bridge: which subscription CLI lends the text-only DS model
   // eyes (describe_image) and a brush (generate_image).
   vision_provider: 'claude-code', // claude-code | codex | grok | agy | <custom id> | off
@@ -79,6 +103,15 @@ export function writeGlobalConfig(patch) {
   const next = { ...readGlobalConfig() };
   for (const [k, v] of Object.entries(patch ?? {})) {
     if (v !== undefined && k in GLOBAL_CONFIG_DEFAULTS) next[k] = v;
+  }
+  // Legacy clamp fields stay writable (session commands still read them), and
+  // a tier_policy write resyncs the new fields so old UIs can't drift apart
+  // from the new policy. Deprecated but harmless.
+  if (patch?.tier_policy !== undefined) {
+    next.tier_policy = patch.tier_policy;
+    if (patch.tier_policy === 'flash-only') { next.collaboration_mode = 'flash-only'; }
+    else if (patch.tier_policy === 'pro-only') { next.collaboration_mode = 'pro-only'; }
+    else if (next.collaboration_mode === 'flash-only' || next.collaboration_mode === 'pro-only') { next.collaboration_mode = 'balanced'; }
   }
   writeFileSync(GLOBAL_CONFIG_FILE, JSON.stringify(next, null, 2) + '\n');
   return next;

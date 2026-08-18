@@ -157,6 +157,54 @@ smoke 测试会挑一条可用的路径派一个廉价任务——DSH 实例在�
 - **worker**：被派去干活的 DSH agent —— 一个完整的会话，自带工具、沙箱与预设，不是一次裸的模型调用。
 - **effort**：推理强度，`off` = 不用推理，`high` = 高投入推理，`max` = 最大推理投入。
 
+## Agent 编排
+
+在 **设置 → DSH Crew → Agent 编排** 里配置（保存在 `~/.config/dsh-crew/config.json`，CC / Codex 新会话自动读取为默认值）。
+
+### 启用子 Agent
+
+worker 派发的总开关。关闭后 `dsh_run_worker` / `dsh_spawn_worker` **在工具层直接拒绝派发**（错误码 `SUBAGENTS_DISABLED`）——这是 backend 硬执法，不是提示词约束。配置会被保留，重新开启即恢复。
+
+### 档位状态
+
+每个档位都有状态，对所有派发（blocking 与 async、hub 与 standalone 完全一致）在 backend 强制生效：
+
+- **禁用（Disabled）**——派发到该档位被拒绝（`TIER_DISABLED`）。禁用一个档位绝不会偷偷启动另一个：指向禁用档位的 `default_tier` 会被跳过，两档都不可用时返回 `NO_AUTO_TIER` / `NO_WORKER_TIER`。
+- **手动（Manual）**——档位可以被调用，但仅当用户（或 orchestrator 替用户）明确点名该档位、或明确选择对应的 `ds-flash` / `ds-pro` 子 Agent 时。它不会被自动选为默认，也不参与自动升档与自动复审。
+- **自动（Auto）**——orchestrator 可以自动把任务委派给该档位。
+
+**Manual 是路由约定，不是读心术。** MCP backend 无法可靠证明一次 `tier=pro` 调用是用户明确点名还是主模型自己的决定，因此 Manual 的准确语义是「backend 自动化全部排除 + 宿主路由指引中明确标注仅限用户点名」——仅此而已。
+
+### 协作模式
+
+| 模式 | Flash | Pro | 自动升档 | 自动 Pro 复审 |
+|---|---|---|---|---|
+| `flash-only` | Auto | 禁用 | 永不 | 永不 |
+| `pro-only` | 禁用 | Auto | 不适用 | 永不 |
+| `balanced`（默认） | Auto | Auto | 仅当开启 `escalate_on_failure` | 仅当开启 `pro_reviews_flash` |
+| `review-pipeline` | Auto | Auto | 仅当开启 `escalate_on_failure` | 始终 |
+| `custom` | 按 `flash_state` / `pro_state` | 按 `flash_state` / `pro_state` | 按 `escalate_on_failure` | 按 `pro_reviews_flash` |
+
+当只有一个档位是 Auto 时，该档位承担所有常规可委派工作，与默认职责无关——只用 Flash 也能完成任何实现任务。
+
+### 职责（roles）
+
+`flash_roles` 与 `pro_roles` 是路由指引（谁擅长什么），不是关键词分类器。允许的 role：`implementation`、`simple_fix`、`tests`、`search_inspection`、`architecture`、`complex_debugging`、`refactor`、`code_review`。默认：Flash 负责实现 / 简单修复 / 测试 / 搜索；Pro 负责架构 / 复杂调试 / 重构 / 审查 / 实现。
+
+### 主 Agent 模式
+
+`direct-allowed` / `coordinator-first` / `dispatcher-only` 描述 orchestrator 偏好的工作方式。**这是宿主路由指引，不是安全边界**——Crew MCP backend 无法阻止 Claude Code 或 Codex 自己编辑文件、跑 shell 或使用宿主的其他工具。`dispatcher-only` 的意思是「尽量只做规划、派发、审查与整合」，而不是「宿主的工具被禁用了」。
+
+### 策略优先级
+
+从高到低：会话 `enabled` → 全局 `subagents_enabled` → 会话 `tier_policy` 硬钳制（`flash-only` / `pro-only`）→ 协作预设 → custom 档位状态 → 显式指定 tier → `default_tier` → 唯一的 Auto 档位 → 报错。`dsh_run_worker` 与 `dsh_spawn_worker` 共享同一套 resolver；hub jobs API 也执行同一策略。
+
+旧的 `tier_policy` 完全保留：旧配置自动迁移（`flash-only` → Flash Only，`pro-only` → Pro Only，`auto` → Balanced），`/dsh-crew:config` / `/dsh-config` 继续接受 `policy=…` 作为会话钳制。
+
+### Review Pipeline
+
+在 `review-pipeline` 模式（blocking 派发）下，Flash 实现成功后自动追加 **一次** Pro 复审——最多一次，且仅在 Pro 为 Auto 时执行。复审任务收到原始任务、工作目录与 Flash 结果摘要，并被要求只审不改（除非用户要求修复）。实现结果绝不会被复审覆盖；复审失败时返回「实现成功 + 复审失败」，由 orchestrator 决定下一步。**异步派发（`dsh_spawn_worker`）保持原有的单任务行为**——需要复审请显式发起。「只读复审」是提示词约束；本项目没有只读沙箱（见限制说明）。
+
 ## Claude Code
 
 ### 安装
@@ -248,6 +296,18 @@ Codex 侧装的是同样两条 prompt：
 | `describe_image` | 看图回答问题（截图、设计稿、图表等），结果按 provider + 模型 + 图片 + 问题缓存 |
 | `generate_image` | 按文字描述出图，保存到指定绝对路径；输出为平面位图（需要图层编辑用 OpenPencil） |
 
+### 能力开关
+
+**启用 Crew 视觉** 与 **启用生图**（设置 → DSH Crew → 多模态）是真实开关，控制工具注册：
+
+- `vision_enabled = false` → Crew 的 `describe_image` 工具**不注册**，Crew 视觉 route（`deepseek-vision` adapter + 贴图转写）**不安装**。
+- `imagegen_enabled = false` → Crew 的 `generate_image` 工具**不注册**。
+- `provider = off` 即使开关开着也视为不可用。
+- 关闭能力不会清空已保存的 provider/model——重新开启即恢复原设置。
+- 由于工具注册发生在 DSH 启动时，**开关改动需要重启 DSH 生效**（UI 有明确提示）。
+
+这样你就可以让 Crew 与自己的视觉插件（如 `dsh-vision`）共存：关掉 Crew 视觉 / 生图，只保留子 Agent 派发。
+
 **会话贴图**：在 DSH 里把模型切到 `DeepSeek (视觉) ◉` 即可直接贴图。图片会留在会话里正常显示，插件在其后附上一段转写文字，并在发送前把图片剥离——你看图、模型读字。
 
 ### 配置
@@ -334,6 +394,15 @@ Codex 侧装的是同样两条 prompt：
 - 生图输出为平面位图，需要分层编辑用 OpenPencil
 - **运行时依赖**：仅 `@modelcontextprotocol/sdk` 与 `zod`；`@deepseek-ai/*` 为 peerDependencies（由 DSH 宿主提供）
 - **Codex 必须配置**：`default_tools_approval_mode = "approve"`，否则工具调用被自动取消
+- **主 Agent 模式不是宿主工具沙箱**：Crew backend 无法限制宿主自己的编辑 / shell 工具，它只是路由指引
+- **Manual 档位无法可靠区分「用户点名」与「主模型自行选择」**：backend 强制的是「不参与自动选择 / 升档 / 复审」，宿主指引写明「仅用户明确点名时使用」
+- **自动 Pro 复审的只读要求是提示词约束**——本项目没有只读沙箱
+- **异步派发不会自动串联复审**；review-pipeline 语义作用于 blocking 的 `dsh_run_worker`
+- **没有文件级写锁**：并行派发的 worker 可能改到同一文件，防重叠写入要靠任务拆分（后续工作）
+
+## Fork 说明
+
+本仓库是 [ZSeven-W/dsh-crew](https://github.com/ZSeven-W/dsh-crew) 的个人定制 fork：在原 MIT 许可的工作之上新增可配置 Crew 编排（子 Agent 开关、档位状态、协作模式、主 Agent 模式、职责、Review Pipeline）与多模态真实开关。原始的安装、Hub 与 standalone 派发链路保持不变。
 
 ## 开发
 
