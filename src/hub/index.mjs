@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
-import { normalizeGlobalConfig, chooseDefaultTier } from '../policy.mjs';
+import { normalizeGlobalConfig, chooseDefaultTier, getMultimodalRegistrationPlan } from '../policy.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -296,11 +296,18 @@ export async function apply(ctx) {
   const disposers = [];
 
   // Multimodal bridge: register describe_image / generate_image for the DS
-  // model. Config is read per call so settings-page edits apply live.
+  // model. Config is read per call so settings-page edits apply live; the
+  // capability switches (vision_enabled / imagegen_enabled) decide which tools
+  // are registered at plugin boot, so toggling them takes effect on restart.
   try {
     const { createMultimodalTools } = await import('../multimodal.mjs');
     const { readGlobalConfig } = await import('../install/install.mjs');
+    const plan = getMultimodalRegistrationPlan(normalizeGlobalConfig(readGlobalConfig()));
     for (const tool of createMultimodalTools(() => readGlobalConfig())) {
+      if (!plan.tools[tool.name]) {
+        ctx.logger?.info?.(`dsh-crew: ${tool.name} not registered (disabled by capability switch)`);
+        continue;
+      }
       disposers.push(ctx.effect(() => ctx.tools.register(tool), `dsh-crew: ${tool.name} tool`));
     }
   } catch (err) {
@@ -308,11 +315,15 @@ export async function apply(ctx) {
   }
 
   // Vision route: image paste on the text-only DS models (admission adapter +
-  // pre-step transcription).
+  // pre-step transcription). Installed only while Crew Vision is enabled.
   try {
     const { installVisionRoute } = await import('../vision-route.mjs');
     const { readGlobalConfig } = await import('../install/install.mjs');
-    disposers.push(installVisionRoute(ctx, () => readGlobalConfig()));
+    if (getMultimodalRegistrationPlan(normalizeGlobalConfig(readGlobalConfig())).visionRoute) {
+      disposers.push(installVisionRoute(ctx, () => readGlobalConfig()));
+    } else {
+      ctx.logger?.info?.('dsh-crew: vision route not installed (Crew Vision disabled by capability switch)');
+    }
   } catch (err) {
     ctx.logger?.warn?.(`dsh-crew: vision route unavailable: ${err?.message ?? err}`);
   }
