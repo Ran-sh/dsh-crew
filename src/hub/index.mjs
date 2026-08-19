@@ -280,6 +280,23 @@ async function readBody(req, limit = 64 * 1024) {
   return body.trim() === '' ? {} : JSON.parse(body);
 }
 
+/**
+ * Resolve a direct-hub spawn payload against the global policy.
+ * Pure helper (no ctx / no I/O) so the jobs route and the unit tests share
+ * the exact same normalization: the tier that finally reaches the worker
+ * runtime is always the policy resolver's effective tier, never a raw or
+ * missing request field.
+ *
+ * Returns { ok: true, payload } (payload.tier = effective tier) or
+ * { ok: false, code, error }.
+ */
+export function resolveHubSpawnPayload(payload, getConfig = () => ({})) {
+  const config = normalizeGlobalConfig(getConfig());
+  const decision = chooseDefaultTier(config, payload?.tier, {});
+  if (!decision.ok) return { ok: false, code: decision.error.policyCode, error: decision.error.message };
+  return { ok: true, payload: { ...(payload ?? {}), tier: decision.tier } };
+}
+
 // ---------- plugin entry ----------
 
 export async function apply(ctx) {
@@ -291,8 +308,9 @@ export async function apply(ctx) {
   } catch {}
   // Backend policy enforcement for the hub jobs route: mirrors the MCP
   // server's resolver. No session scope exists here (the MCP layer already
-  // enforced its own), so the check uses the global config only.
-  const policyCheck = (tier) => chooseDefaultTier(normalizeGlobalConfig(hub.getConfig?.() ?? {}), tier, {});
+  // enforced its own), so the check uses the global config only. The route
+  // calls resolveHubSpawnPayload (above) to stamp the effective tier onto
+  // the spawn payload.
   const disposers = [];
 
   // Multimodal bridge: register describe_image / generate_image for the DS
@@ -359,12 +377,13 @@ export async function apply(ctx) {
           }
           if (req.method === 'POST' && parts.length === 0) {
             const payload = await readBody(req);
-            // Same policy resolver as the MCP server (src/server.mjs): disabled
-            // tiers and the subagents master switch are hard-enforced here too,
-            // so the hub path can never start a worker the MCP layer refused.
-            const decision = policyCheck(payload?.tier);
-            if (!decision.ok) return sendJson(res, 400, { ok: false, error: decision.error.message, code: decision.error.policyCode });
-            const job = await hub.spawn(payload);
+            // Same policy resolver as the MCP server (src/server.mjs), with the
+            // resolved effective tier stamped back onto the spawn payload: a
+            // missing or policy-clamped tier must never reach WorkerRegistry
+            // as its raw default (pro-only + no tier used to spawn flash).
+            const resolved = resolveHubSpawnPayload(payload, () => hub.getConfig?.() ?? {});
+            if (!resolved.ok) return sendJson(res, 400, { ok: false, error: resolved.error, code: resolved.code });
+            const job = await hub.spawn(resolved.payload);
             return sendJson(res, 200, { ok: true, job: hub.view(job) });
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'cancel') {
