@@ -237,7 +237,7 @@ const SAFE_GLOBAL_KEYS = [
   'default_tier', 'default_effort', 'mode', 'default_timeout_seconds', 'hub_url',
   'tier_policy', 'escalate_on_failure', 'subagents_enabled', 'collaboration_mode',
   'main_agent_mode', 'flash_state', 'pro_state', 'flash_roles', 'pro_roles',
-  'pro_reviews_flash', 'vision_enabled', 'imagegen_enabled',
+  'pro_reviews_flash', 'worker_provider_mode', 'vision_enabled', 'imagegen_enabled',
   'vision_provider', 'vision_model', 'imagegen_provider',
   'preset_flash', 'preset_pro',
 ];
@@ -251,6 +251,20 @@ async function buildConfigReport() {
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
   const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
+  // Worker provider routing: report the configured mode plus the effective
+  // provider resolved by the DSH host (query the hub's provider route — the
+  // MCP process itself cannot read the DSH Models selection). No credentials.
+  let effectiveWorkerProvider = null;
+  let providerResolutionError;
+  const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
+  if (await hubAvailable()) {
+    try {
+      const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/provider`);
+      const body = await res.json();
+      if (body?.ok && body.effective_worker_provider) effectiveWorkerProvider = body.effective_worker_provider;
+      else if (body?.error) providerResolutionError = body.error;
+    } catch (err) { providerResolutionError = err?.message ?? String(err); }
+  }
   return {
     // Effective session values (flat shape keeps /dsh-config tables working).
     enabled: sessionConfig.enabled,
@@ -263,6 +277,10 @@ async function buildConfigReport() {
     escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
     preset_flash: sessionConfig.preset_flash ?? legacy.preset_flash,
     preset_pro: sessionConfig.preset_pro ?? legacy.preset_pro,
+    // Worker provider routing.
+    worker_provider_mode: workerProviderMode,
+    effective_worker_provider: effectiveWorkerProvider,
+    provider_resolution_error: providerResolutionError,
     // Configurable-crew effective policy.
     subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
     collaboration_mode: collaborationMode,

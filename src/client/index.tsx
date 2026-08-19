@@ -34,6 +34,9 @@ const COPY = {
     tierStateDesc: { disabled: '禁用', manual: '手动（仅用户点名时可用）', auto: '自动（orchestrator 可自动委派）' },
     stateManagedByPreset: '由协作模式管理',
     statePresetHint: '切到 Custom 可单独配置各档状态。',
+    workerProvider: 'Worker Provider',
+    workerProviderDesc: { 'follow-dsh': '跟随 DSH Provider · 用 DSH Models 当前选择的 provider（Flash/Pro 仍映射 deepseek-v4-flash / deepseek-v4-pro）', 'deepseek-official': 'DeepSeek Official · 始终使用内置 deepseek-official' },
+    workerProviderHint: '仅作用于 Hub 模式；Standalone 始终用 deepseek-official + DEEPSEEK_API_KEY。',
     responsibilities: '职责',
     responsibilitiesHint: '路由指引，仅用于描述分工；只剩一个 Auto 档时它承担全部可委派工作。',
     roleLabels: { implementation: '代码实现', simple_fix: '简单修复', tests: '测试', search_inspection: '搜索 / 检查', architecture: '架构', complex_debugging: '复杂调试', refactor: '重构', code_review: '代码审查' },
@@ -124,6 +127,9 @@ const COPY = {
     tierStateDesc: { disabled: 'Disabled', manual: 'Manual (only when the user names this tier)', auto: 'Auto (the orchestrator may delegate to it)' },
     stateManagedByPreset: 'managed by the collaboration mode',
     statePresetHint: 'Switch to Custom to configure each tier state separately.',
+    workerProvider: 'Worker Provider',
+    workerProviderDesc: { 'follow-dsh': 'Follow DSH Provider · use the provider selected in DSH Models (Flash/Pro still map to deepseek-v4-flash / deepseek-v4-pro)', 'deepseek-official': 'DeepSeek Official · always use the built-in deepseek-official provider' },
+    workerProviderHint: 'Applies to Hub workers only; Standalone always uses deepseek-official + DEEPSEEK_API_KEY.',
     responsibilities: 'Responsibilities',
     responsibilitiesHint: 'Routing guidance describing the split of work; with a single Auto tier left, that tier carries all delegatable coding work.',
     roleLabels: { implementation: 'Code implementation', simple_fix: 'Simple fixes', tests: 'Tests', search_inspection: 'Search / inspection', architecture: 'Architecture', complex_debugging: 'Complex debugging', refactor: 'Refactoring', code_review: 'Code review' },
@@ -606,6 +612,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                 <CustomSelect value={mode}
                   onChange={(v) => field('collaboration_mode', v)}
                   options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
+              <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
+                <CustomSelect value={config.worker_provider_mode ?? 'deepseek-official'}
+                  onChange={(v) => field('worker_provider_mode', v)}
+                  options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
             </>))}
             {tierCard('flash', { t: copy.tierCardFlash, d: 'deepseek-v4-flash · fast and cheap' })}
             {tierCard('pro', { t: copy.tierCardPro, d: 'deepseek-v4-pro · stronger reasoning' })}

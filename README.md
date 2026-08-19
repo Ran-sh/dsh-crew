@@ -197,6 +197,17 @@ When only one tier is Auto, that tier carries all normal delegatable coding work
 
 The main agent learns the current policy through `dsh_worker_config` (no-argument call returns the effective states plus `routing_guidance`). The installed `/dsh-crew:config` / `/dsh-config` commands are the discoverable way to read it; the guidance is: consult it when a routing-sensitive delegation decision is made and the current policy is unknown or may have changed — not before every step.
 
+### Worker Provider (Hub workers)
+
+`worker_provider_mode` decides which DSH provider backs a Hub worker session:
+
+- **Follow DSH Provider** (`follow-dsh`) — each worker uses the provider currently selected in DSH Models (Settings → Models). Flash / Pro still map to `deepseek-v4-flash` / `deepseek-v4-pro` model slots, so a DSH provider that serves those model ids (e.g. an OpenAI-compatible gateway) works directly. The selection is read live per worker, so changing the provider in Models takes effect on the next spawn.
+- **DeepSeek Official** (`deepseek-official`) — always use the built-in provider; this is the default for upgraded configs, so existing setups never change provider unexpectedly.
+
+Credentials always stay in the DSH provider configuration — Crew never stores or reads a copy. If `follow-dsh` is active but no provider is selected in DSH, worker dispatch fails with `NO_DSH_PROVIDER_SELECTED` (no silent fallback). The main agent cannot set the provider: it is decided by Crew config + DSH selection only.
+
+**Standalone mode is unchanged**: it always uses `deepseek-official` and the standalone `DEEPSEEK_API_KEY` — it does not follow DSH's provider selection.
+
 ### Policy precedence
 
 Highest to lowest: session `enabled` → global `subagents_enabled` → session `tier_policy` hard clamp (`flash-only` / `pro-only`) → collaboration preset → custom tier states → explicitly requested tier → `default_tier` → the single Auto tier → error. `dsh_run_worker` and `dsh_spawn_worker` share one resolver; the hub jobs API resolves the same effective tier and passes it into the actual worker spawn (a missing tier under Pro Only starts Pro, never the registry's flash default).
