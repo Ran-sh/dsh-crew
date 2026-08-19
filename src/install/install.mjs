@@ -147,12 +147,12 @@ export function uninstallCodex({ home = homedir() } = {}) {
 export async function installClaudeCode({ home = homedir(), statusline = false } = {}) {
   const actions = [];
 
-  // The marketplace root is the PARENT directory (dsh-plugins/): marketplace
-  // plugin sources must be './<subdir>' paths inside the marketplace root, so
-  // the plugin repo itself cannot be its own marketplace and a wrapper
-  // directory elsewhere cannot reference it either.
-  const mpDir = dirname(ROOT);
-  actions.push(`marketplace: ${mpDir} (parent-dir marketplace, source ./dsh-crew)`);
+  // The repository carries its own marketplace manifest (.claude-plugin/
+  // marketplace.json with source "."), so the marketplace root IS the plugin
+  // checkout itself — no parent-directory layout assumption. This keeps the
+  // installer working when the repo is cloned anywhere (e.g. Desktop\dsh-crew).
+  const mpDir = ROOT;
+  actions.push(`marketplace: ${mpDir} (self-marketplace, source .)`);
 
   // 2. settings.json: marketplace + enabledPlugins + permissions allowlist.
   const settingsFile = join(home, '.claude', 'settings.json');
@@ -227,10 +227,17 @@ export async function installClaudeCode({ home = homedir(), statusline = false }
     // stale snapshot in ~/.claude/plugins/cache — uninstall first so an update
     // always re-copies the current code.
     try { run(`claude plugin uninstall ${PLUGIN_KEY}`); } catch {}
-    run(`claude plugin install ${PLUGIN_KEY} --scope user -y`);
+    // Newer Claude Code (>= 2.1.x) dropped the -y flag; older builds accepted
+    // it. Try without it first, fall back to the legacy flag.
+    try {
+      run(`claude plugin install ${PLUGIN_KEY} --scope user`);
+    } catch (errNoFlag) {
+      if (!String(errNoFlag?.message ?? '').includes('unknown option')) throw errNoFlag;
+      run(`claude plugin install ${PLUGIN_KEY} --scope user -y`);
+    }
     actions.push(`cli: plugin snapshot refreshed (${PLUGIN_KEY})`);
   } catch (err) {
-    actions.push(`cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY} -y (${String(err?.message ?? err).slice(0, 120)})`);
+    actions.push(`cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY} (${String(err?.message ?? err).slice(0, 120)})`);
   }
   return { ok: true, actions };
 }

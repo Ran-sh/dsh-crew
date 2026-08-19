@@ -1,0 +1,17 @@
+{
+  "name": "dsh-crew",
+  "owner": {
+    "name": "Ran-sh"
+  },
+  "metadata": {
+    "description": "DSH Crew plugin marketplace (configurable worker dispatch for Claude Code / Codex)"
+  },
+  "plugins": [
+    {
+      "name": "dsh-crew",
+      "version": "0.1.0",
+      "source": ".",
+      "description": "Dispatch subtasks to DeepSeek Harness (DSH) agents as native subagents with live progress"
+    }
+  ]
+}
