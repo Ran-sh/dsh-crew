@@ -195,9 +195,11 @@ When only one tier is Auto, that tier carries all normal delegatable coding work
 
 `direct-allowed` / `coordinator-first` / `dispatcher-only` describe how the orchestrator should prefer to work. **This is host routing guidance, not a security boundary** — a Crew MCP backend cannot stop Claude Code or Codex from editing files, running shell commands or using the host's other tools. `dispatcher-only` means "prefer planning, dispatch, review and final integration", not "the host's tools are disabled".
 
+The main agent learns the current policy through `dsh_worker_config` (no-argument call returns the effective states plus `routing_guidance`). The installed `/dsh-crew:config` / `/dsh-config` commands are the discoverable way to read it; the guidance is: consult it when a routing-sensitive delegation decision is made and the current policy is unknown or may have changed — not before every step.
+
 ### Policy precedence
 
-Highest to lowest: session `enabled` → global `subagents_enabled` → session `tier_policy` hard clamp (`flash-only` / `pro-only`) → collaboration preset → custom tier states → explicitly requested tier → `default_tier` → the single Auto tier → error. `dsh_run_worker` and `dsh_spawn_worker` share one resolver; the hub jobs API enforces the same policy.
+Highest to lowest: session `enabled` → global `subagents_enabled` → session `tier_policy` hard clamp (`flash-only` / `pro-only`) → collaboration preset → custom tier states → explicitly requested tier → `default_tier` → the single Auto tier → error. `dsh_run_worker` and `dsh_spawn_worker` share one resolver; the hub jobs API resolves the same effective tier and passes it into the actual worker spawn (a missing tier under Pro Only starts Pro, never the registry's flash default).
 
 Legacy `tier_policy` remains fully supported: old configs migrate automatically (`flash-only` → Flash Only, `pro-only` → Pro Only, `auto` → Balanced), and `/dsh-crew:config` / `/dsh-config` keep accepting `policy=…` as a session clamp.
 

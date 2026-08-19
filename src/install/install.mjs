@@ -10,7 +10,10 @@ import { homedir } from 'node:os';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
-const MCP_TOOLS = ['dsh_run_worker', 'dsh_spawn_worker', 'dsh_worker_status', 'dsh_worker_result', 'dsh_worker_cancel'];
+// dsh_worker_config is included so the session commands (/dsh-crew:config,
+// /dsh-config) and any orchestrator policy lookup run without an extra
+// authorization prompt.
+export const MCP_TOOLS = ['dsh_run_worker', 'dsh_spawn_worker', 'dsh_worker_status', 'dsh_worker_result', 'dsh_worker_cancel', 'dsh_worker_config'];
 
 function backup(file) {
   if (existsSync(file)) {

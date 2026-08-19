@@ -249,6 +249,8 @@ async function buildConfigReport() {
   const defaultDecision = chooseDefaultTier(globalConfig, undefined, sessionConfig);
   const overrides = {};
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
+  const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
+  const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
   return {
     // Effective session values (flat shape keeps /dsh-config tables working).
     enabled: sessionConfig.enabled,
@@ -256,17 +258,27 @@ async function buildConfigReport() {
     default_effort: sessionConfig.default_effort ?? legacy.default_effort,
     mode: sessionConfig.mode ?? legacy.mode,
     default_timeout_seconds: sessionConfig.default_timeout_seconds ?? legacy.default_timeout_seconds,
+    // Legacy tier_policy clamp (session level, highest priority when set).
     tier_policy: sessionConfig.tier_policy ?? legacy.tier_policy,
     escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
     preset_flash: sessionConfig.preset_flash ?? legacy.preset_flash,
     preset_pro: sessionConfig.preset_pro ?? legacy.preset_pro,
     // Configurable-crew effective policy.
     subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
-    collaboration_mode: sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode,
-    main_agent_mode: sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode,
+    collaboration_mode: collaborationMode,
+    main_agent_mode: mainAgentMode,
     flash_state: flashState,
     pro_state: proState,
+    flash_roles: globalConfig.flash_roles ?? [],
+    pro_roles: globalConfig.pro_roles ?? [],
     pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldRunProReview(globalConfig, sessionConfig),
+    // One-line effective summary for the orchestrator, plus the authoritative
+    // routing guidance. legacy_source shows whether a session tier_policy
+    // clamp or the global collaboration mode is driving the decision.
+    effective_policy: `mode=${collaborationMode} flash=${flashState} pro=${proState} subagents=${sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false}`,
+    legacy_source: sessionConfig.tier_policy !== undefined
+      ? `session tier_policy clamp (${sessionConfig.tier_policy})`
+      : `global collaboration mode (${collaborationMode})`,
     effective_default_tier: defaultDecision.ok ? defaultDecision.tier : null,
     effective_default_tier_reason: defaultDecision.ok ? defaultDecision.guidance : (defaultDecision.error.policyCode ?? 'none'),
     routing_guidance: getRoutingGuidance(globalConfig, sessionConfig),
