@@ -197,6 +197,17 @@ worker 派发的总开关。关闭后 `dsh_run_worker` / `dsh_spawn_worker` **�
 
 主 Agent 通过 `dsh_worker_config`（无参调用返回 effective 状态与 `routing_guidance`）获知当前策略。已安装的 `/dsh-crew:config` / `/dsh-config` 是可发现的读取方式；建议的时机是：当你要做出路由敏感的委派决策、且当前策略未知或可能已变化时查一次——不是每一步都查。
 
+### Worker Provider（Hub Worker）
+
+`worker_provider_mode` 决定 Hub worker 会话由哪个 DSH provider 支撑：
+
+- **跟随 DSH Provider**（`follow-dsh`）——每个 worker 使用 DSH Models（设置 → 模型）当前选择的 provider。Flash / Pro 仍映射到 `deepseek-v4-flash` / `deepseek-v4-pro` 模型槽位，所以任何能提供这些模型 id 的 DSH provider（例如 OpenAI 兼容 gateway）都能直接用。选择是每次 worker 启动时实时读取的，在 Models 里改 provider 后下一次派发即生效。
+- **DeepSeek Official**（`deepseek-official`）——始终使用内置 provider；这是升级后旧配置的默认值，避免老用户意外切换 provider。
+
+凭据始终由 DSH 的 provider 配置管理，Crew 从不保存或读取副本。若 `follow-dsh` 生效但 DSH 中未选择 provider，worker 派发会以 `NO_DSH_PROVIDER_SELECTED` 明确失败（不静默回退）。主 Agent 不能设置 provider：它只由 Crew 配置 + DSH 选择决定。
+
+**Standalone 模式不变**：始终用 `deepseek-official` + 独立的 `DEEPSEEK_API_KEY`，不跟随 DSH 的 provider 选择。
+
 ### 策略优先级
 
 从高到低：会话 `enabled` → 全局 `subagents_enabled` → 会话 `tier_policy` 硬钳制（`flash-only` / `pro-only`）→ 协作预设 → custom 档位状态 → 显式指定 tier → `default_tier` → 唯一的 Auto 档位 → 报错。`dsh_run_worker` 与 `dsh_spawn_worker` 共享同一套 resolver；hub jobs API 解析出同一个 effective tier 并把它真正传进 worker 的 spawn（Pro Only 下缺省 tier 启动的是 Pro，绝不会落到 registry 的 flash 默认值）。
