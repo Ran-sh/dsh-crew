@@ -144,6 +144,7 @@ Hub worker 的 provider 由 Crew 配置 + DSH 选择共同决定：
 - Standalone 只使用 DeepSeek Official。
 - Crew Vision 的工具注册改动可能需要重启 DSH。
 - 集成内容改动后请重启 Codex Desktop。
+- 每个 worker 都会返回一份可审查的交付报告（`## Diff` / `## Tests` / `## Risks`），并由 hub 捕获一份只读、已脱敏、仅存内存的工作区 diff，方便你在接受结果前核对改动内容。
 
 ## 版权与许可
 

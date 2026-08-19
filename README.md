@@ -144,6 +144,7 @@ Credentials stay in the DSH provider configuration only. Tested with an OpenAI-c
 - Standalone uses DeepSeek Official only.
 - Crew Vision registration changes may require a DSH restart.
 - Restart Codex Desktop after integration changes.
+- Every worker returns an auditable Delivery Report (`## Diff` / `## Tests` / `## Risks`) and the hub captures a read-only, redacted in-memory workspace diff so you can verify what changed before accepting the result.
 
 ## Credits & License
 

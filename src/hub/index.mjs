@@ -14,6 +14,8 @@ import {
   resolveHubWorkerProvider,
   getMultimodalRegistrationPlan,
 } from '../policy.mjs';
+import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
+import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -92,10 +94,16 @@ export class WorkerRegistry {  constructor(ctx) {
       cwd: job.cwd, turn: job.turn, step: job.step, currentTool: job.currentTool,
       toolCalls: job.toolCalls, tokens: job.tokens, mode: 'hub',
       startedAt: job.startedAt, endedAt: job.endedAt,
+      delivery_complete: !!job.delivery_complete,
+      workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
     };
     if (withResult) {
       v.result = job.result; v.error = job.error; v.stopReason = job.stopReason;
       v.reasonDetail = job.reasonDetail;
+      v.delivery = job.delivery_metadata ?? null;
+      v.delivery_missing = job.delivery_missing ?? [];
+      v.workspace_diff = job.workspaceDiff ?? null;
+      v.workspace_baseline_dirty = !!job.workspaceDiff?.dirtyBaseline;
     }
     return v;
   }
@@ -110,7 +118,7 @@ export class WorkerRegistry {  constructor(ctx) {
    * cannot route around the provider policy. Tier still picks the model slot
    * (flash → deepseek-v4-flash, pro → deepseek-v4-pro).
    */
-  async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', preset }) {
+  async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', preset, delivery = 'coding' }) {
     const model = TIER_MODELS[tier];
     if (!model) throw new Error(`unknown tier "${tier}"`);
     if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}"`);
@@ -131,16 +139,27 @@ export class WorkerRegistry {  constructor(ctx) {
       throw Object.assign(new Error(resolvedProvider.error), { policyCode: resolvedProvider.code });
     }
 
+    // The worker always gets the auditable Delivery Contract appended (unless
+    // it already carries one), so its final message follows ## Diff / ## Tests
+    // / ## Risks — or the review contract for automatic Pro reviews.
+    const workerPrompt = appendDeliveryInstructions(task, { tier, isReview: delivery === 'review' });
+
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
     const sessionId = `session-${randomUUID()}`;
     const job = {
       id, sessionId, tier, model, effort, task, source, cwd,
+      prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
       status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
       tokens: { input: 0, output: 0, reasoning: 0 },
       startedAt: new Date().toISOString(), endedAt: null,
       result: null, error: null, stopReason: null, handle: null, waiters: [],
+      delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       texts: [],
     };
+    // Read-only pre-run snapshot (async, never blocks dispatch): the audit
+    // only needs the before-state by the time the worker finishes. Non-repos
+    // degrade to { kind:'no-git' } instead of failing the job.
+    job.baseline = await captureWorkspaceBaseline({ cwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     this.jobs.set(id, job);
 
     const selection = { provider: resolvedProvider.provider, model, reasoningEffort: effort };
@@ -208,7 +227,7 @@ export class WorkerRegistry {  constructor(ctx) {
         this.ctx.logger?.warn?.(`dsh-crew: workspace attach failed for ${cwd}: ${err?.message ?? err}`);
       }
       await handle.agent.whenIdle();
-      handle.agent.followup(userMessage(task));
+      handle.agent.followup(userMessage(job.prompt));
       await handle.agent.whenIdle();
       job.result = job.texts.at(-1) ?? '';
       job.status = job.stopReason === 'completed' ? 'done' : 'failed';
@@ -221,9 +240,21 @@ export class WorkerRegistry {  constructor(ctx) {
         if (job.status === 'running') job.status = 'failed';
         job.error = job.error ?? (err?.message ?? String(err));
       })
-      .finally(() => {
+      .finally(async () => {
         job.endedAt = new Date().toISOString();
         job.currentTool = null;
+        // Delivery completeness is separate from execution status: a job can
+        // be done yet fail to report Diff/Tests/Risks (or Review sections for
+        // an automatic review). Parse whatever final message the worker
+        // produced so the orchestrator can decide whether to accept.
+        const parsed = parseDeliveryReport(job.result ?? '');
+        job.delivery_complete = parsed.complete;
+        job.delivery_missing = parsed.missing;
+        job.delivery_metadata = formatDeliveryMetadata(parsed);
+        // Read-only after-snapshot of the workspace: bounded, redacted patch.
+        job.workspaceDiff = job.baseline.kind === 'git'
+          ? await captureWorkspaceDiff({ cwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
+          : job.baseline;
         this.publish();
         for (const w of job.waiters.splice(0)) w();
       });

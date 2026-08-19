@@ -382,6 +382,7 @@ export function getRoutingGuidance(config, session = {}) {
     if (shouldRunProReview(config, session)) parts.push('A successful Flash implementation may be followed by one automatic Pro review.');
   }
   parts.push(`Main agent mode (host guidance only — does not restrict host tools): ${mainMode}. ${MAIN_MODE_GUIDANCE[mainMode]}`);
+  parts.push('After a worker returns, check its delivery metadata (delivery_complete / delivery_missing) and redacted workspace diff (workspace_diff_available): if the Delivery Report is missing or files changed outside scope, do not accept the result as final — request a follow-up worker run.');
   return parts.join(' ');
 }
 
