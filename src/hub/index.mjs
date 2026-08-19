@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
 import { normalizeGlobalConfig, chooseDefaultTier, getMultimodalRegistrationPlan } from '../policy.mjs';
@@ -69,8 +69,10 @@ const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 
 // ---------- job registry ----------
 
-class WorkerRegistry {
-  constructor(ctx) {
+// Exported for the unit tests (test/hub-windows.test.mjs); instantiation
+// needs only a duck-typed ctx, so spawn()'s path guard is testable without a
+// live DSH host.
+export class WorkerRegistry {  constructor(ctx) {
     this.ctx = ctx;
     this.jobs = new Map();
     this.nextId = 1;
@@ -100,7 +102,9 @@ class WorkerRegistry {
     const model = TIER_MODELS[tier];
     if (!model) throw new Error(`unknown tier "${tier}"`);
     if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}"`);
-    if (!cwd || !cwd.startsWith('/')) throw new Error('cwd must be an absolute path');
+    // isAbsolute covers POSIX (/...) and Windows drive paths (D:\... / D:/...):
+    // on Windows the MCP shim always passes process.cwd() in drive form.
+    if (!cwd || !isAbsolute(cwd)) throw new Error('cwd must be an absolute path');
     await this.ctx.get('loader')?.await();
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
