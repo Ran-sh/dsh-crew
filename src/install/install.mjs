@@ -141,6 +141,19 @@ export function uninstallCodex({ home = homedir() } = {}) {
     const p = join(home, '.codex', 'prompts', f);
     if (existsSync(p)) { rmSync(p); actions.push(`removed: ${p}`); }
   }
+  // Remove only the dsh-crew entry from [mcp_servers], keeping any other
+  // MCP servers the user configured.
+  const configFile = join(home, '.codex', 'config.toml');
+  if (existsSync(configFile)) {
+    const before = readFileSync(configFile, 'utf8');
+    const lineRe = /(^|\n)[ \t]*dsh-crew\s*=\s*\{[^\n]*\}/;
+    const after = lineRe.test(before) ? before.replace(lineRe, '') : before;
+    if (after !== before) {
+      backup(configFile);
+      writeFileSync(configFile, after.replace(/(^|\n){2,}/g, '\n\n').replace(/^\[mcp_servers\]\n?$/, ''));
+      actions.push(`codex config: removed dsh-crew MCP entry`);
+    }
+  }
   return { ok: true, actions: actions.length ? actions : ['nothing to remove'] };
 }
 
@@ -247,12 +260,18 @@ export function installCodex({ home = homedir(), scope } = {}) {
   const agentsDir = scope === 'project' ? join(process.cwd(), '.codex', 'agents') : join(home, '.codex', 'agents');
   mkdirSync(agentsDir, { recursive: true });
   const srcDir = join(ROOT, 'codex', 'agents');
+  // Windows drive paths must render with forward slashes: backslashes in a
+  // TOML basic string are escape sequences (\\U\\u... are invalid), which made
+  // the role files unparseable for Codex Desktop. node accepts forward slashes
+  // on Windows, so the absolute path rendered as D:/... is both valid TOML and
+  // runnable.
+  const renderedPath = join(ROOT, 'src', 'server.mjs').replace(/\\/g, '/');
   for (const f of readdirSync(srcDir).filter((f) => f.endsWith('.toml'))) {
     const dest = join(agentsDir, f);
     const bak = backup(dest);
     if (bak) actions.push(`backup: ${bak}`);
     const rendered = readFileSync(join(srcDir, f), 'utf8')
-      .replace(/args = \[.*server\.mjs"\]/, `args = ["${join(ROOT, 'src', 'server.mjs')}"]`);
+      .replace(/args = \[.*server\.mjs"\]/, `args = ["${renderedPath}"]`);
     writeFileSync(dest, rendered);
     actions.push(`role: ${dest}`);
   }
@@ -263,13 +282,55 @@ export function installCodex({ home = homedir(), scope } = {}) {
     writeFileSync(join(promptsDir, f), readFileSync(join(promptsSrc, f), 'utf8'));
     actions.push(`prompt: ${join(promptsDir, f)}`);
   }
+  if (scope !== 'project') {
+    const act = writeGlobalCodexMcpServer(home, renderedPath);
+    actions.push(...act);
+  }
   return { ok: true, actions };
 }
 
 /**
- * Wire the DSH worker segment into an existing claude-hud statusline via its
- * --extra-cmd hook (requires CLAUDE_HUD_ALLOW_EXTRA_CMD=1). Idempotent.
+ * Codex Desktop reads the shared config at ~/.codex/config.toml, and the role
+ * files alone only expose dsh MCP tools inside the ds-flash/ds-pro subagents.
+ * To make dsh_worker_config (policy) visible to the MAIN Codex session, add a
+ * top-level [mcp_servers] entry under dsh-crew — preserving any other servers
+ * the user already configured. Idempotent (updates in place). Never requires
+ * the codex CLI.
  */
+export function writeGlobalCodexMcpServer(home, renderedPath) {
+  const configFile = join(home, '.codex', 'config.toml');
+  const entry = `dsh-crew = { command = "node", args = ["${renderedPath}"] }`;
+  const backupFile = backup(configFile);
+  const existing = existsSync(configFile) ? readFileSync(configFile, 'utf8') : '';
+  const hasSection = /(^|\n)\s*\[mcp_servers\]/.test(existing);
+  const sectionIdx = hasSection ? existing.search(/(^|\n)\s*\[mcp_servers\]/) : -1;
+
+  let next;
+  if (hasSection) {
+    // Section exists: find its extent (next top-level [section]) and patch the
+    // dsh-crew entry within it.
+    const afterHeader = sectionIdx + existing.slice(sectionIdx).indexOf(']') + 1;
+    const rest = existing.slice(afterHeader);
+    const nextHeader = rest.search(/(^|\n)\s*\[[^\]]+\]/);
+    const sectionBody = nextHeader === -1 ? rest : rest.slice(0, nextHeader);
+    const tail = nextHeader === -1 ? '' : rest.slice(nextHeader);
+    const lineRe = /(^|\n)([ \t]*)dsh-crew\s*=\s*\{[^\n]*\}/;
+    const patched = lineRe.test(sectionBody)
+      ? sectionBody.replace(lineRe, `$1$2${entry}`)
+      : `${sectionBody.replace(/\s*$/, '')}\n${entry}`;
+    next = existing.slice(0, afterHeader) + patched + tail;
+  } else {
+    // No [mcp_servers] section: append a fresh one.
+    const sep = existing && !/[\n]$/.test(existing) ? '\n' : '';
+    next = `${existing}${sep}[mcp_servers]\n${entry}\n`;
+  }
+  writeFileSync(configFile, next);
+  const actions = [];
+  if (backupFile) actions.push(`config backup: ${backupFile}`);
+  actions.push(`codex config: [mcp_servers] dsh-crew → ${renderedPath}`);
+  return actions;
+}
+
 export function installHudSegment({ home = homedir() } = {}) {
   const settingsFile = join(home, '.claude', 'settings.json');
   const settings = readJson(settingsFile, null);
