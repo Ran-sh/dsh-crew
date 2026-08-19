@@ -70,6 +70,13 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // Automatic Pro review after a successful Flash run (review-pipeline forces
   // this on; balanced/custom only when this flag is set).
   pro_reviews_flash: false,
+  // Worker provider routing for HUB workers: which DSH provider backs each
+  // worker session. follow-dsh = use the provider selected in DSH Models
+  // (Flash/Pro still map to deepseek-v4-flash / deepseek-v4-pro);
+  // deepseek-official = always use the built-in provider (legacy behavior,
+  // kept the default so upgraded configs never silently switch providers).
+  // Standalone mode always uses deepseek-official + DEEPSEEK_API_KEY.
+  worker_provider_mode: 'deepseek-official',
   // ---- configurable-crew multimodal switches ----
   // False = the Crew describe_image tool and vision route are not registered
   // at DSH boot (takes effect after a DSH restart). Provider/model values are

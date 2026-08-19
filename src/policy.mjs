@@ -41,6 +41,7 @@ export const POLICY_ERROR_CODES = {
   NO_WORKER_TIER: 'NO_WORKER_TIER',
   PRO_NOT_AUTO: 'PRO_NOT_AUTO',
   VISION_DISABLED: 'VISION_DISABLED',
+  NO_DSH_PROVIDER_SELECTED: 'NO_DSH_PROVIDER_SELECTED',
 };
 
 export const POLICY_ERROR_MESSAGES = {
@@ -54,7 +55,46 @@ export const POLICY_ERROR_MESSAGES = {
     'No DSH worker tier is enabled.',
   [POLICY_ERROR_CODES.PRO_NOT_AUTO]:
     'Automatic Flash→Pro escalation was skipped because Pro is Manual/Disabled.',
+  [POLICY_ERROR_CODES.NO_DSH_PROVIDER_SELECTED]:
+    'No DSH provider is selected for Hub workers. Select a provider in DSH Models or switch Worker Provider to DeepSeek Official.',
 };
+
+// ---------- worker provider routing ----------
+
+/**
+ * Worker provider modes for Hub workers:
+ *  - follow-dsh: use whatever provider is selected in DSH Models for the
+ *    current session; the tier still maps to the DeepSeek V4 model slot.
+ *  - deepseek-official: always use the built-in deepseek-official provider
+ *    (the legacy behavior; also the safe default for upgraded configs).
+ */
+export const WORKER_PROVIDER_MODES = ['follow-dsh', 'deepseek-official'];
+export const DEFAULT_WORKER_PROVIDER_MODE = 'deepseek-official';
+
+export function normalizeWorkerProviderMode(raw) {
+  return WORKER_PROVIDER_MODES.includes(raw) ? raw : DEFAULT_WORKER_PROVIDER_MODE;
+}
+
+/**
+ * Resolve the provider for a Hub worker. Pure: `getCurrentSelection` (the DSH
+ * agentDefaultModel accessor) is injected so tests can stub it, and no
+ * credential ever flows through here.
+ */
+export function resolveHubWorkerProvider({ worker_provider_mode, getCurrentSelection }) {
+  const mode = normalizeWorkerProviderMode(worker_provider_mode);
+  if (mode === 'deepseek-official') return { ok: true, provider: 'deepseek-official', mode };
+  const selection = typeof getCurrentSelection === 'function' ? getCurrentSelection() : undefined;
+  const provider = selection?.provider;
+  if (!provider) {
+    return {
+      ok: false,
+      code: POLICY_ERROR_CODES.NO_DSH_PROVIDER_SELECTED,
+      error: POLICY_ERROR_MESSAGES[POLICY_ERROR_CODES.NO_DSH_PROVIDER_SELECTED],
+      mode,
+    };
+  }
+  return { ok: true, provider, mode };
+}
 
 /** Structured policy error; `code` is machine-readable, `message` user-facing. */
 export function policyError(code, extra = {}) {
@@ -138,6 +178,9 @@ export function normalizeGlobalConfig(raw = {}) {
     flash_roles: normalizeRoles(raw.flash_roles, DEFAULT_FLASH_ROLES),
     pro_roles: normalizeRoles(raw.pro_roles, DEFAULT_PRO_ROLES),
     pro_reviews_flash: normalizeBool(raw.pro_reviews_flash, false),
+    // Worker provider routing: legacy-friendly default keeps deepseek-official
+    // unless the user explicitly chooses follow-dsh (never silently switches).
+    worker_provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode),
     vision_enabled: visionEnabled,
     imagegen_enabled: imagegenEnabled,
   };

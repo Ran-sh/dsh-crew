@@ -7,7 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
-import { normalizeGlobalConfig, chooseDefaultTier, getMultimodalRegistrationPlan } from '../policy.mjs';
+import {
+  normalizeGlobalConfig,
+  chooseDefaultTier,
+  normalizeWorkerProviderMode,
+  resolveHubWorkerProvider,
+  getMultimodalRegistrationPlan,
+} from '../policy.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -98,7 +104,13 @@ export class WorkerRegistry {  constructor(ctx) {
     this.shard.publish([...this.jobs.values()].map((j) => this.view(j)));
   }
 
-  async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', provider = 'deepseek-official', preset }) {
+  /**
+   * Spawn a Hub worker. The provider is resolved from Crew config +
+   * DSH selection (worker_provider_mode), never from the caller — a caller
+   * cannot route around the provider policy. Tier still picks the model slot
+   * (flash → deepseek-v4-flash, pro → deepseek-v4-pro).
+   */
+  async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', preset }) {
     const model = TIER_MODELS[tier];
     if (!model) throw new Error(`unknown tier "${tier}"`);
     if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}"`);
@@ -106,6 +118,18 @@ export class WorkerRegistry {  constructor(ctx) {
     // on Windows the MCP shim always passes process.cwd() in drive form.
     if (!cwd || !isAbsolute(cwd)) throw new Error('cwd must be an absolute path');
     await this.ctx.get('loader')?.await();
+
+    // Provider routing: follow-dsh reads the DSH Models selection live; the
+    // default deepseek-official keeps legacy setups unchanged. Re-resolved on
+    // every spawn so a Models change takes effect on the next worker.
+    const workerProviderMode = normalizeWorkerProviderMode(this.getConfig?.()?.worker_provider_mode);
+    const resolvedProvider = resolveHubWorkerProvider({
+      worker_provider_mode: workerProviderMode,
+      getCurrentSelection: () => this.ctx.get('agentDefaultModel')?.currentSelection?.(),
+    });
+    if (!resolvedProvider.ok) {
+      throw Object.assign(new Error(resolvedProvider.error), { policyCode: resolvedProvider.code });
+    }
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
     const sessionId = `session-${randomUUID()}`;
@@ -119,7 +143,7 @@ export class WorkerRegistry {  constructor(ctx) {
     };
     this.jobs.set(id, job);
 
-    const selection = { provider, model, reasoningEffort: effort };
+    const selection = { provider: resolvedProvider.provider, model, reasoningEffort: effort };
     const presets = this.ctx.get('agentPresets');
     const cfg = this.getConfig?.() ?? {};
     const wanted = preset ?? (tier === 'flash' ? cfg.preset_flash : cfg.preset_pro);
@@ -433,6 +457,29 @@ export async function apply(ctx) {
             defaultId: presets.defaultId,
             presets: list.map((p) => ({ id: p.id, name: p.name ?? p.id })),
           });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/provider`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        try {
+          // Mirrors the worker spawn resolution (same helper, same selection
+          // accessor) so the MCP shim can report the effective provider for
+          // dsh_worker_config. Never returns a credential.
+          const mode = normalizeWorkerProviderMode(hub.getConfig?.()?.worker_provider_mode);
+          const resolved = resolveHubWorkerProvider({
+            worker_provider_mode: mode,
+            getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
+          });
+          if (!resolved.ok) {
+            return sendJson(res, 200, { ok: false, code: resolved.code, error: resolved.error, worker_provider_mode: mode, effective_worker_provider: null });
+          }
+          return sendJson(res, 200, { ok: true, worker_provider_mode: mode, effective_worker_provider: resolved.provider });
         } catch (err) {
           return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
         }
