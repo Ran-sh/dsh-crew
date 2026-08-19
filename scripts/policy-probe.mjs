@@ -51,6 +51,13 @@ try { cfgJson = JSON.parse(cfgText); } catch {}
 check('config returns effective policy', !!cfgJson && typeof cfgJson.flash_state === 'string' && typeof cfgJson.pro_state === 'string' && typeof cfgJson.routing_guidance === 'string',
   cfgJson ? `flash=${cfgJson.flash_state} pro=${cfgJson.pro_state} mode=${cfgJson.collaboration_mode}` : cfgText?.slice(0, 120));
 check('config hides API keys', cfgText !== undefined && !/api_key|sk-/.test(cfgText));
+check('config reports effective_policy + roles + legacy_source', !!cfgJson
+  && typeof cfgJson.effective_policy === 'string' && cfgJson.effective_policy.includes('mode=')
+  && Array.isArray(cfgJson.flash_roles) && cfgJson.flash_roles.length > 0
+  && Array.isArray(cfgJson.pro_roles) && cfgJson.pro_roles.length > 0
+  && typeof cfgJson.legacy_source === 'string',
+  cfgJson ? cfgJson.effective_policy : undefined);
+check('config reflects main_agent_mode', !!cfgJson && ['direct-allowed', 'coordinator-first', 'dispatcher-only'].includes(cfgJson.main_agent_mode), cfgJson?.main_agent_mode);
 
 // 2. Session clamp: flash-only + explicit pro must be refused with TIER_DISABLED.
 const clamp = await call('tools/call', { name: 'dsh_worker_config', arguments: { tier_policy: 'flash-only' } });

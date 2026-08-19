@@ -291,11 +291,12 @@ export function getTierRoles(config, tier) {
 // ---------- routing guidance ----------
 
 const MAIN_MODE_GUIDANCE = {
-  'direct-allowed': 'Host agent may implement directly or delegate. Use DSH workers when useful.',
+  'direct-allowed':
+    'Host agent may implement directly or delegate. Use enabled DSH workers when helpful. No preference to delegate everything.',
   'coordinator-first':
-    'Prefer to plan, decompose, delegate suitable coding work to enabled Auto workers, then inspect/verify results. Direct work remains allowed for tiny tasks, unavailable tiers, or integration recovery.',
+    'Prefer: (1) understand the goal, (2) decompose the task, (3) delegate suitable coding work to enabled Auto workers, (4) inspect results, (5) verify, (6) integrate. Direct implementation remains allowed for tiny changes, recovery, unavailable tiers, or tasks better handled by the host.',
   'dispatcher-only':
-    'Prefer planning, dispatch, review and final integration; delegate implementation to enabled workers whenever practical. This is host guidance, not a hard restriction on host tools.',
+    'Prefer: (1) planning, (2) dispatch, (3) supervision, (4) review, (5) final integration. Delegate implementation whenever practical to enabled workers. This is routing guidance, not a hard restriction on host tools.',
 };
 
 const COLLABORATION_GUIDANCE = {
