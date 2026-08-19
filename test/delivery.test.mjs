@@ -17,6 +17,8 @@ import {
   REVIEW_SECTIONS,
   DELIVERY_MARKER,
 } from '../src/delivery.mjs';
+import { jobView } from '../src/jobs.mjs';
+import { WorkerRegistry } from '../src/hub/index.mjs';
 
 // ---------- buildDeliveryInstructions ----------
 
@@ -200,4 +202,66 @@ test('contract constants line up with the parser', () => {
   assert.deepEqual(REVIEW_SECTIONS, ['Review Findings', 'Evidence', 'Risks', 'Verdict']);
   assert.match(buildDeliveryInstructions({}), /# Delivery report/);
   assert.ok(String(DELIVERY_MARKER).length > 0);
+});
+
+// ---------- MCP view consistency ----------
+//
+// dsh_run_worker and dsh_worker_result must expose the same per-job delivery +
+// workspace_diff fields (both go through jobView / WorkerRegistry.view with
+// withResult=true), while dsh_worker_status stays limited to the two booleans.
+
+function finishedJob() {
+  return {
+    id: 'j1', tier: 'flash', model: 'deepseek-v4-flash', effort: 'max', status: 'done', source: 'claude-code',
+    task: 'implement X', cwd: '/proj', turn: 1, step: 2, currentTool: null, toolCalls: 3,
+    tokens: { input: 10, output: 20, reasoning: 0 }, startedAt: 't0', endedAt: 't1',
+    result: ['did it', '', '## Diff', 'a.mjs', '', '## Tests', 'passed', '', '## Risks', 'none'].join('\n'),
+    error: null, stopReason: 'completed',
+    delivery_complete: true, delivery_missing: [], delivery_metadata: { complete: true, diff: 'a.mjs' },
+    workspaceDiff: { kind: 'git', patch: '…', redacted: [], truncated: false, dirtyBaseline: false },
+  };
+}
+
+test('standalone job view: full delivery + workspace fields only in withResult views', () => {
+  const full = jobView(finishedJob(), { withResult: true });
+  assert.equal(full.delivery_complete, true);
+  assert.deepEqual(full.delivery_missing, []);
+  assert.equal(full.delivery.complete, true);
+  assert.equal(full.workspace_diff_available, true);
+  assert.equal(full.workspace_diff.kind, 'git');
+  assert.equal(full.workspace_baseline_dirty, false);
+  // dsh_worker_status shape: only the two booleans from the new mechanism.
+  const status = jobView(finishedJob());
+  assert.equal(status.delivery_complete, true);
+  assert.equal(status.workspace_diff_available, true);
+  assert.equal('delivery' in status, false);
+  assert.equal('delivery_missing' in status, false);
+  assert.equal('workspace_diff' in status, false);
+});
+
+test('hub job view mirrors the standalone view for delivery + workspace fields', () => {
+  const reg = new WorkerRegistry({ get: () => undefined });
+  const job = { ...finishedJob(), sessionId: 's1' };
+  const full = reg.view(job, true);
+  assert.equal(full.delivery_complete, true);
+  assert.equal(full.delivery.complete, true);
+  assert.equal(full.workspace_diff_available, true);
+  assert.equal(full.workspace_diff.kind, 'git');
+  const status = reg.view(job);
+  assert.equal(status.delivery_complete, true);
+  assert.equal(status.workspace_diff_available, true);
+  assert.equal('delivery' in status, false);
+  assert.equal('delivery_missing' in status, false);
+  assert.equal('workspace_diff' in status, false);
+  assert.equal('workspace_diff' in status, false);
+});
+
+test('incomplete worker output surfaces as delivery_complete=false in full views', () => {
+  const job = { ...finishedJob(), result: 'worked without a report', delivery_complete: false, delivery_missing: ['Diff', 'Tests', 'Risks'], delivery_metadata: { complete: false, missing: ['Diff', 'Tests', 'Risks'] } };
+  const full = jobView(job, { withResult: true });
+  assert.equal(full.delivery_complete, false);
+  assert.deepEqual(full.delivery_missing, ['Diff', 'Tests', 'Risks']);
+  assert.equal(full.delivery.complete, false);
+  // Execution status stays separate from delivery completeness.
+  assert.equal(full.status, 'done');
 });

@@ -15,6 +15,7 @@ import {
   getMultimodalRegistrationPlan,
 } from '../policy.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
+import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -94,12 +95,15 @@ export class WorkerRegistry {  constructor(ctx) {
       toolCalls: job.toolCalls, tokens: job.tokens, mode: 'hub',
       startedAt: job.startedAt, endedAt: job.endedAt,
       delivery_complete: !!job.delivery_complete,
+      workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
     };
     if (withResult) {
       v.result = job.result; v.error = job.error; v.stopReason = job.stopReason;
       v.reasonDetail = job.reasonDetail;
       v.delivery = job.delivery_metadata ?? null;
       v.delivery_missing = job.delivery_missing ?? [];
+      v.workspace_diff = job.workspaceDiff ?? null;
+      v.workspace_baseline_dirty = !!job.workspaceDiff?.dirtyBaseline;
     }
     return v;
   }
@@ -152,6 +156,10 @@ export class WorkerRegistry {  constructor(ctx) {
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       texts: [],
     };
+    // Read-only pre-run snapshot (async, never blocks dispatch): the audit
+    // only needs the before-state by the time the worker finishes. Non-repos
+    // degrade to { kind:'no-git' } instead of failing the job.
+    job.baseline = await captureWorkspaceBaseline({ cwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     this.jobs.set(id, job);
 
     const selection = { provider: resolvedProvider.provider, model, reasoningEffort: effort };
@@ -243,6 +251,10 @@ export class WorkerRegistry {  constructor(ctx) {
         job.delivery_complete = parsed.complete;
         job.delivery_missing = parsed.missing;
         job.delivery_metadata = formatDeliveryMetadata(parsed);
+        // Read-only after-snapshot of the workspace: bounded, redacted patch.
+        job.workspaceDiff = job.baseline.kind === 'git'
+          ? await captureWorkspaceDiff({ cwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
+          : job.baseline;
         this.publish();
         for (const w of job.waiters.splice(0)) w();
       });

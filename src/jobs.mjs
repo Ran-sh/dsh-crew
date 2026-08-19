@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
+import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -43,6 +44,7 @@ function publishStatus() {
     currentTool: j.currentTool, tokens: j.tokens,
     startedAt: j.startedAt, endedAt: j.endedAt,
     delivery_complete: !!j.delivery_complete,
+    workspace_diff_available: !!j.workspaceDiff && j.workspaceDiff.kind === 'git',
   })));
 }
 
@@ -52,11 +54,14 @@ export function jobView(j, { withResult = false } = {}) {
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
     tokens: j.tokens, toolCalls: j.toolCalls, startedAt: j.startedAt, endedAt: j.endedAt,
     delivery_complete: !!j.delivery_complete,
+    workspace_diff_available: !!j.workspaceDiff && j.workspaceDiff.kind === 'git',
   };
   if (withResult) {
     v.result = j.result; v.error = j.error; v.stopReason = j.stopReason;
     v.delivery = j.delivery_metadata ?? null;
     v.delivery_missing = j.delivery_missing ?? [];
+    v.workspace_diff = j.workspaceDiff ?? null;
+    v.workspace_baseline_dirty = !!j.workspaceDiff?.dirtyBaseline;
   }
   return v;
 }
@@ -108,9 +113,16 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
     startedAt: new Date().toISOString(), endedAt: null,
     result: null, error: null, stopReason: null, harness,
     delivery_complete: false, delivery_missing: [], delivery_metadata: null,
+    workspaceDiff: null, baselinePromise: null,
     waiters: [],
   };
   jobs.set(id, job);
+
+  // Read-only pre-run snapshot (async, never blocks dispatch): the audit only
+  // needs the before-state by the time the worker finishes. Non-repos degrade
+  // to { kind:'no-git' } instead of failing the job.
+  job.baselinePromise = captureWorkspaceBaseline({ cwd: workspace })
+    .catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
 
   const sessionId = id;
   const onNotification = (n) => {
@@ -161,6 +173,11 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
       job.delivery_complete = parsed.complete;
       job.delivery_missing = parsed.missing;
       job.delivery_metadata = formatDeliveryMetadata(parsed);
+      // Read-only after-snapshot of the workspace: bounded, redacted patch.
+      const baseline = await job.baselinePromise;
+      job.workspaceDiff = baseline.kind === 'git'
+        ? await captureWorkspaceDiff({ cwd: workspace, baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
+        : baseline;
       publishStatus();
       for (const w of job.waiters.splice(0)) w();
     });
