@@ -5,6 +5,8 @@
 // (tier chosen / rejection code), which happens before any LLM call.
 // Usage: node scripts/live-policy-matrix.mjs
 
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const BASE = 'http://127.0.0.1:3080/_dsh/dsh-crew';
 const CWD = 'D:/Users/48376/Desktop';
 
@@ -43,7 +45,7 @@ async function spawn(body) {
 // Baseline: record the pre-test config so the caller can restore it.
 const baseline = await getConfig();
 console.log('baseline config:', JSON.stringify({ collaboration_mode: baseline.collaboration_mode, flash_state: baseline.flash_state, pro_state: baseline.pro_state, subagents_enabled: baseline.subagents_enabled, vision_enabled: baseline.vision_enabled, imagegen_enabled: baseline.imagegen_enabled }));
-await import('node:fs').then(({ writeFileSync }) => writeFileSync('scripts/.live-baseline.json', JSON.stringify(baseline)));
+await import('node:fs').then(({ writeFileSync }) => writeFileSync(join(tmpdir(), 'dsh-crew-live-baseline.json'), JSON.stringify(baseline)));
 
 // ---------- Test A: Subagents OFF ----------
 await setConfig({ subagents_enabled: false, collaboration_mode: 'balanced' });
