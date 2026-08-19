@@ -161,13 +161,17 @@ export async function setupInstall({
     if (r.ok === false) return { ok: false, error: 'Codex integration failed' };
   }
 
-  // 5. Claude Code (optional).
+  // 5. Claude Code (optional). Absent CLI is a clean skip; a detected CLI whose
+  //     install fails is a real failure (the user has Claude — the automatic
+  //     integration failed).
   if (commandExists('claude')) {
     if (dryRun) {
       mark(log, true, 'Claude Code integration (dry-run)');
     } else {
       const r = installer.installClaudeCode ? await installer.installClaudeCode({ home }) : await realInstaller.installClaudeCode({ home });
-      mark(log, r.ok !== false, r.ok === false ? 'Claude Code integration failed' : 'Claude Code integration');
+      const ok = r.ok !== false;
+      mark(log, ok, ok ? 'Claude Code integration' : 'Claude Code integration failed');
+      if (!ok) return { ok: false, error: 'Claude Code integration failed' };
     }
   } else {
     log('- Claude Code not detected, skipped');
@@ -181,9 +185,11 @@ export async function setupInstall({
 
 /**
  * Uninstall: Codex Desktop integration → Claude integration → DSH web profile
- * remove. Keeps ~/.config/dsh-crew, backups and credentials by default
- * (remove them explicitly with --purge). Never touches the repo, DSH,
- * Codex Desktop or Claude Code themselves.
+ * remove. Any critical step failing makes the whole run fail (ok=false +
+ * failures list) so callers / the CLI never report success on a partial
+ * removal. "Not installed" is idempotent success, never a failure. Keeps
+ * ~/.config/dsh-crew, backups and credentials by default (--purge removes them
+ * explicitly). Never touches the repo, DSH, Codex Desktop or Claude Code.
  */
 export async function setupUninstall({
   dryRun = false,
@@ -194,46 +200,55 @@ export async function setupUninstall({
   installer = realInstaller,
 } = {}) {
   log('DSH Crew uninstaller');
+  const failures = [];
+  const fail = (name, text) => { mark(log, false, text || `${name} failed`); failures.push(name); };
+
   if (dryRun) {
     mark(log, true, 'Codex Desktop integration would be removed');
     mark(log, true, 'Claude Code integration would be removed');
     mark(log, true, 'DSH web profile would be removed');
   } else {
+    // Codex (not installed → installer returns ok:true "nothing to remove").
     const cx = installer.uninstallCodex ? installer.uninstallCodex({ home }) : realInstaller.uninstallCodex({ home });
-    mark(log, cx.ok !== false, 'Codex Desktop integration removed');
-    const cl = installer.uninstallClaudeCode ? installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
-    mark(log, cl.ok !== false, 'Claude Code integration removed');
+    if (cx.ok !== false) mark(log, true, 'Codex Desktop integration removed');
+    else fail('codex', 'Codex Desktop integration removal failed');
 
-    const dsh = detectDsh();
+    // Claude (not installed → ok:true "settings.json not found").
+    const cl = installer.uninstallClaudeCode ? installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
+    if (cl.ok !== false) mark(log, true, 'Claude Code integration removed');
+    else fail('claude', 'Claude Code integration removal failed');
+
+    // DSH profile remove — idempotent (absent profile = already removed).
     const name = readPackageName(root);
+    const dsh = detectDsh();
     if (!name) {
-      log('✗ DSH plugin removal skipped: package name missing');
-      return { ok: false, error: 'DSH profile removal failed' };
-    }
-    if (!dsh) {
-      log('✗ DSH plugin removal skipped: DSH CLI not found');
-      return { ok: false, error: 'DSH profile removal failed' };
-    }
-    // Idempotency: if the profile no longer lists the package, nothing to do —
-    // pnpm remove on an already-absent dependency errors out.
-    if (!profileHasPackage(home, name)) {
+      fail('dsh', 'DSH plugin removal failed: package name missing');
+    } else if (!dsh) {
+      fail('dsh', 'DSH plugin removal failed: DSH CLI not found');
+    } else if (!profileHasPackage(home, name)) {
       mark(log, true, 'DSH web profile already removed');
     } else {
       const rm = runDsh(dsh.cli, ['remove', name]);
-      if (!rm.ok) {
-        log(`✗ DSH web profile removal failed:\n${(rm.stderr || rm.stdout || '').slice(0, 400)}`);
-        return { ok: false, error: 'DSH profile removal failed' };
-      }
-      mark(log, true, 'DSH web profile removed');
+      if (!rm.ok) fail('dsh', `DSH web profile removal failed: ${(rm.stderr || rm.stdout || '').trim().slice(0, 300)}`);
+      else mark(log, true, 'DSH web profile removed');
     }
   }
 
-  if (!purge && !dryRun) log('\nConfig/backups kept.');
-  if (purge && !dryRun) {
-    try { rmSync(join(home, '.config', 'dsh-crew'), { recursive: true, force: true }); mark(log, true, '~/.config/dsh-crew purged'); } catch { mark(log, false, 'could not purge ~/.config/dsh-crew'); }
+  if (!dryRun) {
+    if (purge) {
+      try { rmSync(join(home, '.config', 'dsh-crew'), { recursive: true, force: true }); mark(log, true, '~/.config/dsh-crew purged'); }
+      catch { fail('purge', 'could not purge ~/.config/dsh-crew'); }
+    } else {
+      log('\nConfig/backups kept.');
+    }
+  }
+
+  if (failures.length > 0) {
+    log('\nFAILED: uninstall incomplete');
+    return { ok: false, failures };
   }
   log('Done.');
-  return { ok: true };
+  return { ok: true, failures: [] };
 }
 
 /** Report what is installed where. Never prints credentials. */
@@ -257,24 +272,45 @@ export async function setupStatus({ log = console.log, root = ROOT, home = homed
 }
 
 // ---------- CLI entry ----------
+
+/**
+ * Run the setup CLI from an argv slice and return an exit code (0 success,
+ * 1 failure / usage error / unexpected exception). Actions are injectable for
+ * tests (run?.install / uninstall / status); defaults call the real functions.
+ * Uses process.exitCode semantics through the return value so stdout/stderr
+ * flush before the process ends.
+ */
+export async function runSetupCli({
+  argv = process.argv.slice(2),
+  run = {},
+  log = console.log,
+} = {}) {
+  const action = argv[0];
+  const flags = new Set(argv.slice(1));
+  const dryRun = flags.has('--dry-run');
+  const purge = flags.has('--purge');
+  const install = run.install ?? setupInstall;
+  const uninstall = run.uninstall ?? setupUninstall;
+  const status = run.status ?? setupStatus;
+  try {
+    let result;
+    if (action === 'install') result = await install({ dryRun, log });
+    else if (action === 'uninstall') result = await uninstall({ dryRun, purge, log });
+    else if (action === 'status') result = await status({ log });
+    else {
+      console.error('usage: node scripts/setup.mjs <install|uninstall|status> [--dry-run] [--purge]');
+      return 1;
+    }
+    return result?.ok === false ? 1 : 0;
+  } catch (err) {
+    console.error(`setup failed: ${err?.message ?? err}`);
+    return 1;
+  }
+}
+
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) || (
   process.argv[1] && resolve(join(process.cwd(), process.argv[1])) === fileURLToPath(import.meta.url)
 );
 if (isMain) {
-  const action = process.argv[2];
-  const flags = new Set(process.argv.slice(3));
-  const dryRun = flags.has('--dry-run');
-  const purge = flags.has('--purge');
-  try {
-    if (action === 'install') await setupInstall({ dryRun });
-    else if (action === 'uninstall') await setupUninstall({ dryRun, purge });
-    else if (action === 'status') await setupStatus({});
-    else {
-      console.error('usage: node scripts/setup.mjs <install|uninstall|status> [--dry-run] [--purge]');
-      process.exit(1);
-    }
-  } catch (err) {
-    console.error(`setup failed: ${err?.message ?? err}`);
-    process.exit(1);
-  }
+  process.exitCode = await runSetupCli({});
 }

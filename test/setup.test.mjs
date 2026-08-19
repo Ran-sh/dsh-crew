@@ -173,10 +173,11 @@ test('uninstall reports DSH profile removal failure when it fails', async () => 
     mkdirSync(join(t.dir, '.dsh', 'profiles', 'web'), { recursive: true });
     writeFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: [] } } }));
     const logs = [];
-    // No real dsh CLI in this environment → runDsh fails → ok:false path.
+    // No real dsh CLI in this environment → runDsh fails → aggregated failure.
     const r = await setupUninstall({ log: (m) => logs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller(calls) });
     assert.equal(r.ok, false);
-    assert.match(r.error, /DSH profile removal failed/);
+    assert.ok(r.failures.includes('dsh'), `dsh must be in failures: ${JSON.stringify(r.failures)}`);
+    assert.match(logs.join('\n'), /FAILED: uninstall incomplete/);
   } finally { t.cleanup(); }
 });
 
