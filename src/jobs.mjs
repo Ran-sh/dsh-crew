@@ -8,6 +8,7 @@ import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -41,6 +42,7 @@ function publishStatus() {
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
     currentTool: j.currentTool, tokens: j.tokens,
     startedAt: j.startedAt, endedAt: j.endedAt,
+    delivery_complete: !!j.delivery_complete,
   })));
 }
 
@@ -49,20 +51,29 @@ export function jobView(j, { withResult = false } = {}) {
     id: j.id, tier: j.tier, model: j.model, effort: j.effort, status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
     tokens: j.tokens, toolCalls: j.toolCalls, startedAt: j.startedAt, endedAt: j.endedAt,
+    delivery_complete: !!j.delivery_complete,
   };
-  if (withResult) { v.result = j.result; v.error = j.error; v.stopReason = j.stopReason; }
+  if (withResult) {
+    v.result = j.result; v.error = j.error; v.stopReason = j.stopReason;
+    v.delivery = j.delivery_metadata ?? null;
+    v.delivery_missing = j.delivery_missing ?? [];
+  }
   return v;
 }
 
 export function listJobs() { return [...jobs.values()]; }
 export function getJob(id) { return jobs.get(id); }
 
-export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api' }) {
+export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
   const tierInfo = TIERS[tier];
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
   if (!existsSync(RUNTIME_BIN)) throw new Error(`dsh-jsonrpc-agent not installed at ${RUNTIME_BIN}; run pnpm install in ${ROOT}`);
   const workspace = resolve(cwd ?? process.cwd());
+  // The worker always gets the auditable Delivery Contract appended (unless it
+  // already carries one), so its final message follows ## Diff / ## Tests /
+  // ## Risks — or the review contract for automatic Pro reviews.
+  const workerPrompt = appendDeliveryInstructions(task, { tier, isReview: delivery === 'review' });
   const id = `job-${nextId++}-${Date.now().toString(36)}`;
   const dotEnv = loadDotEnv();
   if (!process.env.DEEPSEEK_API_KEY && !dotEnv.DEEPSEEK_API_KEY) {
@@ -91,10 +102,12 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
 
   const job = {
     id, tier, model: tierInfo.model, effort, task, source, cwd: workspace,
+    prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
     status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
     tokens: { input: 0, output: 0, reasoning: 0 },
     startedAt: new Date().toISOString(), endedAt: null,
     result: null, error: null, stopReason: null, harness,
+    delivery_complete: false, delivery_missing: [], delivery_metadata: null,
     waiters: [],
   };
   jobs.set(id, job);
@@ -125,7 +138,7 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
   };
 
   job.promise = harness
-    .run(task, { sessionId, onNotification })
+    .run(workerPrompt, { sessionId, onNotification })
     .then((result) => {
       job.result = result.finalResponse ?? '';
       const lastEnd = [...(result.events ?? [])].reverse().find((ev) => ev?.type === 'turn/end');
@@ -141,6 +154,13 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
       job.endedAt = new Date().toISOString();
       job.currentTool = null;
       try { await harness.close(); } catch {}
+      // Delivery completeness is separate from execution status: a job can be
+      // done yet fail to report Diff/Tests/Risks. Parse whatever final message
+      // the worker produced so the orchestrator can decide whether to accept.
+      const parsed = parseDeliveryReport(job.result ?? '');
+      job.delivery_complete = parsed.complete;
+      job.delivery_missing = parsed.missing;
+      job.delivery_metadata = formatDeliveryMetadata(parsed);
       publishStatus();
       for (const w of job.waiters.splice(0)) w();
     });

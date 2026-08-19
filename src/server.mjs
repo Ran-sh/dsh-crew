@@ -129,7 +129,7 @@ function buildReviewTask(task, implementation) {
     'Flash implementation summary:',
     resultText === '' ? '(no summary; inspect the workspace directly)' : resultText,
     '',
-    'Report: 1) does the implementation satisfy the task, 2) concrete issues (bugs, style, risks), 3) suggested fixes. Be concise.',
+    'Report: 1) does the implementation satisfy the task, 2) concrete issues (bugs, style, risks), 3) suggested fixes. Be concise. Use the review Delivery Report format appended below (## Review Findings / ## Evidence / ## Risks / ## Verdict).',
   ].join('\n');
 }
 
@@ -154,12 +154,12 @@ server.registerTool('dsh_run_worker', {
   const e = effort ?? sessionConfig.default_effort;
   const timeout = timeout_seconds ?? sessionConfig.default_timeout_seconds;
 
-  const runOnce = async (t, jobTask) => {
+  const runOnce = async (t, jobTask, extra = {}) => {
     if ((await resolveMode()) === 'hub') {
-      const spawned = await hub.spawn({ task: jobTask, tier: t, effort: e, cwd: workDir, source: ORCHESTRATOR, preset: presetForTier(t) });
+      const spawned = await hub.spawn({ task: jobTask, tier: t, effort: e, cwd: workDir, source: ORCHESTRATOR, preset: presetForTier(t), ...extra });
       return await hub.get(spawned.id, timeout);
     }
-    const job = startJob({ task: jobTask, tier: t, effort: e, cwd: workDir, timeoutMs: timeout * 1000, source: ORCHESTRATOR });
+    const job = startJob({ task: jobTask, tier: t, effort: e, cwd: workDir, timeoutMs: timeout * 1000, source: ORCHESTRATOR, ...extra });
     await waitJob(job.id, timeout * 1000);
     return jobView(job, { withResult: true });
   };
@@ -182,7 +182,7 @@ server.registerTool('dsh_run_worker', {
   // (non-escalated) Flash implementation, and only when Pro is an Auto tier.
   if (job.status === 'done' && firstTier === 'flash' && shouldRunProReview(globalConfig, sessionConfig)) {
     const implementation = job;
-    const review = await runOnce('pro', buildReviewTask(task, implementation));
+    const review = await runOnce('pro', buildReviewTask(task, implementation), { delivery: 'review' });
     const combo = { phase: 'review', implementation, review };
     if (review.status === 'running') {
       return text({ ...combo, status: 'running', note: `pro review still running after ${timeout}s; poll with dsh_worker_result` });
