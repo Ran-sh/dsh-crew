@@ -216,7 +216,7 @@ One-click installation (choose one):
 - **DSH settings page** (when hub mode is installed): Settings → DSH Crew → "Install to Claude Code"
 - **Command line**: `node src/install/cli.mjs all`
 
-Both do the same thing: register local marketplace (parent directory `dsh-plugins/` as marketplace root) + `claude plugin install` + MCP tool permission allowlist + claude-hud worker status segment config (auto-backup settings.json before changes, idempotent). **Restart the session after installation for changes to take effect.**
+Both do the same thing: register this local dsh-crew checkout as a **self-contained marketplace** (the repo carries its own `.claude-plugin/marketplace.json`, so any clone location installs directly) + `claude plugin install` + MCP tool permission allowlist (all six dsh tool rules, including `dsh_worker_config`) + claude-hud worker status segment config (auto-backup settings.json before changes, idempotent). **Restart the session after installation for changes to take effect.**
 
 ### Usage
 
@@ -262,9 +262,11 @@ Role files come pre-configured with:
 
 **Note**: When manually copying, absolute paths in the `args` field must be updated to match actual installation location; the installer handles this automatically.
 
+**Codex Desktop is supported directly** through the shared Codex configuration (`~/.codex/`): the installer writes the role files and MCP config that Codex Desktop reads, and does not require the `codex` CLI. The Codex CLI is optional — it can be used as an additional host or management interface, but is never required for the integration.
+
 ### Usage
 
-- In interactive TUI, select "spawn ds-pro to ..." to dispatch tasks; Active/Done panels show progress
+- In the Codex Desktop app (or interactive TUI), select "spawn ds-pro to ..." to dispatch tasks; Active/Done panels show progress
 - `codex exec` mode can also directly call `dsh_run_worker`
 
 

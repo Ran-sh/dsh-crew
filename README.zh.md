@@ -216,7 +216,7 @@ worker 派发的总开关。关闭后 `dsh_run_worker` / `dsh_spawn_worker` **�
 - **DSH 设置页**（已装 hub 模式时）：设置 → DSH Crew → "安装到 Claude Code"
 - **命令行**：`node src/install/cli.mjs all`
 
-两者做同样的事：注册本地 marketplace（父目录 `dsh-plugins/` 为 marketplace 根） + `claude plugin install` + MCP 工具权限白名单 + claude-hud worker 状态段配置（改动前自动备份 settings.json，幂等）。**安装后重启会话生效**。
+两者做同样的事：把本台机器上的 dsh-crew checkout 注册为**自包含 marketplace**（仓库自带 `.claude-plugin/marketplace.json`，任何克隆位置都能直接安装）+ `claude plugin install` + MCP 工具权限白名单（全部 6 条 dsh 工具规则，含 `dsh_worker_config`） + claude-hud worker 状态段配置（改动前自动备份 settings.json，幂等）。**安装后重启会话生效**。
 
 ### 使用
 
@@ -262,9 +262,11 @@ cp codex/agents/*.toml ~/.codex/agents/    # 全局或项目级 .codex/agents/
 
 **注意**：手工复制时，role 文件中 `args` 的绝对路径需按实际安装位置修改；用安装器则无需手改。
 
+**Codex Desktop 直接受支持**：安装器写入 `~/.codex/` 的角色文件与 MCP 配置即 Codex Desktop 所读取的共享配置，**不依赖 `codex` CLI**。Codex CLI 是可选的补充宿主 / 管理入口，绝非集成必需。
+
 ### 使用
 
-- 交互 TUI 里选 "spawn ds-pro to ..." 派发任务，Active/Done 面板显示进度
+- 在 Codex Desktop（或交互 TUI）里选 "spawn ds-pro to ..." 派发任务，Active/Done 面板显示进度
 - `codex exec` 模式也可直接调 `dsh_run_worker`
 
 
