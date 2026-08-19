@@ -33,7 +33,7 @@ test('Case 2: flash-only + missing tier → hub.spawn receives tier=flash', () =
   assert.equal(r.payload.tier, 'flash');
 });
 
-test('Case 3: pro-only + explicit tier=flash → clamped to pro (same semantics as the MCP server)', () => {
+test('Case 3: pro-only + explicit tier=flash → rejected TIER_DISABLED (same semantics as the MCP server)', () => {
   // The MCP layer rejects TIER_DISABLED; the hub must not silently diverge, so
   // the shared resolver returns the same rejection with the same code.
   const r = resolveHubSpawnPayload(raw({ task: 'x', tier: 'flash' }), () => cfg({ collaboration_mode: 'pro-only' }));
