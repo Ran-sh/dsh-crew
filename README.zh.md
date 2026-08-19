@@ -195,9 +195,11 @@ worker 派发的总开关。关闭后 `dsh_run_worker` / `dsh_spawn_worker` **�
 
 `direct-allowed` / `coordinator-first` / `dispatcher-only` 描述 orchestrator 偏好的工作方式。**这是宿主路由指引，不是安全边界**——Crew MCP backend 无法阻止 Claude Code 或 Codex 自己编辑文件、跑 shell 或使用宿主的其他工具。`dispatcher-only` 的意思是「尽量只做规划、派发、审查与整合」，而不是「宿主的工具被禁用了」。
 
+主 Agent 通过 `dsh_worker_config`（无参调用返回 effective 状态与 `routing_guidance`）获知当前策略。已安装的 `/dsh-crew:config` / `/dsh-config` 是可发现的读取方式；建议的时机是：当你要做出路由敏感的委派决策、且当前策略未知或可能已变化时查一次——不是每一步都查。
+
 ### 策略优先级
 
-从高到低：会话 `enabled` → 全局 `subagents_enabled` → 会话 `tier_policy` 硬钳制（`flash-only` / `pro-only`）→ 协作预设 → custom 档位状态 → 显式指定 tier → `default_tier` → 唯一的 Auto 档位 → 报错。`dsh_run_worker` 与 `dsh_spawn_worker` 共享同一套 resolver；hub jobs API 也执行同一策略。
+从高到低：会话 `enabled` → 全局 `subagents_enabled` → 会话 `tier_policy` 硬钳制（`flash-only` / `pro-only`）→ 协作预设 → custom 档位状态 → 显式指定 tier → `default_tier` → 唯一的 Auto 档位 → 报错。`dsh_run_worker` 与 `dsh_spawn_worker` 共享同一套 resolver；hub jobs API 解析出同一个 effective tier 并把它真正传进 worker 的 spawn（Pro Only 下缺省 tier 启动的是 Pro，绝不会落到 registry 的 flash 默认值）。
 
 旧的 `tier_policy` 完全保留：旧配置自动迁移（`flash-only` → Flash Only，`pro-only` → Pro Only，`auto` → Balanced），`/dsh-crew:config` / `/dsh-config` 继续接受 `policy=…` 作为会话钳制。
 
