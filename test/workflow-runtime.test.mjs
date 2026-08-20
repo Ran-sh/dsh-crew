@@ -274,6 +274,34 @@ test('cancelling a queued workflow removes it without running', async () => {
   assert.ok(a.attempts.length === 1, 'only A executed');
 });
 
+// ---------- candidate lifecycle & reviewer inputs ----------
+
+test('candidate capture failure retains the worktree instead of deleting it', async () => {
+  const a = makeAdapter({});
+  a.captureCandidate = async () => null; // capture always fails
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'done', 'business result is preserved despite capture failure');
+  assert.equal(v.candidate_capture_failed, true);
+  assert.equal(v.workspace_retained, true, 'worktree kept for debug, never deleted');
+  assert.equal(v.candidate, null);
+});
+
+test('automatic reviewer input includes the sanitized candidate', async () => {
+  const a = makeAdapter({ getConfigPatch: { collaboration_mode: 'review-pipeline' } });
+  let lastView = null;
+  a.buildReviewTask = (task, view) => { lastView = view; return 'review'; };
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'done');
+  assert.ok(lastView && lastView.candidate, 'reviewer must receive the candidate');
+  assert.ok(lastView.candidate.changed_files.includes('src/a.mjs'));
+});
+
 // ---------- verdict normalizer ----------
 
 test('normalizeReviewVerdict handles free text', () => {

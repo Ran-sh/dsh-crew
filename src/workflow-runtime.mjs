@@ -160,6 +160,9 @@ export function createWorkflowRuntime(adapters, {
       outcome: null,
       error: null,
       cleanup_warning: null,
+      candidate_capture_failed: false,
+      retain_workspace: false,
+      workspace_retained: false,
       events: [{ at: now, phase: JOB_PHASES.CREATED, type: 'created' }],
       createdAt: now,
       startedAt: now,
@@ -204,6 +207,13 @@ export function createWorkflowRuntime(adapters, {
   }
 
   async function releaseWorkspace(job) {
+    if (job.retain_workspace) {
+      // Candidate capture failed — the worktree holds the only copy of the
+      // worker's changes. Keep it and surface where it lives instead of
+      // deleting the only recoverable state.
+      job.workspace_retained = true;
+      return;
+    }
     if (!job.workspaceHandle) return;
     try {
       const r = await adapters.releaseWorkspace(job.workspaceHandle);
@@ -289,9 +299,16 @@ export function createWorkflowRuntime(adapters, {
         // user workspace is never drafted into one.
         if (alloc?.ok && alloc.isolation === 'worktree' && job.candidate === null) {
           const candidate = await safeCapture(adapters, job.execution_cwd, job.base_revision);
-          job.candidate = candidate;
-          if (candidate) outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
-          else outcome.workspace_evidence_ok = true;
+          if (candidate === null) {
+            // The worker's changes live only in the worktree; do not delete the
+            // only recoverable state when the candidate cannot be captured.
+            job.candidate_capture_failed = true;
+            job.retain_workspace = true;
+            job.events.push({ at: clock(), phase: job.phase, type: 'candidate/failed', message: 'candidate capture failed; worktree retained for debug' });
+          } else {
+            job.candidate = candidate;
+            outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
+          }
         }
         job.outcome = outcome;
 
@@ -320,7 +337,9 @@ export function createWorkflowRuntime(adapters, {
         if (decision.step === 'review') {
           transition(job, JOB_PHASES.REVIEWING, 'automatic review');
           const before = job.candidate;
-          const reviewTask = adapters.buildReviewTask(job.original_task, { outcome });
+          // The reviewer sees outcome + the SANITIZED candidate (changed files,
+          // base revision, redacted patch) — never the raw workspace.
+          const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
           job.review = review;
           // The implementation candidate stays the pre-review snapshot; the
@@ -439,6 +458,8 @@ export function createWorkflowRuntime(adapters, {
       error: job.error ?? null,
       error_code: job.error_code ?? null,
       cleanup_warning: job.cleanup_warning ?? null,
+      candidate_capture_failed: job.candidate_capture_failed === true,
+      workspace_retained: job.workspace_retained === true,
       decision: job.decision,
       candidate_available: !!job.candidate,
       review_status: job.review ? job.review.status ?? null : null,
