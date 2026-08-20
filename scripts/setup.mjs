@@ -4,9 +4,6 @@
 //   node scripts/setup.mjs install [--dry-run]
 //   node scripts/setup.mjs uninstall [--dry-run] [--purge]
 //   node scripts/setup.mjs status
-//
-// Installs the LOCAL checkout (link:<ROOT>) into the DSH web profile plus the
-// Codex Desktop integration and, when the Claude CLI is detected, Claude Code.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, rmSync } from 'node:fs';
@@ -26,23 +23,22 @@ function commandExists(name) {
 
 function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: opts.shell === true,
-    cwd: opts.cwd ?? ROOT,
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: opts.shell === true, cwd: opts.cwd ?? ROOT,
   });
   return { ok: r.status === 0, status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 /**
- * Detect the DSH CLI used for profile operations. A source install only needs
- * Node/npm's npx: if a standalone `dsh` is unavailable, `npx -y` is a valid
- * execution strategy and will fetch the CLI when the actual add/remove runs.
- * Merely detecting npx never starts DSH and never touches credentials.
+ * Detect the DSH CLI. `allowDownload` is intentionally opt-in: installation
+ * may use `npx -y` to fetch DSH, while status/uninstall probes never trigger a
+ * network download merely by checking availability.
  */
-export function detectDsh() {
+export function detectDsh({ allowDownload = false } = {}) {
   if (commandExists('dsh')) return { kind: 'dsh', cli: 'dsh plugin --profile web' };
-  if (commandExists('npx')) return { kind: 'npx', cli: 'npx -y @deepseek-ai/dsh plugin --profile web' };
+  if (!commandExists('npx')) return null;
+  if (allowDownload) return { kind: 'npx', cli: 'npx -y @deepseek-ai/dsh plugin --profile web' };
+  const probe = run('npx --no-install @deepseek-ai/dsh --version', [], { shell: true });
+  if (probe.ok) return { kind: 'npx', cli: 'npx --no-install @deepseek-ai/dsh plugin --profile web' };
   return null;
 }
 
@@ -80,10 +76,6 @@ function mark(log, ok, text) {
   return ok;
 }
 
-/**
- * Install: dependencies → client build → DSH web profile link → Codex Desktop
- * → Claude Code (when detected). Never starts DSH or reads credentials.
- */
 export async function setupInstall({
   dryRun = false,
   log = console.log,
@@ -105,9 +97,8 @@ export async function setupInstall({
     const baseArgs = pnpmOk ? [] : ['-y', 'pnpm'];
     const d = run(cmd, [...baseArgs, 'install', '--frozen-lockfile']);
     if (!d.ok) {
-      if (depsPresent(root)) {
-        mark(log, true, `dependencies (already present; install skipped — ${(d.stderr || d.stdout || '').trim().split('\n')[0]})`);
-      } else {
+      if (depsPresent(root)) mark(log, true, `dependencies (already present; install skipped — ${(d.stderr || d.stdout || '').trim().split('\n')[0]})`);
+      else {
         mark(log, false, `dependencies install failed: ${(d.stderr || d.stdout || '').trim().slice(-300)}`);
         return { ok: false, error: 'dependencies install failed' };
       }
@@ -125,14 +116,15 @@ export async function setupInstall({
 
   const name = readPackageName(root);
   if (!name) return { ok: false, error: 'package.json name missing' };
-  const dsh = detectDsh();
+  // Install is the one operation allowed to fetch the DSH CLI via npx. A
+  // dry-run only checks that npx exists; detectDsh itself performs no network.
+  const dsh = detectDsh({ allowDownload: true });
   if (!dsh) {
     log('✗ DSH CLI not detected (dsh or npx)');
     return { ok: false, error: 'DSH CLI not found' };
   }
-  if (dryRun) {
-    mark(log, true, `DSH web profile would be linked: ${dsh.kind} add "link:${root}"`);
-  } else {
+  if (dryRun) mark(log, true, `DSH web profile would be linked: ${dsh.kind} add "link:${root}"`);
+  else {
     const add = runDsh(dsh.cli, ['add', `link:${root}`]);
     if (!add.ok) {
       log(`✗ DSH web profile link failed:\n${(add.stderr || add.stdout || '').slice(0, 400)}`);
@@ -164,10 +156,6 @@ export async function setupInstall({
   return { ok: true };
 }
 
-/**
- * Uninstall our host integrations and remove the DSH profile package. An
- * already-absent profile is success and does not require a DSH CLI at all.
- */
 export async function setupUninstall({
   dryRun = false,
   purge = false,
@@ -194,11 +182,11 @@ export async function setupUninstall({
     else fail('claude', 'Claude Code integration removal failed');
 
     const name = readPackageName(root);
-    if (!name) {
-      fail('dsh', 'DSH plugin removal failed: package name missing');
-    } else if (!profileHasPackage(home, name)) {
-      mark(log, true, 'DSH web profile already removed');
-    } else {
+    if (!name) fail('dsh', 'DSH plugin removal failed: package name missing');
+    else if (!profileHasPackage(home, name)) mark(log, true, 'DSH web profile already removed');
+    else {
+      // Uninstall must not surprise the user or CI by downloading a CLI just
+      // to probe. Use only an already available dsh / locally resolvable npx.
       const dsh = detectDsh();
       if (!dsh) fail('dsh', 'DSH plugin removal failed: DSH CLI not found');
       else {
@@ -211,10 +199,8 @@ export async function setupUninstall({
 
   if (!dryRun) {
     if (purge) {
-      try {
-        rmSync(join(home, '.config', 'dsh-crew'), { recursive: true, force: true });
-        mark(log, true, '~/.config/dsh-crew purged');
-      } catch { fail('purge', 'could not purge ~/.config/dsh-crew'); }
+      try { rmSync(join(home, '.config', 'dsh-crew'), { recursive: true, force: true }); mark(log, true, '~/.config/dsh-crew purged'); }
+      catch { fail('purge', 'could not purge ~/.config/dsh-crew'); }
     } else log('\nConfig/backups kept.');
   }
 
@@ -244,11 +230,7 @@ export async function setupStatus({ log = console.log, root = ROOT, home = homed
   return { ok: true, dshPlugin, codex, claude };
 }
 
-export async function runSetupCli({
-  argv = process.argv.slice(2),
-  run: actions = {},
-  log = console.log,
-} = {}) {
+export async function runSetupCli({ argv = process.argv.slice(2), run: actions = {}, log = console.log } = {}) {
   const action = argv[0];
   const flags = new Set(argv.slice(1));
   const dryRun = flags.has('--dry-run');
