@@ -199,6 +199,7 @@ export function formatDeliveryMetadata(parsed, { limit = 400 } = {}) {
     const clipped = clip(sections[s], limit);
     if (clipped !== undefined) out[METADATA_KEYS[s]] = clipped;
   }
+  if (parsed?.tests_status) out.tests_status = parsed.tests_status;
   if (out.missing.length === 0) delete out.missing;
   return out;
 }

@@ -1,7 +1,4 @@
 allowBuilds:
-  '0': '@deepseek-ai/dsh-subprocess-local'
-  '1': koffi
-  '2': node-pty
-  '@deepseek-ai/dsh-subprocess-local': set this to true or false
-  koffi: set this to true or false
-  node-pty: set this to true or false
+  '@deepseek-ai/dsh-subprocess-local': true
+  koffi: true
+  node-pty: true

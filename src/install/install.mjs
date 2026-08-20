@@ -109,7 +109,10 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // User-added model ids per provider, merged into the panel's model list.
   extra_models: {},
   // Hub-mode agent preset per tier: 'default' follows the DSH roster default.
-  preset_flash: 'minimal',
+  // Harness Default uses the session-aware filesystem/shell stack. The DSH
+  // minimal preset's provider-native tools use the Host process cwd instead,
+  // so it is unsafe as the fresh default for jobs targeting another workspace.
+  preset_flash: 'default',
   preset_pro: 'default',
 };
 
@@ -131,14 +134,17 @@ export function mergeStoredGlobalConfig(stored) {
   }
   if (!has('main_agent_mode')) merged.main_agent_mode = 'coordinator-first';
   if (!has('worker_provider_mode')) merged.worker_provider_mode = 'deepseek-official';
+  // Preserve the prior release's Flash preset for existing files that predate
+  // this field; only a genuinely fresh/no-file config gets Harness Default.
+  if (!has('preset_flash')) merged.preset_flash = 'minimal';
   if (!has('vision_enabled')) merged.vision_enabled = stored.vision_provider !== 'off';
   if (!has('imagegen_enabled')) merged.imagegen_enabled = stored.imagegen_provider !== 'off';
   return merged;
 }
 
-export function readGlobalConfig() {
-  if (!existsSync(GLOBAL_CONFIG_FILE)) return { ...GLOBAL_CONFIG_DEFAULTS };
-  return mergeStoredGlobalConfig(readJson(GLOBAL_CONFIG_FILE, {}));
+export function readGlobalConfig({ configFile = GLOBAL_CONFIG_FILE } = {}) {
+  if (!existsSync(configFile)) return { ...GLOBAL_CONFIG_DEFAULTS };
+  return mergeStoredGlobalConfig(readJson(configFile, {}));
 }
 
 export function writeGlobalConfig(patch) {

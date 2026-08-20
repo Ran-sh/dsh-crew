@@ -210,9 +210,24 @@ test('validateDeliveryReport agrees with parse on complete and missing reports',
 test('formatDeliveryMetadata gives bounded snippets plus complete flag', () => {
   const md = formatDeliveryMetadata(parseDeliveryReport(codingReport()));
   assert.equal(md.complete, true);
+  assert.equal(md.tests_status, 'PASS');
   assert.equal(md.diff, 'src/a.mjs — fixed the bug');
   assert.equal(md.unverified, 'not tested on Windows');
   assert.equal('missing' in md, false);
+});
+
+test('formatDeliveryMetadata preserves aggregate coding test status only for valid coding reports', () => {
+  const notRun = formatDeliveryMetadata(parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nNOT RUN — integration — unavailable\n## Risks\nnone'));
+  assert.equal(notRun.complete, true);
+  assert.equal(notRun.tests_status, 'NOT RUN');
+
+  const failed = formatDeliveryMetadata(parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nFAIL — integration — broke\n## Risks\nknown'));
+  assert.equal(failed.complete, true);
+  assert.equal(failed.tests_status, 'FAIL');
+
+  const invalid = formatDeliveryMetadata(parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit\n## Risks\nnone'));
+  assert.equal(invalid.complete, false);
+  assert.equal('tests_status' in invalid, false);
 });
 
 test('formatDeliveryMetadata clips long sections and names missing ones', () => {
@@ -229,6 +244,7 @@ test('formatDeliveryMetadata maps review sections onto findings/evidence/verdict
   assert.equal(md.complete, true);
   assert.equal(md.verdict, 'approved');
   assert.equal(md.findings, 'ok');
+  assert.equal('tests_status' in md, false);
 });
 
 test('contract constants line up with the parser', () => {
@@ -250,9 +266,9 @@ function finishedJob() {
     id: 'j1', tier: 'flash', model: 'deepseek-v4-flash', effort: 'max', status: 'done', source: 'claude-code',
     task: 'implement X', cwd: '/proj', turn: 1, step: 2, currentTool: null, toolCalls: 3,
     tokens: { input: 10, output: 20, reasoning: 0 }, startedAt: 't0', endedAt: 't1',
-    result: ['did it', '', '## Diff', 'a.mjs', '', '## Tests', 'passed', '', '## Risks', 'none'].join('\n'),
+    result: ['did it', '', '## Diff', 'a.mjs', '', '## Tests', 'PASS — node --test — passed', '', '## Risks', 'none'].join('\n'),
     error: null, stopReason: 'completed',
-    delivery_complete: true, delivery_missing: [], delivery_metadata: { complete: true, diff: 'a.mjs' },
+    delivery_complete: true, delivery_missing: [], delivery_metadata: { complete: true, diff: 'a.mjs', tests_status: 'PASS' },
     workspaceDiff: { kind: 'git', patch: '…', redacted: [], truncated: false, dirtyBaseline: false },
   };
 }
@@ -262,6 +278,7 @@ test('standalone job view: full delivery + workspace fields only in withResult v
   assert.equal(full.delivery_complete, true);
   assert.deepEqual(full.delivery_missing, []);
   assert.equal(full.delivery.complete, true);
+  assert.equal(full.delivery.tests_status, 'PASS');
   assert.equal(full.workspace_diff_available, true);
   assert.equal(full.workspace_diff.kind, 'git');
   assert.equal(full.workspace_baseline_dirty, false);
@@ -280,6 +297,7 @@ test('hub job view mirrors the standalone view for delivery + workspace fields',
   const full = reg.view(job, true);
   assert.equal(full.delivery_complete, true);
   assert.equal(full.delivery.complete, true);
+  assert.equal(full.delivery.tests_status, 'PASS');
   assert.equal(full.workspace_diff_available, true);
   assert.equal(full.workspace_diff.kind, 'git');
   const status = reg.view(job);
@@ -299,4 +317,12 @@ test('incomplete worker output surfaces as delivery_complete=false in full views
   assert.equal(full.delivery.complete, false);
   // Execution status stays separate from delivery completeness.
   assert.equal(full.status, 'done');
+});
+
+test('failed tests remain delivery metadata and do not rewrite execution status', () => {
+  const job = { ...finishedJob(), delivery_metadata: { complete: true, tests_status: 'FAIL', diff: 'a.mjs', tests: 'FAIL — node --test — failed', risks: 'known' } };
+  const full = jobView(job, { withResult: true });
+  assert.equal(full.status, 'done');
+  assert.equal(full.delivery.complete, true);
+  assert.equal(full.delivery.tests_status, 'FAIL');
 });

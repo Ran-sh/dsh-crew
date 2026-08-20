@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GLOBAL_CONFIG_DEFAULTS, mergeStoredGlobalConfig } from '../src/install/install.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { GLOBAL_CONFIG_DEFAULTS, mergeStoredGlobalConfig, readGlobalConfig } from '../src/install/install.mjs';
 import { normalizeGlobalConfig } from '../src/policy.mjs';
 
 test('fresh defaults are the minimal Codex to Flash workflow', () => {
@@ -15,10 +18,28 @@ test('fresh defaults are the minimal Codex to Flash workflow', () => {
   assert.equal(GLOBAL_CONFIG_DEFAULTS.worker_provider_mode, 'follow-dsh');
   assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.flash_model_priority, []);
   assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.pro_model_priority, []);
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.preset_flash, 'default');
+});
+
+test('a missing config file reads and normalizes to the fresh runtime workflow', (t) => {
+  const fixture = mkdtempSync(join(tmpdir(), 'dsh-crew-fresh-config-'));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const config = normalizeGlobalConfig(readGlobalConfig({ configFile: join(fixture, 'missing-config.json') }));
+  assert.equal(config.subagents_enabled, true);
+  assert.equal(config.collaboration_mode, 'flash-only');
+  assert.equal(config.flash_state, 'auto');
+  assert.equal(config.pro_state, 'disabled');
+  assert.equal(config.main_agent_mode, 'direct-allowed');
+  assert.equal(config.worker_provider_mode, 'follow-dsh');
+  assert.equal(config.vision_enabled, false);
+  assert.equal(config.imagegen_enabled, false);
+  assert.equal(config.flash_model_fallback, 'harness-default');
+  assert.equal(config.pro_model_fallback, 'harness-default');
+  assert.equal(config.preset_flash, 'default');
 });
 
 test('an existing pre-feature config keeps legacy modes while gaining safe model fields', () => {
-  const config = mergeStoredGlobalConfig({ tier_policy: 'auto', vision_provider: 'claude-code', imagegen_provider: 'codex' });
+  const config = normalizeGlobalConfig(mergeStoredGlobalConfig({ tier_policy: 'auto', vision_provider: 'claude-code', imagegen_provider: 'codex' }));
   assert.equal(config.collaboration_mode, 'balanced');
   assert.equal(config.flash_state, 'auto');
   assert.equal(config.pro_state, 'auto');
@@ -26,7 +47,27 @@ test('an existing pre-feature config keeps legacy modes while gaining safe model
   assert.equal(config.worker_provider_mode, 'deepseek-official');
   assert.equal(config.vision_enabled, true);
   assert.equal(config.imagegen_enabled, true);
+  assert.equal(config.preset_flash, 'minimal');
   assert.deepEqual(config.flash_model_priority, []);
+});
+
+test('an explicit existing configuration survives merge and normalization', () => {
+  const config = normalizeGlobalConfig(mergeStoredGlobalConfig({
+    collaboration_mode: 'review-pipeline',
+    main_agent_mode: 'dispatcher-only',
+    worker_provider_mode: 'deepseek-official',
+    vision_enabled: true,
+    preset_flash: 'minimal',
+    flash_model_priority: [{ provider: 'a', model: 'm1' }],
+    pro_model_priority: [{ provider: 'b', model: 'm2' }],
+  }));
+  assert.equal(config.collaboration_mode, 'review-pipeline');
+  assert.equal(config.main_agent_mode, 'dispatcher-only');
+  assert.equal(config.worker_provider_mode, 'deepseek-official');
+  assert.equal(config.vision_enabled, true);
+  assert.equal(config.preset_flash, 'minimal');
+  assert.deepEqual(config.flash_model_priority, [{ provider: 'a', model: 'm1' }]);
+  assert.deepEqual(config.pro_model_priority, [{ provider: 'b', model: 'm2' }]);
 });
 
 test('existing explicit advanced settings and model priorities survive normalization', () => {
