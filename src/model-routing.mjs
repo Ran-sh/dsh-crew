@@ -60,7 +60,6 @@ function defaultResult(harnessDefault, providers) {
       : {}),
   };
 }
-
 export function resolveWorkerModel({
   tier,
   priority,

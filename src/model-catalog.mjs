@@ -75,4 +75,3 @@ export async function readHarnessModelCatalog({ llm, getCurrentSelection, now = 
     partial: failed > 0,
   };
 }
-

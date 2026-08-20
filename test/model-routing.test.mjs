@@ -89,4 +89,3 @@ test('priority normalization removes invalid and duplicate refs but distinguishe
   assert.deepEqual(normalized, [{ provider: 'a', model: 'same' }, { provider: 'b', model: 'same' }]);
   assert.notEqual(modelRefKey(normalized[0]), modelRefKey(normalized[1]));
 });
-
