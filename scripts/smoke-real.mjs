@@ -1,0 +1,70 @@
+// Real DSH Hub smoke for the v0.2 runtime path. Spawns this branch's MCP
+// server (src/server.mjs) over stdio and drives it with the MCP SDK against a
+// LIVE DSH hub (127.0.0.1:3080). Uses a throwaway temp git repo as the
+// workspace; never touches the primary web profile or the user's real repos.
+// Usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn]
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+const repo = process.argv[2];
+const mode = process.argv[3] ?? 'run';
+if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn]'); process.exit(2); }
+
+const TASK = [
+  'In this git repository, create the file src/answer.mjs with exactly the content: `export const answer = 40 + 2;`',
+  'Then run the single-line check: node -e \'const a = require("./src/answer.mjs"); if (a.answer !== 42) process.exit(1); console.log("answer ok");\' (ESM note: use import("./src/answer.mjs") or write .cjs — pick whatever works and run it).',
+  'End your final message with the required Delivery Report:',
+  '## Diff',
+  '- src/answer.mjs — added answer',
+  '## Tests',
+  'PASS — node check — answer is 42',
+  '## Risks',
+  'none',
+].join('\n');
+
+const transport = new StdioClientTransport({
+  command: 'node',
+  args: ['src/server.mjs'],
+  cwd: process.cwd(),
+  stderr: process.stderr,
+});
+const client = new Client({ name: 'dsh-crew-smoke', version: '1.0.0', requestTimeout: 600 * 1000 });
+
+async function call(name, args, timeoutMs) {
+  const res = await client.callTool({ name, arguments: args }, undefined, timeoutMs ? { timeout: timeoutMs } : undefined);
+  return JSON.parse(res.content.find((c) => c.type === 'text').text);
+}
+
+try {
+  await client.connect(transport);
+  console.log(`[smoke] connected; mode=${mode} cwd=${repo}`);
+
+  if (mode === 'spawn') {
+    const spawnView = await call('dsh_spawn_worker', { task: TASK, role: 'worker', cwd: repo });
+    console.log('[smoke] spawn view:', JSON.stringify(spawnView, null, 2));
+    const wfId = spawnView.workflow_id ?? spawnView.id;
+    // poll a few times for the final result (workflow continues in background)
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const v = await call('dsh_worker_result', { job_id: wfId, wait_seconds: 0 });
+      if (v.status !== 'running') {
+        console.log('[smoke] final (spawn):', JSON.stringify({ id: v.id, role: v.role, phase: v.phase, status: v.status, isolation: v.isolation, attempt: v.attempt, review: v.review?.verdict ?? null, candidate: v.candidate?.changed_files ?? null, error: v.error }, null, 2));
+        await client.close();
+        process.exit(v.status === 'done' ? 0 : 1);
+      }
+      if (i === 23) console.log('[smoke] still running after poll window: ', JSON.stringify(v));
+    }
+    await client.close();
+    process.exit(2);
+  }
+
+    const view = await call('dsh_run_worker', { task: TASK, role: 'worker', cwd: repo, timeout_seconds: 540 }, 560 * 1000);
+  const k = (o) => ({ id: o.id, role: o.role, phase: o.phase, status: o.status, isolation: o.isolation, execution_cwd: o.execution_cwd, base_revision: o.base_revision, attempt: o.attempt, decision: o.decision, review: o.review?.verdict ?? null, candidate_available: o.candidate_available, candidate_changed: o.candidate?.changed_files ?? null, outcome_task: o.outcome?.task_status ?? null, tests: o.outcome?.tests_status ?? null, error: o.error, error_code: o.error_code, cleanup_warning: o.cleanup_warning, primary_dirty_hint: o.primary_workspace_dirty });
+  console.log('[smoke] final (run):', JSON.stringify(k(view), null, 2));
+  await client.close();
+  process.exit(view.status === 'done' ? 0 : 1);
+} catch (err) {
+  console.error('[smoke] ERROR:', err?.message ?? err);
+  try { await client.close(); } catch {}
+  process.exit(3);
+}
