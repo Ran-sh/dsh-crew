@@ -279,6 +279,7 @@ export function createWorkflowRuntime(adapters, {
           if (candidate === null) {
             job.candidate_capture_failed = true;
             job.retain_workspace = true;
+            job.candidate = null;
             job.events.push({ at: clock(), phase: job.phase, type: 'candidate/failed', attempt, message: 'candidate capture failed; worktree retained for recovery' });
           } else {
             job.candidate = candidate;

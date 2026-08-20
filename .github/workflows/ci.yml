@@ -34,8 +34,8 @@ jobs:
             ! -name 'hub-windows.test.mjs' \
             ! -name 'workspace-audit.test.mjs' -print)
           node --test $files
-      - name: Workspace audit tests (portable cases)
-        run: node --test --test-name-pattern='^(?!Windows Git resolver falls back)' test/workspace-audit.test.mjs
+      - name: Workspace audit tests
+        run: node --test test/workspace-audit.test.mjs
       - name: Build client
         run: pnpm run build:client
 

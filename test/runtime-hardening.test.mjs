@@ -138,6 +138,50 @@ test('escalation refreshes candidate after every worker attempt', async () => {
   assert.equal(view.child_attempts[1].candidate_fingerprint, 'fp-1');
 });
 
+test('latest candidate capture failure never exposes a stale earlier candidate', async () => {
+  let lastAttempt = -1;
+  let released = 0;
+  const adapter = makeRuntimeAdapter({
+    getConfig: () => ({ collaboration_mode: 'balanced', escalate_on_failure: true }),
+    executeAttempt: async (spec) => {
+      lastAttempt = spec.attempt;
+      return {
+        id: `worker-${spec.attempt}`,
+        role: 'worker',
+        attempt: spec.attempt,
+        status: 'done',
+        result: spec.attempt === 0 ? FAILING : GOOD,
+        stopReason: 'completed',
+        provider: 'p',
+        model: spec.attempt === 0 ? 'cheap' : 'strong',
+        selection_source: 'test',
+      };
+    },
+    captureCandidate: async () => lastAttempt === 0 ? {
+      ok: true,
+      changed_files: ['attempt-0.mjs'],
+      patch: 'patch-0',
+      fingerprint: 'fp-0',
+      complete: true,
+      replayable: true,
+    } : { ok: false, reason: 'capture failed' },
+    releaseWorkspace: async () => { released += 1; return { ok: true }; },
+  });
+  const rt = createWorkflowRuntime(adapter, { maxParallel: 1, idFactory: ids() });
+  const job = rt.start({ role: 'worker', model_class_hint: 'flash', task: 'fix then lose capture', cwd: '/repo' });
+  await rt.wait(job.id, 2000);
+  const view = rt.get(job.id, { withResult: true });
+  assert.equal(view.status, 'done');
+  assert.equal(view.attempt, 2);
+  assert.equal(view.candidate_capture_failed, true);
+  assert.equal(view.candidate_available, false);
+  assert.equal(view.candidate, null);
+  assert.equal(view.workspace_retained, true);
+  assert.equal(released, 0);
+  assert.equal(view.child_attempts[0].candidate_fingerprint, 'fp-0');
+  assert.equal(view.child_attempts[1].candidate_fingerprint, null);
+});
+
 test('workflow cancellation targets the real adapter attempt id', async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
