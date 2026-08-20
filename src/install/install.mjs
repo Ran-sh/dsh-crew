@@ -114,6 +114,12 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // so it is unsafe as the fresh default for jobs targeting another workspace.
   preset_flash: 'default',
   preset_pro: 'default',
+  // ---- v0.2 runtime execution (writable via the settings config endpoint) ----
+  // Concurrency cap for parallel workflows; isolation: worktree = run coding
+  // workers in per-job git worktrees (fail-closed for non-git workspaces),
+  // shared = legacy in-place behaviour.
+  max_parallel: 3,
+  isolation: 'worktree',
 };
 
 export function mergeStoredGlobalConfig(stored) {

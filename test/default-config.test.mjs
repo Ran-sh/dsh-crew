@@ -85,3 +85,12 @@ test('existing explicit advanced settings and model priorities survive normaliza
     assert.deepEqual(normalized.pro_model_priority, [{ provider: 'b', model: 'm2' }]);
   }
 });
+
+test('v0.2 runtime execution fields are persistable and normalize into the runtime shape', () => {
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.max_parallel, 3);
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.isolation, 'worktree');
+  const stored = mergeStoredGlobalConfig({ max_parallel: 2, isolation: 'shared' });
+  const normalized = normalizeGlobalConfig(stored);
+  assert.equal(normalized.execution.max_parallel, 2);
+  assert.equal(normalized.execution.isolation, 'shared');
+});
