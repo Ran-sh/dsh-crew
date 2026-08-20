@@ -18,6 +18,9 @@ import {
   isSensitivePath,
   parseChanges,
   NOT_A_GIT_REPOSITORY,
+  GIT_TIMEOUT,
+  GIT_TIMEOUT_MS,
+  resolveWindowsGit,
   DIFF_LIMIT,
 } from '../src/workspace-audit.mjs';
 
@@ -43,6 +46,37 @@ test('isSensitivePath redacts env / credentials / secrets / keys / pems', () => 
   for (const p of ['.env', '.env.local', 'config/.env.production', 'credentials.json', 'secrets.yaml', 'secret-key.pem', 'server.key', 'deploy/prod.key']) {
     assert.equal(isSensitivePath(p), true, `${p} should be sensitive`);
   }
+});
+
+test('git timeout degrades with GIT_TIMEOUT instead of failing the worker', async () => {
+  const error = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT', killed: true });
+  const result = await captureWorkspaceBaseline({ cwd: '/proj', git: async () => { throw error; } });
+  assert.equal(result.kind, 'no-git');
+  assert.equal(result.reason, GIT_TIMEOUT);
+});
+
+test('Windows Git resolver prefers where.exe and applies the audit timeout', async () => {
+  let options;
+  const resolved = await resolveWindowsGit({
+    exec: async (file, args, opts) => { options = { file, args, opts }; return { stdout: 'C:\\Git\\cmd\\git.exe\r\nC:\\Git\\bin\\git.exe\r\n' }; },
+    env: {}, exists: () => false,
+  });
+  assert.equal(resolved, 'C:\\Git\\cmd\\git.exe');
+  assert.equal(options.file, 'where.exe');
+  assert.deepEqual(options.args, ['git']);
+  assert.equal(options.opts.timeout, GIT_TIMEOUT_MS);
+});
+
+test('Windows Git resolver falls back to bounded known install paths', async () => {
+  const expected = 'C:\\Program Files\\Git\\bin\\git.exe';
+  const checked = [];
+  const resolved = await resolveWindowsGit({
+    exec: async () => { throw new Error('where unavailable'); },
+    env: { ProgramFiles: 'C:\\Program Files', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' },
+    exists: (candidate) => { checked.push(candidate); return candidate === expected; },
+  });
+  assert.equal(resolved, expected);
+  assert.deepEqual(checked, ['C:\\Program Files\\Git\\cmd\\git.exe', expected]);
 });
 
 test('isSensitivePath leaves ordinary source files alone', () => {

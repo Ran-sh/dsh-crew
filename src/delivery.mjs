@@ -59,7 +59,11 @@ You are a coding worker, and your result must be auditable. End your final messa
 Every file you changed or created (paths), with a one-line summary per file. If you changed nothing, write "no files changed".
 
 ## Tests
-Exactly how you verified the work: the commands you ran and their results, or the manual checks you performed. If you ran none, write "none".
+Every entry must use exactly one of these auditable states:
+PASS — <command/check> — <result>
+FAIL — <command/check> — <reason>
+NOT RUN — <check> — <reason>
+"none" is not a valid Tests result.
 
 ## Risks
 Known risks and side effects: files touched outside the requested scope, assumptions you made, anything that could break, and any credentials or sensitive data you opened.
@@ -67,7 +71,14 @@ Known risks and side effects: files touched outside the requested scope, assumpt
 ## Unverified
 (Optional — omit entirely if you verified everything.) Anything you could not verify: skipped builds, untested platforms, known gaps.
 
-The Diff, Tests and Risks sections are mandatory — do not skip them. Keep each section tight (a few lines is enough). If a section truly has no content, write "none" instead of omitting it.`;
+The Diff, Tests and Risks sections are mandatory — do not skip them. Keep each section tight (a few lines is enough).
+
+${tier === 'flash' ? `Implement only the delegated coding scope.
+Run direct validation needed for your change.
+Return the Delivery Report.
+Then stop and return control to the Main Agent.
+
+Do not autonomously start a new task or delegate further work.` : ''}`;
 }
 
 /**
@@ -79,6 +90,18 @@ export function appendDeliveryInstructions(task, { tier, isReview } = {}) {
   if (typeof task !== 'string') return task;
   if (task.includes(DELIVERY_MARKER)) return task;
   return `${task}\n\n${buildDeliveryInstructions({ tier, isReview })}`;
+}
+
+function parseTestsSection(value) {
+  if (typeof value !== 'string' || value.trim() === '') return { valid: false, status: undefined };
+  const statuses = [];
+  for (const line of value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const match = line.match(/^(?:[-*+]\s+)?(PASS|FAIL|NOT RUN)\s+—\s+\S.*?\s+—\s+\S.*$/);
+    if (!match) return { valid: false, status: undefined };
+    statuses.push(match[1]);
+  }
+  const status = statuses.includes('FAIL') ? 'FAIL' : statuses.includes('NOT RUN') ? 'NOT RUN' : statuses.includes('PASS') ? 'PASS' : undefined;
+  return { valid: status !== undefined, status };
 }
 
 /**
@@ -95,10 +118,11 @@ export function parseDeliveryReport(text = '') {
   if (normalized.trim() === '') {
     return { format: null, present: [], complete: false, missing: [...DELIVERY_SECTIONS], sections: {} };
   }
-  const heading = /^##\s+(Diff|Tests|Risks|Unverified|Review Findings|Evidence|Verdict)\s*$/gm;
+  const canonical = new Map(ALL_DELIVERY_SECTIONS.concat(REVIEW_SECTIONS).map((name) => [name.toLowerCase(), name]));
+  const heading = /^##\s+(Diff|Tests|Risks|Unverified|Review Findings|Evidence|Verdict)\s*$/gim;
   const marks = [];
   let m;
-  while ((m = heading.exec(normalized)) !== null) marks.push({ index: m.index, name: m[1], len: m[0].length });
+  while ((m = heading.exec(normalized)) !== null) marks.push({ index: m.index, name: canonical.get(m[1].toLowerCase()), len: m[0].length });
   if (marks.length === 0) {
     return { format: null, present: [], complete: false, missing: [...DELIVERY_SECTIONS], sections: {} };
   }
@@ -112,16 +136,20 @@ export function parseDeliveryReport(text = '') {
   }
   const isReview = REVIEW_SECTIONS.some((s) => s !== 'Risks' && sections[s] !== undefined);
   const mandatory = isReview ? REVIEW_SECTIONS : DELIVERY_SECTIONS;
+  const parsedTests = isReview ? null : parseTestsSection(sections.Tests);
   const missing = mandatory.filter((s) => {
     const v = sections[s];
-    return v === undefined || v === '';
+    if (v === undefined || v === '') return true;
+    return !isReview && s === 'Tests' && !parsedTests.valid;
   });
+  const testsStatus = parsedTests?.status;
   return {
     format: isReview ? 'review' : 'coding',
     present: [...new Set(marks.map((x) => x.name))],
     complete: missing.length === 0,
     missing,
     sections,
+    ...(testsStatus ? { tests_status: testsStatus } : {}),
   };
 }
 
@@ -136,9 +164,11 @@ export function validateDeliveryReport(parsedOrText) {
   const sections = parsed.sections ?? {};
   const isReview = parsed.format === 'review';
   const mandatory = isReview ? REVIEW_SECTIONS : DELIVERY_SECTIONS;
+  const parsedTests = isReview ? null : parseTestsSection(sections.Tests);
   const missing = mandatory.filter((s) => {
     const v = sections[s];
-    return v === undefined || v === '';
+    if (v === undefined || v === '') return true;
+    return !isReview && s === 'Tests' && !parsedTests.valid;
   });
   return { ok: missing.length === 0, complete: missing.length === 0, missing: [...missing], present: [...(parsed.present ?? [])] };
 }

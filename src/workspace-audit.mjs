@@ -12,6 +12,8 @@
 // it receives (argsArray, { cwd }) and resolves { code, stdout, stderr }.
 
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +21,8 @@ const execFileAsync = promisify(execFile);
 export const DIFF_LIMIT = 64 * 1024;
 export const NOT_A_GIT_REPOSITORY = 'NOT_A_GIT_REPOSITORY';
 export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
+export const GIT_TIMEOUT = 'GIT_TIMEOUT';
+export const GIT_TIMEOUT_MS = 8000;
 
 const SENSITIVE_SUFFIXES = ['.pem', '.key'];
 const SENSITIVE_PREFIXES = ['credentials', 'secret'];
@@ -39,8 +43,34 @@ export function isSensitivePath(relPath) {
   });
 }
 
+let resolvedGitExecutable = 'git';
+
+export async function resolveWindowsGit({ exec = execFileAsync, env = process.env, exists = existsSync } = {}) {
+  try {
+    const located = await exec('where.exe', ['git'], { encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    const first = String(located.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    if (first) return first;
+  } catch {}
+  const candidates = [
+    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'cmd', 'git.exe'),
+    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'git.exe'),
+    env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Git', 'cmd', 'git.exe'),
+  ].filter(Boolean);
+  return candidates.find((candidate) => exists(candidate));
+}
+
 async function defaultRunner(args, { cwd }) {
-  const out = await execFileAsync('git', args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  let out;
+  try {
+    out = await execFileAsync(resolvedGitExecutable, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: GIT_TIMEOUT_MS });
+  } catch (error) {
+    const missing = error?.code === 'ENOENT' || /spawn git ENOENT/i.test(error?.message ?? '');
+    if (!missing || process.platform !== 'win32' || resolvedGitExecutable !== 'git') throw error;
+    const fallback = await resolveWindowsGit();
+    if (!fallback) throw error;
+    resolvedGitExecutable = fallback;
+    out = await execFileAsync(resolvedGitExecutable, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: GIT_TIMEOUT_MS });
+  }
   return { code: 0, stdout: out.stdout ?? '', stderr: out.stderr ?? '' };
 }
 
@@ -55,6 +85,7 @@ async function runGit(runner, args, opts) {
     return { ok: true, code: r.code ?? 0, stdout: r.stdout ?? '', stderr };
   } catch (err) {
     const msg = err?.message ?? String(err);
+    if (err?.code === 'ETIMEDOUT' || err?.killed === true || /timed out|timeout/i.test(msg)) return { ok: false, reason: GIT_TIMEOUT, error: 'git audit timed out' };
     if (/ENOENT|spawn git/i.test(msg)) return { ok: false, reason: GIT_NOT_FOUND, error: msg };
     return { ok: false, reason: NOT_A_GIT_REPOSITORY, error: msg };
   }
