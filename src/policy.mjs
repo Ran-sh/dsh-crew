@@ -397,7 +397,9 @@ export function evaluateAttempt({
   else if (taskStatus === 'partial') reason = 'task_partial';
   else reason = 'unverified';
   if (!canEscalate) return { decision: 'fail', reason: 'escalation_disabled', escalate: false };
-  if (attempt >= maxAttempts) return { decision: 'fail', reason: 'max_attempts_reached', escalate: false };
+  // max_attempts is the TOTAL number of attempts (0..max-1); escalation only
+  // proceeds while there is room for one more attempt.
+  if (attempt + 1 >= maxAttempts) return { decision: 'fail', reason: 'max_attempts_reached', escalate: false };
   return { decision: 'escalate', reason, escalate: true };
 }
 

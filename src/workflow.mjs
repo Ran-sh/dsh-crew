@@ -33,6 +33,29 @@ export function isTerminalPhase(phase) {
   return TERMINAL_PHASES.has(phase);
 }
 
+// Legal phase transitions (pure guard — the runtime never just assigns a phase).
+const ALLOWED_TRANSITIONS = {
+  [JOB_PHASES.CREATED]: [JOB_PHASES.QUEUED, JOB_PHASES.RUNNING, JOB_PHASES.CANCELLED, JOB_PHASES.FAILED],
+  [JOB_PHASES.QUEUED]: [JOB_PHASES.RUNNING, JOB_PHASES.CANCELLED],
+  [JOB_PHASES.RUNNING]: [JOB_PHASES.VERIFYING, JOB_PHASES.REVIEWING, JOB_PHASES.CANCELLED, JOB_PHASES.FAILED],
+  [JOB_PHASES.VERIFYING]: [JOB_PHASES.ESCALATING, JOB_PHASES.REVIEWING, JOB_PHASES.READY, JOB_PHASES.FAILED, JOB_PHASES.CANCELLED],
+  [JOB_PHASES.ESCALATING]: [JOB_PHASES.RUNNING, JOB_PHASES.CANCELLED, JOB_PHASES.FAILED],
+  [JOB_PHASES.REVIEWING]: [JOB_PHASES.READY, JOB_PHASES.FAILED, JOB_PHASES.CANCELLED],
+  [JOB_PHASES.READY]: [JOB_PHASES.COMPLETED, JOB_PHASES.FAILED, JOB_PHASES.CANCELLED],
+};
+
+/**
+ * May a workflow transition from one phase to another? Terminal phases never
+ * leave; every transition must be listed above. Pure.
+ */
+export function canTransition(from, to) {
+  if (isTerminalPhase(to)) return true; // any phase may be cancelled/finalized
+  const fromKey = from ?? JOB_PHASES.CREATED;
+  const allowed = ALLOWED_TRANSITIONS[fromKey];
+  if (!allowed) return false;
+  return allowed.includes(to);
+}
+
 function splitSection(value) {
   if (typeof value !== 'string' || value.trim() === '') return [];
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
