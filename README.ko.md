@@ -112,18 +112,18 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## 설치
 
-npm에서 DSH 프로필로 설치:
+GitHub에서 DSH 프로필로 설치:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 소스 트리에서 로컬 개발하려면:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` 프로토콜은 프로필 의존성을 이 저장소로 심볼릭 링크하므로 다시 빌드하면 바로 반영됩니다.

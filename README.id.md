@@ -112,18 +112,18 @@ Dispatch bisa melebar. Di bawah ini delapan belas worker menerjemahkan README in
 
 ## Instalasi
 
-Pasang dari npm ke sebuah profil DSH:
+Pasang dari GitHub ke sebuah profil DSH:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Atau, untuk pengembangan lokal langsung dari kode sumber:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Protokol `link:` menautkan dependensi profil ke repositori ini, sehingga hasil rebuild langsung terlihat.

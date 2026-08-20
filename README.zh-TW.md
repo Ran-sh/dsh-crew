@@ -112,18 +112,18 @@ Claude Code / Codex（協調器，保留自己的模型）
 
 ## 安裝
 
-從 npm 裝進 DSH profile：
+從 GitHub 裝進 DSH profile：
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 或者從原始碼樹本機開發：
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` 協定把 profile 相依軟連結到本儲存庫，改完重新建置即時可見。

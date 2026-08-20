@@ -112,18 +112,18 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## Установка
 
-Установить из npm в профиль DSH:
+Установить из GitHub в профиль DSH:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Или для локальной разработки прямо из исходников:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Протокол `link:` делает симлинк зависимости профиля на этот репозиторий, поэтому пересборка видна сразу.

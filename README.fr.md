@@ -112,18 +112,18 @@ La répartition s'étale. Ci-dessous, dix-huit workers traduisent ce README en p
 
 ## Installation
 
-Installer depuis npm dans un profil DSH :
+Installer depuis GitHub dans un profil DSH :
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Ou, pour le développement local depuis les sources :
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Le protocole `link:` crée un lien symbolique vers ce dépôt, donc chaque rebuild est visible immédiatement.

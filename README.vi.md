@@ -112,18 +112,18 @@ Việc dispatch có thể trải rộng. Bên dưới, mười tám worker dịc
 
 ## Cài đặt
 
-Cài từ npm vào một profile DSH:
+Cài từ GitHub vào một profile DSH:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Hoặc, để phát triển cục bộ ngay từ mã nguồn:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Giao thức `link:` tạo symlink phụ thuộc của profile tới kho này, nên mỗi lần build lại đều thấy ngay.

@@ -112,18 +112,18 @@ O despacho se espalha. Abaixo, dezoito workers traduzem este README em paralelo:
 
 ## Instalação
 
-Instalar do npm em um perfil do DSH:
+Instalar do GitHub em um perfil do DSH:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Ou, para desenvolvimento local a partir do código-fonte:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 O protocolo `link:` cria um symlink da dependência do perfil para este repositório, então cada rebuild aparece imediatamente.

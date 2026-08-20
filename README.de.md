@@ -112,18 +112,18 @@ Dispatch lässt sich breit auffächern. Unten übersetzen achtzehn Worker dieses
 
 ## Installation
 
-Aus npm in ein DSH-Profil installieren:
+Von GitHub in ein DSH-Profil installieren:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Oder für lokale Entwicklung direkt aus dem Quellbaum:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Das `link:`-Protokoll verlinkt die Profilabhängigkeit auf dieses Repository, sodass Rebuilds sofort sichtbar sind.

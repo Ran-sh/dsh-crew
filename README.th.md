@@ -112,18 +112,18 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## การติดตั้ง
 
-ติดตั้งจาก npm ลงในโปรไฟล์ DSH:
+ติดตั้งจาก GitHub ลงในโปรไฟล์ DSH:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 หรือสำหรับการพัฒนาในเครื่องจากซอร์ส:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 โปรโตคอล `link:` จะ symlink dependency ของโปรไฟล์มาที่รีโพนี้ ทำให้ผลการ rebuild เห็นได้ทันที

@@ -43,12 +43,17 @@ test('primary documentation uses the verified GitHub-only distribution workflow'
 });
 
 test('translated READMEs do not advertise the upstream npm package as this fork', () => {
+  const start = 'npx -y @deepseek-ai/dsh web';
   const translated = readdirSync(ROOT).filter((file) => /^README\..+\.md$/.test(file) && file !== 'README.zh.md');
   assert.ok(translated.length > 0);
   for (const file of translated) {
     const doc = read(file);
+    const installSection = doc.split(/\r?\n/).slice(0, 150).join('\n');
     assert.doesNotMatch(doc, /npm:\s*<code>@zseven-w\/dsh-crew<\/code>/, file);
     assert.doesNotMatch(doc, /dsh plugin --profile web add @zseven-w\/dsh-crew@latest/, file);
+    assert.doesNotMatch(doc, /^dsh (?:web|plugin )/m, file);
+    assert.doesNotMatch(installSection, /\bnpm\b/i, file);
     assert.match(doc, /github:Ran-sh\/dsh-crew/, file);
+    assert.match(doc, new RegExp(start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), file);
   }
 });

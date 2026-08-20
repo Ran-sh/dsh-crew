@@ -112,18 +112,18 @@ Dağıtım yatayda büyür. Aşağıda on sekiz worker bu README'yi paralel olar
 
 ## Kurulum
 
-npm üzerinden bir DSH profiline kurun:
+GitHub üzerinden bir DSH profiline kurun:
 
 ```bash
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh web
 ```
 
 Ya da kaynak ağacından yerel geliştirme için:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` protokolü profil bağımlılığını bu depoya sembolik olarak bağlar; böylece her rebuild anında görünür.
