@@ -180,13 +180,17 @@ export function installStatus({ home = homedir() } = {}) {
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
   const hudWired = typeof settings.statusLine?.command === 'string'
     && settings.statusLine.command.includes('worker-segment.sh');
-  const codexInstalled = existsSync(join(home, '.codex', 'agents', 'ds-flash.toml'));
+  const codexInstalled = existsSync(join(home, '.codex', 'agents', 'ds-flash.toml'))
+    || existsSync(join(home, '.codex', 'agents', 'ds-worker.toml'));
   return { claude: { installed: claudeInstalled, hud: hudWired }, codex: { installed: codexInstalled } };
 }
 
 export function uninstallCodex({ home = homedir() } = {}) {
   const actions = [];
-  for (const f of ['ds-flash.toml', 'ds-pro.toml']) {
+  // Both the v0.2 roles (ds-worker / ds-reviewer) and the deprecated v0.1
+  // aliases (ds-flash / ds-pro) are dsh-crew managed; uninstall removes only
+  // these, never a user's own role files.
+  for (const f of ['ds-flash.toml', 'ds-pro.toml', 'ds-worker.toml', 'ds-reviewer.toml']) {
     const p = join(home, '.codex', 'agents', f);
     if (existsSync(p)) { backup(p); rmSync(p); actions.push(`removed: ${p} (backup kept)`); }
   }

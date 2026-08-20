@@ -12,8 +12,11 @@ import {
   chooseDefaultTier,
   normalizeWorkerProviderMode,
   getMultimodalRegistrationPlan,
+  canDispatchRole,
+  resolveModelPolicy,
+  resolveRoleTierHint,
 } from '../policy.mjs';
-import { resolveWorkerModel } from '../model-routing.mjs';
+import { resolveWorkerModel, resolveModel } from '../model-routing.mjs';
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
@@ -74,6 +77,9 @@ import { setLang } from '../i18n.mjs';
 
 const ROUTE_BASE = '/_dsh/dsh-crew';
 const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
+// Local copy (the hub must not import jobs.mjs, which pulls the DSH SDK into
+// the profile realm): a valid dispatch role set.
+const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 
 // ---------- job registry ----------
@@ -90,7 +96,8 @@ export class WorkerRegistry {  constructor(ctx) {
 
   view(job, withResult = false) {
     const v = {
-      id: job.id, sessionId: job.sessionId, tier: job.tier, provider: job.provider, model: job.model,
+      id: job.id, sessionId: job.sessionId, role: job.role ?? 'worker', attempt: job.attempt ?? 0,
+      tier: job.tier, provider: job.provider, model: job.model,
       selection_source: job.selection_source,
       effort: job.effort, requested_effort: job.effort, reasoning_effort: job.reasoning_effort ?? null,
       status: job.status, source: job.source, task: job.task.slice(0, 300),
@@ -119,10 +126,20 @@ export class WorkerRegistry {  constructor(ctx) {
    * Spawn a Hub worker. DeepSeek Official preserves the standalone-compatible
    * tier slots; follow-dsh resolves an ordered provider/model selection from
    * the live Harness catalog. Callers cannot route around either policy.
+   *
+   * `role` (worker | reviewer) records who does the work; `tier` remains the
+   * legacy model-class slot. Reviewer-role jobs always use the pro slot.
    */
-  async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', preset, delivery = 'coding' }) {
-    const legacyModel = LEGACY_TIER_MODELS[tier];
-    if (!legacyModel) throw new Error(`unknown tier "${tier}"`);
+  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding' }) {
+    // role is only honored when the caller explicitly names it; a legacy
+    // tier-only spawn (role === undefined) keeps the exact v0.1 resolution.
+    const hasRole = role === 'worker' || role === 'reviewer';
+    if (role !== undefined && !hasRole) throw new Error(`unknown role "${role}"`);
+    const effRole = hasRole ? role : 'worker';
+    // A reviewer is a role, not a model class: its tier slot is always pro.
+    const effTier = role === 'reviewer' ? 'pro' : tier;
+    const legacyModel = LEGACY_TIER_MODELS[effTier];
+    if (!legacyModel) throw new Error(`unknown tier "${effTier}"`);
     if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}"`);
     // isAbsolute covers POSIX (/...) and Windows drive paths (D:\... / D:/...):
     // on Windows the MCP shim always passes process.cwd() in drive form.
@@ -153,26 +170,40 @@ export class WorkerRegistry {  constructor(ctx) {
           ? { providers: [{ id: current.provider, name: current.provider, models: [] }], harness_default: current }
           : { providers: [], harness_default: null };
       }
-      selection = resolveWorkerModel({
-        tier,
-        priority: cfg[`${tier}_model_priority`],
-        priorityConfigured: cfg[`${tier}_model_priority_configured`],
-        fallback: cfg[`${tier}_model_fallback`],
-        catalog,
-        harnessDefault: catalog.harness_default ?? getCurrentSelection(),
-      });
+      // v0.2 role-based selection only when the caller named a role; legacy
+      // tier-only spawns resolve through the tier resolver exactly as before.
+      if (hasRole) {
+        const policy = resolveModelPolicy(cfg, effRole, { attempt });
+        selection = resolveModel({
+          role: effRole,
+          attempt,
+          policy,
+          catalog,
+          harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+        });
+      } else {
+        selection = resolveWorkerModel({
+          tier: effTier,
+          priority: cfg[`${effTier}_model_priority`],
+          priorityConfigured: cfg[`${effTier}_model_priority_configured`],
+          fallback: cfg[`${effTier}_model_fallback`],
+          catalog,
+          harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+        });
+      }
       if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
     }
 
     // The worker always gets the auditable Delivery Contract appended (unless
     // it already carries one), so its final message follows ## Diff / ## Tests
-    // / ## Risks — or the review contract for automatic Pro reviews.
-    const workerPrompt = appendDeliveryInstructions(task, { tier, isReview: delivery === 'review' });
+    // / ## Risks — or the review contract for reviewer-role jobs.
+    const jobRole = hasRole ? role : (delivery === 'review' || role === 'reviewer' ? 'reviewer' : 'worker');
+    const workerPrompt = appendDeliveryInstructions(task, { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
     const sessionId = `session-${randomUUID()}`;
     const job = {
-      id, sessionId, tier, provider: selection.provider, model: selection.model,
+      id, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
       selection_source: selection.source, effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
@@ -376,9 +407,19 @@ async function readBody(req, limit = 64 * 1024) {
  */
 export function resolveHubSpawnPayload(payload, getConfig = () => ({})) {
   const config = normalizeGlobalConfig(getConfig());
-  const decision = chooseDefaultTier(config, payload?.tier, {});
+  const raw = payload ?? {};
+  // v0.2 role-based dispatch: reviewer / worker are gated by their role state,
+  // and the tier slot is derived from the role (reviewer always → pro).
+  if (raw.role === 'worker' || raw.role === 'reviewer') {
+    const hint = resolveRoleTierHint(raw.role, raw.tier);
+    if (!hint.ok) return { ok: false, code: hint.code, error: hint.error };
+    const decision = canDispatchRole(config, raw.role, true, {});
+    if (!decision.ok) return { ok: false, code: decision.error.policyCode, error: decision.error.message };
+    return { ok: true, payload: { ...raw, role: raw.role, tier: hint.tier } };
+  }
+  const decision = chooseDefaultTier(config, raw.tier, {});
   if (!decision.ok) return { ok: false, code: decision.error.policyCode, error: decision.error.message };
-  return { ok: true, payload: { ...(payload ?? {}), tier: decision.tier } };
+  return { ok: true, payload: { ...raw, tier: decision.tier } };
 }
 
 // ---------- plugin entry ----------

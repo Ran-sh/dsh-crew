@@ -44,6 +44,12 @@ export const POLICY_ERROR_CODES = {
   PRO_NOT_AUTO: 'PRO_NOT_AUTO',
   VISION_DISABLED: 'VISION_DISABLED',
   NO_DSH_PROVIDER_SELECTED: 'NO_DSH_PROVIDER_SELECTED',
+  // v0.2 role-world errors. RE-CONFIG_REQUIRED for review dispatch that the
+  // automatic review workflow refused; ROLE_TIER_CONFLICT for a request that
+  // names both a role and an incompatible legacy tier.
+  ROLE_DISABLED: 'ROLE_DISABLED',
+  ROLE_NOT_AUTO: 'ROLE_NOT_AUTO',
+  ROLE_TIER_CONFLICT: 'ROLE_TIER_CONFLICT',
 };
 
 export const POLICY_ERROR_MESSAGES = {
@@ -59,7 +65,330 @@ export const POLICY_ERROR_MESSAGES = {
     'Automatic Flash→Pro escalation was skipped because Pro is Manual/Disabled.',
   [POLICY_ERROR_CODES.NO_DSH_PROVIDER_SELECTED]:
     'No DSH provider is selected for Hub workers. Select a provider in DSH Models or switch Worker Provider to DeepSeek Official.',
+  [POLICY_ERROR_CODES.ROLE_DISABLED]:
+    'DeepSeek {tier} role is disabled by the current DSH Crew policy.',
+  [POLICY_ERROR_CODES.ROLE_NOT_AUTO]:
+    'The {tier} role is not an Auto role; it runs only when explicitly requested.',
+  [POLICY_ERROR_CODES.ROLE_TIER_CONFLICT]:
+    'A request cannot name both a role and a legacy tier that contradict it: role={role} conflicts with tier={tier}.',
 };
+
+// ---------- v0.2 role abstraction (worker / reviewer) ----------
+//
+// v0.1 expressed every dispatch as a flash/pro *tier*: the tier doubled as
+// both "who does the work" (role) and "which model class" (policy). v0.2
+// separates the two:
+//
+//   - Role: worker (execute / fix / test / search) and reviewer (independent
+//     review + verdict). A coding request defaults to worker; reviewer is
+//     produced by the review workflow or an explicit request.
+//   - Model Policy: which provider/model candidates back a role, with
+//     preferred -> priority -> escalation -> Harness Default fallback.
+//
+// Flash / Pro survive only as legacy model-hint + config-migration concepts.
+// Everything new here reads a canonical config shape produced by
+// migrateLegacyConfig; the legacy collab/tier functions stay for compatibility.
+
+export const DISPATCH_ROLES = ['worker', 'reviewer'];
+export const ROLE_STATES = TIER_STATES; // disabled | manual | auto
+export const ROLE_MODEL_STRATEGIES = ['economy', 'balanced', 'quality', 'strong'];
+export const DEFAULT_WORKER_STRATEGY = 'balanced';
+export const DEFAULT_REVIEWER_STRATEGY = 'strong';
+export const DEFAULT_MAX_PARALLEL = 3;
+
+export function normalizeRoleState(raw) {
+  return normalizeState(raw);
+}
+
+export function normalizeIsolation(raw) {
+  return raw === 'worktree' || raw === 'shared' ? raw : 'worktree';
+}
+
+function normalizeMaxParallel(raw) {
+  const n = Number.isInteger(raw) ? raw : DEFAULT_MAX_PARALLEL;
+  if (n < 1) return 1;
+  if (n > 16) return 16;
+  return n;
+}
+
+/**
+ * Normalize one role's model policy into the canonical shape:
+ * { role, strategy, priority, priorityConfigured, escalation_priority,
+ *   escalation_priority_configured, fallback, escalation: { enabled, max_attempts } }.
+ * Pure; unknown fields drop, empty priority falls back to the role default.
+ */
+export function normalizeModelPolicy(raw = {}) {
+  return {
+    role: raw.role === 'reviewer' ? 'reviewer' : 'worker',
+    strategy: ROLE_MODEL_STRATEGIES.includes(raw.strategy)
+      ? raw.strategy
+      : (raw.role === 'reviewer' ? DEFAULT_REVIEWER_STRATEGY : DEFAULT_WORKER_STRATEGY),
+    priority: normalizeModelPriority(raw.priority),
+    priorityConfigured: raw.priorityConfigured === true,
+    escalation_priority: normalizeModelPriority(raw.escalation_priority),
+    escalation_priority_configured: raw.escalation_priority_configured === true,
+    fallback: raw.fallback === 'harness-default' ? 'harness-default' : 'harness-default',
+    escalation: {
+      enabled: normalizeBool(raw.escalation?.enabled, false),
+      max_attempts: Number.isInteger(raw.escalation?.max_attempts) && raw.escalation.max_attempts > 0
+        ? Math.min(raw.escalation.max_attempts, 5)
+        : 2,
+    },
+  };
+}
+
+function deriveCollaboration(raw) {
+  if (COLLABORATION_MODES.includes(raw.collaboration_mode)) return raw.collaboration_mode;
+  if (raw.tier_policy === 'flash-only') return 'flash-only';
+  if (raw.tier_policy === 'pro-only') return 'pro-only';
+  return 'balanced';
+}
+
+function deriveTierState(raw, tier) {
+  if (TIER_STATES.includes(raw[`${tier}_state`])) return raw[`${tier}_state`];
+  if (raw.tier_policy === 'flash-only') return tier === 'flash' ? 'auto' : 'disabled';
+  if (raw.tier_policy === 'pro-only') return tier === 'pro' ? 'auto' : 'disabled';
+  return 'auto';
+}
+
+function migrationWorkerState(collab, flashState, proState) {
+  if (collab === 'pro-only') return proState === 'disabled' ? 'disabled' : 'auto';
+  if (collab === 'flash-only') return flashState === 'disabled' ? 'disabled' : 'auto';
+  // balanced / review-pipeline / custom: worker is the default coding entry.
+  if (flashState === 'disabled' && proState === 'disabled') return 'disabled';
+  if (flashState === 'manual' && proState === 'manual') return 'manual';
+  if (flashState === 'manual') return 'manual';
+  return 'auto';
+}
+
+function migrationReviewState(collab, proState, autoReview) {
+  if (collab === 'review-pipeline') return 'auto';
+  if (collab === 'pro-only' || collab === 'flash-only') return 'disabled';
+  if (autoReview) return proState === 'disabled' ? 'disabled' : 'auto';
+  // balanced / custom: the reviewer is available on request while the strong
+  // (pro) model class is an Auto tier; otherwise it stays disabled.
+  return proState === 'auto' ? 'manual' : 'disabled';
+}
+
+/**
+ * Centralized v0.1 → v0.2 config migration. Pure and single-source: converts
+ * any legacy (or partially canonical) config into the canonical worker /
+ * reviewer / execution shape the role helpers consume. Never reads
+ * credentials, never touches provider selection directly, never writes.
+ */
+export function migrateLegacyConfig(raw = {}) {
+  const collab = deriveCollaboration(raw);
+  const flashState = deriveTierState(raw, 'flash');
+  const proState = deriveTierState(raw, 'pro');
+  const escalationEnabled = normalizeBool(raw.escalate_on_failure, false)
+    || normalizeBool(raw.worker?.model_policy?.escalation?.enabled, false);
+  const autoReview = collab === 'review-pipeline'
+    || normalizeBool(raw.pro_reviews_flash, false)
+    || normalizeBool(raw.review?.auto_review, false);
+
+  const worker = {
+    state: migrationWorkerState(collab, flashState, proState),
+    provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode ?? raw.worker?.provider_mode),
+    model_policy: normalizeModelPolicy({
+      role: 'worker',
+      strategy: collab === 'pro-only' ? 'quality' : collab === 'flash-only' ? 'economy' : 'balanced',
+      priority: raw.flash_model_priority ?? raw.worker?.model_policy?.priority,
+      priorityConfigured: raw.flash_model_priority_configured === true || raw.worker?.model_policy?.priorityConfigured === true,
+      escalation_priority: raw.pro_model_priority ?? raw.worker?.model_policy?.escalation_priority,
+      escalation_priority_configured: raw.pro_model_priority_configured === true || raw.worker?.model_policy?.escalation_priority_configured === true,
+      fallback: 'harness-default',
+      escalation: {
+        enabled: escalationEnabled,
+        max_attempts: raw.worker?.model_policy?.escalation?.max_attempts ?? 2,
+      },
+    }),
+  };
+
+  const review = {
+    state: migrationReviewState(collab, proState, autoReview),
+    mode: 'auto',
+    auto_review: autoReview,
+    provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode ?? raw.review?.provider_mode),
+    model_policy: normalizeModelPolicy({
+      role: 'reviewer',
+      strategy: 'strong',
+      priority: raw.pro_model_priority ?? raw.review?.model_policy?.priority,
+      priorityConfigured: raw.pro_model_priority_configured === true || raw.review?.model_policy?.priorityConfigured === true,
+      fallback: 'harness-default',
+    }),
+  };
+
+  return {
+    subagents_enabled: normalizeEnabled(raw.subagents_enabled),
+    main_agent_mode: MAIN_AGENT_MODES.includes(raw.main_agent_mode) ? raw.main_agent_mode : 'coordinator-first',
+    execution: {
+      enabled: normalizeEnabled(raw.subagents_enabled),
+      default_effort: ['off', 'high', 'max'].includes(raw.default_effort) ? raw.default_effort : 'max',
+      default_timeout_seconds: Number.isInteger(raw.default_timeout_seconds) && raw.default_timeout_seconds > 0
+        ? raw.default_timeout_seconds : 1800,
+      mode: ['auto', 'hub', 'standalone'].includes(raw.mode) ? raw.mode : 'auto',
+      max_parallel: normalizeMaxParallel(raw.execution?.max_parallel ?? raw.max_parallel),
+      isolation: normalizeIsolation(raw.execution?.isolation ?? raw.isolation),
+    },
+    worker,
+    review,
+    // The legacy view is retained so config rounds-trips and old fields never
+    // drop silently; it is explicitly marked legacy.
+    legacy: {
+      collaboration_mode: collab,
+      flash_state: flashState,
+      pro_state: proState,
+      tier_policy: raw.tier_policy,
+    },
+  };
+}
+
+/** Canonical view of any config (legacy-normalized or already canonical). */
+export function getCanonical(config = {}) {
+  if (config?.worker && config?.review) {
+    return {
+      subagents_enabled: normalizeEnabled(config.subagents_enabled),
+      main_agent_mode: MAIN_AGENT_MODES.includes(config.main_agent_mode) ? config.main_agent_mode : 'coordinator-first',
+      execution: {
+        enabled: normalizeEnabled(config.execution?.enabled ?? config.subagents_enabled),
+        default_effort: ['off', 'high', 'max'].includes(config.execution?.default_effort) ? config.execution.default_effort : 'max',
+        default_timeout_seconds: Number.isInteger(config.execution?.default_timeout_seconds) && config.execution.default_timeout_seconds > 0
+          ? config.execution.default_timeout_seconds : 1800,
+        mode: ['auto', 'hub', 'standalone'].includes(config.execution?.mode) ? config.execution.mode : 'auto',
+        max_parallel: normalizeMaxParallel(config.execution?.max_parallel),
+        isolation: normalizeIsolation(config.execution?.isolation),
+      },
+      worker: { ...config.worker, state: normalizeRoleState(config.worker.state), model_policy: normalizeModelPolicy(config.worker.model_policy) },
+      review: { ...config.review, state: normalizeRoleState(config.review.state), model_policy: normalizeModelPolicy(config.review.model_policy) },
+    };
+  }
+  return migrateLegacyConfig(config);
+}
+
+// ---------- v0.2 role helpers ----------
+
+/**
+ * Effective state of a dispatch role. Session `${role}_state` overrides the
+ * canonical role state; absent canonical config falls back to the legacy
+ * migration (so a stock v0.1 config drives the same gate it always did).
+ */
+export function getRoleState(config = {}, role = 'worker', session = {}) {
+  const override = session[`${role}_state`];
+  if (override === 'disabled' || override === 'manual' || override === 'auto') return override;
+  const canon = getCanonical(config);
+  if (role === 'reviewer') return canon.review.state ?? 'auto';
+  return canon.worker.state ?? 'auto';
+}
+
+export function isRoleEnabled(config = {}, role = 'worker', session = {}) {
+  return getRoleState(config, role, session) !== 'disabled';
+}
+
+export function isRoleAutoEligible(config = {}, role = 'worker', session = {}) {
+  return getRoleState(config, role, session) === 'auto';
+}
+
+/**
+ * Deterministic dispatch decision for one role. A disabled role refuses every
+ * request; a manual role runs only when explicitly requested; an auto role is
+ * callable automatically and on request.
+ */
+export function canDispatchRole(config = {}, role = 'worker', explicitRequest = false, session = {}) {
+  if (session.enabled === false || config.subagents_enabled === false) {
+    return { ok: false, error: policyError(POLICY_ERROR_CODES.SUBAGENTS_DISABLED) };
+  }
+  const state = getRoleState(config, role, session);
+  if (state === 'disabled') return { ok: false, error: policyError(POLICY_ERROR_CODES.ROLE_DISABLED, { tier: role }) };
+  if (state === 'manual' && !explicitRequest) {
+    if (role === 'reviewer') return { ok: false, error: policyError(POLICY_ERROR_CODES.ROLE_NOT_AUTO, { tier: role }) };
+    return { ok: false, error: policyError(POLICY_ERROR_CODES.NO_AUTO_TIER) };
+  }
+  return { ok: true, role, guidance: explicitRequest ? 'explicit request' : 'auto role' };
+}
+
+/**
+ * Default role for a coding (or generic) request. The worker is the default
+ * coding role; the reviewer is only reachable through an explicit request or
+ * the review workflow. Mirrors the v0.1 chooseDefaultTier gate.
+ */
+export function chooseRole(config = {}, requestedRole, session = {}) {
+  if (requestedRole === 'worker' || requestedRole === 'reviewer') {
+    return canDispatchRole(config, requestedRole, true, session);
+  }
+  return canDispatchRole(config, 'worker', false, session);
+}
+
+/**
+ * Bridge a role + legacy tier pair. reviewer pairs with no tier or tier=pro
+ * (the strong benchmark slot); worker pairs with any tier (tier becomes a
+ * model-class hint). A reviewer+flash pair is a hard conflict, never guessed.
+ */
+export function resolveRoleTierHint(role, legacyTier) {
+  const wantsReviewer = role === 'reviewer';
+  const wantsWorker = role === undefined || role === 'worker';
+  if (wantsWorker && (legacyTier === undefined || legacyTier === 'flash' || legacyTier === 'pro')) {
+    return { ok: true, role: 'worker', tier: legacyTier ?? 'flash' };
+  }
+  if (wantsReviewer && (legacyTier === undefined || legacyTier === 'pro')) {
+    return { ok: true, role: 'reviewer', tier: 'pro' };
+  }
+  return {
+    ok: false,
+    code: POLICY_ERROR_CODES.ROLE_TIER_CONFLICT,
+    error: POLICY_ERROR_MESSAGES[POLICY_ERROR_CODES.ROLE_TIER_CONFLICT]
+      .replace('{role}', role === 'reviewer' ? 'reviewer' : 'worker')
+      .replace('{tier}', legacyTier ?? '(none)'),
+  };
+}
+
+/** Model policy for a role (canonical config or derived from legacy). */
+export function resolveModelPolicy(config = {}, role = 'worker', context = {}) {
+  const canon = getCanonical(config);
+  const policy = role === 'reviewer' ? canon.review.model_policy : canon.worker.model_policy;
+  return {
+    within: role,
+    role,
+    ...policy,
+    attempt: Number.isInteger(context?.attempt) ? context.attempt : 0,
+  };
+}
+
+/** Should a successful worker run be followed by one automatic reviewer pass? */
+export function shouldAutoReview(config = {}, session = {}) {
+  const sessionOverride = session.auto_review;
+  if (sessionOverride === true || sessionOverride === false) return sessionOverride;
+  if (getRoleState(config, 'reviewer', session) !== 'auto') return false;
+  const canon = getCanonical(config);
+  return canon.review.auto_review === true;
+}
+
+/**
+ * Decision about whether some evidence warrants another (stronger) worker
+ * attempt. PR2 keeps the workflow-visible rules here as a pure function; PR1
+ * uses it to centralize the legacy "escalate on failure" boolean so the
+ * blocking path and future async path share one rule.
+ */
+export function evaluateAttempt({
+  execution = 'completed',
+  taskStatus = 'success',
+  testsStatus,
+  deliveryComplete = true,
+  workspaceEvidenceOK = true,
+  policy = {},
+  attempt = 0,
+} = {}) {
+  const maxAttempts = policy?.escalation?.max_attempts ?? 2;
+  if (attempt >= maxAttempts) return { decision: 'fail', reason: 'max_attempts_reached', escalate: false };
+  if (!policy?.escalation?.enabled) return { decision: 'fail', reason: 'escalation_disabled', escalate: false };
+  if (execution === 'failed') return { decision: 'escalate', reason: 'execution_failed', escalate: true };
+  if (taskStatus === 'partial' || taskStatus === 'blocked') {
+    return { decision: 'escalate', reason: `task_${taskStatus}`, escalate: true };
+  }
+  if (testsStatus === 'FAIL') return { decision: 'escalate', reason: 'tests_failed', escalate: true };
+  if (deliveryComplete === false) return { decision: 'escalate', reason: 'delivery_incomplete', escalate: true };
+  if (workspaceEvidenceOK === false) return { decision: 'escalate', reason: 'workspace_mismatch', escalate: true };
+  return { decision: 'accept', reason: 'verified', escalate: false };
+}
 
 // ---------- worker provider routing ----------
 
@@ -170,7 +499,7 @@ export function normalizeGlobalConfig(raw = {}) {
     ? normalizeEnabled(raw.imagegen_enabled)
     : raw.imagegen_provider !== 'off';
 
-  return {
+  const normalized = {
     ...raw,
     subagents_enabled: normalizeEnabled(raw.subagents_enabled),
     collaboration_mode: collaborationMode,
@@ -192,6 +521,11 @@ export function normalizeGlobalConfig(raw = {}) {
     vision_enabled: visionEnabled,
     imagegen_enabled: imagegenEnabled,
   };
+  // This normalized legacy view is the single input to the v0.2 canonical
+  // migration, so every consumer sees the same worker/reviewer model policy
+  // the role helpers compute from any raw config.
+  const canonical = migrateLegacyConfig(normalized);
+  return { ...normalized, execution: canonical.execution, worker: canonical.worker, review: canonical.review };
 }
 
 /** Legacy view of a normalized config: keeps tier_policy-shaped consumers working. */
@@ -393,6 +727,12 @@ export function getRoutingGuidance(config, session = {}) {
     parts.push(stateLine(config, 'pro', session));
     if (canEscalateFlashToPro(config, session)) parts.push('A failed blocking Flash job may automatically escalate to Pro once.');
     if (shouldRunProReview(config, session)) parts.push('A successful Flash implementation may be followed by one automatic Pro review.');
+    // v0.2 role view: worker = execution, reviewer = independent review. The
+    // legacy tier lines above stay for compatibility with older orchestrators.
+    const workerState = getRoleState(config, 'worker', session);
+    const reviewState = getRoleState(config, 'reviewer', session);
+    parts.push(`Roles: worker=${workerState} (implementation / fixes / tests / search), reviewer=${reviewState} (independent review). Default coding role is worker; the reviewer joins via explicit request or the automatic review workflow.`);
+    if (shouldAutoReview(config, session)) parts.push('A successful worker run is followed by one automatic reviewer pass (read-only).');
   }
   parts.push(`Main agent mode (host guidance only — does not restrict host tools): ${mainMode}. ${MAIN_MODE_GUIDANCE[mainMode]}`);
   parts.push('After a worker returns, check its delivery metadata (delivery_complete / delivery_missing / delivery.tests_status) and redacted workspace diff (workspace_diff_available). delivery.complete=true does not mean the task succeeded: tests_status=FAIL requires another fix or an explicit failure report, and tests_status=NOT RUN requires disclosure of the unverified work. If the Delivery Report is missing or files changed outside scope, do not accept the result as final — request a follow-up worker run.');

@@ -9,6 +9,14 @@ export const DEFAULT_TIER_MODEL_PREFERENCES = Object.freeze({
   pro: 'deepseek-v4-pro',
 });
 
+// v0.2 role → default preferred model class. A role describes who does the
+// work; the model class is only the fresh-config recommendation until a
+// priority list or Harness Default takes over.
+export const DEFAULT_ROLE_MODEL_PREFERENCES = Object.freeze({
+  worker: 'deepseek-v4-flash',
+  reviewer: 'deepseek-v4-pro',
+});
+
 export const MODEL_FALLBACKS = ['harness-default'];
 export const NO_WORKER_MODEL_AVAILABLE = 'NO_WORKER_MODEL_AVAILABLE';
 
@@ -112,5 +120,43 @@ export function resolveWorkerModel({
     code: NO_WORKER_MODEL_AVAILABLE,
     message: `No Harness model is available for the ${tier ?? 'requested'} worker.`,
   };
+}
+
+/**
+ * v0.2 role-based model selection. Turns a role's model policy (from
+ * policy.resolveModelPolicy) into an ordered selection:
+ *   attempt 0      → policy.priority (primary / cheap candidates)
+ *   attempt >= 1   → policy.escalation_priority (strong / escalation candidates)
+ *   otherwise      → Harness Default fallback
+ * The output shape matches resolveWorkerModel (provider/model/source/...) plus
+ * role + attempt so selection provenance lands in job metadata.
+ */
+export function resolveModel({
+  role = 'worker',
+  attempt = 0,
+  policy,
+  catalog,
+  harnessDefault,
+} = {}) {
+  const p = policy && typeof policy === 'object' ? policy : {};
+  const escalated = Number.isInteger(attempt) && attempt > 0;
+  const candidates = escalated ? p.escalation_priority : p.priority;
+  const configured = escalated
+    ? p.escalation_priority_configured === true || candidates.length > 0
+    : p.priorityConfigured === true || candidates.length > 0;
+  // Escalation never re-picks the fresh "preferred" role default: an empty
+  // escalation pool falls through to Harness Default instead.
+  const preferredModelId = escalated ? undefined : DEFAULT_ROLE_MODEL_PREFERENCES[role] ?? undefined;
+  const result = resolveWorkerModel({
+    tier: role,
+    priority: candidates,
+    priorityConfigured: configured,
+    catalog,
+    harnessDefault,
+    fallback: p.fallback === 'harness-default' ? 'harness-default' : 'harness-default',
+    preferredModelId,
+  });
+  if (!result.ok) return { ...result, role, attempt };
+  return { ...result, role, attempt };
 }
 

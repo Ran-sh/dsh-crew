@@ -22,6 +22,14 @@ export const TIERS = {
   pro: { model: 'deepseek-v4-pro', label: 'V4 Pro' },
 };
 
+// v0.2: a job carries a dispatch role (worker | reviewer) plus its legacy
+// tier slot. The role describes who did the work; the tier is the model-class
+// slot that standalone mode falls back to (role = execution intent).
+export const ROLES = {
+  worker: { canReview: false },
+  reviewer: { canReview: true },
+};
+
 function loadDotEnv() {
   const out = {};
   try {
@@ -39,7 +47,7 @@ const shard = createShardWriter('mcp');
 
 function publishStatus() {
   shard.publish([...jobs.values()].map((j) => ({
-    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
@@ -52,7 +60,7 @@ function publishStatus() {
 
 export function jobView(j, { withResult = false } = {}) {
   const v = {
-    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
@@ -73,16 +81,17 @@ export function jobView(j, { withResult = false } = {}) {
 export function listJobs() { return [...jobs.values()]; }
 export function getJob(id) { return jobs.get(id); }
 
-export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
+export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
   const tierInfo = TIERS[tier];
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
+  if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
   if (!existsSync(RUNTIME_BIN)) throw new Error(`dsh-jsonrpc-agent not installed at ${RUNTIME_BIN}; run pnpm install in ${ROOT}`);
   const workspace = resolve(cwd ?? process.cwd());
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
-  // ## Risks — or the review contract for automatic Pro reviews.
-  const workerPrompt = appendDeliveryInstructions(task, { tier, isReview: delivery === 'review' });
+  // ## Risks — or the review contract for reviewer-role jobs.
+  const workerPrompt = appendDeliveryInstructions(task, { tier, role, isReview: delivery === 'review' });
   const id = `job-${nextId++}-${Date.now().toString(36)}`;
   const dotEnv = loadDotEnv();
   if (!process.env.DEEPSEEK_API_KEY && !dotEnv.DEEPSEEK_API_KEY) {
@@ -110,7 +119,7 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
   });
 
   const job = {
-    id, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
+    id, role, attempt, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
     effort, reasoning_effort: effort, task, source, cwd: workspace,
     prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
     status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
