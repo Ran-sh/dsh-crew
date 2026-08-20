@@ -468,6 +468,8 @@ export function createWorkflowRuntime(adapters, {
       v.child_attempts = job.attempts.map((a) => ({
         id: a.id, role: a.role, attempt: a.attempt, provider: a.provider, model: a.model,
         selection_source: a.selection_source, status: a.status, stopReason: a.stopReason,
+        outcome_task: a.outcome?.task_status ?? null,
+        error: a.error ?? null,
         tokens: a.usage ?? null,
       }));
       v.outcome = job.outcome;

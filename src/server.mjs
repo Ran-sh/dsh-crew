@@ -14,6 +14,7 @@ import {
   chooseDefaultTier,
   canDispatchRole,
   resolveRoleTierHint,
+  shouldAutoReview,
 } from './policy.mjs';
 import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
 
@@ -343,7 +344,7 @@ async function buildConfigReport() {
     pro_state: proState,
     flash_roles: globalConfig.flash_roles ?? [],
     pro_roles: globalConfig.pro_roles ?? [],
-    pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldRunProReview(globalConfig, sessionConfig),
+    pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldAutoReview(globalConfig, sessionConfig),
     // One-line effective summary for the orchestrator, plus the authoritative
     // routing guidance. legacy_source shows whether a session tier_policy
     // clamp or the global collaboration mode is driving the decision.

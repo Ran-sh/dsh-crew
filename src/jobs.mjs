@@ -8,6 +8,7 @@ import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
@@ -15,8 +16,17 @@ import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const STATUS_FILE = join(CONFIG_DIR, 'status.json');
-const RUNTIME_BIN = join(ROOT, 'node_modules', '.bin', 'dsh-jsonrpc-agent');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
+
+// The worker agent entry. The pnpm .bin shim on Windows is a POSIX shell
+// script that Node spawn cannot execute (ENOENT), so we always launch
+// `node <lib/bin.js> <cordis>` via process.execPath — cross-platform.
+const requireAgents = createRequire(import.meta.url);
+let AGENT_JS = null;
+for (const spec of ['@deepseek-ai/dsh-sdk-jsonrpc-demo/bin', '@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js']) {
+  try { AGENT_JS = requireAgents.resolve(spec); break; } catch {}
+}
+if (!AGENT_JS) AGENT_JS = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-sdk-jsonrpc-demo', 'lib', 'bin.js');
 
 export const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
@@ -88,7 +98,7 @@ export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, e
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
   if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
-  if (!existsSync(RUNTIME_BIN)) throw new Error(`dsh-jsonrpc-agent not installed at ${RUNTIME_BIN}; run pnpm install in ${ROOT}`);
+  if (!existsSync(AGENT_JS)) throw new Error(`dsh-jsonrpc-agent not installed at ${AGENT_JS}; run pnpm install in ${ROOT}`);
   const workspace = resolve(cwd ?? process.cwd());
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
@@ -102,8 +112,8 @@ export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, e
 
   const harness = new DeepSeekHarness({
     launch: {
-      command: RUNTIME_BIN,
-      args: [CORDIS],
+      command: process.execPath,
+      args: [AGENT_JS, CORDIS],
       cwd: workspace,
       env: {
         ...process.env,

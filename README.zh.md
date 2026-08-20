@@ -286,6 +286,7 @@ Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。各�
 - 每个 worker 都会返回可审查的交付报告（`## Diff` / `## Tests` / `## Risks`），隔离候选捕获有界、脱敏的 patch，方便在接受前核对改动。
 - 阻塞与异步任务执行**同一套** workflow（证据驱动升级 + 自动审查）；异步只是立刻返回 workflow id 并在后台继续。
 - `dsh_worker_status` / `dsh_worker_result` / `dsh_worker_cancel` 以 workflow id（`wf-…`）为主；旧的 `hub-…` / `job-…` id 仍兼容。
+- Standalone 以 `node <dsh-sdk-jsonrpc-demo/lib/bin.js>` 启动 worker（Windows 安全；pnpm 的 `.bin` sh shim 无法被 Node spawn）。Standalone 默认 DeepSeek Official + `DEEPSEEK_API_KEY`，但支持 `DEEPSEEK_BASE_URL`——已配置在 `~/.dsh` 的 OpenAI 兼容网关（如 `opencode-*`）可通过同时设置这两个环境变量来支撑 Standalone worker。
 - 设置 UI 在本过渡构建里仍展示旧的 Flash/Pro 兼容控件；新 worker/reviewer 角色策略与 `execution.isolation` 的写回是后续项。
 
 ## 版权与许可

@@ -319,6 +319,7 @@ Credentials stay in the DSH provider configuration only. Tested with an OpenAI-c
 - Every worker returns an auditable Delivery Report (`## Diff` / `## Tests` / `## Risks`) and the isolated candidate captures a bounded, redacted patch so you can verify what changed before accepting.
 - Blocking and async jobs execute the same workflow (evidence-driven escalation + automatic reviewer pass); async just returns a workflow id immediately and continues in the background.
 - `dsh_worker_status` / `dsh_worker_result` / `dsh_worker_cancel` operate on workflow ids (`wf-…`); legacy `hub-…` / `job-…` ids are still accepted.
+- Standalone launches the worker as `node <dsh-sdk-jsonrpc-demo/lib/bin.js>` (Windows-safe; the pnpm `.bin` sh shim is not spawnable). Standalone defaults to the DeepSeek Official provider + `DEEPSEEK_API_KEY`, but honors `DEEPSEEK_BASE_URL` so an OpenAI-compatible gateway (e.g. an `opencode-*` gateway already configured in `~/.dsh`) can back standalone workers by setting both env vars.
 - The Settings UI still presents the legacy Flash/Pro compatibility controls in this transition build; the new worker/reviewer role policy and `execution.isolation` write-through is a follow-up.
 
 ## Credits & License

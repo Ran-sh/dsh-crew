@@ -1,14 +1,52 @@
-// Real DSH Hub smoke for the v0.2 runtime path. Spawns this branch's MCP
-// server (src/server.mjs) over stdio and drives it with the MCP SDK against a
-// LIVE DSH hub (127.0.0.1:3080). Uses a throwaway temp git repo as the
-// workspace; never touches the primary web profile or the user's real repos.
-// Usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn]
+// Real DSH smoke for the v0.2 runtime path. Spawns this branch's MCP server
+// (src/server.mjs) over stdio and drives it with the MCP SDK.
+//   run|spawn : against a LIVE DSH hub (127.0.0.1:3080)
+//   standalone: standalone worker path (jobs.mjs) routed at the DSH-configured
+//               OpenAI-compatible gateway (base URL + key read from DSH's own
+//               ~/.dsh store; injected as DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL,
+//               never printed).
+// Uses a throwaway temp git repo; never touches the web profile or user repos.
+// Usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone]
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const repo = process.argv[2];
 const mode = process.argv[3] ?? 'run';
-if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn]'); process.exit(2); }
+if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone]'); process.exit(2); }
+
+/** Read KEY: value (credentials.yaml) with values redacted from logs. */
+function readDshStore() {
+  const cred = join(homedir(), '.dsh', '.credentials.yaml');
+  const settings = join(homedir(), '.dsh', 'settings.yaml');
+  const key = (file, name) => {
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        const m = line.match(new RegExp(`^\\s*${name}\\s*:\\s*(.+?)\\s*$`));
+        if (m) return m[1].trim().replace(/^['"]|['"]$/g, '');
+      }
+    } catch {}
+    return '';
+  };
+  // provider-level apiKey (settings.yaml) falls back to the credential store key
+  return {
+    apiKey: key(settings, 'apiKey') || key(cred, 'OPENCODE_GO_API_KEY'),
+    baseURL: key(settings, 'baseURL') || 'https://opencode.ai/zen/go/v1',
+  };
+}
+
+/** Session descriptor for the MCP child. NEVER logs the key. */
+function serverTransport(extraEnv = {}) {
+  return new StdioClientTransport({
+    command: 'node',
+    args: ['src/server.mjs'],
+    cwd: process.cwd(),
+    env: { ...process.env, ...extraEnv },
+    stderr: process.stderr,
+  });
+}
 
 const TASK = [
   'In this git repository, create the file src/answer.mjs with exactly the content: `export const answer = 40 + 2;`',
@@ -22,12 +60,19 @@ const TASK = [
   'none',
 ].join('\n');
 
-const transport = new StdioClientTransport({
-  command: 'node',
-  args: ['src/server.mjs'],
-  cwd: process.cwd(),
-  stderr: process.stderr,
-});
+// For standalone mode, route the worker at the user's DSH-configured
+// OpenAI-compatible gateway (key + base URL flow through the child env only,
+// they are never logged).
+const standaloneEnv = {};
+if (mode === 'standalone') {
+  const store = readDshStore();
+  if (!store.apiKey) { console.error('[smoke] no OpenAI-compatible key found in ~/.dsh (OPENCODE_GO_API_KEY / settings apiKey)'); process.exit(2); }
+  standaloneEnv.DEEPSEEK_API_KEY = store.apiKey;
+  standaloneEnv.DEEPSEEK_BASE_URL = store.baseURL;
+  standaloneEnv.DSH_SANDBOX_MODE = 'workspace-write';
+  console.log(`[smoke] standalone: routing at ${store.baseURL} (key injected, not shown)`);
+}
+const transport = serverTransport(standaloneEnv);
 const client = new Client({ name: 'dsh-crew-smoke', version: '1.0.0', requestTimeout: 600 * 1000 });
 
 async function call(name, args, timeoutMs) {
@@ -38,6 +83,10 @@ async function call(name, args, timeoutMs) {
 try {
   await client.connect(transport);
   console.log(`[smoke] connected; mode=${mode} cwd=${repo}`);
+  if (mode === 'standalone') {
+    // Force the standalone execution path (session mode) so jobs.mjs handles it.
+    await call('dsh_worker_config', { mode: 'standalone' });
+  }
 
   if (mode === 'spawn') {
     const spawnView = await call('dsh_spawn_worker', { task: TASK, role: 'worker', cwd: repo });
