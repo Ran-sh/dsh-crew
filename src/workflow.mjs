@@ -7,8 +7,8 @@
 //
 // Everything in this module is a pure function (no DSH, hub or worker runtime,
 // no I/O), so the workflow rules are unit-testable in isolation. The runtime
-// layers (jobs.mjs, the hub) stamp the phase and outcome through these helpers
-// so server.mjs stays a transport adapter.
+// layers stamp phase + outcome through these helpers so server.mjs stays a
+// transport adapter.
 
 import { evaluateAttempt } from './policy.mjs';
 import { parseDeliveryReport } from './delivery.mjs';
@@ -46,11 +46,13 @@ const ALLOWED_TRANSITIONS = {
 
 /**
  * May a workflow transition from one phase to another? Terminal phases never
- * leave; every transition must be listed above. Pure.
+ * leave. A terminal destination is allowed only from a non-terminal phase;
+ * every non-terminal transition must be listed above.
  */
 export function canTransition(from, to) {
-  if (isTerminalPhase(to)) return true; // any phase may be cancelled/finalized
   const fromKey = from ?? JOB_PHASES.CREATED;
+  if (isTerminalPhase(fromKey)) return false;
+  if (isTerminalPhase(to)) return true;
   const allowed = ALLOWED_TRANSITIONS[fromKey];
   if (!allowed) return false;
   return allowed.includes(to);
@@ -76,6 +78,7 @@ function parseTests(section) {
  * the verdict. Returns 'success' | 'partial' | 'blocked' | 'failed'.
  */
 export function classifyTaskStatus({ executionStatus = 'completed', testsStatus, deliveryComplete = true, deliveryMissing = [] } = {}) {
+  void deliveryMissing;
   if (executionStatus !== 'completed') return 'failed';
   if (testsStatus === 'FAIL') return 'partial';
   if (!deliveryComplete) return 'blocked';
