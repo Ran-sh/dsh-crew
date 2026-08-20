@@ -240,7 +240,7 @@ export function createWorkflowRuntime(adapters, {
       if (isReviewJob) {
         // Explicit reviewer: one reviewer pass over the workspace.
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
-        const before = alloc?.ok ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
+        const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
         const reviewTask = adapters.buildReviewTask(job.original_task, null);
         const review = await runReviewerAttempt(job, reviewTask, config, before);
         job.review = review;
@@ -285,7 +285,9 @@ export function createWorkflowRuntime(adapters, {
         transition(job, JOB_PHASES.VERIFYING, `attempt ${attempt} complete`);
 
         // Workspace evidence: a coding worker claiming changes must show them.
-        if (alloc?.ok && (job.candidate === null)) {
+        // Only an isolated (worktree) workspace produces a candidate — a shared
+        // user workspace is never drafted into one.
+        if (alloc?.ok && alloc.isolation === 'worktree' && job.candidate === null) {
           const candidate = await safeCapture(adapters, job.execution_cwd, job.base_revision);
           job.candidate = candidate;
           if (candidate) outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
@@ -371,7 +373,8 @@ export function createWorkflowRuntime(adapters, {
       source: job.source,
     });
     job.attempts.push({ ...attemptRecord(ar, 0), phase: 'review' });
-    const afterCandidate = await safeCapture(adapters, cwd, baseRevision);
+    // Mutation detection only applies to an isolated candidate workspace.
+    const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
     return normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
   }
 
