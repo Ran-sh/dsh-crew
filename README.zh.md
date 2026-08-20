@@ -230,10 +230,27 @@ node scripts/setup.mjs uninstall
 各角色通过实时 Harness 目录独立解析有序候选：
 
 - attempt 0 → 角色首选（便宜 / 快）优先级；
-- attempt ≥ 1 → 升级（强）优先级——升级基于**证据**（FAIL 测试、交付缺失、阻塞 / 未完成任务、工作区 diff 与 worker 报告不一致），并非只看失败，且不超 `max_attempts`；
+- attempt ≥ 1 → 升级（强）优先级——升级基于**证据**（FAIL 测试、交付缺失、阻塞 / 未完成任务、工作区 diff 与 worker 报告不一致），并非只看失败，且不超 `max_attempts`（0..max-1，总尝试次数）；
 - 否则 → Harness Default。
 
-Flash / Pro 只作为历史模型类提示（`deepseek-v4-flash` / `deepseek-v4-pro`）存在，不再是角色。
+基础设施失败（缺 API key、Hub 不可达、worktree 隔离下非 Git 工作区）**不会**靠“换更强模型”解决，而是以稳定错误码失败。Flash / Pro 只作为历史模型类提示存在，不再是角色。
+
+## 工作流
+
+每次派发——`dsh_run_worker`（阻塞）与 `dsh_spawn_worker`（异步）、Hub 或 Standalone——都走**同一套** workflow runtime：
+
+```
+CREATED -> (繁忙时 QUEUED) -> RUNNING -> VERIFYING
+  -> ESCALATING（证据驱动）-> RUNNING -> VERIFYING
+  -> REVIEWING（自动审查）-> READY -> COMPLETED
+  （或 FAILED / CANCELLED）
+```
+
+阻塞与异步的唯一区别是调用方是否等待。coding worker 默认在独立临时 git worktree 中执行；返回 `change candidate`（base revision、committed + 未提交 + 新增文件、有界脱敏 patch、指纹）供 orchestrator 接受 / 拒绝 / 要求修改——runtime 绝不自动合并进你的 working tree。
+
+### 隔离
+
+`execution.isolation` 默认为 `worktree`：worker 角色在 HEAD 的分离 worktree 上工作，主工作区永不被动（即使它是 dirty 的；未提交的主工作区改动不会混入 candidate）。如果目标工作区**不是** git 仓库，worktree 隔离任务会 **fail closed**（`NOT_GIT_REPOSITORY`）而不是静默共享——需要旧的就地行为请显式设 `execution.isolation: "shared"`。
 
 ## 模式
 
@@ -248,7 +265,7 @@ Custom 模式可分别配置 worker / reviewer 状态。
 
 ## Provider
 
-Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。Flash / Pro 各自使用不限数量的有序模型优先级；新配置默认偏好 `deepseek-v4-flash` / `deepseek-v4-pro`，并以 Harness Default 兜底。
+Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。各角色独立解析候选：**worker** 使用首选（便宜）优先级 + 升级（强）模型池，**reviewer** 有独立审查优先级——旧版新鲜偏好为 `deepseek-v4-flash` / `deepseek-v4-pro`，以 Harness Default 兜底。
 
 - **Follow DSH Provider** — 从 Harness 目录解析角色的 provider/model 优先级（新配置默认值）。
 - **DeepSeek Official** — 为兼容旧配置保留内置固定路由。
@@ -266,9 +283,10 @@ Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。Flash
 - Standalone 只使用 DeepSeek Official。
 - Crew Vision 的工具注册改动可能需要重启 DSH。
 - 集成内容改动后请重启 Codex Desktop。
-- 每个 worker 都会返回一份可审查的交付报告（`## Diff` / `## Tests` / `## Risks`），并由 hub 捕获一份只读、已脱敏、仅存内存的工作区 diff，方便你在接受结果前核对改动内容。
-- 阻塞（`dsh_run_worker`）与异步（`dsh_spawn_worker`）任务共用同一套工作流状态机与证据规则；异步升级 / 复查通过相同的结构化 outcome 暴露。
-- coding worker 默认以独立临时 git worktree 执行，并行任务不会写同一个 working tree；orchestrator 收到变更候选（base revision、name status、有界脱敏 patch）后再决定是否接受。
+- 每个 worker 都会返回可审查的交付报告（`## Diff` / `## Tests` / `## Risks`），隔离候选捕获有界、脱敏的 patch，方便在接受前核对改动。
+- 阻塞与异步任务执行**同一套** workflow（证据驱动升级 + 自动审查）；异步只是立刻返回 workflow id 并在后台继续。
+- `dsh_worker_status` / `dsh_worker_result` / `dsh_worker_cancel` 以 workflow id（`wf-…`）为主；旧的 `hub-…` / `job-…` id 仍兼容。
+- 设置 UI 在本过渡构建里仍展示旧的 Flash/Pro 兼容控件；新 worker/reviewer 角色策略与 `execution.isolation` 的写回是后续项。
 
 ## 版权与许可
 

@@ -246,13 +246,44 @@ Harness catalog:
 
 - attempt 0 → the role's primary (cheap/fast) priority;
 - attempt ≥ 1 → the escalation (strong) priority — escalation happens on
-  *evidence* (FAIl tests, incomplete delivery, blocked/incomplete task,
+  *evidence* (FAIL tests, incomplete delivery, blocked/incomplete task,
   workspace diff that disagrees with the worker's report), not on failure
-  alone, and never beyond `max_attempts`;
+  alone, and never beyond `max_attempts` (0..max-1, total attempts);
 - otherwise → Harness Default.
 
-Flash / Pro survive only as legacy model-class hints (`deepseek-v4-flash` /
-`deepseek-v4-pro`); they are not roles.
+Infrastructure failures (missing API key, unreachable hub, non-git workspace
+under worktree isolation) are **never** "fixed" by a stronger model — they
+fail with a stable error code instead. Flash / Pro survive only as legacy
+model-class hints (`deepseek-v4-flash` / `deepseek-v4-pro`); they are not
+roles.
+
+## Workflow
+
+Every dispatch — `dsh_run_worker` (blocking) and `dsh_spawn_worker` (async),
+Hub or Standalone — runs the **same** workflow runtime:
+
+```
+CREATED -> (QUEUED when busy) -> RUNNING -> VERIFYING
+  -> ESCALATING (evidence) -> RUNNING -> VERIFYING
+  -> REVIEWING (automatic reviewer) -> READY -> COMPLETED
+  (or FAILED / CANCELLED)
+```
+
+The only difference between blocking and async is whether the caller awaits.
+A coding worker runs in its own temporary git worktree (isolated execution);
+a `change candidate` (base revision, committed + uncommitted + new-file
+changes, bounded redacted patch, fingerprint) is returned for the orchestrator
+to accept / reject / revise — the runtime never auto-merges into your working
+tree.
+
+### Isolation
+
+`execution.isolation` is `worktree` by default: a worker role converges on a
+fresh detached worktree at HEAD and the primary workspace is never modified
+(even while it is dirty; uncommitted primary changes are not folded in). If
+the requested workspace is **not** a git repository, worktree-isolated jobs
+fail closed (`NOT_GIT_REPOSITORY`) instead of silently sharing — set
+`execution.isolation: "shared"` to allow the legacy in-place behavior.
 
 ## Modes
 
@@ -267,7 +298,7 @@ Custom mode configures worker / reviewer states directly.
 
 ## Provider
 
-Crew reads every provider and model currently registered in DeepSeek Harness. Flash and Pro each have an unlimited ordered model priority list; their fresh preferences are `deepseek-v4-flash` / `deepseek-v4-pro`, with Harness Default as fallback.
+Crew reads every provider and model currently registered in DeepSeek Harness. Each role resolves its own candidates: the **worker** uses a primary (cheap) priority with an escalation (strong) pool, and the **reviewer** has an independent review priority — the legacy fresh preferences are `deepseek-v4-flash` / `deepseek-v4-pro`, with Harness Default as fallback.
 
 - **Follow DSH Provider** — resolve the role's provider/model priority from the Harness catalog (fresh default).
 - **DeepSeek Official** — use the legacy built-in fixed route for compatibility.
@@ -285,9 +316,10 @@ Credentials stay in the DSH provider configuration only. Tested with an OpenAI-c
 - Standalone uses DeepSeek Official only.
 - Crew Vision registration changes may require a DSH restart.
 - Restart Codex Desktop after integration changes.
-- Every worker returns an auditable Delivery Report (`## Diff` / `## Tests` / `## Risks`) and the hub captures a read-only, redacted in-memory workspace diff so you can verify what changed before accepting the result.
-- Blocking (`dsh_run_worker`) and async (`dsh_spawn_worker`) jobs share the same workflow state machine and evidence rules; async escalation/review follow-up is exposed through the same structured outcome.
-- A coding worker's default execution path is a temporary git worktree so parallel jobs never write the same working tree; the orchestrator receives a change candidate (base revision, name status, bounded redacted patch) before accepting.
+- Every worker returns an auditable Delivery Report (`## Diff` / `## Tests` / `## Risks`) and the isolated candidate captures a bounded, redacted patch so you can verify what changed before accepting.
+- Blocking and async jobs execute the same workflow (evidence-driven escalation + automatic reviewer pass); async just returns a workflow id immediately and continues in the background.
+- `dsh_worker_status` / `dsh_worker_result` / `dsh_worker_cancel` operate on workflow ids (`wf-…`); legacy `hub-…` / `job-…` ids are still accepted.
+- The Settings UI still presents the legacy Flash/Pro compatibility controls in this transition build; the new worker/reviewer role policy and `execution.isolation` write-through is a follow-up.
 
 ## Credits & License
 
