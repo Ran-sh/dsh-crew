@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { startJob, waitJob, cancelJob, listJobs, getJob, jobView } from './jobs.mjs';
 import { hubAvailable, hub } from './hub-client.mjs';
+import { resolveWorkerModel } from './model-routing.mjs';
 import {
   normalizeGlobalConfig,
   deriveLegacyConfig,
@@ -17,7 +18,7 @@ import {
 
 const server = new McpServer({ name: 'dsh-crew', version: '0.1.0' });
 
-const tierSchema = z.enum(['flash', 'pro']).optional().describe('Worker model tier: flash = deepseek-v4-flash (simple tasks), pro = deepseek-v4-pro (harder tasks). Omit to use the session default. Explicit tier requests are honored unless that tier is disabled by the current DSH Crew policy.');
+const tierSchema = z.enum(['flash', 'pro']).optional().describe('Worker role tier: Flash handles delegated coding execution; Pro handles manually enabled advanced/review work. The actual provider/model is resolved from Crew priorities in Hub mode.');
 const effortSchema = z.enum(['off', 'high', 'max']).optional().describe('Reasoning effort for the worker. Omit to use the session default.');
 
 // Session-level configuration. This MCP server process lives exactly as long
@@ -238,11 +239,17 @@ const SAFE_GLOBAL_KEYS = [
   'tier_policy', 'escalate_on_failure', 'subagents_enabled', 'collaboration_mode',
   'main_agent_mode', 'flash_state', 'pro_state', 'flash_roles', 'pro_roles',
   'pro_reviews_flash', 'worker_provider_mode', 'vision_enabled', 'imagegen_enabled',
+  'flash_model_priority', 'flash_model_priority_configured', 'flash_model_fallback',
+  'pro_model_priority', 'pro_model_priority_configured', 'pro_model_fallback',
   'vision_provider', 'vision_model', 'imagegen_provider',
   'preset_flash', 'preset_pro',
 ];
 
 async function buildConfigReport() {
+  // Tier policy remains a session-start snapshot by design, but Hub model
+  // priorities are resolved live on every spawn. Re-read only those global
+  // routing fields so this report matches what the Hub will actually use.
+  const currentGlobalConfig = normalizeGlobalConfig(readGlobalConfig());
   const legacy = deriveLegacyConfig(globalConfig);
   const flashState = getEffectiveTierState(globalConfig, 'flash', sessionConfig);
   const proState = getEffectiveTierState(globalConfig, 'pro', sessionConfig);
@@ -251,20 +258,39 @@ async function buildConfigReport() {
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
   const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
-  // Worker provider routing: report the configured mode plus the effective
-  // provider resolved by the DSH host (query the hub's provider route — the
-  // MCP process itself cannot read the DSH Models selection). No credentials.
+  // Worker model routing: the Hub catalog contains public ids/names only.
+  // Resolve both tiers independently so Harness Default is never mislabeled
+  // as the effective worker provider when a priority overrides it.
   let effectiveWorkerProvider = null;
+  let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
-  const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
-  if (await hubAvailable()) {
+  const workerProviderMode = currentGlobalConfig.worker_provider_mode ?? 'deepseek-official';
+  if (workerProviderMode === 'deepseek-official') {
+    effectiveWorkerSelection = {
+      flash: { provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' },
+      pro: { provider: 'deepseek-official', model: 'deepseek-v4-pro', source: 'legacy-strict' },
+    };
+  } else if (await hubAvailable()) {
     try {
-      const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/provider`);
+      const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/models`);
       const body = await res.json();
-      if (body?.ok && body.effective_worker_provider) effectiveWorkerProvider = body.effective_worker_provider;
-      else if (body?.error) providerResolutionError = body.error;
+      if (!body?.ok) providerResolutionError = body?.error ?? 'Unable to read Harness model catalog.';
+      else for (const tier of ['flash', 'pro']) {
+        const selected = resolveWorkerModel({
+          tier,
+          priority: currentGlobalConfig[`${tier}_model_priority`],
+          priorityConfigured: currentGlobalConfig[`${tier}_model_priority_configured`],
+          fallback: currentGlobalConfig[`${tier}_model_fallback`],
+          catalog: body,
+          harnessDefault: body.harness_default,
+        });
+        effectiveWorkerSelection[tier] = selected.ok
+          ? { provider: selected.provider, model: selected.model, source: selected.source }
+          : { code: selected.code, error: selected.message };
+      }
     } catch (err) { providerResolutionError = err?.message ?? String(err); }
   }
+  effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
   return {
     // Effective session values (flat shape keeps /dsh-config tables working).
     enabled: sessionConfig.enabled,
@@ -280,7 +306,12 @@ async function buildConfigReport() {
     // Worker provider routing.
     worker_provider_mode: workerProviderMode,
     effective_worker_provider: effectiveWorkerProvider,
+    effective_worker_selection: effectiveWorkerSelection,
     provider_resolution_error: providerResolutionError,
+    flash_model_priority: currentGlobalConfig.flash_model_priority ?? [],
+    flash_model_fallback: currentGlobalConfig.flash_model_fallback ?? 'harness-default',
+    pro_model_priority: currentGlobalConfig.pro_model_priority ?? [],
+    pro_model_fallback: currentGlobalConfig.pro_model_fallback ?? 'harness-default',
     // Configurable-crew effective policy.
     subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
     collaboration_mode: collaborationMode,
@@ -301,7 +332,7 @@ async function buildConfigReport() {
     effective_default_tier_reason: defaultDecision.ok ? defaultDecision.guidance : (defaultDecision.error.policyCode ?? 'none'),
     routing_guidance: getRoutingGuidance(globalConfig, sessionConfig),
     session_overrides: overrides,
-    global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, globalConfig[k]])),
+    global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, currentGlobalConfig[k]])),
     hub_reachable: await hubAvailable(),
   };
 }

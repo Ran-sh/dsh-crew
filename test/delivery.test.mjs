@@ -81,7 +81,7 @@ function codingReport() {
     'src/a.mjs — fixed the bug',
     '',
     '## Tests',
-    'node --test passed',
+    'PASS — node --test — passed',
     '',
     '## Risks',
     'none',
@@ -106,6 +106,41 @@ test('missing mandatory sections → complete false and named in missing', () =>
   assert.equal(r.complete, false);
   assert.deepEqual(r.missing, ['Tests', 'Risks']);
   assert.equal(r.sections.Tests, '');
+});
+
+test('Flash coding prompt returns control to Main without automatic Pro work', () => {
+  const instructions = buildDeliveryInstructions({ tier: 'flash' });
+  assert.match(instructions, /Implement only the delegated coding scope/);
+  assert.match(instructions, /stop and return control to the Main Agent/);
+  assert.doesNotMatch(instructions, /automatic Pro review/i);
+});
+
+test('coding headings are case-insensitive and canonicalized', () => {
+  const r = parseDeliveryReport('## diff\na.mjs\n## TESTS\nPASS — node --test — passed\n## risks\nnone');
+  assert.equal(r.complete, true);
+  assert.deepEqual(r.present, ['Diff', 'Tests', 'Risks']);
+  assert.equal(r.sections.Tests, 'PASS — node --test — passed');
+});
+
+test('Tests requires PASS, FAIL, or NOT RUN and rejects none', () => {
+  const none = parseDeliveryReport('## Diff\na.mjs\n## Tests\nnone\n## Risks\nnone');
+  assert.equal(none.complete, false);
+  assert.deepEqual(none.missing, ['Tests']);
+  const failed = parseDeliveryReport('## Diff\na.mjs\n## Tests\nFAIL — pnpm test — two failures\n## Risks\nknown');
+  assert.equal(failed.complete, true, 'a reported test failure is still a complete delivery report');
+  assert.equal(failed.tests_status, 'FAIL');
+  const bulleted = parseDeliveryReport('## Diff\na.mjs\n## Tests\n- NOT RUN — pnpm test — unavailable\n- PASS — file check — ok\n## Risks\nnone');
+  assert.equal(bulleted.complete, true);
+  assert.equal(bulleted.tests_status, 'NOT RUN');
+  const mixed = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nFAIL — integration — broke\n## Risks\nknown');
+  assert.equal(mixed.complete, true);
+  assert.equal(mixed.tests_status, 'FAIL');
+  const malformed = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nintegration not checked\n## Risks\nknown');
+  assert.equal(malformed.complete, false);
+  assert.deepEqual(malformed.missing, ['Tests']);
+  const missingResult = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit\n## Risks\nnone');
+  assert.equal(missingResult.complete, false);
+  assert.deepEqual(missingResult.missing, ['Tests']);
 });
 
 test('empty / absent report is incomplete with all mandatory sections missing', () => {
@@ -146,7 +181,7 @@ test('review report with a missing verdict is incomplete from the review contrac
 });
 
 test('report headings are detected only as line-start ## headings', () => {
-  const text = 'some ## Diff inline mention\n## Tests\nran the suite\n## Risks\nnone';
+  const text = 'some ## Diff inline mention\n## Tests\nPASS — node --test — passed\n## Risks\nnone';
   const r = parseDeliveryReport(text);
   assert.equal(r.present.includes('Diff'), false); // inline, not a heading
   assert.equal(r.complete, false);
@@ -181,7 +216,7 @@ test('formatDeliveryMetadata gives bounded snippets plus complete flag', () => {
 });
 
 test('formatDeliveryMetadata clips long sections and names missing ones', () => {
-  const text = ['## Diff', 'a'.repeat(1000), '', '## Tests', 't', '', '## Risks', ''].join('\n');
+  const text = ['## Diff', 'a'.repeat(1000), '', '## Tests', 'PASS — check — ok', '', '## Risks', ''].join('\n');
   const md = formatDeliveryMetadata(parseDeliveryReport(text), { limit: 20 });
   assert.equal(md.complete, false);
   assert.deepEqual(md.missing, ['Risks']);

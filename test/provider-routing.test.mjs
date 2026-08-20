@@ -182,15 +182,59 @@ test('Hub Case 4: provider changes between spawns → second worker uses the new
   assert.equal(created[1].agentOptions.provider, 'deepseek-official');
 });
 
-test('follow-dsh + no selection → spawn rejects with NO_DSH_PROVIDER_SELECTED, no agents.create', async () => {
+test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {
   const reg = makeRegistry(undefined, 'follow-dsh');
   const created = captureAgentOptions(reg);
   await assert.rejects(
     reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/tmp' }),
-    (err) => err.policyCode === POLICY_ERROR_CODES.NO_DSH_PROVIDER_SELECTED,
+    (err) => err.policyCode === 'NO_WORKER_MODEL_AVAILABLE',
   );
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(created.length, 0, 'no worker may start without a resolved provider');
+});
+
+test('Hub uses configured provider/model priority and records the selection source', async () => {
+  const reg = makeRegistry({ provider: 'default', model: 'default-model', reasoningEffort: 'high' }, 'follow-dsh');
+  reg.ctx.llm = {
+    listProviders: () => [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'default', name: 'Default' }],
+    listModels: async (provider) => provider === 'b' ? [{ provider: 'b', id: 'chosen', name: 'Chosen' }] : [],
+  };
+  reg.getConfig = () => ({
+    worker_provider_mode: 'follow-dsh',
+    flash_model_priority: [{ provider: 'b', model: 'chosen' }],
+    flash_model_priority_configured: true,
+  });
+  const created = captureAgentOptions(reg);
+  const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  assert.equal(job.provider, 'b');
+  assert.equal(job.model, 'chosen');
+  assert.equal(job.selection_source, 'priority');
+  assert.equal(job.reasoning_effort, undefined, 'explicit priorities preserve the target provider/model default effort');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(created[0].agentOptions, { provider: 'b', model: 'chosen' });
+});
+
+test('Hub resolves Pro from its own priority independently of Flash', async () => {
+  const reg = makeRegistry({ provider: 'default', model: 'default-model' }, 'follow-dsh');
+  reg.ctx.llm = {
+    listProviders: () => [{ id: 'flash-provider', name: 'Flash' }, { id: 'pro-provider', name: 'Pro' }, { id: 'default', name: 'Default' }],
+    listModels: async (provider) => provider === 'flash-provider'
+      ? [{ id: 'flash-model', name: 'Flash Model' }]
+      : provider === 'pro-provider' ? [{ id: 'pro-model', name: 'Pro Model' }] : [],
+  };
+  reg.getConfig = () => ({
+    worker_provider_mode: 'follow-dsh',
+    flash_model_priority: [{ provider: 'flash-provider', model: 'flash-model' }],
+    flash_model_priority_configured: true,
+    pro_model_priority: [{ provider: 'pro-provider', model: 'pro-model' }],
+    pro_model_priority_configured: true,
+  });
+  const created = captureAgentOptions(reg);
+  const job = await reg.spawn({ task: 'review', tier: 'pro', effort: 'off', cwd: '/tmp', delivery: 'review' });
+  assert.equal(job.provider, 'pro-provider');
+  assert.equal(job.model, 'pro-model');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(created[0].agentOptions, { provider: 'pro-provider', model: 'pro-model' });
 });
 
 test('caller cannot route around the provider policy (request provider is ignored)', async () => {

@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readd
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { normalizeModelPriority } from '../model-routing.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
@@ -49,21 +50,21 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   hub_url: 'http://127.0.0.1:3080',
   // auto = orchestrator picks the tier; flash-only / pro-only clamp every
   // dispatch to one tier at the tool layer regardless of what was requested.
-  tier_policy: 'auto',
+  tier_policy: 'flash-only',
   // When a blocking flash run fails, retry the same task once on pro.
   escalate_on_failure: false,
   // ---- configurable-crew orchestration (see src/policy.mjs) ----
   // Master switch for the whole worker dispatch path (hard, backend-enforced).
   subagents_enabled: true,
   // flash-only | pro-only | balanced | review-pipeline | custom
-  collaboration_mode: 'balanced',
+  collaboration_mode: 'flash-only',
   // direct-allowed | coordinator-first | dispatcher-only (host routing
   // guidance — the Crew MCP backend cannot restrict the host's own tools).
-  main_agent_mode: 'coordinator-first',
+  main_agent_mode: 'direct-allowed',
   // Per-tier state: disabled | manual | auto. Owned by the collaboration
   // preset unless collaboration_mode is "custom".
   flash_state: 'auto',
-  pro_state: 'auto',
+  pro_state: 'disabled',
   // Roles per tier: routing guidance only, not a keyword classifier.
   flash_roles: ['implementation', 'simple_fix', 'tests', 'search_inspection'],
   pro_roles: ['architecture', 'complex_debugging', 'refactor', 'code_review', 'implementation'],
@@ -76,13 +77,21 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // deepseek-official = always use the built-in provider (legacy behavior,
   // kept the default so upgraded configs never silently switch providers).
   // Standalone mode always uses deepseek-official + DEEPSEEK_API_KEY.
-  worker_provider_mode: 'deepseek-official',
+  worker_provider_mode: 'follow-dsh',
+  // Ordered Harness provider/model selections. The configured flags preserve
+  // the distinction between a fresh recommendation and a user-cleared list.
+  flash_model_priority: [],
+  flash_model_priority_configured: false,
+  flash_model_fallback: 'harness-default',
+  pro_model_priority: [],
+  pro_model_priority_configured: false,
+  pro_model_fallback: 'harness-default',
   // ---- configurable-crew multimodal switches ----
   // False = the Crew describe_image tool and vision route are not registered
   // at DSH boot (takes effect after a DSH restart). Provider/model values are
   // kept untouched so re-enabling restores the previous setup.
-  vision_enabled: true,
-  imagegen_enabled: true,
+  vision_enabled: false,
+  imagegen_enabled: false,
   // Multimodal bridge: which subscription CLI lends the text-only DS model
   // eyes (describe_image) and a brush (generate_image).
   vision_provider: 'claude-code', // claude-code | codex | grok | agy | <custom id> | off
@@ -104,8 +113,32 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   preset_pro: 'default',
 };
 
+export function mergeStoredGlobalConfig(stored) {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return { ...GLOBAL_CONFIG_DEFAULTS };
+  const has = (key) => Object.prototype.hasOwnProperty.call(stored, key);
+  const merged = { ...GLOBAL_CONFIG_DEFAULTS, ...stored };
+  // Fields introduced by configurable Crew keep the prior release's behavior
+  // when an existing file predates them. Only a genuinely fresh config gets
+  // the new minimal defaults above.
+  if (!has('collaboration_mode')) {
+    merged.collaboration_mode = stored.tier_policy === 'flash-only' ? 'flash-only'
+      : stored.tier_policy === 'pro-only' ? 'pro-only' : 'balanced';
+  }
+  if (!has('flash_state') || !has('pro_state')) {
+    if (stored.tier_policy === 'flash-only') { merged.flash_state = 'auto'; merged.pro_state = 'disabled'; }
+    else if (stored.tier_policy === 'pro-only') { merged.flash_state = 'disabled'; merged.pro_state = 'auto'; }
+    else { merged.flash_state = 'auto'; merged.pro_state = 'auto'; }
+  }
+  if (!has('main_agent_mode')) merged.main_agent_mode = 'coordinator-first';
+  if (!has('worker_provider_mode')) merged.worker_provider_mode = 'deepseek-official';
+  if (!has('vision_enabled')) merged.vision_enabled = stored.vision_provider !== 'off';
+  if (!has('imagegen_enabled')) merged.imagegen_enabled = stored.imagegen_provider !== 'off';
+  return merged;
+}
+
 export function readGlobalConfig() {
-  return { ...GLOBAL_CONFIG_DEFAULTS, ...readJson(GLOBAL_CONFIG_FILE, {}) };
+  if (!existsSync(GLOBAL_CONFIG_FILE)) return { ...GLOBAL_CONFIG_DEFAULTS };
+  return mergeStoredGlobalConfig(readJson(GLOBAL_CONFIG_FILE, {}));
 }
 
 export function writeGlobalConfig(patch) {
@@ -113,6 +146,13 @@ export function writeGlobalConfig(patch) {
   const next = { ...readGlobalConfig() };
   for (const [k, v] of Object.entries(patch ?? {})) {
     if (v !== undefined && k in GLOBAL_CONFIG_DEFAULTS) next[k] = v;
+  }
+  for (const tier of ['flash', 'pro']) {
+    const key = `${tier}_model_priority`;
+    if (patch?.[key] !== undefined) {
+      next[key] = normalizeModelPriority(patch[key]);
+      next[`${tier}_model_priority_configured`] = true;
+    }
   }
   // Legacy clamp fields stay writable (session commands still read them), and
   // a tier_policy write resyncs the new fields so old UIs can't drift apart

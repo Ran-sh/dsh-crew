@@ -39,7 +39,9 @@ const shard = createShardWriter('mcp');
 
 function publishStatus() {
   shard.publish([...jobs.values()].map((j) => ({
-    id: j.id, tier: j.tier, model: j.model, effort: j.effort, status: j.status, source: j.source,
+    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
+    status: j.status, source: j.source,
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
     currentTool: j.currentTool, tokens: j.tokens,
     startedAt: j.startedAt, endedAt: j.endedAt,
@@ -50,7 +52,9 @@ function publishStatus() {
 
 export function jobView(j, { withResult = false } = {}) {
   const v = {
-    id: j.id, tier: j.tier, model: j.model, effort: j.effort, status: j.status, source: j.source,
+    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
+    status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
     tokens: j.tokens, toolCalls: j.toolCalls, startedAt: j.startedAt, endedAt: j.endedAt,
     delivery_complete: !!j.delivery_complete,
@@ -106,7 +110,8 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
   });
 
   const job = {
-    id, tier, model: tierInfo.model, effort, task, source, cwd: workspace,
+    id, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
+    effort, reasoning_effort: effort, task, source, cwd: workspace,
     prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
     status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
     tokens: { input: 0, output: 0, reasoning: 0 },

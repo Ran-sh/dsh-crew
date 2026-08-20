@@ -11,9 +11,10 @@ import {
   normalizeGlobalConfig,
   chooseDefaultTier,
   normalizeWorkerProviderMode,
-  resolveHubWorkerProvider,
   getMultimodalRegistrationPlan,
 } from '../policy.mjs';
+import { resolveWorkerModel } from '../model-routing.mjs';
+import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 
@@ -72,7 +73,7 @@ function seedLangFromHost(ctx) {
 import { setLang } from '../i18n.mjs';
 
 const ROUTE_BASE = '/_dsh/dsh-crew';
-const TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
+const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 
 // ---------- job registry ----------
@@ -89,8 +90,10 @@ export class WorkerRegistry {  constructor(ctx) {
 
   view(job, withResult = false) {
     const v = {
-      id: job.id, sessionId: job.sessionId, tier: job.tier, model: job.model,
-      effort: job.effort, status: job.status, source: job.source, task: job.task.slice(0, 300),
+      id: job.id, sessionId: job.sessionId, tier: job.tier, provider: job.provider, model: job.model,
+      selection_source: job.selection_source,
+      effort: job.effort, requested_effort: job.effort, reasoning_effort: job.reasoning_effort ?? null,
+      status: job.status, source: job.source, task: job.task.slice(0, 300),
       cwd: job.cwd, turn: job.turn, step: job.step, currentTool: job.currentTool,
       toolCalls: job.toolCalls, tokens: job.tokens, mode: 'hub',
       startedAt: job.startedAt, endedAt: job.endedAt,
@@ -113,14 +116,13 @@ export class WorkerRegistry {  constructor(ctx) {
   }
 
   /**
-   * Spawn a Hub worker. The provider is resolved from Crew config +
-   * DSH selection (worker_provider_mode), never from the caller — a caller
-   * cannot route around the provider policy. Tier still picks the model slot
-   * (flash → deepseek-v4-flash, pro → deepseek-v4-pro).
+   * Spawn a Hub worker. DeepSeek Official preserves the standalone-compatible
+   * tier slots; follow-dsh resolves an ordered provider/model selection from
+   * the live Harness catalog. Callers cannot route around either policy.
    */
   async spawn({ task, tier = 'flash', effort = 'max', cwd, source = 'api', preset, delivery = 'coding' }) {
-    const model = TIER_MODELS[tier];
-    if (!model) throw new Error(`unknown tier "${tier}"`);
+    const legacyModel = LEGACY_TIER_MODELS[tier];
+    if (!legacyModel) throw new Error(`unknown tier "${tier}"`);
     if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}"`);
     // isAbsolute covers POSIX (/...) and Windows drive paths (D:\... / D:/...):
     // on Windows the MCP shim always passes process.cwd() in drive form.
@@ -130,13 +132,36 @@ export class WorkerRegistry {  constructor(ctx) {
     // Provider routing: follow-dsh reads the DSH Models selection live; the
     // default deepseek-official keeps legacy setups unchanged. Re-resolved on
     // every spawn so a Models change takes effect on the next worker.
-    const workerProviderMode = normalizeWorkerProviderMode(this.getConfig?.()?.worker_provider_mode);
-    const resolvedProvider = resolveHubWorkerProvider({
-      worker_provider_mode: workerProviderMode,
-      getCurrentSelection: () => this.ctx.get('agentDefaultModel')?.currentSelection?.(),
-    });
-    if (!resolvedProvider.ok) {
-      throw Object.assign(new Error(resolvedProvider.error), { policyCode: resolvedProvider.code });
+    const cfg = normalizeGlobalConfig(this.getConfig?.() ?? {});
+    const workerProviderMode = normalizeWorkerProviderMode(cfg.worker_provider_mode);
+    const getCurrentSelection = () => this.ctx.get('agentDefaultModel')?.currentSelection?.();
+    let selection;
+    if (workerProviderMode === 'deepseek-official') {
+      selection = { ok: true, provider: 'deepseek-official', model: legacyModel, source: 'legacy-strict', reasoningEffort: effort };
+    } else {
+      let catalog;
+      try {
+        catalog = await readHarnessModelCatalog({
+          llm: this.ctx.llm ?? this.ctx.get('llm'),
+          getCurrentSelection,
+        });
+      } catch {
+        // Older/mocked hosts without the catalog surface can still route the
+        // current Harness default without exposing any credential fields.
+        const current = getCurrentSelection();
+        catalog = current?.provider
+          ? { providers: [{ id: current.provider, name: current.provider, models: [] }], harness_default: current }
+          : { providers: [], harness_default: null };
+      }
+      selection = resolveWorkerModel({
+        tier,
+        priority: cfg[`${tier}_model_priority`],
+        priorityConfigured: cfg[`${tier}_model_priority_configured`],
+        fallback: cfg[`${tier}_model_fallback`],
+        catalog,
+        harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+      });
+      if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
     }
 
     // The worker always gets the auditable Delivery Contract appended (unless
@@ -147,7 +172,9 @@ export class WorkerRegistry {  constructor(ctx) {
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
     const sessionId = `session-${randomUUID()}`;
     const job = {
-      id, sessionId, tier, model, effort, task, source, cwd,
+      id, sessionId, tier, provider: selection.provider, model: selection.model,
+      selection_source: selection.source, effort, reasoning_effort: selection.reasoningEffort,
+      task, source, cwd,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
       status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
       tokens: { input: 0, output: 0, reasoning: 0 },
@@ -162,9 +189,7 @@ export class WorkerRegistry {  constructor(ctx) {
     job.baseline = await captureWorkspaceBaseline({ cwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     this.jobs.set(id, job);
 
-    const selection = { provider: resolvedProvider.provider, model, reasoningEffort: effort };
     const presets = this.ctx.get('agentPresets');
-    const cfg = this.getConfig?.() ?? {};
     const wanted = preset ?? (tier === 'flash' ? cfg.preset_flash : cfg.preset_pro);
     const presetId = presets === undefined
       ? undefined
@@ -499,20 +524,59 @@ export async function apply(ctx) {
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         try {
-          // Mirrors the worker spawn resolution (same helper, same selection
-          // accessor) so the MCP shim can report the effective provider for
-          // dsh_worker_config. Never returns a credential.
-          const mode = normalizeWorkerProviderMode(hub.getConfig?.()?.worker_provider_mode);
-          const resolved = resolveHubWorkerProvider({
+          const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const mode = normalizeWorkerProviderMode(config.worker_provider_mode);
+          let selections;
+          if (mode === 'deepseek-official') {
+            selections = {
+              flash: { provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' },
+              pro: { provider: 'deepseek-official', model: 'deepseek-v4-pro', source: 'legacy-strict' },
+            };
+          } else {
+            const catalog = await readHarnessModelCatalog({
+              llm: ctx.llm ?? ctx.get('llm'),
+              getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
+            });
+            selections = {};
+            for (const tier of ['flash', 'pro']) {
+              const selected = resolveWorkerModel({
+                tier,
+                priority: config[`${tier}_model_priority`],
+                priorityConfigured: config[`${tier}_model_priority_configured`],
+                fallback: config[`${tier}_model_fallback`],
+                catalog,
+                harnessDefault: catalog.harness_default,
+              });
+              selections[tier] = selected.ok
+                ? { provider: selected.provider, model: selected.model, source: selected.source }
+                : { code: selected.code, error: selected.message };
+            }
+          }
+          return sendJson(res, 200, {
+            ok: true,
             worker_provider_mode: mode,
+            effective_worker_provider: selections.flash?.provider ?? null,
+            effective_worker_selection: selections,
+          });
+        } catch (err) {
+          return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE', error: 'Unable to resolve Harness worker models.' });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/models`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET' && req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
+        try {
+          const catalog = await readHarnessModelCatalog({
+            llm: ctx.llm ?? ctx.get('llm'),
             getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
           });
-          if (!resolved.ok) {
-            return sendJson(res, 200, { ok: false, code: resolved.code, error: resolved.error, worker_provider_mode: mode, effective_worker_provider: null });
-          }
-          return sendJson(res, 200, { ok: true, worker_provider_mode: mode, effective_worker_provider: resolved.provider });
-        } catch (err) {
-          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+          return sendJson(res, 200, { ok: true, ...catalog });
+        } catch (error) {
+          return sendJson(res, 503, { ok: false, code: error?.code ?? 'MODEL_CATALOG_UNAVAILABLE', error: 'Unable to read Harness model catalog.' });
         }
       },
     }));
