@@ -20,6 +20,7 @@ import { resolveWorkerModel, resolveModel } from '../model-routing.mjs';
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
+import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -102,6 +103,7 @@ export class WorkerRegistry {  constructor(ctx) {
       effort: job.effort, requested_effort: job.effort, reasoning_effort: job.reasoning_effort ?? null,
       status: job.status, source: job.source, task: job.task.slice(0, 300),
       cwd: job.cwd, turn: job.turn, step: job.step, currentTool: job.currentTool,
+      phase: job.phase ?? null,
       toolCalls: job.toolCalls, tokens: job.tokens, mode: 'hub',
       startedAt: job.startedAt, endedAt: job.endedAt,
       delivery_complete: !!job.delivery_complete,
@@ -112,6 +114,7 @@ export class WorkerRegistry {  constructor(ctx) {
       v.reasonDetail = job.reasonDetail;
       v.delivery = job.delivery_metadata ?? null;
       v.delivery_missing = job.delivery_missing ?? [];
+      v.outcome = job.outcome ?? null;
       v.workspace_diff = job.workspaceDiff ?? null;
       v.workspace_baseline_dirty = !!job.workspaceDiff?.dirtyBaseline;
     }
@@ -207,11 +210,13 @@ export class WorkerRegistry {  constructor(ctx) {
       selection_source: selection.source, effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
+      phase: JOB_PHASES.RUNNING,
       status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
       tokens: { input: 0, output: 0, reasoning: 0 },
       startedAt: new Date().toISOString(), endedAt: null,
       result: null, error: null, stopReason: null, handle: null, waiters: [],
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
+      outcome: null,
       texts: [],
     };
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
@@ -307,6 +312,15 @@ export class WorkerRegistry {  constructor(ctx) {
         job.delivery_complete = parsed.complete;
         job.delivery_missing = parsed.missing;
         job.delivery_metadata = formatDeliveryMetadata(parsed);
+        // Canonical structured outcome (shared workflow layer) + terminal phase.
+        job.outcome = buildOutcome({
+          result: job.result ?? '',
+          deliveryMeta: job.delivery_metadata,
+          executionStatus: job.status === 'done' ? 'completed' : 'failed',
+          stopReason: job.stopReason,
+          deliveryMissing: job.delivery_missing,
+        });
+        job.phase = job.status === 'done' ? JOB_PHASES.COMPLETED : job.status === 'cancelled' ? JOB_PHASES.CANCELLED : JOB_PHASES.FAILED;
         // Read-only after-snapshot of the workspace: bounded, redacted patch.
         job.workspaceDiff = job.baseline.kind === 'git'
           ? await captureWorkspaceDiff({ cwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
@@ -335,6 +349,7 @@ export class WorkerRegistry {  constructor(ctx) {
     if (!job) return undefined;
     if (job.status === 'running') {
       job.status = 'cancelled';
+      job.phase = JOB_PHASES.CANCELLED;
       job.error = 'cancelled by request';
       try { await job.handle?.dispose(); } catch {}
       this.publish();

@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
+import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -47,7 +48,7 @@ const shard = createShardWriter('mcp');
 
 function publishStatus() {
   shard.publish([...jobs.values()].map((j) => ({
-    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
@@ -60,7 +61,7 @@ function publishStatus() {
 
 export function jobView(j, { withResult = false } = {}) {
   const v = {
-    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
@@ -72,6 +73,7 @@ export function jobView(j, { withResult = false } = {}) {
     v.result = j.result; v.error = j.error; v.stopReason = j.stopReason;
     v.delivery = j.delivery_metadata ?? null;
     v.delivery_missing = j.delivery_missing ?? [];
+    v.outcome = j.outcome ?? null;
     v.workspace_diff = j.workspaceDiff ?? null;
     v.workspace_baseline_dirty = !!j.workspaceDiff?.dirtyBaseline;
   }
@@ -122,11 +124,13 @@ export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, e
     id, role, attempt, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
     effort, reasoning_effort: effort, task, source, cwd: workspace,
     prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
+    phase: JOB_PHASES.RUNNING,
     status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
     tokens: { input: 0, output: 0, reasoning: 0 },
     startedAt: new Date().toISOString(), endedAt: null,
     result: null, error: null, stopReason: null, harness,
     delivery_complete: false, delivery_missing: [], delivery_metadata: null,
+    outcome: null,
     workspaceDiff: null, baselinePromise: null,
     waiters: [],
   };
@@ -187,6 +191,15 @@ export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, e
       job.delivery_complete = parsed.complete;
       job.delivery_missing = parsed.missing;
       job.delivery_metadata = formatDeliveryMetadata(parsed);
+      // Canonical structured outcome (shared workflow layer) + terminal phase.
+      job.outcome = buildOutcome({
+        result: job.result ?? '',
+        deliveryMeta: job.delivery_metadata,
+        executionStatus: job.status === 'done' ? 'completed' : 'failed',
+        stopReason: job.stopReason,
+        deliveryMissing: job.delivery_missing,
+      });
+      job.phase = job.status === 'done' ? JOB_PHASES.COMPLETED : job.status === 'cancelled' ? JOB_PHASES.CANCELLED : JOB_PHASES.FAILED;
       // Read-only after-snapshot of the workspace: bounded, redacted patch.
       const baseline = await job.baselinePromise;
       job.workspaceDiff = baseline.kind === 'git'
@@ -216,6 +229,7 @@ export async function cancelJob(id) {
   if (!job) throw new Error(`no such job: ${id}`);
   if (job.status !== 'running') return job;
   job.status = 'cancelled';
+  job.phase = JOB_PHASES.CANCELLED;
   job.error = 'cancelled by request';
   try { await job.harness.close(); } catch {}
   publishStatus();

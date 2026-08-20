@@ -378,16 +378,27 @@ export function evaluateAttempt({
   attempt = 0,
 } = {}) {
   const maxAttempts = policy?.escalation?.max_attempts ?? 2;
+  const canEscalate = policy?.escalation?.enabled === true;
+  // Clean verified path short-circuits: there is nothing to escalate.
+  const clean = execution !== 'failed'
+    && (taskStatus === 'success' || taskStatus === undefined)
+    && testsStatus !== 'FAIL'
+    && deliveryComplete === true
+    && workspaceEvidenceOK !== false;
+  if (clean) return { decision: 'accept', reason: 'verified', escalate: false };
+  // Something needs attention. Escalation-disabled and max-attempts only stop
+  // an up-grade, never turn a clean run into a failure.
+  let reason;
+  if (execution === 'failed') reason = 'execution_failed';
+  else if (taskStatus === 'blocked') reason = 'task_blocked';
+  else if (testsStatus === 'FAIL') reason = 'tests_failed';
+  else if (deliveryComplete === false) reason = 'delivery_incomplete';
+  else if (workspaceEvidenceOK === false) reason = 'workspace_mismatch';
+  else if (taskStatus === 'partial') reason = 'task_partial';
+  else reason = 'unverified';
+  if (!canEscalate) return { decision: 'fail', reason: 'escalation_disabled', escalate: false };
   if (attempt >= maxAttempts) return { decision: 'fail', reason: 'max_attempts_reached', escalate: false };
-  if (!policy?.escalation?.enabled) return { decision: 'fail', reason: 'escalation_disabled', escalate: false };
-  if (execution === 'failed') return { decision: 'escalate', reason: 'execution_failed', escalate: true };
-  if (taskStatus === 'partial' || taskStatus === 'blocked') {
-    return { decision: 'escalate', reason: `task_${taskStatus}`, escalate: true };
-  }
-  if (testsStatus === 'FAIL') return { decision: 'escalate', reason: 'tests_failed', escalate: true };
-  if (deliveryComplete === false) return { decision: 'escalate', reason: 'delivery_incomplete', escalate: true };
-  if (workspaceEvidenceOK === false) return { decision: 'escalate', reason: 'workspace_mismatch', escalate: true };
-  return { decision: 'accept', reason: 'verified', escalate: false };
+  return { decision: 'escalate', reason, escalate: true };
 }
 
 // ---------- worker provider routing ----------
