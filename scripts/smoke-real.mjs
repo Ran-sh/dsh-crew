@@ -15,7 +15,8 @@ import { join } from 'node:path';
 
 const repo = process.argv[2];
 const mode = process.argv[3] ?? 'run';
-if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone]'); process.exit(2); }
+const effort = process.argv[4] ?? 'max';
+if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone] [effort]'); process.exit(2); }
 
 /** Read KEY: value (credentials.yaml) with values redacted from logs. */
 function readDshStore() {
@@ -107,7 +108,7 @@ try {
     process.exit(2);
   }
 
-    const view = await call('dsh_run_worker', { task: TASK, role: 'worker', cwd: repo, timeout_seconds: 540 }, 560 * 1000);
+    const view = await call('dsh_run_worker', { task: TASK, role: 'worker', cwd: repo, effort, timeout_seconds: 540 }, 560 * 1000);
   const k = (o) => ({ id: o.id, role: o.role, phase: o.phase, status: o.status, isolation: o.isolation, execution_cwd: o.execution_cwd, base_revision: o.base_revision, attempt: o.attempt, decision: o.decision, review: o.review?.verdict ?? null, candidate_available: o.candidate_available, candidate_changed: o.candidate?.changed_files ?? null, outcome_task: o.outcome?.task_status ?? null, tests: o.outcome?.tests_status ?? null, error: o.error, error_code: o.error_code, cleanup_warning: o.cleanup_warning, primary_dirty_hint: o.primary_workspace_dirty });
   console.log('[smoke] final (run):', JSON.stringify(k(view), null, 2));
   await client.close();
