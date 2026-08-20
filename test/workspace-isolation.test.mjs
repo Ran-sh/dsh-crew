@@ -92,10 +92,13 @@ test('captureCandidate builds a bounded, redacted candidate with name status + s
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-wt-cap-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const { runner, calls } = fakeRunner([
-    { pat: /^status --porcelain$/, out: { stdout: ' M src/a.mjs\n?? .env\n' } },
-    { pat: /^diff --name-status HEAD$/, out: { stdout: 'M\tsrc/a.mjs\n' } },
-    { pat: /^diff --stat HEAD$/, out: { stdout: ' src/a.mjs | 2 +-\n' } },
-    { pat: /^diff --binary HEAD$/, out: { stdout: 'diff --git a/src/a.mjs b/src/a.mjs\n+export const x = 1;\n' } },
+    { pat: /^rev-parse --verify /, out: { stdout: `${REV}\n` } },
+    { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+    { pat: /^diff --name-status abc123$/, out: { stdout: 'M\tsrc/a.mjs\n' } },
+    { pat: /^diff --stat abc123$/, out: { stdout: ' src/a.mjs | 2 +-\n' } },
+    { pat: /^status --porcelain/, out: { stdout: ' M src/a.mjs\n?? .env\n' } },
+    // Path-scoped diff of the NON-sensitive tracked path only — never .env.
+    { pat: /^diff --binary abc123 -- src\/a\.mjs$/, out: { stdout: 'diff --git a/src/a.mjs b/src/a.mjs\n+export const x = 1;\n' } },
   ]);
   const c = await captureCandidate({ worktreePath: dir, baseRevision: REV, git: runner });
   assert.equal(c.ok, true);
@@ -104,9 +107,11 @@ test('captureCandidate builds a bounded, redacted candidate with name status + s
   assert.ok(c.changed_files.includes('src/a.mjs'));
   assert.match(c.patch, /src\/a\.mjs/);
   // .env is redacted: the patch must carry only the marker path, never content
-  assert.match(c.patch, /\[REDACTED SENSITIVE FILE: \.env\]/);
+  assert.match(c.patch, /\[REDACTED SENSITIVE FILE: \.env(?:\s+\(.*\))?\]/);
   assert.ok(c.sensitive_paths_redacted.includes('.env'));
-  assert.ok(calls.some((x) => x.args[0] === 'diff'));
+  assert.deepEqual(c.untracked_files, ['.env']);
+  assert.match(c.fingerprint, /^[0-9a-f]{64}$/);
+  assert.ok(calls.some((x) => x.args[0] === 'diff' && x.args[1] === '--binary'));
 });
 
 test('captureCandidate on a missing worktree path degrades without throwing', async () => {

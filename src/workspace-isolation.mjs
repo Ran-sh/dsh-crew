@@ -16,9 +16,10 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { isSensitivePath, parseChanges, DIFF_LIMIT, GIT_TIMEOUT_MS } from './workspace-audit.mjs';
 
@@ -29,6 +30,7 @@ export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
 export const GIT_TIMEOUT = 'GIT_TIMEOUT';
 export const GIT_ERROR = 'GIT_ERROR';
 export const WORKTREE_LOCKED = 'WORKTREE_LOCKED';
+export const CANDIDATE_CAPTURE_FAILED = 'CANDIDATE_CAPTURE_FAILED';
 export const MAX_PARALLEL_CAP = 16;
 export const DEFAULT_MAX_PARALLEL = 3;
 const WORKTREE_PREFIX = 'dsh-crew-';
@@ -120,50 +122,168 @@ export async function createIsolatedWorkspace({ cwd, jobId, baseRevision, root =
   };
 }
 
+function splitFirstTab(line) {
+  const i = line.indexOf('\t');
+  return i === -1 ? [line, ''] : [line.slice(0, i), line.slice(i + 1)];
+}
+
 /**
- * Capture an auditable change candidate from an isolated worktree: name
- * status, diff stat, and the bounded + redacted patch of the worker's changes
- * relative to the base revision. Never touches the primary working tree.
+ * Build the sanitized candidate patch. Security discipline:
+ *   1. The full git diff is NEVER assembled up front — only a PATH-SCOPED
+ *      `git diff <base> -- <non-sensitive paths>` is ever run, so sensitive
+ *      tracked content never enters the patch buffer.
+ *   2. Rename/copy hunks are excluded entirely when EITHER the source or the
+ *      destination path is sensitive.
+ *   3. Sensitive files (tracked, deleted, renamed, untracked) appear only as a
+ *      `[REDACTED SENSITIVE FILE]` marker — the content is never read.
+ *   4. Non-sensitive untracked files get a real new-file patch (read via
+ *      Node fs, so no shell /dev/null dependency; text lines are bounded and a
+ *      binary file degrades to a size marker).
+ *   5. Truncation runs LAST, over the already-sanitized patch, so a size limit
+ *      can never split a secret into view.
+ */
+async function buildCandidatePatch(run, { cwd, base, nameStatus, status, untracked, limit }) {
+  const tracked = [];
+  const sensitive = new Set();
+  for (const line of String(nameStatus ?? '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [, rest] = splitFirstTab(trimmed);
+    const involved = rest.split('\t').filter(Boolean).map((p) => p.replace(/\\/g, '/'));
+    if (involved.length === 0) continue;
+    // Rename/copy: if either side is sensitive, redact the whole entry.
+    if (involved.some(isSensitivePath)) {
+      for (const p of involved) sensitive.add(p);
+    } else {
+      for (const p of involved) if (!tracked.includes(p)) tracked.push(p);
+    }
+  }
+
+  let out = '';
+  const redacted = [];
+  if (tracked.length > 0) {
+    const r = await runGit(run, ['diff', '--binary', base, '--', ...tracked], { cwd });
+    if (!r.ok) return { failed: true, reason: r.reason, error: r.error };
+    out += r.stdout;
+  }
+  for (const p of sensitive) {
+    redacted.push(p);
+    out += `[REDACTED SENSITIVE FILE: ${p}]\n`;
+  }
+  for (const p of untracked) {
+    if (isSensitivePath(p)) {
+      redacted.push(p);
+      out += `[REDACTED SENSITIVE FILE: ${p} (untracked)]\n`;
+      continue;
+    }
+    const abs = join(cwd, ...p.split('/'));
+    if (existsSync(abs)) out += await safeNewFilePatch(p, abs);
+    else out += `[UNTRACKED FILE: ${p}]\n`;
+  }
+
+  const truncated = Buffer.byteLength(out, 'utf8') > limit;
+  if (truncated) out = Buffer.from(out, 'utf8').subarray(0, limit).toString('utf8');
+  return { failed: false, patch: out, truncated, redacted };
+}
+
+/** Real new-file patch for a non-sensitive untracked file (text or binary). */
+async function safeNewFilePatch(relPath, absPath) {
+  try {
+    const buf = await readFile(absPath);
+    if (buf.includes(0)) return `[NEW BINARY FILE: ${relPath} (${buf.length} bytes)]\n`;
+    const lines = buf.toString('utf8').split(/\r?\n/);
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    if (lines.length === 0) return `[NEW EMPTY FILE: ${relPath}]\n`;
+    const body = lines.map((l) => `+${l}`).join('\n');
+    return `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}\n`;
+  } catch {
+    return `[UNTRACKED FILE: ${relPath}]\n`;
+  }
+}
+
+function candidateFingerprint({ base, nameStatus, patch }) {
+  return createHash('sha256')
+    .update(`${base}\n${nameStatus ?? ''}\n${patch ?? ''}`)
+    .digest('hex');
+}
+
+/**
+ * Capture an auditable change candidate from an isolated worktree. The diff
+ * scope is ALWAYS the supplied `baseRevision` — never `HEAD` — so committed
+ * worker changes (base..HEAD) AND uncommitted working-tree edits on top are
+ * both captured, and invalid bases fail explicitly. The patch is built
+ * path-scoped (sensitive tracked content never enters the buffer), non-
+ * sensitive new files are included as real patches, and the whole candidate
+ * is fingerprinted over the sanitized patch. Never touches the primary tree.
  */
 export async function captureCandidate({ worktreePath, baseRevision, git, limit = DIFF_LIMIT } = {}) {
   const run = git ?? defaultRunner;
   if (!worktreePath || !existsSync(worktreePath)) {
     return { ok: false, reason: NOT_GIT_REPOSITORY, error: 'worktree path missing' };
   }
-  const [status, nameStatus, statRel, patchRel] = await Promise.all([
-    runGit(run, ['status', '--porcelain'], { cwd: worktreePath }),
-    runGit(run, ['diff', '--name-status', 'HEAD'], { cwd: worktreePath }),
-    runGit(run, ['diff', '--stat', 'HEAD'], { cwd: worktreePath }),
-    runGit(run, ['diff', '--binary', 'HEAD'], { cwd: worktreePath }),
+  // Invalid base revisions must fail loudly, not silently diff the wrong thing.
+  const baseCheck = baseRevision
+    ? await runGit(run, ['rev-parse', '--verify', `${baseRevision}^{commit}`], { cwd: worktreePath })
+    : { ok: true };
+  if (baseRevision && !baseCheck.ok) {
+    return { ok: false, reason: CANDIDATE_CAPTURE_FAILED, error: `invalid base revision ${baseRevision}: ${(baseCheck.error ?? '').trim()}` };
+  }
+  const base = baseRevision ?? (await runGit(run, ['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();
+
+  const [nameStatus, statRel, status, head] = await Promise.all([
+    runGit(run, ['diff', '--name-status', base], { cwd: worktreePath }),
+    runGit(run, ['diff', '--stat', base], { cwd: worktreePath }),
+    // -uall expands untracked directories into their individual files so the
+    // candidate lists real paths (and can include their content) instead of a
+    // bare directory marker.
+    runGit(run, ['status', '--porcelain', '-uall'], { cwd: worktreePath }),
+    runGit(run, ['rev-parse', 'HEAD'], { cwd: worktreePath }),
   ]);
-  for (const r of [status, nameStatus, statRel, patchRel]) if (!r.ok) return { ok: false, reason: r.reason, error: r.error };
+  for (const r of [nameStatus, statRel, status]) if (!r.ok) return { ok: false, reason: r.reason, error: r.error };
+
   const changes = parseChanges(nameStatus.stdout, status.stdout);
-  const { patch, truncated, redacted } = await buildCandidatePatch(run, { changes, patch: patchRel.stdout, limit });
+  const untracked = changes.untracked;
+  const { failed, patch, truncated, redacted } = await buildCandidatePatch(run, {
+    cwd: worktreePath,
+    base,
+    nameStatus: nameStatus.stdout,
+    status: status.stdout,
+    untracked,
+    limit,
+  });
+  if (failed) return { ok: false, reason: failed.reason ?? CANDIDATE_CAPTURE_FAILED, error: failed.error };
+
+  const nameStatusOut = nameStatus.stdout;
   return {
     ok: true,
     kind: 'git-worktree',
-    base_revision: baseRevision ?? null,
+    base_revision: base,
+    committed_head: head.ok ? head.stdout.trim() : null,
     worktree_path: worktreePath,
-    changed_files: changes.modified.concat(changes.deleted).concat(changes.renamed).concat(changes.untracked),
-    name_status: nameStatus.stdout,
+    // Tracked changes (from name-status) + redacted sensitive entries + the
+    // untracked file list — every path the worker touched, committed or not.
+    changed_files: [...new Set([...trackedIn(nameStatusOut, untracked), ...redacted, ...untracked])],
+    name_status: nameStatusOut,
     diff_stat: statRel.stdout,
     patch,
     patch_truncated: truncated,
     sensitive_paths_redacted: redacted,
+    untracked_files: untracked,
+    fingerprint: candidateFingerprint({ base, nameStatus: nameStatusOut, patch }),
     candidate_commit: null,
   };
 }
 
-async function buildCandidatePatch(run, { changes, patch, limit }) {
-  let out = String(patch ?? '');
-  const redacted = changes.modified.concat(changes.deleted).concat(changes.untracked).filter((p) => isSensitivePath(p));
-  for (const p of redacted) out += `[REDACTED SENSITIVE FILE: ${p}]\n`;
-  for (const p of changes.untracked) {
-    if (!isSensitivePath(p)) out += `[UNTRACKED FILE: ${p} (content not diffed read-only)]\n`;
+function trackedIn(nameStatus, untracked) {
+  const out = [];
+  for (const line of String(nameStatus ?? '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [, rest] = splitFirstTab(trimmed);
+    const involved = rest.split('\t').filter(Boolean).map((p) => p.replace(/\\/g, '/'));
+    for (const p of involved) if (!out.includes(p) && !untracked.includes(p)) out.push(p);
   }
-  const truncated = Buffer.byteLength(out, 'utf8') > limit;
-  if (truncated) out = Buffer.from(out, 'utf8').subarray(0, limit).toString('utf8');
-  return { patch: out, truncated, redacted };
+  return out;
 }
 
 /** Resolve the MAIN repository root from inside a linked worktree. */
