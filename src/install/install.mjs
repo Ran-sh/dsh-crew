@@ -114,6 +114,19 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // so it is unsafe as the fresh default for jobs targeting another workspace.
   preset_flash: 'default',
   preset_pro: 'default',
+  // ---- v0.2 runtime execution (writable via the settings config endpoint) ----
+  // Concurrency cap for parallel workflows; isolation: worktree = run coding
+  // workers in per-job git worktrees (fail-closed for non-git workspaces),
+  // shared = legacy in-place behaviour.
+  max_parallel: 3,
+  isolation: 'worktree',
+  // ---- v0.2 role state overrides (writable; unset = derived by migration) ----
+  // Explicit worker/reviewer role states (auto | manual | disabled) and the
+  // automatic-review switch. When unset, migrateLegacyConfig derives them from
+  // collaboration_mode / tier_policy / pro_reviews_flash.
+  worker_state: undefined,
+  review_state: undefined,
+  auto_review: undefined,
 };
 
 export function mergeStoredGlobalConfig(stored) {
@@ -180,13 +193,17 @@ export function installStatus({ home = homedir() } = {}) {
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
   const hudWired = typeof settings.statusLine?.command === 'string'
     && settings.statusLine.command.includes('worker-segment.sh');
-  const codexInstalled = existsSync(join(home, '.codex', 'agents', 'ds-flash.toml'));
+  const codexInstalled = existsSync(join(home, '.codex', 'agents', 'ds-flash.toml'))
+    || existsSync(join(home, '.codex', 'agents', 'ds-worker.toml'));
   return { claude: { installed: claudeInstalled, hud: hudWired }, codex: { installed: codexInstalled } };
 }
 
 export function uninstallCodex({ home = homedir() } = {}) {
   const actions = [];
-  for (const f of ['ds-flash.toml', 'ds-pro.toml']) {
+  // Both the v0.2 roles (ds-worker / ds-reviewer) and the deprecated v0.1
+  // aliases (ds-flash / ds-pro) are dsh-crew managed; uninstall removes only
+  // these, never a user's own role files.
+  for (const f of ['ds-flash.toml', 'ds-pro.toml', 'ds-worker.toml', 'ds-reviewer.toml']) {
     const p = join(home, '.codex', 'agents', f);
     if (existsSync(p)) { backup(p); rmSync(p); actions.push(`removed: ${p} (backup kept)`); }
   }

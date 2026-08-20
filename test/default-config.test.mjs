@@ -85,3 +85,19 @@ test('existing explicit advanced settings and model priorities survive normaliza
     assert.deepEqual(normalized.pro_model_priority, [{ provider: 'b', model: 'm2' }]);
   }
 });
+
+test('v0.2 runtime execution fields are persistable and normalize into the runtime shape', () => {
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.max_parallel, 3);
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.isolation, 'worktree');
+  const stored = mergeStoredGlobalConfig({ max_parallel: 2, isolation: 'shared' });
+  const normalized = normalizeGlobalConfig(stored);
+  assert.equal(normalized.execution.max_parallel, 2);
+  assert.equal(normalized.execution.isolation, 'shared');
+});
+
+test('v0.2 role-state overrides normalize into the canonical shape (writable via config)', () => {
+  const normalized = normalizeGlobalConfig({ worker_state: 'manual', review_state: 'disabled', auto_review: true });
+  assert.equal(normalized.worker.state, 'manual');
+  assert.equal(normalized.review.state, 'disabled');
+  assert.equal(normalized.review.auto_review, true);
+});

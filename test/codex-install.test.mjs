@@ -48,7 +48,7 @@ test('Case 5: repeat install is idempotent', async () => {
     installCodex({ home });
     installCodex({ home });
     const agents = readdirSync(join(home, '.codex', 'agents'));
-    assert.equal(agents.filter((a) => a.startsWith('ds-') && a.endsWith('.toml')).length, 2);
+    assert.equal(agents.filter((a) => a.startsWith('ds-') && a.endsWith('.toml')).length, 4);
     const prompts = readdirSync(join(home, '.codex', 'prompts'));
     assert.equal(prompts.filter((p) => p.startsWith('dsh-')).length, 2);
   } finally { rmSync(home, { recursive: true, force: true }); }

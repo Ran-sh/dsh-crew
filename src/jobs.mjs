@@ -8,18 +8,37 @@ import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
+import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const STATUS_FILE = join(CONFIG_DIR, 'status.json');
-const RUNTIME_BIN = join(ROOT, 'node_modules', '.bin', 'dsh-jsonrpc-agent');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
+
+// The worker agent entry. The pnpm .bin shim on Windows is a POSIX shell
+// script that Node spawn cannot execute (ENOENT), so we always launch
+// `node <lib/bin.js> <cordis>` via process.execPath — cross-platform.
+const requireAgents = createRequire(import.meta.url);
+let AGENT_JS = null;
+for (const spec of ['@deepseek-ai/dsh-sdk-jsonrpc-demo/bin', '@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js']) {
+  try { AGENT_JS = requireAgents.resolve(spec); break; } catch {}
+}
+if (!AGENT_JS) AGENT_JS = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-sdk-jsonrpc-demo', 'lib', 'bin.js');
 
 export const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
   pro: { model: 'deepseek-v4-pro', label: 'V4 Pro' },
+};
+
+// v0.2: a job carries a dispatch role (worker | reviewer) plus its legacy
+// tier slot. The role describes who did the work; the tier is the model-class
+// slot that standalone mode falls back to (role = execution intent).
+export const ROLES = {
+  worker: { canReview: false },
+  reviewer: { canReview: true },
 };
 
 function loadDotEnv() {
@@ -39,7 +58,7 @@ const shard = createShardWriter('mcp');
 
 function publishStatus() {
   shard.publish([...jobs.values()].map((j) => ({
-    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
@@ -52,7 +71,7 @@ function publishStatus() {
 
 export function jobView(j, { withResult = false } = {}) {
   const v = {
-    id: j.id, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
@@ -64,6 +83,7 @@ export function jobView(j, { withResult = false } = {}) {
     v.result = j.result; v.error = j.error; v.stopReason = j.stopReason;
     v.delivery = j.delivery_metadata ?? null;
     v.delivery_missing = j.delivery_missing ?? [];
+    v.outcome = j.outcome ?? null;
     v.workspace_diff = j.workspaceDiff ?? null;
     v.workspace_baseline_dirty = !!j.workspaceDiff?.dirtyBaseline;
   }
@@ -73,16 +93,17 @@ export function jobView(j, { withResult = false } = {}) {
 export function listJobs() { return [...jobs.values()]; }
 export function getJob(id) { return jobs.get(id); }
 
-export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
+export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
   const tierInfo = TIERS[tier];
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
+  if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
-  if (!existsSync(RUNTIME_BIN)) throw new Error(`dsh-jsonrpc-agent not installed at ${RUNTIME_BIN}; run pnpm install in ${ROOT}`);
+  if (!existsSync(AGENT_JS)) throw new Error(`dsh-jsonrpc-agent not installed at ${AGENT_JS}; run pnpm install in ${ROOT}`);
   const workspace = resolve(cwd ?? process.cwd());
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
-  // ## Risks — or the review contract for automatic Pro reviews.
-  const workerPrompt = appendDeliveryInstructions(task, { tier, isReview: delivery === 'review' });
+  // ## Risks — or the review contract for reviewer-role jobs.
+  const workerPrompt = appendDeliveryInstructions(task, { tier, role, isReview: delivery === 'review' });
   const id = `job-${nextId++}-${Date.now().toString(36)}`;
   const dotEnv = loadDotEnv();
   if (!process.env.DEEPSEEK_API_KEY && !dotEnv.DEEPSEEK_API_KEY) {
@@ -91,8 +112,8 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
 
   const harness = new DeepSeekHarness({
     launch: {
-      command: RUNTIME_BIN,
-      args: [CORDIS],
+      command: process.execPath,
+      args: [AGENT_JS, CORDIS],
       cwd: workspace,
       env: {
         ...process.env,
@@ -110,14 +131,16 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
   });
 
   const job = {
-    id, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
+    id, role, attempt, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
     effort, reasoning_effort: effort, task, source, cwd: workspace,
     prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
+    phase: JOB_PHASES.RUNNING,
     status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
     tokens: { input: 0, output: 0, reasoning: 0 },
     startedAt: new Date().toISOString(), endedAt: null,
     result: null, error: null, stopReason: null, harness,
     delivery_complete: false, delivery_missing: [], delivery_metadata: null,
+    outcome: null,
     workspaceDiff: null, baselinePromise: null,
     waiters: [],
   };
@@ -178,6 +201,15 @@ export function startJob({ task, tier = 'flash', effort = 'max', cwd, maxTokens 
       job.delivery_complete = parsed.complete;
       job.delivery_missing = parsed.missing;
       job.delivery_metadata = formatDeliveryMetadata(parsed);
+      // Canonical structured outcome (shared workflow layer) + terminal phase.
+      job.outcome = buildOutcome({
+        result: job.result ?? '',
+        deliveryMeta: job.delivery_metadata,
+        executionStatus: job.status === 'done' ? 'completed' : 'failed',
+        stopReason: job.stopReason,
+        deliveryMissing: job.delivery_missing,
+      });
+      job.phase = job.status === 'done' ? JOB_PHASES.COMPLETED : job.status === 'cancelled' ? JOB_PHASES.CANCELLED : JOB_PHASES.FAILED;
       // Read-only after-snapshot of the workspace: bounded, redacted patch.
       const baseline = await job.baselinePromise;
       job.workspaceDiff = baseline.kind === 'git'
@@ -207,6 +239,7 @@ export async function cancelJob(id) {
   if (!job) throw new Error(`no such job: ${id}`);
   if (job.status !== 'running') return job;
   job.status = 'cancelled';
+  job.phase = JOB_PHASES.CANCELLED;
   job.error = 'cancelled by request';
   try { await job.harness.close(); } catch {}
   publishStatus();

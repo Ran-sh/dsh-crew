@@ -12,13 +12,16 @@ import {
   getEffectiveTierState,
   getRoutingGuidance,
   chooseDefaultTier,
-  canEscalateFlashToPro,
-  shouldRunProReview,
+  canDispatchRole,
+  resolveRoleTierHint,
+  shouldAutoReview,
 } from './policy.mjs';
+import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
 
-const server = new McpServer({ name: 'dsh-crew', version: '0.1.0' });
+const server = new McpServer({ name: 'dsh-crew', version: '0.2.0' });
 
-const tierSchema = z.enum(['flash', 'pro']).optional().describe('Worker role tier: Flash handles delegated coding execution; Pro handles manually enabled advanced/review work. The actual provider/model is resolved from Crew priorities in Hub mode.');
+const tierSchema = z.enum(['flash', 'pro']).optional().describe('Legacy worker tier (compatibility only): Flash/Pro now act as a model-class hint, not a role. Prefer role=worker / role=reviewer; the backend resolves the actual provider/model from the Model Policy.');
+const roleSchema = z.enum(['worker', 'reviewer']).optional().describe('Dispatch role: worker executes implementation / fixes / tests / search; reviewer independently reviews a completed implementation. A coding request defaults to worker; reviewer runs on explicit request or via the automatic review workflow.');
 const effortSchema = z.enum(['off', 'high', 'max']).optional().describe('Reasoning effort for the worker. Omit to use the session default.');
 
 // Session-level configuration. This MCP server process lives exactly as long
@@ -118,83 +121,104 @@ async function resolveMode() {
   return up ? 'hub' : 'standalone';
 }
 
-/** Review-only task for the automatic Pro review (Review Pipeline / pro_reviews_flash). */
-function buildReviewTask(task, implementation) {
-  const resultText = String(implementation?.result ?? '').slice(0, 4000);
-  return [
-    'You are the automatic Pro review of a completed Flash implementation. REVIEW ONLY: inspect the current workspace and diff, and report findings. Do NOT modify any files unless the user explicitly asks for fixes.',
+/**
+ * Reviewer task for the automatic review pass. The candidate patch is the
+ * sanitized, bounded candidate from the isolated worktree — never the raw
+ * workspace or any sensitive file content.
+ */
+function buildReviewTask(task, view) {
+  const parts = [
+    'You are the automatic reviewer of a completed worker implementation. REVIEW ONLY: inspect the candidate and report findings. Do NOT modify any files unless the user explicitly asks for fixes.',
     '',
     'Original task:',
     task,
-    '',
-    'Flash implementation summary:',
-    resultText === '' ? '(no summary; inspect the workspace directly)' : resultText,
-    '',
-    'Report: 1) does the implementation satisfy the task, 2) concrete issues (bugs, style, risks), 3) suggested fixes. Be concise. Use the review Delivery Report format appended below (## Review Findings / ## Evidence / ## Risks / ## Verdict).',
-  ].join('\n');
+  ];
+  const o = view?.outcome;
+  if (o) {
+    parts.push('', 'Worker outcome:');
+    parts.push(`task_status=${o.task_status} tests_status=${o.tests_status ?? 'none'} delivery=${o.delivery?.complete ? 'complete' : 'incomplete'}`);
+  }
+  const c = view?.candidate;
+  if (c) {
+    parts.push('', 'Candidate changed files:', Array.isArray(c.changed_files) && c.changed_files.length ? c.changed_files.join('\n') : '(none)');
+    if (c.base_revision) parts.push(`Base revision: ${c.base_revision}`);
+    if (c.patch) parts.push('', 'Candidate patch (sanitized):', String(c.patch).slice(0, 8000));
+  }
+  parts.push('', 'Report: 1) does the implementation satisfy the task, 2) concrete issues (bugs, style, risks), 3) suggested fixes. End your message with ## Review Findings / ## Evidence / ## Risks / ## Verdict (approved | needs changes | rejected).');
+  return parts.join('\n');
 }
+
+// The single workflow runtime for this MCP process (session-scoped). Both
+// dsh_run_worker and dsh_spawn_worker start workflows here; Hub / Standalone
+// and worktree isolation are resolved inside the adapters.
+const workflowRuntime = buildMcpWorkflowRuntime({
+  getSessionConfig: () => sessionConfig,
+  resolveMode,
+  presetForTier,
+  readGlobalConfig,
+  buildReviewTask,
+  attemptTimeoutMs: () => (sessionConfig.default_timeout_seconds ?? 1800) * 1000,
+});
 
 server.registerTool('dsh_run_worker', {
   title: 'Run DSH worker (blocking)',
-  description: 'Delegate a task to a DSH (DeepSeek Harness) coding agent and wait for its final result. The worker is a full DSH agent with its own tools and sandbox. Use tier=flash for simple tasks, tier=pro for harder ones. Disabled tiers are refused by the DSH Crew policy; Manual tiers only run when the user explicitly names them. Blocks until the worker finishes.',
+  description: 'Delegate a task to a DSH (DeepSeek Harness) coding agent and wait for its final result. The worker is a full DSH agent with its own tools and sandbox. Pass role=worker for implementation and role=reviewer for an independent review pass. Disabled roles are refused by the DSH Crew policy; Manual roles only run when explicitly requested. Blocks until the worker finishes.',
   inputSchema: {
     task: z.string().describe('Full task description for the worker, self-contained'),
+    role: roleSchema,
     tier: tierSchema,
+    legacy_tier: tierSchema.describe('Legacy model-class hint (flash | pro), forwarded verbatim by deprecated ds-flash/ds-pro aliases; only influences which model class backs a worker role, never the role gate'),
     effort: effortSchema,
     cwd: z.string().optional().describe('Workspace directory for the worker (defaults to current project)'),
     timeout_seconds: z.number().int().positive().max(7200).optional(),
   },
-}, async ({ task, tier, effort, cwd, timeout_seconds }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  // Single policy resolver shared by blocking and async dispatch. This is
-  // where subagents_enabled=false, disabled tiers and session tier_policy
-  // clamps are enforced — for hub and standalone paths alike.
-  const decision = chooseDefaultTier(globalConfig, tier, sessionConfig);
-  if (!decision.ok) return policyRejection(decision);
+  // Role+legacy-tier bridging: role is the v0.2 gate, tier/legacy_tier remain
+  // the v0.1 model-class hint. A contradictory pair is a hard error, never a
+  // silent guess. Callers that only pass tier keep the exact legacy behavior.
+  const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
+  if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
+  let effRole = hint.role;
+  let effTier;
+  let decision;
+  if (role === undefined) {
+    decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
+    if (!decision.ok) return policyRejection(decision);
+    effTier = decision.tier;
+  } else {
+    decision = canDispatchRole(globalConfig, effRole, true, sessionConfig);
+    if (!decision.ok) return policyRejection(decision);
+    if (effRole === 'reviewer') effTier = 'pro';
+    else if (legacy_tier !== undefined) effTier = legacy_tier;
+    else if (tier !== undefined) effTier = tier;
+    else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
+  }
   const workDir = cwd ?? process.cwd();
   const e = effort ?? sessionConfig.default_effort;
   const timeout = timeout_seconds ?? sessionConfig.default_timeout_seconds;
 
-  const runOnce = async (t, jobTask, extra = {}) => {
-    if ((await resolveMode()) === 'hub') {
-      const spawned = await hub.spawn({ task: jobTask, tier: t, effort: e, cwd: workDir, source: ORCHESTRATOR, preset: presetForTier(t), ...extra });
-      return await hub.get(spawned.id, timeout);
-    }
-    const job = startJob({ task: jobTask, tier: t, effort: e, cwd: workDir, timeoutMs: timeout * 1000, source: ORCHESTRATOR, ...extra });
-    await waitJob(job.id, timeout * 1000);
-    return jobView(job, { withResult: true });
+  // The workflow runtime owns verification, escalation and the automatic
+  // reviewer pass — blocking and async share the exact same flow. `timeout`
+  // only bounds how long the caller waits, never kills the workflow.
+  const spec = {
+    role: effRole,
+    delivery: effRole === 'reviewer' ? 'review' : 'coding',
+    task,
+    cwd: workDir,
+    effort: e,
+    source: ORCHESTRATOR,
   };
-
-  const firstTier = decision.tier;
-  let job = await runOnce(firstTier, task);
-  if (job.status === 'running') return text({ ...job, note: `still running after ${timeout}s; poll with dsh_worker_result` });
-
-  // Escalate on evidence, not prediction: a failed flash run retries once on
-  // pro — but only when the effective policy makes pro an Auto tier.
-  if (job.status === 'failed' && firstTier === 'flash' && canEscalateFlashToPro(globalConfig, sessionConfig)) {
-    const firstError = job.error ?? job.stopReason ?? 'unknown failure';
-    job = await runOnce('pro', task);
-    if (job.status === 'running') return text({ ...job, escalated: true, note: `escalated to pro, still running after ${timeout}s; poll with dsh_worker_result` });
-    return text({ ...job, escalated: true, flash_failure: String(firstError).slice(0, 200) });
+  const wf = workflowRuntime.start(spec);
+  await workflowRuntime.wait(wf.id, timeout * 1000);
+  const view = workflowRuntime.get(wf.id, { withResult: true });
+  if (view.status === 'running') {
+    return text({ ...view, note: `still running after ${timeout}s; poll with dsh_worker_result`, status: 'running' });
   }
-
-  // Automatic Pro review (blocking only): Review Pipeline mode, or an explicit
-  // pro_reviews_flash opt-in. Runs at most once, only after a successful
-  // (non-escalated) Flash implementation, and only when Pro is an Auto tier.
-  if (job.status === 'done' && firstTier === 'flash' && shouldRunProReview(globalConfig, sessionConfig)) {
-    const implementation = job;
-    const review = await runOnce('pro', buildReviewTask(task, implementation), { delivery: 'review' });
-    const combo = { phase: 'review', implementation, review };
-    if (review.status === 'running') {
-      return text({ ...combo, status: 'running', note: `pro review still running after ${timeout}s; poll with dsh_worker_result` });
-    }
-    if (review.status === 'done') return text({ ...combo, status: 'done', review_status: 'done' });
-    // A failed review does not fail the implementation: surface both and let
-    // the orchestrator decide.
-    return text({ ...combo, status: 'done', review_status: 'failed', note: 'implementation succeeded; the automatic Pro review failed — decide whether to review manually.' });
+  if (view.phase === 'failed') {
+    return text({ ...view, note: 'workflow failed — see error / error_code.', status: 'failed' });
   }
-
-  return text(job);
+  return text({ ...view, note: effRole === 'reviewer' ? 'review complete' : 'workflow complete' });
 });
 
 server.registerTool('dsh_worker_config', {
@@ -320,7 +344,7 @@ async function buildConfigReport() {
     pro_state: proState,
     flash_roles: globalConfig.flash_roles ?? [],
     pro_roles: globalConfig.pro_roles ?? [],
-    pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldRunProReview(globalConfig, sessionConfig),
+    pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldAutoReview(globalConfig, sessionConfig),
     // One-line effective summary for the orchestrator, plus the authoritative
     // routing guidance. legacy_source shows whether a session tier_policy
     // clamp or the global collaboration mode is driving the decision.
@@ -339,64 +363,90 @@ async function buildConfigReport() {
 
 server.registerTool('dsh_spawn_worker', {
   title: 'Spawn DSH worker (async)',
-  description: 'Start a DSH (DeepSeek Harness) coding agent in the background and return immediately with a job id. Use dsh_worker_status / dsh_worker_result to follow up. Good for fanning out several workers in parallel. Tier policy is enforced exactly like dsh_run_worker; automatic Pro review is not chained for async jobs (request a review explicitly if needed).',
+  description: 'Start a DSH (DeepSeek Harness) coding workflow in the background and return immediately with a workflow id. Use dsh_worker_status / dsh_worker_result to follow up. Role policy is enforced exactly like dsh_run_worker, and the workflow (verification, escalation, automatic reviewer pass) runs exactly the same for async jobs — only the caller does not await.',
   inputSchema: {
     task: z.string(),
+    role: roleSchema,
     tier: tierSchema,
+    legacy_tier: tierSchema.describe('Legacy model-class hint (flash | pro) — only influences the model class backing a worker role, never the role gate'),
     effort: effortSchema,
     cwd: z.string().optional(),
   },
-}, async ({ task, tier, effort, cwd }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  // Same resolver as dsh_run_worker: async dispatch must never start a tier
-  // the blocking path would refuse.
-  const decision = chooseDefaultTier(globalConfig, tier, sessionConfig);
-  if (!decision.ok) return policyRejection(decision);
+  // Same resolver as dsh_run_worker: async dispatch must never start work a
+  // blocking path would refuse (role gate AND legacy tier gate both enforced).
+  const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
+  if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
+  let decision;
+  if (role === undefined) {
+    decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
+    if (!decision.ok) return policyRejection(decision);
+  } else {
+    decision = canDispatchRole(globalConfig, hint.role, true, sessionConfig);
+    if (!decision.ok) return policyRejection(decision);
+  }
   const workDir = cwd ?? process.cwd();
-  const t = decision.tier;
   const e = effort ?? sessionConfig.default_effort;
-  if ((await resolveMode()) === 'hub') return text(await hub.spawn({ task, tier: t, effort: e, cwd: workDir, source: ORCHESTRATOR, preset: presetForTier(t) }));
-  const job = startJob({ task, tier: t, effort: e, cwd: workDir, source: ORCHESTRATOR });
-  return text(jobView(job));
+  const spec = {
+    role: hint.role,
+    delivery: hint.role === 'reviewer' ? 'review' : 'coding',
+    task,
+    cwd: workDir,
+    effort: e,
+    source: ORCHESTRATOR,
+  };
+  const wf = workflowRuntime.start(spec);
+  return text({ ...workflowRuntime.get(wf.id), workflow_id: wf.id, note: 'started in background; poll with dsh_worker_status / dsh_worker_result' });
 });
 
 server.registerTool('dsh_worker_status', {
   title: 'DSH worker status',
-  description: 'List all DSH worker jobs in this session with live progress (turn/step, current tool, token usage).',
+  description: 'List all DSH worker workflows in this session with phase, role, attempt, current model and token usage.',
   inputSchema: {},
 }, async () => {
-  const local = listJobs().map((j) => jobView(j));
-  const remote = (await hubAvailable()) ? await hub.list().catch(() => []) : [];
-  return text([...remote, ...local]);
+  return text(workflowRuntime.list());
 });
 
 server.registerTool('dsh_worker_result', {
   title: 'DSH worker result',
-  description: 'Fetch the result of a worker job, optionally waiting for it to finish.',
+  description: 'Fetch the result of a worker workflow, optionally waiting for it to finish. Accepts workflow ids (wf-...), Hub attempt ids (hub-...) and legacy standalone ids (job-...).',
   inputSchema: {
     job_id: z.string(),
     wait_seconds: z.number().int().min(0).max(7200).default(0).describe('0 = return current state immediately'),
   },
 }, async ({ job_id, wait_seconds }) => {
+  if (job_id.startsWith('wf-')) {
+    if (wait_seconds > 0) await workflowRuntime.wait(job_id, wait_seconds * 1000);
+    const view = workflowRuntime.get(job_id, { withResult: true });
+    if (!view) return text({ error: `no such workflow: ${job_id}` });
+    return text(view);
+  }
+  // Legacy fallback: direct Hub / standalone attempt ids.
   if (job_id.startsWith('hub-')) {
     if (!(await hubAvailable())) return text({ error: 'hub not reachable' });
     return text(await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message })));
   }
-  if (!getJob(job_id)) return text({ error: `no such job: ${job_id}` });
+  if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
   const job = await waitJob(job_id, wait_seconds > 0 ? wait_seconds * 1000 : 1);
   return text(jobView(job, { withResult: true }));
 });
 
 server.registerTool('dsh_worker_cancel', {
   title: 'Cancel DSH worker',
-  description: 'Cancel a running worker job (terminates its runtime process).',
+  description: 'Cancel a worker workflow (stops the active attempt, never starts escalation/review, releases its worktree). Accepts workflow ids (wf-...), Hub attempt ids (hub-...) and legacy standalone ids (job-...).',
   inputSchema: { job_id: z.string() },
 }, async ({ job_id }) => {
+  if (job_id.startsWith('wf-')) {
+    const view = await workflowRuntime.cancel(job_id);
+    if (!view) return text({ error: `no such workflow: ${job_id}` });
+    return text({ ...view, note: 'cancelled' });
+  }
   if (job_id.startsWith('hub-')) {
     if (!(await hubAvailable())) return text({ error: 'hub not reachable' });
     return text(await hub.cancel(job_id).catch((e) => ({ error: e.message })));
   }
-  if (!getJob(job_id)) return text({ error: `no such job: ${job_id}` });
+  if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
   return text(jobView(await cancelJob(job_id), { withResult: true }));
 });
 

@@ -88,6 +88,15 @@ const COPY = {
     addModelTip: '添加模型到列表', removeModelTip: '从列表移除当前模型', modelPlaceholder: '模型 id，回车确认',
     capVision: '视觉', capImagegen: '生图',
     groupDispatch: '派发', groupRuntime: '运行', groupMultimodal: '多模态',
+    groupWorkflow: '工作流 / 执行（v0.2）',
+    roleWorker: 'Worker 角色（执行）', roleReviewer: 'Reviewer 角色（独立审查）',
+    workerStateLabel: 'Worker 状态', reviewStateLabel: 'Reviewer 状态',
+    roleStateHint: 'auto：orchestrator 可自动派发；manual：仅显式点名；disabled：禁用。未显式设置时由协作模式推导。',
+    autoReview: '自动复审', autoReviewHint: 'worker 成功后自动运行一次 reviewer（独立模型策略，只读）',
+    isolation: '工作区隔离', isolationHint: 'worktree 为默认；非 Git 仓库时需显式 shared，否则任务以 NOT_GIT_REPOSITORY 失败。',
+    isolationDesc: { worktree: 'worktree · 每个 coding worker 独立临时 git worktree（主工作区不动）', shared: 'shared · 旧版就地执行' },
+    maxParallel: '最大并行', maxParallelHint: '同时运行的工作流上限（1–16）；超出进入队列。',
+    legacyCompatibility: '↓ 以下为兼容配置（legacy，Flash/Pro 仍可编辑）',
     cardDispatch: { t: '派发策略', d: 'orchestrator 未指定时的档位与推理强度，以及档位约束、失败升档与两档各自挂载的 Agent 预设。' },
     cardRuntime: { t: '执行与连接', d: 'worker 会话跑在本实例内还是独立进程，单个任务的超时上限，以及 CC / Codex 探测本实例的地址。' },
     cardMM: { t: '视觉与生图', d: '给纯文本的 DSH 模型借来眼睛和画笔：describe_image、会话贴图转写与 generate_image 都用这里的设置。' },
@@ -187,6 +196,15 @@ const COPY = {
     addModelTip: 'Add a model to the list', removeModelTip: 'Remove the current model from the list', modelPlaceholder: 'model id, Enter to confirm',
     capVision: 'vision', capImagegen: 'image-gen',
     groupDispatch: 'Dispatch', groupRuntime: 'Runtime', groupMultimodal: 'Multimodal',
+    groupWorkflow: 'Workflow / Execution (v0.2)',
+    roleWorker: 'Worker role (execution)', roleReviewer: 'Reviewer role (independent review)',
+    workerStateLabel: 'Worker state', reviewStateLabel: 'Reviewer state',
+    roleStateHint: 'auto = the orchestrator may dispatch automatically; manual = only when explicitly named; disabled = off. When unset, derived from the collaboration mode.',
+    autoReview: 'Automatic review', autoReviewHint: 'Run one reviewer pass (independent model policy, read-only) after a successful worker run',
+    isolation: 'Workspace isolation', isolationHint: 'worktree is the default; non-git workspaces require explicit shared, otherwise jobs fail with NOT_GIT_REPOSITORY.',
+    isolationDesc: { worktree: 'worktree · each coding worker runs in its own temporary git worktree (primary untouched)', shared: 'shared · legacy in-place execution' },
+    maxParallel: 'Max parallel', maxParallelHint: 'Upper bound of concurrently running workflows (1–16); extra ones queue.',
+    legacyCompatibility: '↓ Legacy compatibility controls below (Flash/Pro still editable)',
     cardDispatch: { t: 'Dispatch policy', d: 'Tier and effort used when the orchestrator names none, plus tier clamping, failure escalation and the Agent preset mounted per tier.' },
     cardRuntime: { t: 'Execution & connection', d: 'Whether worker sessions run inside this instance or a separate process, the per-job timeout, and the address CC / Codex probes.' },
     cardMM: { t: 'Vision & image generation', d: "Lends the harness's text-only models eyes and a brush: describe_image, pasted-image transcription and generate_image all use these settings." },
@@ -576,6 +594,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       <div style={S.section}>{copy.globalConfig}</div>
       {config && (<>
         {(() => {
+          const clampNum = (v: any) => {
+            const n = Number(v);
+            if (Number.isNaN(n)) return 3;
+            return Math.max(1, Math.min(16, n));
+          };
           const mode = config.collaboration_mode ?? 'flash-only';
           const nonCustom = mode !== 'custom';
           const presetStates = { 'flash-only': { flash: 'auto', pro: 'disabled' }, 'pro-only': { flash: 'disabled', pro: 'auto' }, balanced: { flash: 'auto', pro: 'auto' }, 'review-pipeline': { flash: 'auto', pro: 'auto' }, custom: null } as Record<string, { flash: string; pro: string } | null>;
@@ -710,6 +733,36 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             </div>
           );
           return (<>
+            <div style={S.group}>{copy.groupWorkflow}</div>
+            {block({ t: copy.roleWorker, d: copy.roleStateHint }, (<>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.workerStateLabel}</span>
+                <CustomSelect value={config.worker_state ?? 'auto'}
+                  onChange={(v) => field('worker_state', v)}
+                  options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.reviewStateLabel}</span>
+                <CustomSelect value={config.review_state ?? 'auto'}
+                  onChange={(v) => field('review_state', v)}
+                  options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
+            </>))}
+            {block({ t: copy.autoReview, d: copy.autoReviewHint }, (<>
+              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" checked={config.auto_review ?? !!config.pro_reviews_flash} onChange={(e) => field('auto_review', e.target.checked)} />
+                <span style={{ fontSize: 12.5 }}>{copy.autoReview}</span></label>
+            </>), false)}
+            {block({ t: copy.isolation, d: copy.isolationHint }, (<>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.isolation}</span>
+                <CustomSelect value={config.isolation ?? 'worktree'}
+                  onChange={(v) => field('isolation', v)}
+                  options={(['worktree', 'shared'] as const).map((s) => ({ value: s, label: copy.isolationDesc[s] }))} /></label>
+            </>))}
+            {block({ t: copy.maxParallel, d: copy.maxParallelHint }, (<>
+              <label style={S.field}><span style={S.fieldLabel}>{copy.maxParallel}</span>
+                <input type="number" min={1} max={16} value={config.max_parallel ?? 3}
+                  onChange={(e) => fieldLocal('max_parallel', clampNum(e.target.value))}
+                  onBlur={() => field('max_parallel', clampNum(config.max_parallel))}
+                  style={S.input} /></label>
+            </>))}
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8, marginBottom: 2 }}>{copy.legacyCompatibility}</div>
             <div style={S.group}>{copy.orchestration}</div>
             {block({ t: copy.orchestration, d: copy.enableSubagentsHint }, (<>
               <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }} title={copy.enableSubagentsHint}>
