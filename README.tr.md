@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Geçerli eklenti sürümü: <code>0.1.0-rc.1</code> &middot; DSH <code>0.1.0-rc.6</code> ile test edildi</sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; Geçerli eklenti sürümü: <code>0.1.0-rc.1</code> &middot; DSH <code>0.1.0-rc.6</code> ile test edildi</sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="Lisans" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="Lisans" /></a>
 </p>
 
 <br />
@@ -112,18 +112,18 @@ Dağıtım yatayda büyür. Aşağıda on sekiz worker bu README'yi paralel olar
 
 ## Kurulum
 
-npm üzerinden bir DSH profiline kurun:
+GitHub üzerinden bir DSH profiline kurun:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Ya da kaynak ağacından yerel geliştirme için:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` protokolü profil bağımlılığını bu depoya sembolik olarak bağlar; böylece her rebuild anında görünür.

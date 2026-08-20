@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Текущий релиз плагина: <code>0.1.0-rc.1</code> &middot; Проверено с DSH <code>0.1.0-rc.6</code></sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; Текущий релиз плагина: <code>0.1.0-rc.1</code> &middot; Проверено с DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -112,18 +112,18 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## Установка
 
-Установить из npm в профиль DSH:
+Установить из GitHub в профиль DSH:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Или для локальной разработки прямо из исходников:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Протокол `link:` делает симлинк зависимости профиля на этот репозиторий, поэтому пересборка видна сразу.

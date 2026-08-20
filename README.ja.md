@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; 現行プラグインリリース: <code>0.1.0-rc.1</code> &middot; 動作確認済み DSH <code>0.1.0-rc.6</code></sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; 現行プラグインリリース: <code>0.1.0-rc.1</code> &middot; 動作確認済み DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -112,18 +112,18 @@ Claude Code / Codex (orchestrator, keeps its own model)
 
 ## インストール
 
-npm から DSH プロファイルへインストール:
+GitHub から DSH プロファイルへインストール:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 ソースツリーからローカル開発する場合:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` プロトコルはプロファイルの依存をこのリポジトリへシンボリックリンクするため、再ビルドが即座に反映されます。

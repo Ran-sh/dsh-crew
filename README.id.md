@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Rilis plugin saat ini: <code>0.1.0-rc.1</code> &middot; Diuji dengan DSH <code>0.1.0-rc.6</code></sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; Rilis plugin saat ini: <code>0.1.0-rc.1</code> &middot; Diuji dengan DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -112,18 +112,18 @@ Dispatch bisa melebar. Di bawah ini delapan belas worker menerjemahkan README in
 
 ## Instalasi
 
-Pasang dari npm ke sebuah profil DSH:
+Pasang dari GitHub ke sebuah profil DSH:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Atau, untuk pengembangan lokal langsung dari kode sumber:
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 Protokol `link:` menautkan dependensi profil ke repositori ini, sehingga hasil rebuild langsung terlihat.

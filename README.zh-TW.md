@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> • 目前外掛程式版本: <code>0.1.0-rc.1</code> • 測試版本 DSH <code>0.1.0-rc.6</code></sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> • 目前外掛程式版本: <code>0.1.0-rc.1</code> • 測試版本 DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -112,18 +112,18 @@ Claude Code / Codex（協調器，保留自己的模型）
 
 ## 安裝
 
-從 npm 裝進 DSH profile：
+從 GitHub 裝進 DSH profile：
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 或者從原始碼樹本機開發：
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-crew
-dsh web
+npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+npx -y @deepseek-ai/dsh web
 ```
 
 `link:` 協定把 profile 相依軟連結到本儲存庫，改完重新建置即時可見。
