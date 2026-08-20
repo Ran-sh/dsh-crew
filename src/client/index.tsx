@@ -29,14 +29,20 @@ const COPY = {
     mainAgentModeHint: '这是宿主路由指引，不是对宿主自身工具的硬限制。',
     collaborationMode: '协作模式',
     collaborationModeDesc: { 'flash-only': 'Flash Only · 只用 Flash', 'pro-only': 'Pro Only · 只用 Pro', balanced: 'Balanced · 双 Auto', 'review-pipeline': 'Review Pipeline · Flash 实现 + Pro 复审', custom: 'Custom · 完全手动' },
-    tierCardFlash: 'DeepSeek V4 Flash', tierCardPro: 'DeepSeek V4 Pro',
+    tierCardFlash: 'Flash', tierCardPro: 'Pro',
     tierState: '状态',
     tierStateDesc: { disabled: '禁用', manual: '手动（仅用户点名时可用）', auto: '自动（orchestrator 可自动委派）' },
     stateManagedByPreset: '由协作模式管理',
     statePresetHint: '切到 Custom 可单独配置各档状态。',
     workerProvider: 'Worker Provider',
-    workerProviderDesc: { 'follow-dsh': '跟随 DSH Provider · 用 DSH Models 当前选择的 provider（Flash/Pro 仍映射 deepseek-v4-flash / deepseek-v4-pro）', 'deepseek-official': 'DeepSeek Official · 始终使用内置 deepseek-official' },
+    workerProviderDesc: { 'follow-dsh': '跟随 Harness · 使用各档独立的模型优先级', 'deepseek-official': 'DeepSeek Official · 使用旧版固定模型路由' },
     workerProviderHint: '仅作用于 Hub 模式；Standalone 始终用 deepseek-official + DEEPSEEK_API_KEY。',
+    workerModels: 'Worker 模型', refreshHarnessModels: '刷新 Harness 模型', refreshingModels: '刷新中…',
+    modelPriority: '模型优先级', addPriorityModel: '＋ 添加优先模型', modelSearch: '搜索 Provider 或 Model…',
+    harnessDefault: 'Harness 默认模型', providerUnavailable: 'Provider 不可用', notAdvertised: '当前未列出',
+    noPriority: '未配置优先项', modelPoolSummary: (p: number, m: number) => `Providers: ${p} · Models: ${m}`,
+    partialCatalog: '部分 Provider 读取失败', catalogFailed: '无法读取 Harness 模型目录', removePriority: '移除', moveUp: '上移', moveDown: '下移',
+    needsModelSelection: '多个 Provider 提供默认偏好模型，且 Harness Default 无法消歧；当前将回退到 Harness Default，请手动选择。',
     responsibilities: '职责',
     responsibilitiesHint: '路由指引，仅用于描述分工；只剩一个 Auto 档时它承担全部可委派工作。',
     roleLabels: { implementation: '代码实现', simple_fix: '简单修复', tests: '测试', search_inspection: '搜索 / 检查', architecture: '架构', complex_debugging: '复杂调试', refactor: '重构', code_review: '代码审查' },
@@ -122,14 +128,20 @@ const COPY = {
     mainAgentModeHint: 'Host routing guidance — not a hard restriction on the host\'s own tools.',
     collaborationMode: 'Collaboration Mode',
     collaborationModeDesc: { 'flash-only': 'Flash Only', 'pro-only': 'Pro Only', balanced: 'Balanced', 'review-pipeline': 'Review Pipeline · implement + review', custom: 'Custom' },
-    tierCardFlash: 'DeepSeek V4 Flash', tierCardPro: 'DeepSeek V4 Pro',
+    tierCardFlash: 'Flash', tierCardPro: 'Pro',
     tierState: 'State',
     tierStateDesc: { disabled: 'Disabled', manual: 'Manual (only when the user names this tier)', auto: 'Auto (the orchestrator may delegate to it)' },
     stateManagedByPreset: 'managed by the collaboration mode',
     statePresetHint: 'Switch to Custom to configure each tier state separately.',
     workerProvider: 'Worker Provider',
-    workerProviderDesc: { 'follow-dsh': 'Follow DSH Provider · use the provider selected in DSH Models (Flash/Pro still map to deepseek-v4-flash / deepseek-v4-pro)', 'deepseek-official': 'DeepSeek Official · always use the built-in deepseek-official provider' },
+    workerProviderDesc: { 'follow-dsh': 'Follow Harness · use each tier\'s ordered model priority', 'deepseek-official': 'DeepSeek Official · use legacy fixed model routing' },
     workerProviderHint: 'Applies to Hub workers only; Standalone always uses deepseek-official + DEEPSEEK_API_KEY.',
+    workerModels: 'Worker Models', refreshHarnessModels: 'Refresh Harness Models', refreshingModels: 'Refreshing…',
+    modelPriority: 'Model Priority', addPriorityModel: '＋ Add Priority Model', modelSearch: 'Search Provider or Model…',
+    harnessDefault: 'Harness Default', providerUnavailable: 'Provider unavailable', notAdvertised: 'Currently not advertised',
+    noPriority: 'No priority models configured', modelPoolSummary: (p: number, m: number) => `Providers: ${p} · Models: ${m}`,
+    partialCatalog: 'Some providers failed to load', catalogFailed: 'Unable to read Harness model catalog', removePriority: 'Remove', moveUp: 'Move up', moveDown: 'Move down',
+    needsModelSelection: 'Multiple providers advertise the preferred model and Harness Default cannot disambiguate them. Falling back to Harness Default; choose a priority model explicitly.',
     responsibilities: 'Responsibilities',
     responsibilitiesHint: 'Routing guidance describing the split of work; with a single Auto tier left, that tier carries all delegatable coding work.',
     roleLabels: { implementation: 'Code implementation', simple_fix: 'Simple fixes', tests: 'Tests', search_inspection: 'Search / inspection', architecture: 'Architecture', complex_debugging: 'Complex debugging', refactor: 'Refactoring', code_review: 'Code review' },
@@ -320,6 +332,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     vision_command: string; imagegen_command: string;
   } | null>(null);
   const [modelAdd, setModelAdd] = useState<string | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<any>(null);
+  const [modelCatalogError, setModelCatalogError] = useState('');
+  const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
+  const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
+  const [modelQuery, setModelQuery] = useState('');
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
 
   /**
@@ -364,6 +381,22 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const timer = setInterval(() => { void get('/jobs').then((j) => { if (j.ok) setJobs(j.jobs ?? []); }).catch(() => {}); }, 3000);
     return () => clearInterval(timer);
   }, [refreshAll, get]);
+
+  const refreshHarnessModels = useCallback(async () => {
+    setModelCatalogBusy(true);
+    setModelCatalogError('');
+    try {
+      const result = await get('/models');
+      if (!result.ok) throw new Error(result.error ?? copy.catalogFailed);
+      setModelCatalog(result);
+    } catch (error: any) {
+      setModelCatalogError(error?.message ?? copy.catalogFailed);
+    } finally {
+      setModelCatalogBusy(false);
+    }
+  }, [get, copy]);
+
+  useEffect(() => { void refreshHarnessModels(); }, [refreshHarnessModels]);
 
   const act = useCallback(async (target: string, confirmName?: string) => {
     if (confirmName && !window.confirm(copy.confirmRestore(confirmName))) return;
@@ -543,7 +576,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       <div style={S.section}>{copy.globalConfig}</div>
       {config && (<>
         {(() => {
-          const mode = config.collaboration_mode ?? 'balanced';
+          const mode = config.collaboration_mode ?? 'flash-only';
           const nonCustom = mode !== 'custom';
           const presetStates = { 'flash-only': { flash: 'auto', pro: 'disabled' }, 'pro-only': { flash: 'disabled', pro: 'auto' }, balanced: { flash: 'auto', pro: 'auto' }, 'review-pipeline': { flash: 'auto', pro: 'auto' }, custom: null } as Record<string, { flash: string; pro: string } | null>;
           const states = nonCustom ? presetStates[mode] : null;
@@ -553,6 +586,86 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             const arr = tier === 'flash' ? (config.flash_roles ?? []) : (config.pro_roles ?? []);
             const set = new Set(arr);
             return { arr: roleOptions.filter((r) => set.has(r)), set, save: (list: string[]) => field(tier === 'flash' ? 'flash_roles' : 'pro_roles', list) };
+          };
+          const catalogProviders: any[] = modelCatalog?.providers ?? [];
+          const refKey = (ref: any) => `${ref?.provider ?? ''}\0${ref?.model ?? ''}`;
+          const priorityFor = (tier: string): any[] => Array.isArray(config[`${tier}_model_priority`]) ? config[`${tier}_model_priority`] : [];
+          const savePriority = (tier: string, list: any[]) => {
+            const key = `${tier}_model_priority`;
+            setConfig((current: any) => ({ ...current, [key]: list, [`${tier}_model_priority_configured`]: true }));
+            applyPatch({ [key]: list });
+          };
+          const modelMeta = (ref: any) => {
+            const provider = catalogProviders.find((item) => item.id === ref.provider);
+            const model = provider?.models?.find((item: any) => item.id === ref.model);
+            return { provider, model };
+          };
+          const filteredProviders = catalogProviders.map((provider) => ({
+            ...provider,
+            models: (provider.models ?? []).filter((model: any) => {
+              const query = modelQuery.trim().toLowerCase();
+              return !query || [provider.id, provider.name, model.id, model.name].some((value) => String(value ?? '').toLowerCase().includes(query));
+            }),
+          })).filter((provider) => provider.models.length > 0);
+          const modelPriorityPanel = (tier: 'flash' | 'pro') => {
+            const priority = priorityFor(tier);
+            const selected = new Set(priority.map(refKey));
+            const preferredId = tier === 'flash' ? 'deepseek-v4-flash' : 'deepseek-v4-pro';
+            const preferredProviders = catalogProviders.filter((provider) => (provider.models ?? []).some((model: any) => model.id === preferredId));
+            const ambiguousPreferred = priority.length === 0 && config[`${tier}_model_priority_configured`] !== true
+              && preferredProviders.length > 1
+              && !preferredProviders.some((provider) => provider.id === modelCatalog?.harness_default?.provider);
+            return (
+              <div style={{ gridColumn: '1 / -1', borderTop: '1px solid rgba(128,128,128,0.18)', paddingTop: 9 }}>
+                <div style={{ ...S.fieldLabel, marginBottom: 5 }}>{copy.modelPriority}</div>
+                {priority.length === 0 && <div style={{ fontSize: 12, opacity: 0.55, marginBottom: 6 }}>{copy.noPriority}</div>}
+                {ambiguousPreferred && <div style={{ fontSize: 11.5, color: '#c98735', marginBottom: 6 }}>{copy.needsModelSelection}</div>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {priority.map((ref, index) => {
+                    const meta = modelMeta(ref);
+                    const warning = !meta.provider ? copy.providerUnavailable : !meta.model ? copy.notAdvertised : '';
+                    return (
+                      <div key={refKey(ref)} style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '6px 8px', border: '1px solid rgba(128,128,128,0.2)', borderRadius: 6 }}>
+                        <span style={{ opacity: 0.55, width: 18 }}>{index + 1}.</span>
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 12.5 }}>{meta.model?.name ?? ref.model}</span>
+                          <span style={{ display: 'block', fontSize: 10.5, opacity: 0.58, fontFamily: 'monospace' }}>{ref.provider} / {ref.model}</span>
+                          {warning && <span style={{ display: 'block', fontSize: 10.5, color: '#c98735' }}>{warning}</span>}
+                        </span>
+                        <button type="button" style={{ ...S.btn, padding: '2px 7px' }} title={copy.moveUp} disabled={index === 0}
+                          onClick={() => { const next = [...priority]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; savePriority(tier, next); }}>↑</button>
+                        <button type="button" style={{ ...S.btn, padding: '2px 7px' }} title={copy.moveDown} disabled={index === priority.length - 1}
+                          onClick={() => { const next = [...priority]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; savePriority(tier, next); }}>↓</button>
+                        <button type="button" style={{ ...S.btn, padding: '2px 7px' }} title={copy.removePriority}
+                          onClick={() => savePriority(tier, priority.filter((_, itemIndex) => itemIndex !== index))}>×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 7 }}>
+                  <button type="button" style={S.btn} disabled={!modelCatalog || modelCatalogBusy}
+                    onClick={() => { setModelPickerTier(modelPickerTier === tier ? null : tier); setModelQuery(''); }}>{copy.addPriorityModel}</button>
+                  <span style={{ fontSize: 11, opacity: 0.58 }}>{copy.harnessDefault}: {modelCatalog?.harness_default ? `${modelCatalog.harness_default.provider} / ${modelCatalog.harness_default.model}` : '—'}</span>
+                </div>
+                {modelPickerTier === tier && (
+                  <div style={{ marginTop: 8, border: '1px solid rgba(128,128,128,0.22)', borderRadius: 7, padding: 8, maxHeight: 260, overflow: 'auto' }}>
+                    <input autoFocus value={modelQuery} placeholder={copy.modelSearch} onChange={(event) => setModelQuery(event.target.value)}
+                      style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, marginBottom: 7 }} />
+                    {filteredProviders.map((provider) => (
+                      <div key={provider.id} style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 3 }}>{provider.name} <span style={{ opacity: 0.5, fontFamily: 'monospace' }}>{provider.id}</span></div>
+                        {(provider.models ?? []).map((model: any) => {
+                          const ref = { provider: provider.id, model: model.id };
+                          const duplicate = selected.has(refKey(ref));
+                          return <button key={model.id} type="button" disabled={duplicate} style={{ ...S.btn, display: 'block', width: '100%', textAlign: 'left', marginBottom: 3, opacity: duplicate ? 0.45 : 1 }}
+                            onClick={() => { savePriority(tier, [...priority, ref]); setModelPickerTier(null); }}>{model.name} <span style={{ opacity: 0.55, fontFamily: 'monospace' }}>{model.id}</span></button>;
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
           };
           const tierCard = (tier: string, card: { t: string; d: string }) => (
             <div style={S.block}>
@@ -593,6 +706,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   );
                 })}
               </div>
+              {modelPriorityPanel(tier as 'flash' | 'pro')}
             </div>
           );
           return (<>
@@ -605,7 +719,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             </>), false)}
             {block({ t: copy.mainAgentMode, d: copy.mainAgentModeHint }, (<>
               <label style={S.field}><span style={S.fieldLabel}>{copy.mainAgentMode}</span>
-                <CustomSelect value={config.main_agent_mode ?? 'coordinator-first'}
+                <CustomSelect value={config.main_agent_mode ?? 'direct-allowed'}
                   onChange={(v) => field('main_agent_mode', v)}
                   options={(['direct-allowed', 'coordinator-first', 'dispatcher-only'] as const).map((m) => ({ value: m, label: copy.mainAgentModeDesc[m] }))} /></label>
               <label style={S.field}><span style={S.fieldLabel}>{copy.collaborationMode}</span>
@@ -613,12 +727,19 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   onChange={(v) => field('collaboration_mode', v)}
                   options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
               <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
-                <CustomSelect value={config.worker_provider_mode ?? 'deepseek-official'}
+                <CustomSelect value={config.worker_provider_mode ?? 'follow-dsh'}
                   onChange={(v) => field('worker_provider_mode', v)}
                   options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
             </>))}
-            {tierCard('flash', { t: copy.tierCardFlash, d: 'deepseek-v4-flash · fast and cheap' })}
-            {tierCard('pro', { t: copy.tierCardPro, d: 'deepseek-v4-pro · stronger reasoning' })}
+            {block({ t: copy.workerModels, d: modelCatalog ? copy.modelPoolSummary(modelCatalog.provider_count ?? 0, modelCatalog.model_count ?? 0) : copy.catalogFailed }, (<>
+              <button type="button" style={S.btn} disabled={modelCatalogBusy} onClick={() => { void refreshHarnessModels(); }}>
+                {modelCatalogBusy ? copy.refreshingModels : copy.refreshHarnessModels}
+              </button>
+              {modelCatalog?.partial && <span style={{ fontSize: 11.5, color: '#c98735' }}>{copy.partialCatalog}</span>}
+              {modelCatalogError && <span style={{ fontSize: 11.5, color: '#c55' }}>{modelCatalogError}</span>}
+            </>), false)}
+            {tierCard('flash', { t: copy.tierCardFlash, d: 'implementation · direct validation · Delivery Report' })}
+            {tierCard('pro', { t: copy.tierCardPro, d: 'manual advanced work · review pipeline' })}
             <div style={S.group}>{copy.routing}</div>
             {block({ t: copy.routing, d: '' }, (<>
               <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={copy.escalateHint}>

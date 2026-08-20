@@ -104,8 +104,8 @@ node scripts/setup.mjs uninstall
 
 1. 照常启动 DSH：`npx @deepseek-ai/dsh web`
 2. 打开 **设置 → DSH Crew**。
-3. 使用自定义 provider 时，Worker Provider 选 **Follow DSH Provider**。
-4. Collaboration Mode 推荐 **Balanced**。
+3. 保持新安装默认的 **Flash Only** 工作流：Codex → Flash 编码 worker → Codex。
+4. 需要时用 **刷新 Harness 模型** 为 Flash / Pro 分别设置有序模型优先级。
 5. 重启 Codex Desktop / Claude Code。
 
 然后直接说：
@@ -126,10 +126,10 @@ Custom 模式可分别配置 Flash / Pro 的状态与职责。
 
 ## Provider
 
-Hub worker 的 provider 由 Crew 配置 + DSH 选择共同决定：
+Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。Flash / Pro 分别使用不限数量的有序模型优先级；新配置默认偏好 `deepseek-v4-flash` / `deepseek-v4-pro`，并以 Harness Default 兜底。
 
-- **Follow DSH Provider** — 每个 worker 使用 DSH Models 当前选择的 provider；Flash / Pro 仍映射到 `deepseek-v4-flash` / `deepseek-v4-pro`。
-- **DeepSeek Official** — 始终使用内置 provider（默认值，保持兼容）。
+- **Follow DSH Provider** — 从 Harness 模型目录解析各档的 provider/model 优先级（新配置默认值）。
+- **DeepSeek Official** — 为兼容旧配置保留内置固定路由。
 
 凭据始终由 DSH 的 provider 配置管理。已在 OpenAI 兼容的 OpenCode Go 网关实测。Standalone 模式（无 DSH 运行）始终使用 DeepSeek Official + `DEEPSEEK_API_KEY`。
 

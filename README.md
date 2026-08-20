@@ -104,8 +104,8 @@ Keeps:
 
 1. Start DSH as usual: `npx @deepseek-ai/dsh web`
 2. Open **Settings → DSH Crew**.
-3. If you use a custom provider, set Worker Provider → **Follow DSH Provider**.
-4. **Balanced** is a good default Collaboration Mode.
+3. Keep the fresh default **Flash Only** workflow: Codex → Flash coding worker → Codex.
+4. Use **Refresh Harness Models** to choose an ordered Flash or Pro model priority when needed.
 5. Restart Codex Desktop / Claude Code.
 
 Then just say:
@@ -126,10 +126,10 @@ Custom mode configures Flash / Pro states and responsibilities directly.
 
 ## Provider
 
-Hub workers resolve their provider from Crew config + DSH selection:
+Crew reads every provider and model currently registered in DeepSeek Harness. Flash and Pro each have an unlimited ordered model priority list; their fresh preferences are `deepseek-v4-flash` / `deepseek-v4-pro`, with Harness Default as fallback.
 
-- **Follow DSH Provider** — each worker uses the provider currently selected in DSH Models; Flash / Pro still map to `deepseek-v4-flash` / `deepseek-v4-pro`.
-- **DeepSeek Official** — always use the built-in provider (the default, kept for compatibility).
+- **Follow DSH Provider** — resolve the tier's provider/model priority from the Harness catalog (fresh default).
+- **DeepSeek Official** — use the legacy built-in fixed route for compatibility.
 
 Credentials stay in the DSH provider configuration only. Tested with an OpenAI-compatible OpenCode Go gateway. Standalone mode (no DSH running) always uses DeepSeek Official + `DEEPSEEK_API_KEY`.
 
