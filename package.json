@@ -1,5 +1,5 @@
 {
-  "name": "@zseven-w/dsh-crew",
+  "name": "@ran-sh/dsh-crew",
   "version": "0.1.0-rc.1",
   "type": "module",
   "main": "./src/hub/index.mjs",
@@ -85,7 +85,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZSeven-W/dsh-crew.git"
+    "url": "git+https://github.com/Ran-sh/dsh-crew.git"
+  },
+  "homepage": "https://github.com/Ran-sh/dsh-crew",
+  "bugs": {
+    "url": "https://github.com/Ran-sh/dsh-crew/issues"
   },
   "keywords": [
     "dsh",
@@ -117,8 +121,5 @@
     "docs/images/dsh-crew-host.png",
     "docs/images/dsh-crew-jobs.png",
     "LICENSE"
-  ],
-  "publishConfig": {
-    "access": "public"
-  }
+  ]
 }
