@@ -17,6 +17,8 @@
 //   collaboration mode says. Global tier_policy is only consulted when
 //   migrating old configs; new decisions run on collaboration_mode + states.
 
+import { normalizeModelPriority } from './model-routing.mjs';
+
 export const TIER_STATES = ['disabled', 'manual', 'auto'];
 export const COLLABORATION_MODES = ['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'];
 export const MAIN_AGENT_MODES = ['direct-allowed', 'coordinator-first', 'dispatcher-only'];
@@ -181,6 +183,12 @@ export function normalizeGlobalConfig(raw = {}) {
     // Worker provider routing: legacy-friendly default keeps deepseek-official
     // unless the user explicitly chooses follow-dsh (never silently switches).
     worker_provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode),
+    flash_model_priority: normalizeModelPriority(raw.flash_model_priority),
+    flash_model_priority_configured: raw.flash_model_priority_configured === true || normalizeModelPriority(raw.flash_model_priority).length > 0,
+    flash_model_fallback: raw.flash_model_fallback === 'harness-default' ? raw.flash_model_fallback : 'harness-default',
+    pro_model_priority: normalizeModelPriority(raw.pro_model_priority),
+    pro_model_priority_configured: raw.pro_model_priority_configured === true || normalizeModelPriority(raw.pro_model_priority).length > 0,
+    pro_model_fallback: raw.pro_model_fallback === 'harness-default' ? raw.pro_model_fallback : 'harness-default',
     vision_enabled: visionEnabled,
     imagegen_enabled: imagegenEnabled,
   };
