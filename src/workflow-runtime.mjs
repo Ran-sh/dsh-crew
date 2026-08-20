@@ -35,7 +35,6 @@ function lines(value) {
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
-/** Loose verdict normalizer: APPROVE / APPROVED / PASS -> approve, etc. */
 export function normalizeReviewVerdict(value) {
   const s = String(value ?? '').trim().toLowerCase();
   if (/^(approve|approved|pass)\b/.test(s) || s === 'pass' || s === 'approve') return 'approve';
@@ -43,15 +42,11 @@ export function normalizeReviewVerdict(value) {
   return 'inconclusive';
 }
 
-/** Normalize a reviewer attempt into the canonical review record. */
 export function normalizeReview({ attemptResult, beforeCandidate, afterCandidate } = {}) {
   const parsed = parseDeliveryReport(attemptResult?.result ?? '');
   const mutation = mutationDetected(beforeCandidate, afterCandidate);
   const reportedVerdict = normalizeReviewVerdict(parsed.sections?.Verdict ?? attemptResult?.result ?? '');
   return {
-    // A reviewer that mutates the implementation candidate invalidates its own
-    // approval. Keep the finding useful, but never expose "approve + mutated"
-    // as a green review result.
     verdict: mutation ? 'request_changes' : reportedVerdict,
     reported_verdict: reportedVerdict,
     findings: lines(parsed.sections?.['Review Findings']),
@@ -68,8 +63,6 @@ export function normalizeReview({ attemptResult, beforeCandidate, afterCandidate
 function mutationDetected(before, after) {
   if (!before) return false;
   if (before.fingerprint == null) return false;
-  // candidate capture failing after the reviewer ran (e.g. worktree gone) is
-  // also treated as evidence the reviewer could have changed something.
   if (!after) return true;
   return after.fingerprint != null && before.fingerprint !== after.fingerprint;
 }
@@ -79,11 +72,9 @@ function deliveryClaimsChanges(outcome) {
 }
 
 function workspaceEvidenceOK(outcome, candidate) {
-  if (!candidate) return true; // non-coding or capture unavailable: no penalty
+  if (!candidate) return true;
   const hasChanges = Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0;
   if (outcome?.execution_status !== 'completed') return true;
-  // A completed worker that claims changes must produce a candidate with
-  // changes; a candidate listing changes is always acceptable evidence.
   return !deliveryClaimsChanges(outcome) || hasChanges;
 }
 
@@ -99,26 +90,6 @@ function sumUsage(attempts) {
   return tokens;
 }
 
-/**
- * Create a workflow runtime bound to `adapters`. Adapter interface:
- *
- *   executeAttempt(spec) -> AttemptResult  (spawn + resolve one session)
- *   spec = { id, workflowId, role, attempt, task, cwd, effort, policy, source,
- *            model_class_hint?, onAttemptStarted?(actualId) }
- *   AttemptResult = { id, role, attempt, status, provider, model,
- *     selection_source, result, stopReason, outcome?, error?, usage? }
- *   cancelAttempt(id) -> Promise<void>
- *   allocateWorkspace(spec) ->
- *     { ok, execution_cwd, base_revision?, isolation, primary_workspace_dirty?, handle? }
- *     or { ok:false, reason, error }
- *   captureCandidate({ cwd, baseRevision }) -> candidate (optional; absent = no isolation)
- *   releaseWorkspace(handle) -> { ok, error? }
- *   buildReviewTask(task, attemptView) -> string
- *   getConfig() -> normalized config
- *
- * `spec` fields: role ("worker"|"reviewer"), task, effort, cwd (requested),
- * source, delivery ("coding"|"review"), model_class_hint (legacy flash/pro).
- */
 export function createWorkflowRuntime(adapters, {
   maxParallel = 3,
   idFactory = () => `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -133,9 +104,7 @@ export function createWorkflowRuntime(adapters, {
 
   function transition(job, to, reason) {
     if (job.phase === to) return;
-    if (!canTransition(job.phase, to)) {
-      throw new Error(`illegal workflow transition ${job.phase} -> ${to}`);
-    }
+    if (!canTransition(job.phase, to)) throw new Error(`illegal workflow transition ${job.phase} -> ${to}`);
     job.phase = to;
     job.events.push({ at: clock(), phase: to, type: 'phase', reason: reason ?? to });
     log(`${job.id} ${to}`);
@@ -217,8 +186,6 @@ export function createWorkflowRuntime(adapters, {
 
   async function releaseWorkspace(job) {
     if (job.retain_workspace) {
-      // Candidate capture failed/incomplete — the worktree holds the only full
-      // copy of the worker's changes. Keep it and surface where it lives.
       job.workspace_retained = true;
       return;
     }
@@ -238,7 +205,6 @@ export function createWorkflowRuntime(adapters, {
 
     try {
       config = adapters.getConfig?.() ?? {};
-      // --- workspace allocation (worktree isolation for coding workers) ---
       const alloc = await adapters.allocateWorkspace?.(job);
       if (alloc && alloc.ok === false) {
         job.error = alloc.error ?? alloc.reason;
@@ -257,7 +223,6 @@ export function createWorkflowRuntime(adapters, {
       transition(job, JOB_PHASES.RUNNING, 'start');
 
       if (isReviewJob) {
-        // Explicit reviewer: one reviewer pass over the workspace.
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
         const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
         const reviewTask = adapters.buildReviewTask(job.original_task, null);
@@ -268,7 +233,6 @@ export function createWorkflowRuntime(adapters, {
         return;
       }
 
-      // --- worker attempt loop with evidence-driven escalation ---
       let attempt = 0;
       for (;;) {
         if (job.cancelling) { cancelWorkflow(job); return; }
@@ -296,8 +260,6 @@ export function createWorkflowRuntime(adapters, {
         if (job.cancelling) { cancelWorkflow(job); return; }
         const attemptView = attemptRecord(ar, attempt);
         job.attempts.push(attemptView);
-        // Infrastructure failures (missing key, unreachable hub, cwd invalid,
-        // worktree/git problems) are NOT fixed by a stronger model.
         if (ar.infra === true) {
           failJob(job, Object.assign(new Error(ar.error ?? 'infrastructure failure'), { code: WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE }));
           return;
@@ -309,37 +271,30 @@ export function createWorkflowRuntime(adapters, {
         });
         transition(job, JOB_PHASES.VERIFYING, `attempt ${attempt} complete`);
 
-        // Workspace evidence must represent the LATEST attempt. Escalated
-        // workers continue editing the same isolated worktree, so re-capture
-        // after every attempt instead of freezing the attempt-0 candidate.
+        // Capture the latest candidate after every attempt. Capture failure is
+        // not allowed to delete the only recoverable state: retain the worktree
+        // and preserve the worker business result, while surfacing the warning.
         if (alloc?.ok && alloc.isolation === 'worktree') {
           const candidate = await safeCapture(adapters, job.execution_cwd, job.base_revision);
           if (candidate === null) {
             job.candidate_capture_failed = true;
             job.retain_workspace = true;
             job.events.push({ at: clock(), phase: job.phase, type: 'candidate/failed', attempt, message: 'candidate capture failed; worktree retained for recovery' });
-            failJob(job, Object.assign(new Error('candidate capture failed; isolated worktree retained'), { code: WORKFLOW_ERROR_CODES.CANDIDATE_CAPTURE_FAILED }));
-            return;
-          }
-          job.candidate = candidate;
-          attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
-          outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
-          if (candidate.complete === false || candidate.replayable === false) {
-            job.retain_workspace = true;
-            job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });
+          } else {
+            job.candidate = candidate;
+            attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
+            outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
+            if (candidate.complete === false || candidate.replayable === false) {
+              job.retain_workspace = true;
+              job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });
+            }
           }
         }
         job.outcome = outcome;
 
         const reviewRequested = !isReviewJob && shouldAutoReview(config);
         const reviewerAuto = getRoleState(config, 'reviewer') !== 'disabled';
-        const decision = decideNextStep({
-          outcome,
-          policy,
-          attempt,
-          reviewRequested,
-          reviewerAuto,
-        });
+        const decision = decideNextStep({ outcome, policy, attempt, reviewRequested, reviewerAuto });
         job.decision = { step: decision.step, phase: decision.phase, reason: decision.reason };
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/complete', attempt, decision: decision.step });
 
@@ -356,13 +311,9 @@ export function createWorkflowRuntime(adapters, {
         if (decision.step === 'review') {
           transition(job, JOB_PHASES.REVIEWING, 'automatic review');
           const before = job.candidate;
-          // The reviewer sees outcome + the SANITIZED candidate (changed files,
-          // base revision, redacted patch) — never the raw workspace.
           const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
           job.review = review;
-          // The implementation candidate stays the pre-review snapshot; the
-          // reviewer workspace is discarded after release.
           transition(job, JOB_PHASES.READY, decision.reason);
           finalize(job);
           return;
@@ -385,9 +336,7 @@ export function createWorkflowRuntime(adapters, {
     try {
       const c = await adapters.captureCandidate({ cwd, baseRevision });
       return c && c.ok ? c : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async function runReviewerAttempt(job, task, config, beforeCandidate, cwd = job.execution_cwd, baseRevision = job.base_revision) {
@@ -412,7 +361,6 @@ export function createWorkflowRuntime(adapters, {
     });
     job.current_attempt_id = null;
     job.attempts.push({ ...attemptRecord(ar, 0), phase: 'review' });
-    // Mutation detection only applies to an isolated candidate workspace.
     const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
     return normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
   }
@@ -516,9 +464,7 @@ export function createWorkflowRuntime(adapters, {
     return job;
   }
 
-  async function kickoff(job) {
-    await runWorkflow(job);
-  }
+  async function kickoff(job) { await runWorkflow(job); }
 
   async function wait(id, timeoutMs) {
     const job = jobs.get(id);
@@ -536,15 +482,12 @@ export function createWorkflowRuntime(adapters, {
     return job ? workflowView(job, opts) : undefined;
   }
 
-  function list() {
-    return [...jobs.values()].map((j) => workflowView(j));
-  }
+  function list() { return [...jobs.values()].map((j) => workflowView(j)); }
 
   async function cancel(id) {
     const job = jobs.get(id);
     if (!job) return undefined;
     cancelWorkflow(job);
-    // Remove from queue if still queued; queued jobs never consumed an active slot.
     const qi = queue.indexOf(job);
     if (qi !== -1) queue.splice(qi, 1);
     return workflowView(job);
@@ -553,5 +496,4 @@ export function createWorkflowRuntime(adapters, {
   return { start, wait, get, list, cancel };
 }
 
-// re-export phases so callers / tests share one definition
 export { JOB_PHASES, TERMINAL };
