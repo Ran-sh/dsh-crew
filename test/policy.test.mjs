@@ -226,6 +226,20 @@ test('21b. pro_reviews_flash on but pro manual → no automatic review', () => {
   assert.equal(shouldRunProReview(c), false);
 });
 
+test('21c. session collaboration mode overrides the global automatic-review mode', () => {
+  const pipeline = baseConfig({ collaboration_mode: 'review-pipeline' });
+  const balanced = baseConfig({ collaboration_mode: 'balanced' });
+  assert.equal(shouldRunProReview(pipeline, { collaboration_mode: 'balanced' }), false);
+  assert.equal(shouldRunProReview(balanced, { collaboration_mode: 'review-pipeline' }), true);
+});
+
+test('21d. session pro_reviews_flash overrides the global automatic-review choice', () => {
+  const optedIn = baseConfig({ pro_reviews_flash: true });
+  const optedOut = baseConfig({ pro_reviews_flash: false });
+  assert.equal(shouldRunProReview(optedIn, { pro_reviews_flash: false }), false);
+  assert.equal(shouldRunProReview(optedOut, { pro_reviews_flash: true }), true);
+});
+
 // ---------- roles ----------
 
 test('22. unknown role values are dropped', () => {
@@ -295,11 +309,24 @@ test('routing guidance mentions disabled tiers and main agent mode limits', () =
   assert.match(g, /Flash: Auto/);
   assert.match(g, /Pro: Disabled/);
   assert.match(g, /host guidance/);
+  assert.match(g, /does not mean the task succeeded/);
+  assert.match(g, /tests_status=FAIL/);
+  assert.match(g, /tests_status=NOT RUN/);
 });
 
 test('routing guidance reflects full disablement', () => {
   const g = getRoutingGuidance(baseConfig({ subagents_enabled: false }));
   assert.match(g, /DISABLED/);
+});
+
+test('routing guidance reflects session collaboration and main-agent overrides', () => {
+  const g = getRoutingGuidance(baseConfig({ collaboration_mode: 'balanced', main_agent_mode: 'coordinator-first' }), {
+    collaboration_mode: 'flash-only',
+    main_agent_mode: 'direct-allowed',
+  });
+  assert.match(g, /Flash is the only Auto tier/);
+  assert.match(g, /Pro: Disabled/);
+  assert.match(g, /Main agent mode .* direct-allowed/);
 });
 
 test('validateConfig flags review-pipeline with a disabled tier', () => {

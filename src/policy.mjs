@@ -241,7 +241,10 @@ export function getEffectiveTierState(config, tier, session = {}) {
   const tp = session.tier_policy;
   if (tp === 'flash-only') return tier === 'flash' ? 'auto' : 'disabled';
   if (tp === 'pro-only') return tier === 'pro' ? 'auto' : 'disabled';
-  const preset = resolveCollaborationPreset(config);
+  const effectiveConfig = session.collaboration_mode
+    ? { ...config, collaboration_mode: session.collaboration_mode }
+    : config;
+  const preset = resolveCollaborationPreset(effectiveConfig);
   const state = tier === 'flash' ? preset.flash : preset.pro;
   const override = session[`${tier}_state`];
   if (override === 'disabled' || override === 'manual' || override === 'auto') return override;
@@ -324,13 +327,14 @@ export function canEscalateFlashToPro(config, session = {}) {
 
 /** Should a successful flash job be followed by one automatic pro review? */
 export function shouldRunProReview(config, session = {}) {
-  const mode = config.collaboration_mode ?? 'balanced';
+  const mode = session.collaboration_mode ?? config.collaboration_mode ?? 'balanced';
+  const optedIn = session.pro_reviews_flash ?? config.pro_reviews_flash;
   const proState = getEffectiveTierState(config, 'pro', session);
   if (proState !== 'auto') return false;
   if (session.tier_policy === 'flash-only') return false;
   if (mode === 'review-pipeline') return true;
   // Balanced / custom: only when explicitly opted in via pro_reviews_flash.
-  return normalizeBool(config.pro_reviews_flash);
+  return normalizeBool(optedIn);
 }
 
 /** Roles for a tier (host guidance for who does what, not a hard classifier). */
@@ -377,8 +381,9 @@ function stateLine(config, tier, session) {
  * without pretending the host's own tools are restricted.
  */
 export function getRoutingGuidance(config, session = {}) {
-  const mode = config.collaboration_mode ?? 'balanced';
-  const mainMode = MAIN_AGENT_MODES.includes(config.main_agent_mode) ? config.main_agent_mode : 'coordinator-first';
+  const mode = session.collaboration_mode ?? config.collaboration_mode ?? 'balanced';
+  const requestedMainMode = session.main_agent_mode ?? config.main_agent_mode;
+  const mainMode = MAIN_AGENT_MODES.includes(requestedMainMode) ? requestedMainMode : 'coordinator-first';
   const parts = [];
   if (session.enabled === false || config.subagents_enabled === false) {
     parts.push('DSH worker dispatch is DISABLED. Do not call dsh_run_worker / dsh_spawn_worker; report the disablement to the user instead of doing the task yourself.');
@@ -390,7 +395,7 @@ export function getRoutingGuidance(config, session = {}) {
     if (shouldRunProReview(config, session)) parts.push('A successful Flash implementation may be followed by one automatic Pro review.');
   }
   parts.push(`Main agent mode (host guidance only — does not restrict host tools): ${mainMode}. ${MAIN_MODE_GUIDANCE[mainMode]}`);
-  parts.push('After a worker returns, check its delivery metadata (delivery_complete / delivery_missing) and redacted workspace diff (workspace_diff_available): if the Delivery Report is missing or files changed outside scope, do not accept the result as final — request a follow-up worker run.');
+  parts.push('After a worker returns, check its delivery metadata (delivery_complete / delivery_missing / delivery.tests_status) and redacted workspace diff (workspace_diff_available). delivery.complete=true does not mean the task succeeded: tests_status=FAIL requires another fix or an explicit failure report, and tests_status=NOT RUN requires disclosure of the unverified work. If the Delivery Report is missing or files changed outside scope, do not accept the result as final — request a follow-up worker run.');
   return parts.join(' ');
 }
 
