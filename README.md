@@ -44,6 +44,64 @@ Codex Desktop / Claude Code
 
 ## Install
 
+Prerequisites: Node.js with npm/npx, Git, and pnpm. The GitHub install path was tested with each prerequisite removed from the command environment: DSH needs `npx`, and its profile forwarder calls both Git and `pnpm`.
+
+Install directly from this GitHub repository from any directory:
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+Start DSH:
+
+```bash
+npx -y @deepseek-ai/dsh web
+```
+
+Then open **Settings → DSH Crew** and click **Install** for Codex. Claude Code integration is optional and has its own Install button.
+
+This installs Crew persistently in the DSH `web` profile. Crew is not published to the npm registry; `npx` only runs the DSH CLI, which installs Crew from GitHub.
+
+### Update
+
+Re-run the GitHub add command. DSH/pnpm refreshes the Git revision without adding a duplicate dependency or bundle entry:
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+Restart DSH after updating.
+
+### Migrating an older fork install
+
+Older versions of this fork used the upstream package identity `@zseven-w/dsh-crew`. Because the package name alone cannot distinguish this fork from the genuine upstream package, migration is deliberately not automatic.
+
+Only if you have confirmed that the old package came from `Ran-sh/dsh-crew`, run:
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+Do not remove `@zseven-w/dsh-crew` when it is an intentional installation of the upstream project.
+
+## Uninstall
+
+DSH Crew and its Codex / Claude Code integrations are separate layers:
+
+1. In **Settings → DSH Crew**, click **Restore** for Codex and Claude Code integrations that you installed.
+2. Remove the profile plugin:
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+```
+
+Removing the profile plugin does not implicitly edit `~/.codex` or `~/.claude`. Crew configuration, backups, credentials, and other DSH bundles are preserved.
+
+## Development / Source install
+
+The source installer remains available for contributors and local checkout development.
+
 Windows:
 
 ```bat
@@ -65,36 +123,32 @@ Cross-platform:
 node scripts/setup.mjs install
 ```
 
-The installer:
+The source installer:
 
 - links this local checkout into the DSH web profile (`link:<repo>`)
 - installs the Codex Desktop integration (no `codex` CLI required)
 - installs the Claude Code integration automatically when the `claude` CLI is detected (optional)
 - is idempotent — safe to re-run
 
-It never touches your credentials or DSH provider settings, and it does not start DSH for you.
-
-## Uninstall
-
-Windows:
+Source uninstall on Windows:
 
 ```bat
 uninstall.cmd
 ```
 
-Cross-platform:
+Source uninstall cross-platform:
 
 ```bash
 node scripts/setup.mjs uninstall
 ```
 
-Removes:
+It removes:
 
 - DSH Crew from the DSH web profile
 - Codex Desktop integration
 - Claude Code integration
 
-Keeps:
+It keeps:
 
 - the repository
 - Crew config (`~/.config/dsh-crew`)
@@ -102,7 +156,7 @@ Keeps:
 
 ## Quick Start
 
-1. Start DSH as usual: `npx @deepseek-ai/dsh web`
+1. Start DSH as usual: `npx -y @deepseek-ai/dsh web`
 2. Open **Settings → DSH Crew**.
 3. Keep the fresh default **Flash Only** workflow: Codex → Flash coding worker → Codex.
 4. Use **Refresh Harness Models** to choose an ordered Flash or Pro model priority when needed.
@@ -148,6 +202,6 @@ Credentials stay in the DSH provider configuration only. Tested with an OpenAI-c
 
 ## Credits & License
 
-This fork is based on [ZSeven-W/dsh-crew](https://github.com/ZSeven-W/dsh-crew) and retains the original MIT license and attribution.
+This fork is based on the original DSH Crew by [ZSeven-W](https://github.com/ZSeven-W/dsh-crew) and retains the original MIT license and attribution. It adds configurable Harness-backed model priorities, Codex → Flash → Codex defaults, auditable delivery, and related workflow changes.
 
 MIT License — see [LICENSE](LICENSE).

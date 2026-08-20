@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; वर्तमान प्लगइन रिलीज: <code>0.1.0-rc.1</code> &middot; DSH <code>0.1.0-rc.6</code> के साथ परीक्षित</sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; वर्तमान प्लगइन रिलीज: <code>0.1.0-rc.1</code> &middot; DSH <code>0.1.0-rc.6</code> के साथ परीक्षित</sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -115,7 +115,7 @@ Claude Code / Codex (orchestrator, keeps its own model)
 npm से DSH प्रोफ़ाइल में इंस्टॉल करें:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
 dsh web
 ```
 

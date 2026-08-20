@@ -44,6 +44,64 @@ Codex Desktop / Claude Code
 
 ## 安装
 
+前置条件：带 npm/npx 的 Node.js、Git 和 pnpm。我们分别从命令环境中移除这些前置项做过真实测试：DSH 需要 `npx`，其 profile 转发器会直接调用 Git 和 `pnpm`。
+
+在任意目录直接从本 GitHub 仓库安装：
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+启动 DSH：
+
+```bash
+npx -y @deepseek-ai/dsh web
+```
+
+然后打开 **设置 → DSH Crew**，在 Codex 一行点击 **安装**。Claude Code 集成是可选项，有独立的安装按钮。
+
+Crew 会持久安装在 DSH 的 `web` profile 中。本 fork 不发布到 npm registry；`npx` 只负责运行 DSH CLI，再由 DSH 从 GitHub 安装 Crew。
+
+### 更新
+
+重新执行 GitHub add 命令。DSH/pnpm 会刷新 Git revision，不会重复添加 dependency 或 bundle：
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+更新后重启 DSH。
+
+### 迁移旧版 fork 安装
+
+旧版 fork 曾使用上游包名 `@zseven-w/dsh-crew`。仅凭包名无法区分本 fork 与真正的上游包，因此不会自动迁移。
+
+只有在确认旧包来自 `Ran-sh/dsh-crew` 时，才执行：
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+```
+
+如果 `@zseven-w/dsh-crew` 是你有意安装的上游原版，请不要移除它。
+
+## 卸载
+
+DSH Crew 与 Codex / Claude Code 宿主集成是两层：
+
+1. 在 **设置 → DSH Crew** 中，对已安装的 Codex / Claude Code 集成点击 **还原**。
+2. 移除 profile plugin：
+
+```bash
+npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+```
+
+只移除 profile plugin 不会隐式修改 `~/.codex` 或 `~/.claude`。Crew 配置、备份、凭据和其他 DSH bundle 都会保留。
+
+## 开发 / 源码安装
+
+源码安装器继续保留，供贡献者与本地 checkout 开发使用。
+
 Windows：
 
 ```bat
@@ -65,36 +123,32 @@ install.cmd
 node scripts/setup.mjs install
 ```
 
-安装器会：
+源码安装器会：
 
 - 把本仓库以 link 方式装进 DSH web profile（`link:<repo>`）
 - 安装 Codex Desktop 集成（**不需要** `codex` CLI）
 - 检测到 `claude` CLI 时自动安装 Claude Code 集成（可选）
 - 幂等，可安全重复执行
 
-它不会改动你的凭据或 DSH provider 设置，也不会替你启动 DSH。
-
-## 卸载
-
-Windows：
+Windows 源码卸载：
 
 ```bat
 uninstall.cmd
 ```
 
-跨平台：
+跨平台源码卸载：
 
 ```bash
 node scripts/setup.mjs uninstall
 ```
 
-移除：
+它会移除：
 
 - DSH web profile 中的 DSH Crew
 - Codex Desktop 集成
 - Claude Code 集成
 
-保留：
+它会保留：
 
 - 仓库
 - Crew 配置（`~/.config/dsh-crew`）
@@ -102,7 +156,7 @@ node scripts/setup.mjs uninstall
 
 ## 快速开始
 
-1. 照常启动 DSH：`npx @deepseek-ai/dsh web`
+1. 照常启动 DSH：`npx -y @deepseek-ai/dsh web`
 2. 打开 **设置 → DSH Crew**。
 3. 保持新安装默认的 **Flash Only** 工作流：Codex → Flash 编码 worker → Codex。
 4. 需要时用 **刷新 Harness 模型** 为 Flash / Pro 分别设置有序模型优先级。
@@ -148,6 +202,6 @@ Crew 会读取 DeepSeek Harness 当前注册的全部 provider 与模型。Flash
 
 ## 版权与许可
 
-本 fork 基于 [ZSeven-W/dsh-crew](https://github.com/ZSeven-W/dsh-crew)，保留原 MIT 许可与署名。
+本 fork 基于 [ZSeven-W](https://github.com/ZSeven-W/dsh-crew) 的原始 DSH Crew，保留原 MIT 许可与署名，并增加可配置的 Harness 模型优先级、Codex → Flash → Codex 默认链路、可审计交付等工作流能力。
 
 MIT License —— 见 [LICENSE](LICENSE)。

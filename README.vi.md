@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <sub>npm: <code>@zseven-w/dsh-crew</code> &middot; Phiên bản plugin hiện tại: <code>0.1.0-rc.1</code> &middot; Đã kiểm thử với DSH <code>0.1.0-rc.6</code></sub>
+  <sub>GitHub: <code>Ran-sh/dsh-crew</code> &middot; Phiên bản plugin hiện tại: <code>0.1.0-rc.1</code> &middot; Đã kiểm thử với DSH <code>0.1.0-rc.6</code></sub>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZSeven-W/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ZSeven-W/dsh-crew?color=64748b" alt="License" /></a>
+  <a href="https://github.com/Ran-sh/dsh-crew/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Ran-sh/dsh-crew?color=64748b" alt="License" /></a>
 </p>
 
 <br />
@@ -115,7 +115,7 @@ Việc dispatch có thể trải rộng. Bên dưới, mười tám worker dịc
 Cài từ npm vào một profile DSH:
 
 ```bash
-dsh plugin --profile web add @zseven-w/dsh-crew@latest
+npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
 dsh web
 ```
 
