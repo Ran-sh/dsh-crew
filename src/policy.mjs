@@ -182,12 +182,15 @@ export function migrateLegacyConfig(raw = {}) {
   const proState = deriveTierState(raw, 'pro');
   const escalationEnabled = normalizeBool(raw.escalate_on_failure, false)
     || normalizeBool(raw.worker?.model_policy?.escalation?.enabled, false);
-  const autoReview = collab === 'review-pipeline'
-    || normalizeBool(raw.pro_reviews_flash, false)
-    || normalizeBool(raw.review?.auto_review, false);
+  // Explicit v0.2 auto-review switch wins over the legacy opt-in / pipeline.
+  const autoReview = raw.auto_review !== undefined
+    ? normalizeBool(raw.auto_review)
+    : collab === 'review-pipeline'
+      || normalizeBool(raw.pro_reviews_flash, false)
+      || normalizeBool(raw.review?.auto_review, false);
 
   const worker = {
-    state: migrationWorkerState(collab, flashState, proState),
+    state: normalizeRoleState(raw.worker_state ?? migrationWorkerState(collab, flashState, proState)),
     provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode ?? raw.worker?.provider_mode),
     model_policy: normalizeModelPolicy({
       role: 'worker',
@@ -205,7 +208,7 @@ export function migrateLegacyConfig(raw = {}) {
   };
 
   const review = {
-    state: migrationReviewState(collab, proState, autoReview),
+    state: normalizeRoleState(raw.review_state ?? migrationReviewState(collab, proState, autoReview)),
     mode: 'auto',
     auto_review: autoReview,
     provider_mode: normalizeWorkerProviderMode(raw.worker_provider_mode ?? raw.review?.provider_mode),

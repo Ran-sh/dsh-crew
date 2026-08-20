@@ -100,3 +100,17 @@ test('migration is pure: input object untouched', () => {
   migrateLegacyConfig(raw);
   assert.deepEqual(raw, { tier_policy: 'flash-only' });
 });
+
+test('explicit worker_state / review_state / auto_review override the derived role states', () => {
+  const c = migrateLegacyConfig({ tier_policy: 'flash-only', worker_state: 'manual', review_state: 'auto', auto_review: true });
+  assert.equal(c.worker.state, 'manual');
+  assert.equal(c.review.state, 'auto');
+  assert.equal(c.review.auto_review, true);
+});
+
+test('unset v0.2 overrides fall back to the derived states', () => {
+  const c = migrateLegacyConfig({ tier_policy: 'flash-only' });
+  assert.equal(c.worker.state, 'auto');
+  assert.equal(c.review.state, 'disabled');
+  assert.equal(c.review.auto_review, false);
+});

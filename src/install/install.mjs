@@ -120,6 +120,13 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // shared = legacy in-place behaviour.
   max_parallel: 3,
   isolation: 'worktree',
+  // ---- v0.2 role state overrides (writable; unset = derived by migration) ----
+  // Explicit worker/reviewer role states (auto | manual | disabled) and the
+  // automatic-review switch. When unset, migrateLegacyConfig derives them from
+  // collaboration_mode / tier_policy / pro_reviews_flash.
+  worker_state: undefined,
+  review_state: undefined,
+  auto_review: undefined,
 };
 
 export function mergeStoredGlobalConfig(stored) {

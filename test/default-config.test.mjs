@@ -94,3 +94,10 @@ test('v0.2 runtime execution fields are persistable and normalize into the runti
   assert.equal(normalized.execution.max_parallel, 2);
   assert.equal(normalized.execution.isolation, 'shared');
 });
+
+test('v0.2 role-state overrides normalize into the canonical shape (writable via config)', () => {
+  const normalized = normalizeGlobalConfig({ worker_state: 'manual', review_state: 'disabled', auto_review: true });
+  assert.equal(normalized.worker.state, 'manual');
+  assert.equal(normalized.review.state, 'disabled');
+  assert.equal(normalized.review.auto_review, true);
+});
