@@ -4,7 +4,7 @@
   "source_branch": "test/v0.3-dynamic-runtime-controls-smoke",
   "source_commit": "LATEST",
   "objective": "Verify P1-B dynamic runtime controls in a real persistent DSH/MCP environment without modifying repository source.",
-  "context": "This branch is the clean merge preview of PR #12 head 17d3d0018a375ae0ad40899210949d8bec564a87 onto main b7cee7abe104dde64f3a9690c7f05d706fde15d2. Test the real activation boundaries implemented by PR #12. Use one persistent MCP process where the scenario says same-session. Any temporary Crew config changes must be backed up and restored byte-for-byte. Use a disposable Git repository for worker jobs. Do not modify DSH provider settings or credentials.",
+  "context": "This branch contains the clean merge preview of PR #12 head 17d3d0018a375ae0ad40899210949d8bec564a87 plus the project-local Agent Workflow v1.8.0 snapshot from main. Test the real activation boundaries implemented by PR #12. Use one persistent MCP process where the scenario says same-session. Any temporary Crew config changes must be backed up and restored byte-for-byte. Use a disposable Git repository for worker jobs. Do not modify DSH provider settings or credentials. New execution evidence must use Result Contract v2 and validator-owned stamping.",
   "allowed_changes": [
     "docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json"
   ],
@@ -17,7 +17,8 @@
   ],
   "validation": [
     "Validate this Task Contract with node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json before execution.",
-    "Record the exact source SHA used and take non-secret byte hashes of the existing Crew config and DSH settings before testing; never include file contents or secrets in the result.",
+    "At real execution start, create a Result Contract v2 draft with schema_version=2 and timeline.started_at at second precision with timezone; record the exact resolved source SHA used.",
+    "Record non-secret byte hashes of the existing Crew config and DSH settings before testing; never include file contents or secrets in the result.",
     "Start or link the branch in a real disposable DSH profile and keep one MCP process alive for the same-session scenarios. Confirm dsh_worker_config reports runtime_controls.max_parallel and activation_boundaries, including max_parallel=live, collaboration_mode=next-workflow, default_effort=next-session, and hub_url/vision_enabled/imagegen_enabled=restart-required.",
     "LIVE raise: temporarily set global max_parallel=1, refresh/read the same MCP runtime, start two sufficiently long async worker workflows in a disposable Git repository, confirm the second queues, then change global max_parallel=2 without restarting MCP/DSH and trigger the normal runtime refresh path; confirm queued work is admitted and no running workflow is cancelled.",
     "LIVE lower: with two workflows active, change global max_parallel from 2 to 1 without restarting the persistent MCP process, start another workflow, and confirm it queues; confirm lowering never cancels active workflows and new admission waits until active count falls below the new limit.",
@@ -25,7 +26,7 @@
     "NEXT SESSION: in the same MCP process, change persisted global default_effort to a different valid value and confirm the current session retains its startup default while global_defaults reflects the persisted change; start a fresh MCP session and confirm the new session inherits the changed default. Restore the original value afterward.",
     "Confirm Settings /config returns config_activation metadata matching dsh_worker_config activation_boundaries for the tested keys, and confirm the client build containing the Activation Boundaries settings surface loads in the disposable DSH profile without client-load errors.",
     "Restore every temporary Crew configuration change byte-for-byte, stop/remove any disposable DSH profile and disposable worker repository created for the smoke, and confirm the original Crew config and DSH settings hashes match the pre-test hashes.",
-    "Write and validate docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json with node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json."
+    "Finish the Result Contract v2 with timeline.completed_at at second precision with timezone, then run node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json --stamp and finally run normal result validation once more. Do not manually fabricate result_validation evidence."
   ],
   "acceptance_criteria": [
     "The same persistent MCP runtime observes max_parallel increases and decreases with the documented admission semantics and without cancelling already-running work.",
@@ -34,6 +35,7 @@
     "MCP diagnostics and Settings config expose matching activation-boundary metadata, and the Activation Boundaries client surface loads successfully in a disposable DSH profile.",
     "No repository source/test/build/package/CI/release files are modified by the executor; only the required Result Contract is committed.",
     "All temporary local config/runtime artifacts are cleaned up and the original Crew config and DSH settings are restored exactly; no credential or secret value appears in the result.",
+    "The committed result is Result Contract v2 with a second-precision timezone timeline and validator-owned result_validation stamped by --stamp.",
     "Every required validation is reported truthfully using PASS, FAIL, PARTIAL, SKIP, BLOCKED, or NOT RUN; overall PASS is used only when every listed test passes."
   ],
   "result_contract": "docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json",
@@ -46,7 +48,9 @@
     "prepared_from_commit": "8c04452d6f41941bf2e994dba8ba5ff9536ae786",
     "feature_pr": 12,
     "feature_head": "17d3d0018a375ae0ad40899210949d8bec564a87",
-    "workflow_version": "1.7.0",
+    "workflow_version": "1.8.0",
+    "workflow_source_commit": "5e4239aa3a30e3a1738dcdb79e7d341ea8bca458",
+    "result_contract_version": 2,
     "requires_real_dsh": true
   }
 }
