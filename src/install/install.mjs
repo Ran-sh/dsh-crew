@@ -216,6 +216,7 @@ export function getGlobalConfigDiagnostics({ configFile = GLOBAL_CONFIG_FILE } =
     const mirrorKeys = [
       'subagents_enabled', 'main_agent_mode', 'default_effort',
       'default_timeout_seconds', 'mode', 'max_parallel', 'isolation',
+      'collaboration_mode', 'tier_policy', 'flash_state', 'pro_state',
       'worker_state', 'review_state', 'auto_review', 'worker_provider_mode',
       'flash_model_priority', 'flash_model_priority_configured',
       'flash_model_fallback', 'pro_model_priority',
