@@ -9,6 +9,7 @@ import { hubCompatibilityMessage, resolveHubExecutionMode } from './hub-compatib
 import { RUNTIME_VERSION } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
+import { buildConfigReadinessMatrix } from './config-readiness.mjs';
 import {
   normalizeGlobalConfig,
   deriveLegacyConfig,
@@ -270,6 +271,8 @@ async function buildConfigReport() {
   let effectiveWorkerProvider = null;
   let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
+  let providerCatalogChecked = false;
+  let providerCatalogBody = null;
   const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
   if (workerProviderMode === 'deepseek-official') {
     effectiveWorkerSelection = {
@@ -278,8 +281,10 @@ async function buildConfigReport() {
     };
   } else if (hubCompatibility.compatible) {
     try {
+      providerCatalogChecked = true;
       const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/models`);
       const body = await res.json();
+      providerCatalogBody = body;
       if (!body?.ok) providerResolutionError = body?.error ?? 'Unable to read Harness model catalog.';
       else for (const tier of ['flash', 'pro']) {
         const selected = resolveWorkerModel({
@@ -294,11 +299,20 @@ async function buildConfigReport() {
           ? { provider: selected.provider, model: selected.model, source: selected.source }
           : { code: selected.code, error: selected.message };
       }
-    } catch (err) { providerResolutionError = err?.message ?? String(err); }
+    } catch (err) {
+      providerCatalogChecked = true;
+      providerResolutionError = err?.message ?? String(err);
+    }
   } else if (hubCompatibility.reachable) {
     providerResolutionError = hubCompatibilityMessage(hubCompatibility);
   }
   effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
+  const readinessMatrix = buildConfigReadinessMatrix({
+    hubCompatibility,
+    workerProviderMode,
+    providerCatalogChecked,
+    providerCatalogBody,
+  });
   return {
     enabled: sessionConfig.enabled,
     default_tier: sessionConfig.default_tier ?? legacy.default_tier,
@@ -336,6 +350,7 @@ async function buildConfigReport() {
     global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, globalConfig[k]])),
     runtime_controls: runtimeControls,
     activation_boundaries: activationBoundaries,
+    readiness_matrix: readinessMatrix,
     hub_reachable: hubCompatibility.reachable,
     hub_compatible: hubCompatibility.compatible,
     hub_compatibility: hubCompatibility,
