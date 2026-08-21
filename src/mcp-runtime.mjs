@@ -9,6 +9,7 @@
 
 import { createWorkflowRuntime } from './workflow-runtime.mjs';
 import { normalizeGlobalConfig } from './policy.mjs';
+import { buildDirectSelectionTrace, enrichSelectionTrace } from './model-routing.mjs';
 import {
   createIsolatedWorkspace,
   cleanupIsolatedWorkspace,
@@ -51,16 +52,37 @@ export function resolveAttemptTier({ role = 'worker', attempt = 0, modelClassHin
 }
 
 /** Map a Hub/Standalone job view into the AttemptResult the runtime expects. */
-function attemptFromView(view, spec) {
-  return {
-    id: view?.id ?? spec.id,
-    role: view?.role ?? spec.role ?? 'worker',
-    // `view.attempt` may be an adapter routing-attempt (see below); the
-    // workflow's logical attempt number is always the spec value.
-    attempt: spec.attempt ?? 0,
+export function attemptFromView(view, spec) {
+  const role = view?.role ?? spec.role ?? 'worker';
+  const logicalAttempt = spec.attempt ?? 0;
+  const source = view?.selection_source ?? null;
+  const transportTrace = view?.selection_trace ?? buildDirectSelectionTrace({
+    role,
+    logicalAttempt,
+    modelClassHint: spec.model_class_hint ?? null,
+    strategy: source ?? 'transport-selection',
+    candidateSet: logicalAttempt > 0 ? 'escalation' : 'primary',
     provider: view?.provider ?? null,
     model: view?.model ?? null,
-    selection_source: view?.selection_source ?? null,
+    source: source ?? 'transport-selection',
+    escalationReason: spec.escalation_reason ?? null,
+  });
+  const selectionTrace = enrichSelectionTrace(transportTrace, {
+    role,
+    logicalAttempt,
+    modelClassHint: spec.model_class_hint ?? null,
+    escalationReason: spec.escalation_reason ?? null,
+  });
+  return {
+    id: view?.id ?? spec.id,
+    role,
+    // `view.attempt` may be an adapter routing-attempt (see below); the
+    // workflow's logical attempt number is always the spec value.
+    attempt: logicalAttempt,
+    provider: view?.provider ?? null,
+    model: view?.model ?? null,
+    selection_source: source,
+    selection_trace: selectionTrace,
     status: view?.status ?? 'failed',
     result: view?.result ?? null,
     stopReason: view?.stopReason ?? null,
@@ -153,6 +175,8 @@ export function buildMcpWorkflowRuntime(deps) {
       timeoutMs,
       source,
       delivery,
+      modelClassHint: spec.model_class_hint ?? null,
+      escalationReason: spec.escalation_reason ?? null,
     });
     spec.onAttemptStarted?.(job.id);
     await waitJob(job.id, timeoutMs);
