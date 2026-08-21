@@ -1,0 +1,78 @@
+{
+  "id": "v0.3-model-selection-trace-integrate-latest-main",
+  "mode": "IMPLEMENT",
+  "source_branch": "feat/v0.3-model-selection-trace-integrated",
+  "source_commit": "LATEST",
+  "objective": "Integrate the already-validated Model Selection Trace implementation from PR #15 onto the latest main without regressing later readiness, failure-classification, or structured error-code work; preserve routing semantics and verify the integrated branch in deterministic and real Hub/MCP execution.",
+  "context": "The source branch was created from current main at/after merge commit f36479120f5835590e26025c46e9dd9ce0c9608e. Reference implementation is PR #15 branch feat/v0.3-model-selection-trace, tested feature head 13fc8cd9af6fffcfeaa4445092542104b6ca5a04. Real TEST_ONLY smoke on test/v0.3-model-selection-trace-smoke passed and is recorded at docs/agent-results/v0.3-model-selection-trace-real-smoke.json on that branch: genuine Hub/MCP execution emitted sanitized selection_trace with provider/model/source matching the actual attempt. The old feature branch diverged from main at 4e42cda77f37175bf5e2fc523488110dc2809388. Comparison shows the only files changed by both old PR #15 and later main are src/mcp-runtime.mjs and src/workflow-runtime.mjs; the other six PR #15 files were not subsequently modified on main. Treat PR #15 as the semantic reference, not as permission to overwrite later main behavior. Preserve current main failure classification, structured error-code propagation, runtime controls, readiness, catalog diagnostics, and all other later changes. For src/hub/index.mjs and src/jobs.mjs, preserve main's existing line-ending convention and apply only semantic trace hunks; do not normalize/rewrite the whole files merely due EOL differences.",
+  "allowed_changes": [
+    "src/hub/index.mjs",
+    "src/jobs.mjs",
+    "src/mcp-runtime.mjs",
+    "src/model-routing.mjs",
+    "src/workflow-runtime.mjs",
+    "test/model-routing.test.mjs",
+    "test/model-selection-trace.test.mjs",
+    "test/role-routing.test.mjs",
+    "docs/agent-results/v0.3-model-selection-trace-integrated-result.json"
+  ],
+  "forbidden_changes": [
+    "all repository paths not listed in allowed_changes, except deletion of docs/agent-tasks/ACTIVE_TASK.json on successful completion",
+    ".github/workflows/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "worker.cordis.yml",
+    "docs/agent-workflow.md",
+    ".agent-workflow/**",
+    "persistent DSH/provider credentials or provider/model configuration",
+    "non-disposable user workspaces",
+    "routing-policy semantic changes unrelated to restoring PR #15 trace metadata"
+  ],
+  "validation": [
+    "Validate docs/agent-tasks/ACTIVE_TASK.json with node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json before implementation.",
+    "Fetch main and feat/v0.3-model-selection-trace. Confirm this source branch started from current main and preserve unrelated dirty worktree state; do not reset/clean/stash/force-push unrelated work.",
+    "Use merge-base 4e42cda77f37175bf5e2fc523488110dc2809388 and PR #15 diff as the semantic reference. Reapply the trace feature onto latest main. Do not blindly replace src/mcp-runtime.mjs or src/workflow-runtime.mjs with the stale PR #15 versions; combine trace metadata with latest-main error_code/failure/runtime changes.",
+    "Preserve the PR #15 trace contract: stable version=1 selection_trace; role/logical_attempt/model_class_hint/strategy/candidate_set/ordered_candidates/selected/selection_source/fallback_reason/escalation_reason; Hub and Standalone job views; MCP compatibility/enrichment; workflow child attempts and reviewer metadata; escalation reason propagation. Trace remains metadata-only and must not alter routing decisions.",
+    "For src/hub/index.mjs and src/jobs.mjs, preserve the latest-main line-ending convention and avoid whole-file EOL churn. Verify git diff --ignore-space-at-eol or an equivalent check shows only semantic trace hunks plus any unavoidable minimal context.",
+    "Preserve all later-main behavior in the two overlapping files, including attempt error_code propagation, terminal-code promotion without stale-code leakage after successful escalation, normalized failure metadata, live runtime controls, and existing isolation/cancellation/review behavior.",
+    "Run node --test test/*.test.mjs and pnpm run build:client. Record exact statuses and counts; do not invent lint/typecheck commands.",
+    "Use a disposable Git repository and a disposable/current-source DSH profile to run at least one genuine Hub/MCP dsh_run_worker (or equivalent live MCP) workflow on the integrated source. Verify child_attempts[0].selection_trace exists, required fields are present, and selected provider/model/source exactly match the actual child attempt. Do not change persistent provider/model configuration to manufacture a result.",
+    "Verify the live trace contains no credentials, tokens, cookies, private keys, signed URLs, environment values, raw provider configuration payloads, raw exception dumps, or sensitive local paths. Provider/model identifiers and bounded diagnostic fields are allowed.",
+    "If a natural escalation occurs, verify logical_attempt increments and escalation_reason is preserved. Do not corrupt source/provider config merely to force escalation; deterministic tests are sufficient if no natural escalation occurs.",
+    "Verify persistent Crew/provider configuration is unchanged after the real smoke using secret-free hashes/byte equality only, and remove disposable profiles/processes/repos created for the test.",
+    "Write Result Contract v2 to docs/agent-results/v0.3-model-selection-trace-integrated-result.json with second-precision timezone timestamps; run the installed validator with --stamp, validate the stamped result again, delete ACTIVE_TASK.json on real completion, and push the integration branch."
+  ],
+  "acceptance_criteria": [
+    "Integrated branch is based on latest main and contains the PR #15 trace behavior without reverting later main functionality.",
+    "Only the eight authorized source/test files differ semantically from latest main, plus the Result Contract; no package/lockfile/CI/release changes occur.",
+    "src/mcp-runtime.mjs retains latest-main structured error_code propagation while adding trace enrichment/fallback.",
+    "src/workflow-runtime.mjs retains latest-main failure classification and final-attempt error-code lifecycle while adding trace/escalation metadata.",
+    "Hub/Standalone/model-routing trace behavior matches the already-tested PR #15 semantics and does not cause unrelated line-ending churn.",
+    "node --test test/*.test.mjs and pnpm run build:client PASS.",
+    "At least one genuine live Hub/MCP worker attempt on the integrated branch PASSes and exposes a sanitized selection_trace matching the actual provider/model/source.",
+    "Persistent Crew/provider configuration is unchanged/restored and no non-disposable user workspace is modified.",
+    "Final Result Contract is schema_version 2 with validator-owned PASS stamp; ACTIVE_TASK.json is deleted; completion is pushed without force."
+  ],
+  "result_contract": "docs/agent-results/v0.3-model-selection-trace-integrated-result.json",
+  "completion_commit_contract": [
+    "src/hub/index.mjs",
+    "src/jobs.mjs",
+    "src/mcp-runtime.mjs",
+    "src/model-routing.mjs",
+    "src/workflow-runtime.mjs",
+    "test/model-routing.test.mjs",
+    "test/model-selection-trace.test.mjs",
+    "test/role-routing.test.mjs",
+    "docs/agent-results/v0.3-model-selection-trace-integrated-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "tracks_issue": 7,
+    "supersedes_pr": 15,
+    "reference_feature_commit": "13fc8cd9af6fffcfeaa4445092542104b6ca5a04",
+    "validated_smoke_result": "docs/agent-results/v0.3-model-selection-trace-real-smoke.json@test/v0.3-model-selection-trace-smoke",
+    "executor_scope": "integration-and-real-validation",
+    "human_companion_generated": false
+  }
+}
