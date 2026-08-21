@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hubRequestError } from '../src/hub-client.mjs';
+import { HUB_REQUEST_FAILED, hubRequestError } from '../src/hub-client.mjs';
 
 test('Hub request error preserves explicit code without copying response payload', () => {
   const err = hubRequestError({
@@ -14,13 +14,13 @@ test('Hub request error preserves explicit code without copying response payload
   assert.doesNotMatch(JSON.stringify(err), /must-not-copy/);
 });
 
-test('Hub request error falls back to policyCode and ignores blank codes', () => {
+test('Hub request error falls back to policyCode and ignores blank explicit codes', () => {
   assert.equal(hubRequestError({ error: 'blocked', policyCode: 'ROLE_DISABLED' }, 400).code, 'ROLE_DISABLED');
-  assert.equal(hubRequestError({ error: 'bad', code: '   ' }, 500).code, undefined);
+  assert.equal(hubRequestError({ error: 'bad', code: '   ' }, 500).code, HUB_REQUEST_FAILED);
 });
 
-test('Hub request error remains compatible when no structured code exists', () => {
+test('Hub request error uses a bounded fallback code when the server omitted one', () => {
   const err = hubRequestError(null, 503);
   assert.equal(err.message, 'hub request failed (503)');
-  assert.equal(err.code, undefined);
+  assert.equal(err.code, HUB_REQUEST_FAILED);
 });
