@@ -1,0 +1,59 @@
+{
+  "id": "v0.3-model-selection-trace-real-smoke",
+  "mode": "TEST_ONLY",
+  "source_branch": "test/v0.3-model-selection-trace-smoke",
+  "source_commit": "LATEST",
+  "objective": "Validate in a real DSH environment that PR #15 model-selection trace metadata is emitted end-to-end through live Hub/MCP execution, matches the model that actually ran, remains sanitized, and does not change routing behavior.",
+  "context": "This branch is based on PR #15 head 13fc8cd9af6fffcfeaa4445092542104b6ca5a04. CI #168 is green on Linux deterministic/workspace-audit/client-build and Windows regressions. The implementation adds selection_trace metadata only; routing semantics must remain unchanged. Use disposable repositories and disposable/current-source DSH profiles as needed. Do not edit implementation or tests. Do not alter persistent provider/model configuration. Session-scoped worker config changes are permitted only when required for the smoke and must be restored before completion. Use only provider/model credentials already authorized in the environment. If standalone credentials are unavailable, report that scenario BLOCKED or SKIP rather than fabricating credentials.",
+  "allowed_changes": [
+    "docs/agent-results/v0.3-model-selection-trace-real-smoke.json"
+  ],
+  "forbidden_changes": [
+    "src/**",
+    "test/**",
+    "client/**",
+    ".github/workflows/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "worker.cordis.yml",
+    "docs/agent-workflow.md",
+    ".agent-workflow/**",
+    "persistent DSH/provider credentials or provider/model configuration",
+    "non-disposable user workspaces"
+  ],
+  "validation": [
+    "Validate docs/agent-tasks/ACTIVE_TASK.json with node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json before testing.",
+    "Confirm the checked-out branch is test/v0.3-model-selection-trace-smoke at the resolved LATEST commit and preserve any unrelated dirty worktree state.",
+    "Run the repository deterministic validation appropriate for this branch: node --test test/*.test.mjs and pnpm run build:client. Record exact commands and statuses; do not invent a lint or typecheck command.",
+    "Using a disposable Git repository and a Hub/MCP runtime loaded from this source revision, execute at least one real worker workflow through dsh_run_worker or the equivalent live MCP path. The task may be trivial, but it must create a genuine DSH attempt rather than a mocked unit test.",
+    "Capture the real completed workflow result and verify child_attempts[0].selection_trace exists with version=1, role, logical_attempt, model_class_hint, strategy, candidate_set, ordered_candidates, selected, selection_source, fallback_reason, and escalation_reason fields.",
+    "Verify selection_trace.selected.provider/model/source exactly match the real child attempt provider/model/selection_source, and logical_attempt matches the workflow attempt number. This is a metadata assertion only; do not change routing to make the assertion pass.",
+    "Inspect the returned trace recursively for sensitive material. It must not contain credentials, tokens, cookies, private keys, signed URLs, environment values, raw provider configuration payloads, raw exception dumps, or sensitive local paths. Provider/model identifiers and bounded enum/context fields are allowed.",
+    "If the environment safely supports a real standalone execution with an already-authorized DEEPSEEK_API_KEY, switch only session-scoped execution mode, run one disposable standalone worker, verify the same trace contract, then restore the session setting. If the credential is absent or unauthorized, mark standalone BLOCKED or SKIP and explain why; do not modify credential storage.",
+    "If a real workflow naturally escalates during the smoke, verify the later child attempt trace carries the exact workflow escalation_reason and incremented logical_attempt. Do not deliberately corrupt source, provider configuration, or user data merely to force escalation; deterministic tests already cover forced escalation semantics.",
+    "Verify persistent dsh-crew/provider configuration is unchanged after the smoke. If any persistent config file is read for comparison, record a secret-free hash/byte-equality result only, never its contents.",
+    "Write Result Contract v2 to docs/agent-results/v0.3-model-selection-trace-real-smoke.json, set timeline timestamps at second precision with timezone, run the result validator with --stamp, then validate the stamped result again before committing completion."
+  ],
+  "acceptance_criteria": [
+    "Repository deterministic tests and client build PASS on the tested source revision, or any unrelated environmental blocker is reported without being converted to PASS.",
+    "At least one genuine live Hub/MCP worker attempt completes and exposes selection_trace through the final workflow child_attempts metadata.",
+    "The live trace version and required fields are structurally present, and selected provider/model/source agree with the attempt that actually executed.",
+    "The live trace contains no sensitive configuration or credential material and only bounded diagnostic metadata.",
+    "No evidence shows a routing behavior change caused by tracing; the trace describes the actual selection rather than influencing it.",
+    "Standalone is separately reported as PASS, BLOCKED, or SKIP according to authorized credential availability; lack of standalone credentials alone does not fail the Hub/MCP acceptance result.",
+    "Persistent Crew/provider configuration is restored/unchanged and no non-disposable user workspace is modified.",
+    "The final Result Contract is schema_version 2 with validator-owned PASS stamp evidence, ACTIVE_TASK.json is removed on real completion, and the completion commit contains only the allowed Result Contract plus ACTIVE_TASK deletion."
+  ],
+  "result_contract": "docs/agent-results/v0.3-model-selection-trace-real-smoke.json",
+  "completion_commit_contract": [
+    "docs/agent-results/v0.3-model-selection-trace-real-smoke.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "tracks_issue": 7,
+    "tracks_pr": 15,
+    "executor_scope": "real-environment-validation-only",
+    "human_companion_generated": false
+  }
+}
