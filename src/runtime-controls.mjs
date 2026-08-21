@@ -39,6 +39,7 @@ export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   flash_model_fallback: Object.freeze({ global: N, session: null }),
   pro_model_priority: Object.freeze({ global: N, session: null }),
   pro_model_fallback: Object.freeze({ global: N, session: null }),
+  adaptive_routing: Object.freeze({ global: N, session: null, note: 'Opt-in provider health ordering is read for the next Hub model selection; existing explicit priorities remain authoritative.' }),
   isolation: Object.freeze({ global: N, session: null }),
   vision_provider: Object.freeze({ global: N, session: null }),
   vision_model: Object.freeze({ global: N, session: null }),

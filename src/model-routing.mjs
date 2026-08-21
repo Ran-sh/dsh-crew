@@ -4,6 +4,8 @@
 // fallback. Catalog membership is advisory; provider registration is the
 // routing boundary.
 
+import { rankAdaptiveCandidates } from './adaptive-routing.mjs';
+
 export const DEFAULT_TIER_MODEL_PREFERENCES = Object.freeze({
   flash: 'deepseek-v4-flash',
   pro: 'deepseek-v4-pro',
@@ -24,6 +26,7 @@ export const MODEL_SELECTION_REASON_CODES = Object.freeze({
   PROVIDER_UNAVAILABLE: 'PROVIDER_UNAVAILABLE',
   PREFERRED_MODEL_UNAVAILABLE: 'PREFERRED_MODEL_UNAVAILABLE',
   PREFERRED_MODEL_AMBIGUOUS: 'PREFERRED_MODEL_AMBIGUOUS',
+  ADAPTIVE_DEPRIORITIZED: 'ADAPTIVE_DEPRIORITIZED',
   HARNESS_DEFAULT_INVALID: 'HARNESS_DEFAULT_INVALID',
   HARNESS_DEFAULT_PROVIDER_UNAVAILABLE: 'HARNESS_DEFAULT_PROVIDER_UNAVAILABLE',
   PRIMARY_CANDIDATES_EXHAUSTED: 'PRIMARY_CANDIDATES_EXHAUSTED',
@@ -117,6 +120,21 @@ function selectTrace(trace, ref, source, { advertised, fallbackReason } = {}) {
   return trace;
 }
 
+function rankForTrace(trace, candidates, {
+  adaptive,
+  adaptiveHealth,
+  explicitPriority = false,
+} = {}) {
+  const ranked = rankAdaptiveCandidates(candidates, {
+    config: adaptive,
+    healthStore: adaptiveHealth,
+    role: trace.role,
+    explicitPriority,
+  });
+  if (ranked.trace.enabled) trace.adaptive = ranked.trace;
+  return ranked;
+}
+
 /**
  * Build a one-candidate trace for transports that intentionally bypass the
  * Harness catalog (DeepSeek Official strict mode / standalone legacy mode).
@@ -158,6 +176,16 @@ export function enrichSelectionTrace(trace, {
           ? trace.ordered_candidates.map((item) => ({ ...item }))
           : [],
         selected: trace.selected && typeof trace.selected === 'object' ? { ...trace.selected } : null,
+        ...(trace.adaptive && typeof trace.adaptive === 'object'
+          ? {
+              adaptive: {
+                ...trace.adaptive,
+                candidates: Array.isArray(trace.adaptive.candidates)
+                  ? trace.adaptive.candidates.map((item) => ({ ...item }))
+                  : [],
+              },
+            }
+          : {}),
       }
     : traceBase({ role, logicalAttempt, modelClassHint, escalationReason });
   if (role === 'worker' || role === 'reviewer') base.role = role;
@@ -179,6 +207,8 @@ export function resolveWorkerModel({
   fallback = 'harness-default',
   preferredModelId = DEFAULT_TIER_MODEL_PREFERENCES[tier],
   traceContext = {},
+  adaptive,
+  adaptiveHealth,
 } = {}) {
   const providers = providerMap(catalog);
   const normalizedPriority = normalizeModelPriority(priority);
@@ -193,6 +223,12 @@ export function resolveWorkerModel({
     candidateSet: traceContext.candidateSet ?? 'primary',
     escalationReason: traceContext.escalationReason ?? null,
   });
+
+  // Explicit priority — including an intentionally empty configured list — is
+  // authoritative. Adaptive mode records that bypass but never reorders it.
+  if (priorityConfigured || normalizedPriority.length > 0) {
+    rankForTrace(trace, normalizedPriority, { adaptive, adaptiveHealth, explicitPriority: true });
+  }
 
   for (let index = 0; index < normalizedPriority.length; index++) {
     const ref = normalizedPriority[index];
@@ -225,17 +261,27 @@ export function resolveWorkerModel({
       }
     }
     if (matches.length === 1) {
+      rankForTrace(trace, matches, { adaptive, adaptiveHealth });
       selectTrace(trace, matches[0], 'preferred-default');
       return { ok: true, ...matches[0], source: 'preferred-default', selection_trace: trace };
     }
     if (matches.length > 1) {
       const preferredProvider = normalizeModelRef(harnessDefault)?.provider;
-      const match = matches.find((candidate) => candidate.provider === preferredProvider);
+      const deterministicMatch = matches.find((candidate) => candidate.provider === preferredProvider) ?? null;
+      const baseline = deterministicMatch
+        ? [deterministicMatch, ...matches.filter((candidate) => candidate.provider !== deterministicMatch.provider)]
+        : matches;
+      const ranked = rankForTrace(trace, baseline, { adaptive, adaptiveHealth });
+      const adaptiveChoice = ranked.trace.decision_supported ? ranked.candidates[0] : null;
+      const match = adaptiveChoice ?? deterministicMatch;
       if (match) {
-        for (const candidate of matches) {
-          if (candidate.provider === match.provider) continue;
+        const decisionOrder = adaptiveChoice ? ranked.candidates : matches;
+        for (const candidate of decisionOrder) {
+          if (candidate.provider === match.provider && candidate.model === match.model) continue;
           trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
-            reasonCode: MODEL_SELECTION_REASON_CODES.PREFERRED_MODEL_AMBIGUOUS,
+            reasonCode: adaptiveChoice
+              ? MODEL_SELECTION_REASON_CODES.ADAPTIVE_DEPRIORITIZED
+              : MODEL_SELECTION_REASON_CODES.PREFERRED_MODEL_AMBIGUOUS,
           }));
         }
         selectTrace(trace, match, 'preferred-default');
@@ -247,6 +293,7 @@ export function resolveWorkerModel({
         }));
       }
     } else {
+      rankForTrace(trace, [], { adaptive, adaptiveHealth });
       trace.ordered_candidates.push(candidateDecision(
         { provider: null, model: preferredModelId },
         'preferred-default',
@@ -254,6 +301,10 @@ export function resolveWorkerModel({
         { reasonCode: MODEL_SELECTION_REASON_CODES.PREFERRED_MODEL_UNAVAILABLE },
       ));
     }
+  }
+
+  if (adaptive?.enabled === true && trace.adaptive === undefined) {
+    rankForTrace(trace, [], { adaptive, adaptiveHealth });
   }
 
   if (fallback === 'harness-default') {
@@ -306,6 +357,7 @@ export function resolveModel({
   policy,
   catalog,
   harnessDefault,
+  adaptiveHealth,
 } = {}) {
   const p = policy && typeof policy === 'object' ? policy : {};
   const escalated = Number.isInteger(attempt) && attempt > 0;
@@ -324,6 +376,8 @@ export function resolveModel({
     harnessDefault,
     fallback: p.fallback === 'harness-default' ? 'harness-default' : 'harness-default',
     preferredModelId,
+    adaptive: p.adaptive,
+    adaptiveHealth,
     traceContext: {
       role,
       logicalAttempt: attempt,
