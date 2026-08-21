@@ -9,6 +9,8 @@ import { buildReadinessMatrix } from './readiness-matrix.mjs';
 const BASE = (process.env.DSH_CREW_HUB ?? readGlobalConfig().hub_url).replace(/\/$/, '');
 const API = `${BASE}/_dsh/dsh-crew`;
 
+export const HUB_REQUEST_FAILED = 'HUB_REQUEST_FAILED';
+
 const EMPTY_STATUS = Object.freeze({
   reachable: false,
   compatible: false,
@@ -106,8 +108,7 @@ function structuredCode(body) {
 /** Build a bounded Hub request error without copying arbitrary response fields. */
 export function hubRequestError(body, status) {
   const err = new Error(body?.error ?? `hub request failed (${status})`);
-  const code = structuredCode(body);
-  if (code) err.code = code;
+  err.code = structuredCode(body) ?? HUB_REQUEST_FAILED;
   return err;
 }
 
