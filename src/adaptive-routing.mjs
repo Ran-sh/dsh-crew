@@ -121,6 +121,16 @@ export function createAdaptiveHealthStore({ maxSamples = 32 } = {}) {
   };
 }
 
+// One bounded store per Node.js process. Hub routing and its entry wrapper share
+// this module instance, so a completed opt-in Hub attempt can influence a later
+// opt-in Hub selection without writing any persistent state. Process restart is
+// intentionally the reset boundary.
+const PROCESS_ADAPTIVE_HEALTH = createAdaptiveHealthStore();
+
+export function getProcessAdaptiveHealthStore() {
+  return PROCESS_ADAPTIVE_HEALTH;
+}
+
 function uniqueCandidates(candidates) {
   const seen = new Set();
   const out = [];
@@ -158,7 +168,7 @@ function traceBase(config, reason, candidates = []) {
  */
 export function rankAdaptiveCandidates(candidates, {
   config: rawConfig,
-  healthStore,
+  healthStore = PROCESS_ADAPTIVE_HEALTH,
   role = 'worker',
   explicitPriority = false,
 } = {}) {
