@@ -19,6 +19,8 @@ import {
 } from '../policy.mjs';
 
 const GLOBAL_CONFIG_FILE = join(homedir(), '.config', 'dsh-crew', 'config.json');
+const COLLABORATION_MODES = ['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'];
+const TIER_STATES = ['disabled', 'manual', 'auto'];
 
 export const GLOBAL_CONFIG_SCHEMA_VERSION = CONFIG_SCHEMA_VERSION;
 export const GLOBAL_CONFIG_DEFAULTS = Object.freeze({
@@ -39,12 +41,12 @@ function sourceVersion(stored) {
 }
 
 function legacySnapshotFrom(config = {}) {
-  const mode = legacy.COLLABORATION_MODES.includes(config.collaboration_mode)
+  const mode = COLLABORATION_MODES.includes(config.collaboration_mode)
     ? config.collaboration_mode
     : (config.tier_policy === 'flash-only' ? 'flash-only'
       : config.tier_policy === 'pro-only' ? 'pro-only' : 'balanced');
-  let flash = legacy.TIER_STATES.includes(config.flash_state) ? config.flash_state : 'auto';
-  let pro = legacy.TIER_STATES.includes(config.pro_state) ? config.pro_state : 'auto';
+  let flash = TIER_STATES.includes(config.flash_state) ? config.flash_state : 'auto';
+  let pro = TIER_STATES.includes(config.pro_state) ? config.pro_state : 'auto';
   if (mode === 'flash-only') { flash = 'auto'; pro = 'disabled'; }
   else if (mode === 'pro-only') { flash = 'disabled'; pro = 'auto'; }
   else if (mode === 'balanced' || mode === 'review-pipeline') { flash = 'auto'; pro = 'auto'; }
