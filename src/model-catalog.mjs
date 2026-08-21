@@ -133,12 +133,13 @@ export async function readHarnessModelCatalog({
   const providers = rawProviders.map(normalizeProvider).filter(Boolean);
   let failed = 0;
   const hydrated = await Promise.all(providers.map(async (provider) => {
-    let harnessModels;
+    let harnessModels = [];
+    let harnessFailed = false;
     try {
       harnessModels = normalizeModels(await llm.listModels(provider.id));
     } catch {
       failed += 1;
-      harnessModels = [];
+      harnessFailed = true;
     }
 
     let models = harnessModels;
@@ -155,27 +156,9 @@ export async function readHarnessModelCatalog({
     return {
       ...provider,
       models,
-      ...(harnessModels.length === 0 && failed > 0 ? {} : {}),
+      ...(harnessFailed ? { error: 'MODEL_LIST_FAILED' } : {}),
     };
   }));
-
-  // Preserve the previous per-provider failure marker without exposing the
-  // underlying error. Re-check only providers whose Harness list call failed.
-  // The public supplement may still provide selectable model ids for those
-  // providers, while `partial` remains truthful about Harness discovery.
-  let providerIndex = 0;
-  for (const provider of providers) {
-    try {
-      // No extra I/O: only use the normalized result to infer a failure marker
-      // from providers that were returned empty with a failed list in the pass
-      // above. The marker is applied explicitly below via a second lightweight
-      // bookkeeping pass implemented during hydration.
-      void provider;
-    } finally {
-      providerIndex += 1;
-    }
-  }
-
   return {
     providers: hydrated,
     provider_count: hydrated.length,
