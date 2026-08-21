@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
+import { buildDirectSelectionTrace } from './model-routing.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -59,6 +60,7 @@ const shard = createShardWriter('mcp');
 function publishStatus() {
   shard.publish([...jobs.values()].map((j) => ({
     id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    selection_trace: j.selection_trace ?? null,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), cwd: j.cwd, turn: j.turn, step: j.step, toolCalls: j.toolCalls,
@@ -72,6 +74,7 @@ function publishStatus() {
 export function jobView(j, { withResult = false } = {}) {
   const v = {
     id: j.id, role: j.role ?? 'worker', attempt: j.attempt ?? 0, phase: j.phase ?? null, tier: j.tier, provider: j.provider, model: j.model, selection_source: j.selection_source,
+    selection_trace: j.selection_trace ?? null,
     effort: j.effort, requested_effort: j.effort, reasoning_effort: j.reasoning_effort ?? j.effort,
     status: j.status, source: j.source,
     task: j.task.slice(0, 300), turn: j.turn, step: j.step, currentTool: j.currentTool,
@@ -93,7 +96,20 @@ export function jobView(j, { withResult = false } = {}) {
 export function listJobs() { return [...jobs.values()]; }
 export function getJob(id) { return jobs.get(id); }
 
-export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, effort = 'max', cwd, maxTokens = 49_152, timeoutMs = 1_800_000, source = 'api', delivery = 'coding' }) {
+export function startJob({
+  task,
+  tier = 'flash',
+  role = 'worker',
+  attempt = 0,
+  effort = 'max',
+  cwd,
+  maxTokens = 49_152,
+  timeoutMs = 1_800_000,
+  source = 'api',
+  delivery = 'coding',
+  modelClassHint = null,
+  escalationReason = null,
+}) {
   const tierInfo = TIERS[tier];
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
   if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
@@ -130,8 +146,20 @@ export function startJob({ task, tier = 'flash', role = 'worker', attempt = 0, e
     maxTokens,
   });
 
+  const selectionTrace = buildDirectSelectionTrace({
+    role,
+    logicalAttempt: attempt,
+    modelClassHint: modelClassHint ?? tier,
+    strategy: 'standalone-legacy',
+    candidateSet: attempt > 0 ? 'escalation' : 'primary',
+    provider: 'deepseek-official',
+    model: tierInfo.model,
+    source: 'standalone-legacy',
+    escalationReason,
+  });
   const job = {
     id, role, attempt, tier, provider: 'deepseek-official', model: tierInfo.model, selection_source: 'standalone-legacy',
+    selection_trace: selectionTrace,
     effort, reasoning_effort: effort, task, source, cwd: workspace,
     prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
     phase: JOB_PHASES.RUNNING,
