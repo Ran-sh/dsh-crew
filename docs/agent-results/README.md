@@ -1,16 +1,11 @@
-# Agent results
+# Agent Results
 
-Durable reports from completed ACTIVE tasks live here when the task requires one.
+Durable Result Contracts and reports live here. Machine-readable results should identify source commit, work performed, exact validations, PASS/FAIL/PARTIAL/SKIP/BLOCKED/NOT RUN states, evidence, changed files, blockers, result path, limitations, and result commit when available.
 
-Recommended naming:
+Validate JSON results with:
 
-```text
-<agent>-<task>-report.md
-<agent>-<task>-review.md
+```sh
+node .agent-workflow/validator/validate-contract.mjs result <result-json>
 ```
 
-A report should be decision-oriented, not a transcript. Include source SHA, branch/environment when relevant, work/tests actually performed, results, evidence, blockers, known limitations, files changed, result commit SHA, and recommended next action.
-
-For dsh-crew runtime validation, include workflow/attempt IDs, provider/model/selection source, relevant phase/status/error flags, and Git/test evidence when those facts are part of the requested scenario.
-
-Never include secrets, credential contents, or private chain-of-thought.
+Do not include private chain-of-thought, credentials, tokens, or signed URLs. Existing historical Markdown reports remain valid evidence; new machine-driven tasks should prefer JSON Result Contracts.
