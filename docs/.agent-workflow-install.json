@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "source_repository": "Ran-sh/chatgpt_workflow",
-  "workflow_version": "1.7.0",
-  "workflow_source_commit": "b931c39e4392db988c80b093eec79cb44d0ae811",
+  "workflow_version": "1.8.0",
+  "workflow_source_commit": "5e4239aa3a30e3a1738dcdb79e7d341ea8bca458",
   "project": "Ran-sh/dsh-crew",
   "migration_source_commit": "10edf2e9e980c652e2e809e0414acbf23d7735b4",
   "generated_files": [
