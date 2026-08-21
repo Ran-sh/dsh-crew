@@ -43,7 +43,17 @@ test('attempt 0 uses the worker primary priority', () => {
     catalog: catalog([provider('b', ['cheap']), provider('c', ['strong'])]),
     harnessDefault,
   });
-  assert.deepEqual(r, { ok: true, provider: 'b', model: 'cheap', source: 'priority', matchedPriorityIndex: 0, role: 'worker', attempt: 0 });
+  assert.equal(r.ok, true);
+  assert.equal(r.provider, 'b');
+  assert.equal(r.model, 'cheap');
+  assert.equal(r.source, 'priority');
+  assert.equal(r.matchedPriorityIndex, 0);
+  assert.equal(r.role, 'worker');
+  assert.equal(r.attempt, 0);
+  assert.equal(r.selection_trace.role, 'worker');
+  assert.equal(r.selection_trace.logical_attempt, 0);
+  assert.equal(r.selection_trace.candidate_set, 'primary');
+  assert.deepEqual(r.selection_trace.selected, { provider: 'b', model: 'cheap', source: 'priority' });
 });
 
 test('attempt 1 escalates to the escalation (strong) candidate pool', () => {
