@@ -3,22 +3,55 @@
 // Web UI); otherwise the MCP server falls back to standalone runtimes.
 
 import { readGlobalConfig } from './install/install.mjs';
+import { evaluateHubHandshake, HUB_COMPATIBILITY_CODES } from './runtime-identity.mjs';
 
 const BASE = (process.env.DSH_CREW_HUB ?? readGlobalConfig().hub_url).replace(/\/$/, '');
 const API = `${BASE}/_dsh/dsh-crew`;
 
-let lastProbe = { at: 0, ok: false };
+const EMPTY_STATUS = Object.freeze({
+  reachable: false,
+  compatible: false,
+  service: null,
+  runtime_version: null,
+  protocol_version: null,
+  capabilities: [],
+  missing_capabilities: [],
+  code: HUB_COMPATIBILITY_CODES.UNREACHABLE,
+});
 
-export async function hubAvailable() {
-  if (Date.now() - lastProbe.at < 10_000) return lastProbe.ok;
+let lastProbe = { at: 0, status: EMPTY_STATUS };
+
+function cacheStatus(status) {
+  lastProbe = { at: Date.now(), status };
+  return status;
+}
+
+/**
+ * Probe the Hub without conflating transport reachability with protocol
+ * compatibility. Callers may force a fresh probe when presenting diagnostics.
+ */
+export async function hubStatus({ force = false } = {}) {
+  if (!force && Date.now() - lastProbe.at < 10_000) return lastProbe.status;
   try {
     const res = await fetch(`${API}/ping`, { signal: AbortSignal.timeout(800) });
-    const body = await res.json();
-    lastProbe = { at: Date.now(), ok: res.ok && body?.service === 'dsh-crew-hub' };
+    let body;
+    try { body = await res.json(); } catch { body = null; }
+    if (!res.ok) {
+      return cacheStatus({
+        ...EMPTY_STATUS,
+        reachable: true,
+        code: HUB_COMPATIBILITY_CODES.HTTP_ERROR,
+        http_status: res.status,
+      });
+    }
+    return cacheStatus(evaluateHubHandshake(body));
   } catch {
-    lastProbe = { at: Date.now(), ok: false };
+    return cacheStatus(EMPTY_STATUS);
   }
-  return lastProbe.ok;
+}
+
+export async function hubAvailable() {
+  return (await hubStatus()).compatible;
 }
 
 async function call(path, init) {
