@@ -40,6 +40,9 @@ export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   pro_model_priority: Object.freeze({ global: N, session: null }),
   pro_model_fallback: Object.freeze({ global: N, session: null }),
   isolation: Object.freeze({ global: N, session: null }),
+  vision_provider: Object.freeze({ global: N, session: null }),
+  vision_model: Object.freeze({ global: N, session: null }),
+  imagegen_provider: Object.freeze({ global: N, session: null }),
 
   // These values are copied into the MCP session defaults at process startup.
   // dsh_worker_config can override them for subsequent workflows in that same
@@ -52,9 +55,11 @@ export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   preset_flash: Object.freeze({ global: S, session: N }),
   preset_pro: Object.freeze({ global: S, session: N }),
 
-  // hub-client freezes its base URL at module initialization so changing the
-  // persisted URL requires the MCP process to restart, not merely a new job.
+  // hub-client freezes its base URL at module initialization. Crew Vision and
+  // Image Generation tool registration is also decided at Hub plugin boot.
   hub_url: Object.freeze({ global: R, session: null }),
+  vision_enabled: Object.freeze({ global: R, session: null }),
+  imagegen_enabled: Object.freeze({ global: R, session: null }),
 });
 
 export function activationForSetting(key) {
