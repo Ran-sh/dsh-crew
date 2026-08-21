@@ -55,6 +55,7 @@ export function normalizeReview({ attemptResult, beforeCandidate, afterCandidate
     delivery_complete: parsed.complete ?? false,
     model: attemptResult?.model ?? null,
     provider: attemptResult?.provider ?? null,
+    selection_trace: attemptResult?.selection_trace ?? null,
     status: attemptResult?.status ?? 'failed',
     ...(mutation ? { mutated_candidate: true, invalidated: true } : {}),
   };
@@ -278,13 +279,14 @@ export function createWorkflowRuntime(adapters, {
       }
 
       let attempt = 0;
+      let escalationReason = null;
       for (;;) {
         if (job.cancelling) { cancelWorkflow(job); return; }
         if (attempt > 0) transition(job, JOB_PHASES.RUNNING, `escalated attempt ${attempt}`);
         const policy = resolveModelPolicy(config, 'worker', { attempt });
         const attemptId = attemptIdFor(adapters, job.id, attempt === 0 ? '' : String(attempt));
         job.current_attempt_id = attemptId;
-        job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt });
+        job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt, escalation_reason: escalationReason });
         const ar = await adapters.executeAttempt({
           id: attemptId,
           workflowId: job.id,
@@ -296,6 +298,7 @@ export function createWorkflowRuntime(adapters, {
           policy,
           source: job.source,
           model_class_hint: job.model_class_hint,
+          escalation_reason: escalationReason,
           onAttemptStarted: (actualId) => {
             if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
           },
@@ -350,6 +353,7 @@ export function createWorkflowRuntime(adapters, {
         }
         if (decision.step === 'escalate') {
           transition(job, JOB_PHASES.ESCALATING, decision.reason);
+          escalationReason = decision.reason;
           attempt += 1;
           continue;
         }
@@ -400,6 +404,7 @@ export function createWorkflowRuntime(adapters, {
       policy,
       source: job.source,
       model_class_hint: 'pro',
+      escalation_reason: null,
       onAttemptStarted: (actualId) => {
         if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
       },
@@ -423,6 +428,7 @@ export function createWorkflowRuntime(adapters, {
       provider: ar.provider ?? null,
       model: ar.model ?? null,
       selection_source: ar.selection_source ?? null,
+      selection_trace: ar.selection_trace ?? null,
       status: ar.status ?? 'failed',
       result: ar.result ?? null,
       stopReason: ar.stopReason ?? null,
@@ -482,7 +488,8 @@ export function createWorkflowRuntime(adapters, {
     if (withResult) {
       v.child_attempts = job.attempts.map((a) => ({
         id: a.id, role: a.role, attempt: a.attempt, provider: a.provider, model: a.model,
-        selection_source: a.selection_source, status: a.status, stopReason: a.stopReason,
+        selection_source: a.selection_source, selection_trace: a.selection_trace ?? null,
+        status: a.status, stopReason: a.stopReason,
         outcome_task: a.outcome?.task_status ?? null,
         error: a.error ?? null, timed_out: a.timed_out === true,
         candidate_fingerprint: a.candidate_fingerprint ?? null,
