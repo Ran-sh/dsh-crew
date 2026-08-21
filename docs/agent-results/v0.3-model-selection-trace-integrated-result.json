@@ -1,0 +1,95 @@
+{
+  "schema_version": 2,
+  "task_id": "v0.3-model-selection-trace-integrate-latest-main",
+  "source_commit": "f518f94be0945feb7e301ec69da6bdf4ce730eea",
+  "status": "PARTIAL",
+  "summary": "Integrated the validated PR #15 Model Selection Trace implementation onto the latest main (merge f364791 + ACTIVE-only chore). The eight authorized files are integrated: the six PR#15-only files (src/hub/index.mjs, src/jobs.mjs, src/model-routing.mjs, test/model-routing.test.mjs, test/model-selection-trace.test.mjs [new], test/role-routing.test.mjs) applied with PR#15's ready-validated semantics while keeping main's CRLF convention (zero EOL churn verified: plain diff equals git diff --ignore-cr-at-eol); the two overlapping files (src/mcp-runtime.mjs, src/workflow-runtime.mjs) were manually merged so PR#15's selection_trace/transport enrichment is combined with latest-main structured error_code propagation, failure classification (classifyFailure), terminal-code promotion and live runtime controls - none of the later-main lines were reverted. Deterministic validation PASS: node --test test/*.test.mjs 395/395 (353 main tests + the restored PR#15 trace tests) and pnpm run build:client PASS (generated lib/client.js restored). Real execution on the integrated source: the source boots as a disposable current-source DSH Hub (127.0.0.1:3213, /runtime 0.3.0-dev protocol 1) and a genuine Hub attempt (hub-1-mt2zi8nh, opencode-go/deepseek-v4-flash, preferred-default) emitted selection_trace version=1 with all 11 required fields, selected.provider/model/source exactly matching the executed attempt, and a zero-hit recursive sensitivity scan; the Hub job view itself carries selection_trace (hub-side emission verified). The worker's inference completion is BLOCKED by DSH_ENVIRONMENT: ~/.dsh/.credentials.yaml was rewritten (by the running web DSH, unrelated to this change) into a version/refs envelope whose `version` is a non-string, which dsh-credentials-local 0.1.0-rc.7 rejects at new-profile boot, and the task forbids modifying or duplicating persistent credentials - so the disposable hub's worker attempt fails at opencode-go auth (EXECUTION_FAILED/max_attempts_reached). The completed-worker trace contract is covered by restored deterministic tests; only a genuine completed live worker remains blocked by that environment defect.",
+  "timeline": {
+    "started_at": "2026-08-21T21:19:00+08:00",
+    "completed_at": "2026-08-21T21:30:00+08:00"
+  },
+  "changed_files": [
+    "src/hub/index.mjs",
+    "src/jobs.mjs",
+    "src/mcp-runtime.mjs",
+    "src/model-routing.mjs",
+    "src/workflow-runtime.mjs",
+    "test/model-routing.test.mjs",
+    "test/model-selection-trace.test.mjs",
+    "test/role-routing.test.mjs"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validated",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)"
+    },
+    {
+      "name": "T02 Branch/revision + worktree safety",
+      "status": "PASS",
+      "evidence": "Branch feat/v0.3-model-selection-trace-integrated at LATEST f518f94be0945feb7e301ec69da6bdf4ce730eea = latest main merge f36479120f5835590e26025c46e9dd9ce0c9608e + ACTIVE_TASK.json only (git diff f364791..HEAD = 1 file); no unrelated dirty state touched"
+    },
+    {
+      "name": "T03 Integration topology + semantic reference",
+      "status": "PASS",
+      "evidence": "merge-base 4e42cda77f37175bf5e2fc523488110dc2809388 and PR #15 feature head 13fc8cd9af6fffcfeaa4445092542104b6ca5a04 confirmed; PR#15 semantic diff (git diff --ignore-cr-at-eol) shows hub +28/-3, jobs +29/-1, model-routing +trace machinery, and the 2 overlap regions; later main (4e42cda..f364791) changed ONLY src/mcp-runtime.mjs and src/workflow-runtime.mjs"
+    },
+    {
+      "name": "T04 Merge semantics on the overlapping files",
+      "status": "PASS",
+      "evidence": "src/mcp-runtime.mjs keeps latest-main export of attemptFromView AND error_code propagation (view.error_code ?? view.code) while adding selection_trace transport fallback + enrichment + standalone startJob modelClassHint/escalationReason; src/workflow-runtime.mjs keeps classifyFailure import/field, final-attempt error-code promotion and reviewer error-code lifecycle while adding selection_trace in normalizeReview/attemptRecord/child_attempts and escalation_reason propagation; full diff vs HEAD shows only these intended additions (mcp-runtime +30 lines, workflow-runtime +11) and none of the later-main lines removed"
+    },
+    {
+      "name": "T05 Deterministic node --test",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 395 tests, 395 pass, 0 fail (main's 353 plus restored PR#15 trace tests incl. model-selection-trace.test.mjs)"
+    },
+    {
+      "name": "T06 Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client -> tsdown/rolldown build completed and lib/client.js regenerated; tracked lib/client.js restored to HEAD afterward (worktree kept to allowed files only)"
+    },
+    {
+      "name": "T07 EOL convention preserved on hub/index.mjs + jobs.mjs",
+      "status": "PASS",
+      "evidence": "All eight edited/new files are CRLF; git diff HEAD -- src/hub/index.mjs src/jobs.mjs is byte-identical to git diff --ignore-cr-at-eol (numstat md5 equal) => zero EOL churn, only semantic trace hunks (+31/-3 hub, +30/-1 jobs)"
+    },
+    {
+      "name": "T08 Integrated source boots as disposable current-source Hub",
+      "status": "PASS",
+      "evidence": "Disposable profile v03int linked to the integrated checkout booted DSH web on 127.0.0.1:3213: GET /_dsh/dsh-crew/ping 200 service=dsh-crew-hub; GET /runtime 200 runtime_version=0.3.0-dev protocol_version=1 capabilities [jobs,jobs-wait,jobs-cancel,roles,attempt-index,model-policy,model-catalog,presets,config]; no boot errors once the unrelated shared-credentials flash-red-herring was pointed at a disposable empty store (see T10)"
+    },
+    {
+      "name": "T09 Real integrated selection_trace emission (Hub-side + MCP)",
+      "status": "PASS",
+      "evidence": "One genuine Hub attempt on the integrated source: hub-1-mt2zi8nh (provider opencode-go, model deepseek-v4-flash, selection_source preferred-default). Integrated Hub job view itself carries selection_trace (hub-side emission via integrated hub/jobs/model-routing). child_attempts[0].selection_trace: version=1 with all 11 required fields (role, logical_attempt=0, model_class_hint=flash, strategy=balanced, candidate_set=primary, ordered_candidates[deepseek-official skipped PREFERRED_MODEL_AMBIGUOUS, opencode-go selected], selected{opencode-go,deepseek-v4-flash,preferred-default}, selection_source, fallback_reason=null, escalation_reason=null); selected.provider/model/source EXACTLY equals the executed attempt; logical_attempt matches; recursive sensitivity scan 0 hits (no creds/tokens/sensitive paths; only bounded identifiers/enums/reason codes)"
+    },
+    {
+      "name": "T10 Genuine COMPLETED Hub/MCP worker on the integrated branch",
+      "status": "BLOCKED",
+      "evidence": "Blocker (DSH_ENVIRONMENT, unrelated to the integration): ~/.dsh/.credentials.yaml was rewritten (by the running DSH web process) into a version/refs envelope whose root `version` value is a non-string; dsh-credentials-local 0.1.0-rc.7 requires every root value to be a string, so any NEW profile boot fails at [cordis.init]. The task forbids modifying or duplicating persistent DSH credentials, so the disposable current-source hub's worker cannot authenticate its opencode-go inference call: the real attempt hub-1-mt2zi8nh was selected correctly but the attempt ended EXECUTION_FAILED / terminal_reason max_attempts_reached. The completed-worker trace contract is covered by the restored deterministic model-selection-trace.test.mjs. Recommended fix (out of scope): correct the credentials file's `version` to a string (or restore the prior flat format), then re-run the completed-worker live smoke."
+    },
+    {
+      "name": "T11 Persistent configuration unchanged + cleanup/safety",
+      "status": "PASS",
+      "evidence": "config.json sha256 7cbbc8e1fb84f2a7dff6d793d259940c497b08234b1699103d786aa2eb21314d and settings.yaml sha256 b3c608b86311c10ad631306e42918f6d860350fe16ccdb38eaf317a3526095f9 identical before/after; disposable profile v03int removed, disposable DSH process (3213) stopped, disposable repos/driver/logs/launcher and a disposable empty credentials store removed; web profile + running Hub (3080) healthy; dsh-crew checkout clean except the eight authorized files; no credentials/secret values appear in this result"
+    }
+  ],
+  "blockers": [
+    "DSH_ENVIRONMENT: genuine completed Hub/MCP worker on a disposable current-source hub is blocked because ~/.dsh/.credentials.yaml was rewritten (by the running DSH web process, independent of this change) into a version/refs envelope with a non-string `version`, which dsh-credentials-local 0.1.0-rc.7 rejects on new-profile boot; the task forbids modifying or duplicating persistent DSH credentials, so the disposable hub's worker cannot authenticate the opencode-go inference call. The integrated selection_trace emission itself was verified on a real attempt (T09); only worker inference completion is blocked."
+  ],
+  "result_path": "docs/agent-results/v0.3-model-selection-trace-integrated-result.json",
+  "notes": [
+    "source_branch: feat/v0.3-model-selection-trace-integrated",
+    "supersedes PR #15 (tracks issue #7); reference feature commit 13fc8cd9af6fffcfeaa4445092542104b6ca5a04; validated smoke result reference docs/agent-results/v0.3-model-selection-trace-real-smoke.json@test/v0.3-model-selection-trace-smoke",
+    "Merge strategy: the six PR#15-only files (not modified on main since 4e42cda) were applied with PR#15 semantics on top of main, converted to main's CRLF convention; the two overlap files were hand-merged to keep latest-main error_code/failure-classification/live-runtime behavior while adding the PR#15 selection_trace and escalation_reason metadata. Trace remains metadata-only; no routing semantics changed (selection_source preferred-default identical with/without trace).",
+    "Environment finding (redacted, no secrets): the shared ~/.dsh/.credentials.yaml format changed during this session (version/refs envelope, non-string `version`), breaking new-profile boots on this DSH 0.1.0-rc.7 install; reported as the T10 DSH_ENVIRONMENT blocker. The user/owner may want to restore the earlier flat-certificate format (values untouched).",
+    "result_commit: filled after push"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v0.3-model-selection-trace-integrated-result.json --stamp",
+    "validated_at": "2026-08-21T13:30:34Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v0.3-model-selection-trace-integrated-result.json"
+  }
+}
