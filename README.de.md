@@ -115,14 +115,16 @@ Dispatch lässt sich breit auffächern. Unten übersetzen achtzehn Worker dieses
 Von GitHub in ein DSH-Profil installieren:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
 Oder für lokale Entwicklung direkt aus dem Quellbaum:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 

@@ -1,9 +1,11 @@
-// Live Crew worker smoke against the running DSH hub (Stage 4 provider routing).
+// Live Crew worker smoke against a Crew-owned dsh-crew Hub (Stage 4 provider
+// routing). Targets the dedicated Crew Hub (DSH_CREW_HUB env or default
+// http://127.0.0.1:3210); it never targets or mutates the official web profile.
 // Creates a temp fixture as cwd, spawns flash, polls, prints job metadata.
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-const BASE = 'http://127.0.0.1:3080/_dsh/dsh-crew';
+const BASE = (process.env.DSH_CREW_HUB ?? 'http://127.0.0.1:3210').replace(/\/$/, '') + '/_dsh/dsh-crew';
 
 (async () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh4-fixture-'));

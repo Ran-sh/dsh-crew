@@ -1,42 +1,18 @@
-// Real DSH smoke for the v0.2 runtime path. Spawns this branch's MCP server
+// Real DSH smoke for the v0.3 runtime path. Spawns this branch's MCP server
 // (src/server.mjs) over stdio and drives it with the MCP SDK.
-//   run|spawn : against a LIVE DSH hub (127.0.0.1:3080)
-//   standalone: standalone worker path (jobs.mjs) routed at the DSH-configured
-//               OpenAI-compatible gateway (base URL + key read from DSH's own
-//               ~/.dsh store; injected as DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL,
-//               never printed).
+//   run|spawn : against a LIVE, Crew-owned DSH hub. The hub URL comes from the
+//               DSH_CREW_HUB environment variable and defaults to the dedicated
+//               Crew port 3210; the official ~/.dsh home / web profile is never
+//               read or touched.
+//   standalone: standalone worker path (jobs.mjs) using ONLY explicitly
+//               supplied process-environment credentials
+//               (DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL). This script never reads
+//               ~/.dsh, any official credential/settings store, or key files.
+//               If the credential environment is absent it exits BLOCKED-style.
 // Uses a throwaway temp git repo; never touches the web profile or user repos.
 // Usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone]
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { readFileSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-
-const repo = process.argv[2];
-const mode = process.argv[3] ?? 'run';
-const effort = process.argv[4] ?? 'max';
-if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone] [effort]'); process.exit(2); }
-
-/** Read KEY: value (credentials.yaml) with values redacted from logs. */
-function readDshStore() {
-  const cred = join(homedir(), '.dsh', '.credentials.yaml');
-  const settings = join(homedir(), '.dsh', 'settings.yaml');
-  const key = (file, name) => {
-    try {
-      for (const line of readFileSync(file, 'utf8').split('\n')) {
-        const m = line.match(new RegExp(`^\\s*${name}\\s*:\\s*(.+?)\\s*$`));
-        if (m) return m[1].trim().replace(/^['"]|['"]$/g, '');
-      }
-    } catch {}
-    return '';
-  };
-  // provider-level apiKey (settings.yaml) falls back to the credential store key
-  return {
-    apiKey: key(settings, 'apiKey') || key(cred, 'OPENCODE_GO_API_KEY'),
-    baseURL: key(settings, 'baseURL') || 'https://opencode.ai/zen/go/v1',
-  };
-}
 
 /** Session descriptor for the MCP child. NEVER logs the key. */
 function serverTransport(extraEnv = {}) {
@@ -44,10 +20,20 @@ function serverTransport(extraEnv = {}) {
     command: 'node',
     args: ['src/server.mjs'],
     cwd: process.cwd(),
-    env: { ...process.env, ...extraEnv },
+    env: {
+      ...process.env,
+      // Crew-owned hub default; an explicit DSH_CREW_HUB overrides it.
+      DSH_CREW_HUB: process.env.DSH_CREW_HUB ?? 'http://127.0.0.1:3210',
+      ...extraEnv,
+    },
     stderr: process.stderr,
   });
 }
+
+const repo = process.argv[2];
+const mode = process.argv[3] ?? 'run';
+const effort = process.argv[4] ?? 'max';
+if (!repo) { console.error('usage: node scripts/smoke-real.mjs <tempGitRepo> [run|spawn|standalone] [effort]'); process.exit(2); }
 
 const TASK = [
   'In this git repository, create the file src/answer.mjs with exactly the content: `export const answer = 40 + 2;`',
@@ -61,17 +47,21 @@ const TASK = [
   'none',
 ].join('\n');
 
-// For standalone mode, route the worker at the user's DSH-configured
-// OpenAI-compatible gateway (key + base URL flow through the child env only,
-// they are never logged).
+// For standalone mode, use ONLY explicitly supplied process-environment
+// credentials (DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL). This script never reads
+// ~/.dsh or any official credential/settings store. Absent credentials are a
+// BLOCKED outcome, not an excuse to invent or read credentials.
 const standaloneEnv = {};
 if (mode === 'standalone') {
-  const store = readDshStore();
-  if (!store.apiKey) { console.error('[smoke] no OpenAI-compatible key found in ~/.dsh (OPENCODE_GO_API_KEY / settings apiKey)'); process.exit(2); }
-  standaloneEnv.DEEPSEEK_API_KEY = store.apiKey;
-  standaloneEnv.DEEPSEEK_BASE_URL = store.baseURL;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    console.error('[smoke] BLOCKED: standalone requires DEEPSEEK_API_KEY in the process environment; credential: ABSENT (no official store will be read)');
+    process.exit(2);
+  }
+  standaloneEnv.DEEPSEEK_API_KEY = apiKey;
+  if (process.env.DEEPSEEK_BASE_URL) standaloneEnv.DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL;
   standaloneEnv.DSH_SANDBOX_MODE = 'workspace-write';
-  console.log(`[smoke] standalone: routing at ${store.baseURL} (key injected, not shown)`);
+  console.log('[smoke] standalone: using process-environment credentials (not shown)');
 }
 const transport = serverTransport(standaloneEnv);
 const client = new Client({ name: 'dsh-crew-smoke', version: '1.0.0', requestTimeout: 600 * 1000 });

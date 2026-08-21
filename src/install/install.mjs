@@ -23,9 +23,29 @@ const GLOBAL_CONFIG_FILE = join(homedir(), '.config', 'dsh-crew', 'config.json')
 const COLLABORATION_MODES = ['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'];
 const TIER_STATES = ['disabled', 'manual', 'auto'];
 
+// ---- P0 isolation contract -------------------------------------------------
+// dsh-crew owns a dedicated DSH home and profile; repository installer/test
+// paths must never default to the user's official ~/.dsh or its ``web`` profile.
+// A fresh Crew Hub config points at the Crew-owned port only; the former
+// shared-profile default 3080 is treated as a legacy value to migrate away from.
+export const CREW_PROFILE_NAME = 'dsh-crew';
+export const CREW_HOME_REL = join('.config', 'dsh-crew', 'harness');
+export const CREW_DEFAULT_HUB_URL = 'http://127.0.0.1:3210';
+export const CREW_LEGACY_HUB_URL = 'http://127.0.0.1:3080';
+export function crewDshHome({ home = homedir() } = {}) {
+  return join(home, CREW_HOME_REL);
+}
+export function crewProfileDir({ home = homedir() } = {}) {
+  return join(crewDshHome({ home }), 'profiles', CREW_PROFILE_NAME);
+}
+
+// The isolated default set: identical to the legacy defaults except the Hub URL,
+// so fresh Crew installs never point at the official web profile.
+const CREW_GLOBAL_CONFIG_DEFAULTS = { ...legacy.GLOBAL_CONFIG_DEFAULTS, hub_url: CREW_DEFAULT_HUB_URL };
+
 export const GLOBAL_CONFIG_SCHEMA_VERSION = CONFIG_SCHEMA_VERSION;
 export const GLOBAL_CONFIG_DEFAULTS = Object.freeze({
-  ...legacy.GLOBAL_CONFIG_DEFAULTS,
+  ...CREW_GLOBAL_CONFIG_DEFAULTS,
   config_schema_version: CONFIG_SCHEMA_VERSION,
 });
 
@@ -70,7 +90,7 @@ function attachReadMetadata(config, { version, canonical }) {
 }
 
 function freshConfig() {
-  const imported = normalizeLegacyGlobalConfig(legacy.GLOBAL_CONFIG_DEFAULTS);
+  const imported = normalizeLegacyGlobalConfig(CREW_GLOBAL_CONFIG_DEFAULTS);
   const normalized = normalizeGlobalConfig({
     ...imported,
     legacy: legacySnapshotFrom(imported),
@@ -79,19 +99,31 @@ function freshConfig() {
   return attachReadMetadata(normalized, { version: CONFIG_SCHEMA_VERSION, canonical: true });
 }
 
+/**
+ * Migrate the former shared-profile Crew Hub default (3080) to the Crew-owned
+ * dedicated port on the read path so a fresh or recovered install can never
+ * silently reconnect to the official web profile. Everything else is preserved.
+ */
+function migrateHubUrl(config, { legacyUrl = CREW_LEGACY_HUB_URL, dedicatedUrl = CREW_DEFAULT_HUB_URL } = {}) {
+  if (validObject(config) && config.hub_url === legacyUrl) {
+    return { ...config, hub_url: dedicatedUrl, hub_url_migrated_from_legacy: true };
+  }
+  return config;
+}
+
 export function mergeStoredGlobalConfig(stored) {
   if (!validObject(stored)) return freshConfig();
 
   const version = sourceVersion(stored);
   if (configHasCanonicalAuthority(stored)) {
-    const merged = { ...legacy.GLOBAL_CONFIG_DEFAULTS, ...stored };
-    return attachReadMetadata(normalizeGlobalConfig(merged), { version, canonical: true });
+    const merged = { ...CREW_GLOBAL_CONFIG_DEFAULTS, ...stored };
+    return attachReadMetadata(migrateHubUrl(normalizeGlobalConfig(merged)), { version, canonical: true });
   }
 
   // Legacy files keep the exact v0.2 import semantics. Reading is non-mutating:
   // migration is reported but the disk file is upgraded only on the next
   // explicit save.
-  const legacyMerged = legacy.mergeStoredGlobalConfig(stored);
+  const legacyMerged = migrateHubUrl(legacy.mergeStoredGlobalConfig(stored));
   const normalized = normalizeLegacyGlobalConfig(legacyMerged);
   return attachReadMetadata(normalized, { version, canonical: false });
 }

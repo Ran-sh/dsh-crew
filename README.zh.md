@@ -55,46 +55,55 @@ git worktree，并行 worker 不会互相踩 working tree）；验证 / reviewer
 
 ## 安装
 
-前置条件：带 npm/npx 的 Node.js、Git 和 pnpm。我们分别从命令环境中移除这些前置项做过真实测试：DSH 需要 `npx`，其 profile 转发器会直接调用 Git 和 `pnpm`。
+前置条件：带 npm/npx 的 Node.js、Git 和 pnpm。
 
-在任意目录直接从本 GitHub 仓库安装：
+> **官方 Harness 隔离** — dsh-crew 安装到它自己的专用 DSH home
+> （`~/.config/dsh-crew/harness`）和专用 profile（`dsh-crew`），永远不会安装
+> 到官方 DSH home（`~/.dsh`）或官方 `web` profile。你的正常 DeepSeek Harness
+> 安装不会被修改。
+
+从本仓库克隆后，跨平台安装：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install
 ```
 
-启动 DSH：
+Windows：
 
-```bash
-npx -y @deepseek-ai/dsh web
+```bat
+install.cmd
 ```
 
 然后打开 **设置 → DSH Crew**，在 Codex 一行点击 **安装**。Claude Code 集成是可选项，有独立的安装按钮。
 
-Crew 会持久安装在 DSH 的 `web` profile 中。本 fork 不发布到 npm registry；`npx` 只负责运行 DSH CLI，再由 DSH 从 GitHub 安装 Crew。
+安装器会把本检出以 `@ran-sh/dsh-crew` 方式链接到专用 `dsh-crew` profile，并把 Crew Hub 指向自己的端口；不会改动官方 web profile 或任何官方凭据存储。本 fork 不发布到 npm registry。
 
 ### 更新
 
-重新执行 GitHub add 命令。DSH/pnpm 会刷新 Git revision，不会重复添加 dependency 或 bundle：
+重新执行源码安装器：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+git pull
+node scripts/setup.mjs install
 ```
 
 更新后重启 DSH。
 
 ### 迁移旧版 fork 安装
 
-旧版 fork 曾使用上游包名 `@zseven-w/dsh-crew`。仅凭包名无法区分本 fork 与真正的上游包，因此不会自动迁移。
+旧版发布把 Crew 安装进官方 DSH `web` profile，这些安装不在受支持路径内。请先用源码卸载器卸载旧版 Crew（见“卸载”），再执行上述源码安装器，它会安装到专用 Crew home/profile。
 
-只有在确认旧包来自 `Ran-sh/dsh-crew` 时，才执行：
+### 旧版 web-profile 命令（不支持 — 仅作参考）
+
+旧版发布和工具曾使用直接 `--profile web` 命令把 Crew 安装进官方 DSH `web` profile。这些命令**不受支持**，不得用于新的安装、更新或卸载 — 受支持的 Crew 工具绝不会修改官方 web profile：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
 ```
 
-如果 `@zseven-w/dsh-crew` 是你有意安装的上游原版，请不要移除它。
+`ZSeven-W/dsh-crew` 是上游项目标识；本 fork 是 `Ran-sh/dsh-crew`。请改用源码安装/卸载器（`node scripts/setup.mjs install|uninstall`）。
 
 ### 从 Flash / Pro 迁移（v0.1 → v0.2 角色）
 
@@ -143,7 +152,7 @@ DSH Crew 与 Codex / Claude Code 宿主集成是两层：
 2. 移除 profile plugin：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+node scripts/setup.mjs uninstall   # Safe uninstall: see the canonical Uninstall section of README.md (official web profile is never modified).
 ```
 
 只移除 profile plugin 不会隐式修改 `~/.codex` 或 `~/.claude`。Crew 配置、备份、凭据和其他 DSH bundle 都会保留。

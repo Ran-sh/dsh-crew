@@ -1,0 +1,127 @@
+{
+  "schema_version": 2,
+  "task_id": "p0-isolate-dsh-crew-and-recover-official-harness",
+  "source_commit": "aeed6468c0153ec8b4aaa77b9ff57a6baed065ce",
+  "status": "PASS",
+  "summary": "P0 (issue #32) completed. Phase A (repository isolation): dsh-crew now owns a dedicated DSH home (~/.config/dsh-crew/harness) and profile (dsh-crew) and a dedicated Crew Hub port (http://127.0.0.1:3210); scripts/setup.mjs runs every DSH CLI invocation with the Crew DSH_HOME in the child environment and profile dsh-crew, never the official web profile; fresh Crew config defaults to 3210 and legacy 3080 configs are read-migrated to 3210; scripts/smoke-real.mjs no longer reads ~/.dsh stores (standalone uses only explicit DEEPSEEK_API_KEY env, else BLOCKED-style exit); live-crew-smoke/live-policy-matrix target the explicit/dedicated hub; a new deterministic isolation regression test guards all these boundaries. Deterministic node --test 396/396 PASS and pnpm run build:client PASS; README (canonical) + 14 translations + docs/agent-workflow.md updated so no normal command installs/removes dsh-crew in --profile web, with official-home isolation stated. Phase B (local recovery/uninstall): stopped the residual dsh-crew MCP process; recovered the official credential store by restoring a trustworthy DSH-generated pre-change flat-format backup (loader-proven with the installed dsh-credentials-local parser; values never changed, printed, or exposed); removed @ran-sh/dsh-crew (dependency + bundle reference + node_modules) from the official web profile, leaving base/web-app bundles unchanged; uninstalled dsh-crew Codex and Claude integrations (narrowly scoped, unrelated content preserved); archived and purged ~/.config/dsh-crew state; verified no dsh-crew plugin/profile/process remains and the official DeepSeek Harness starts fresh and healthy (web root HTTP 200) without dsh-crew using the same installed binary and normal web profile. dsh-crew is left uninstalled; a reinstall requires an explicit new user request.",
+  "timeline": {
+    "started_at": "2026-08-21T21:58:00+08:00",
+    "completed_at": "2026-08-21T22:27:00+08:00"
+  },
+  "changed_files": [
+    "scripts/setup.mjs",
+    "scripts/smoke-real.mjs",
+    "scripts/live-crew-smoke.mjs",
+    "scripts/live-policy-matrix.mjs",
+    "src/install/install.mjs",
+    "test/setup.test.mjs",
+    "test/live-policy-matrix.test.mjs",
+    "test/dsh-profile-isolation.test.mjs",
+    "README.md",
+    "README.zh.md",
+    "README.de.md",
+    "README.es.md",
+    "README.fr.md",
+    "README.hi.md",
+    "README.id.md",
+    "README.ja.md",
+    "README.ko.md",
+    "README.pt.md",
+    "README.ru.md",
+    "README.th.md",
+    "README.tr.md",
+    "README.vi.md",
+    "README.zh-TW.md",
+    "docs/agent-workflow.md"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validated",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)"
+    },
+    {
+      "name": "T02 Repository isolation design (dedicated home/profile/hub + legacy migration)",
+      "status": "PASS",
+      "evidence": "src/install/install.mjs exports CREW_PROFILE_NAME=dsh-crew, CREW_DEFAULT_HUB_URL=http://127.0.0.1:3210, CREW_LEGACY_HUB_URL=http://127.0.0.1:3080, crewDshHome()=~/.config/dsh-crew/harness, crewProfileDir(); fresh config defaults hub_url=3210; legacy stored hub_url=3080 is read-migrated to 3210 while unrelated fields are preserved (verified by unit test)"
+    },
+    {
+      "name": "T03 scripts/setup.mjs install/uninstall/status isolation",
+      "status": "PASS",
+      "evidence": "detectDsh returns a CLI base only; runDsh always builds `plugin --profile dsh-crew` with DSH_HOME=crewDshHome(home) in the child env; profileHasPackage/setupStatus read only the dedicated Crew profile dir; install dry-run explicitly contrasts the retired 'DSH web profile would be linked' legacy phrasing with the dedicated dsh-crew profile; tests prove the official web profile fixture is ignored by uninstall/status"
+    },
+    {
+      "name": "T04 scripts/smoke-real.mjs no official store reads",
+      "status": "PASS",
+      "evidence": "readDshStore removed; no ~/.dsh/.credentials.yaml or ~/.dsh/settings.yaml reads; standalone uses only process.env.DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL and exits 2 (BLOCKED-style) when absent; MCP child defaults DSH_CREW_HUB to 3210"
+    },
+    {
+      "name": "T05 live smoke scripts target the dedicated hub",
+      "status": "PASS",
+      "evidence": "live-crew-smoke.mjs and live-policy-matrix.mjs BASE = (DSH_CREW_HUB ?? http://127.0.0.1:3210) + /_dsh/dsh-crew; no hard-coded 3080 (added unit assertions)"
+    },
+    {
+      "name": "T06 Deterministic isolation regression test",
+      "status": "PASS",
+      "evidence": "New test/dsh-profile-isolation.test.mjs scans the executable installer/test paths (scripts/*, src/install/install.mjs) and fails on `--profile web`, `profiles/web`, ~/.dsh credential/settings reads, readDshStore, or a default 3080 target (3080 allowed only as CREW_LEGACY_HUB_URL in install.mjs); asserts constants + legacy 3080 read-migration. Passes."
+    },
+    {
+      "name": "T07 Documentation isolation",
+      "status": "PASS",
+      "evidence": "README.md canonical Install/Update/Uninstall/Dev/Quick-Start rewritten to the source installer (dedicated Crew home/profile; official harness isolation note); 14 translations' unsafe `--profile web add/remove` commands replaced with a canonical-install pointer while keeping the verified GitHub-only distribution assertions satisfiable (legacy web commands retained only as an explicitly-marked unsupported reference in README.md/README.zh.md); docs/agent-workflow.md project adapter now carries a hard real-environment isolation rule"
+    },
+    {
+      "name": "T08 Deterministic tests + client build",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 396/396 pass, 0 fail (includes setup.cli, distribution, installer, and the new isolation suite); pnpm run build:client PASS (generated lib/client.js restored to HEAD)"
+    },
+    {
+      "name": "T09 Stop residual dsh-crew processes",
+      "status": "PASS",
+      "evidence": "Stopped PID 10412 (D:/Users/48376/Desktop/dsh-crew/src/server.mjs, a leftover dsh-crew MCP test child); left PID 15612 (./mcp/server.mjs, Codex's own MCP) untouched; no dsh-crew process remains"
+    },
+    {
+      "name": "T10 Official credential store recovery",
+      "status": "PASS",
+      "evidence": "Before mutation, created a restrictive (0600) backup of the corrupted official file and recorded basename(.credentials.yaml), mode(100666->backup 0600), size(208), mtime(2026-08-21T13:16:45Z), whole-file sha256(819fecdc...). Inspected the installed dsh-credentials-local loader (requires a flat string map) and all DSH-generated backups; chose the most recent trustworthy pre-change flat backup (.credentials.yaml.backup-20260820-205356-763, sha256 94e6ca1...), loader-proved it (parseCredentialsDocument OK, refs OPENCODE_GO_API_KEY + OPENCODE_GO_MUSE_API_KEY names present), restored it byte-for-byte over the live file (208->187 bytes; live sha 94e6ca1... matches the backup), and loader-proved the restored live file again. No credential value was changed, printed, uploaded, or committed."
+    },
+    {
+      "name": "T11 One-time legacy cleanup of the official web profile",
+      "status": "PASS",
+      "evidence": "Before: web profile package.json deps=[@ran-sh/dsh-crew], bundles=[base, web-app, @ran-sh/dsh-crew], node_modules/@ran-sh/dsh-crew present. After `dsh plugin --profile web remove @ran-sh/dsh-crew` (installed binary, default official home): deps=[], bundles=[base, web-app], @ran-sh/dsh-crew node_modules removed (empty @ran-sh dir removed); base/web-app bundles and unrelated packages (e.g., dsh-plugin-image-mind) untouched; secret-free before/after structure recorded"
+    },
+    {
+      "name": "T12 Codex/Claude Crew integrations uninstalled",
+      "status": "PASS",
+      "evidence": "uninstallCodex removed only ds-flash.toml, ds-pro.toml, dsh-config.md, dsh-status.md and the dsh-crew [mcp_servers] entry from ~/.codex (backups kept; Codex's own projects index left untouched); uninstallClaudeCode removed the dsh-crew marketplace and mcp__plugin_dsh-crew_ permission entries from ~/.claude/settings.json (backup kept). Verified: no crew entries remain in ~/.codex or ~/.claude"
+    },
+    {
+      "name": "T13 Crew local state archived + purged",
+      "status": "PASS",
+      "evidence": "~/.config/dsh-crew archived to C:/Users/48376/AppData/Local/Temp/dsh-crew-config-archive-20260821222434 (config.json + sessions + status.d) then purged; no ~/.config/dsh-crew/harness or other Crew-owned home/profile remains; repository checkout kept"
+    },
+    {
+      "name": "T14 No dsh-crew installed/active + official Harness healthy standalone",
+      "status": "PASS",
+      "evidence": "Verified dsh-crew not in the official web profile (deps/bundles/node_modules clean), not in Codex/Claude integrations, and no dsh-crew process active. Started the user's official DeepSeek Harness normally with the same installed binary and normal web profile: web root HTTP 200 (fresh boot rev b1dfb10aadf9), no credentials version error, and /_dsh/dsh-crew/ping returns the DSH web SPA fallback (text/html) confirming the dsh-crew hub surface is absent. Harness left running healthy; dsh-crew left uninstalled (dsh_crew_reinstalled: false)."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/p0-dsh-profile-isolation-and-uninstall-result.json",
+  "notes": [
+    "source_branch: fix/p0-isolated-dsh-profile",
+    "tracks issue #32 (P0 safety incident); executor_scope repo-isolation-fix-plus-local-recovery-and-uninstall",
+    "dsh_crew_reinstalled: false",
+    "future_reinstall_requires_user_instruction: true",
+    "dedicated Crew home/profile/port used and enforced: crewDshHome()=~/.config/dsh-crew/harness, profile dsh-crew, Crew Hub default http://127.0.0.1:3210 (legacy shared-profile default 3080 is migrated on read)",
+    "credential recovery was by restoring the user's own trustworthy DSH-generated flat-format backup (.credentials.yaml.backup-20260820-205356-763); the corrupted version/refs envelope is preserved restrictively at ~/.dsh/.credentials.yaml.zcode-restricted-before-repair-20260821222257 (0600) and its metadata sha256 819fecdc...; no values exposed",
+    "completion commit contains only the authorized repository files + this Result Contract + deletion of docs/agent-tasks/ACTIVE_TASK.json; no package/lockfile/CI/release changes",
+    "result_commit: filled after push"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/p0-dsh-profile-isolation-and-uninstall-result.json --stamp",
+    "validated_at": "2026-08-21T14:28:33Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/p0-dsh-profile-isolation-and-uninstall-result.json"
+  }
+}

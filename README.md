@@ -57,46 +57,68 @@ tree). Verification / reviewer decide **whether to accept**.
 
 ## Install
 
-Prerequisites: Node.js with npm/npx, Git, and pnpm. The GitHub install path was tested with each prerequisite removed from the command environment: DSH needs `npx`, and its profile forwarder calls both Git and `pnpm`.
+Prerequisites: Node.js with npm/npx, Git, and pnpm. The source setup installer is
+the safe cross-platform path because it controls the Crew DSH home and profile.
 
-Install directly from this GitHub repository from any directory:
+> **Official Harness isolation** — dsh-crew installs into its own dedicated DSH
+> home (`~/.config/dsh-crew/harness`) and profile (`dsh-crew`), never into the
+> official DSH home (`~/.dsh`) or the official `web` profile. Your normal
+> DeepSeek Harness installation is never modified.
+
+From a clone of this repository, cross-platform:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install
 ```
 
-Start DSH:
+or on Windows:
 
-```bash
-npx -y @deepseek-ai/dsh web
+```bat
+install.cmd
 ```
 
-Then open **Settings → DSH Crew** and click **Install** for Codex. Claude Code integration is optional and has its own Install button.
+Then open **Settings → DSH Crew** and click **Install** for Codex. Claude Code
+integration is optional and has its own Install button.
 
-This installs Crew persistently in the DSH `web` profile. Crew is not published to the npm registry; `npx` only runs the DSH CLI, which installs Crew from GitHub.
+The installer links this local checkout as `@ran-sh/dsh-crew` in the dedicated
+`dsh-crew` profile, points the Crew Hub at its own port, and does not touch the
+official DSH web profile or any official credential store. Crew is not published
+to the npm registry.
 
 ### Update
 
-Re-run the GitHub add command. DSH/pnpm refreshes the Git revision without adding a duplicate dependency or bundle entry:
+Re-run the source installer after pulling:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+git pull
+node scripts/setup.mjs install
 ```
 
 Restart DSH after updating.
 
 ### Migrating an older fork install
 
-Older versions of this fork used the upstream package identity `@zseven-w/dsh-crew`. Because the package name alone cannot distinguish this fork from the genuine upstream package, migration is deliberately not automatic.
+Legacy releases installed Crew into the official DSH `web` profile. Those
+installs are outside the supported path. Uninstall any legacy Crew (see
+Uninstall), then run the source installer above, which installs into the
+dedicated Crew home/profile.
 
-Only if you have confirmed that the old package came from `Ran-sh/dsh-crew`, run:
+### Legacy web-profile commands (unsupported — reference only)
+
+Older releases and tooling used direct `--profile web` commands that put Crew
+inside the official DSH `web` profile. Those commands are **not supported** and
+must not be used for new installs, updates, or uninstalls — the official web
+profile is never modified by supported Crew tooling:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
 npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew
 ```
 
-Do not remove `@zseven-w/dsh-crew` when it is an intentional installation of the upstream project.
+`ZSeven-W/dsh-crew` is the upstream project identity; this fork is
+`Ran-sh/dsh-crew`. Use the source installer/uninstaller
+(`node scripts/setup.mjs install|uninstall`) instead.
 
 ### Migrating from Flash / Pro (v0.1 → v0.2 roles)
 
@@ -123,41 +145,46 @@ with a clear `ROLE_TIER_CONFLICT` error — never silently guessed.
 
 pnpm 11 enforces a default supply-chain policy (`minimum-release-age`, 24h):
 a lockfile entry published within the last day is rejected unless listed under
-`minimumReleaseAgeExclude`. Installing Crew into a fresh `web` profile is
-unaffected, but if your profile already contains a just-published DSH-plugin
-(for example the optional `dsh-plugin-image-mind`), the install fails with
-this error.
+`minimumReleaseAgeExclude`. Installing Crew into a fresh dedicated `dsh-crew`
+profile is unaffected, but if the Crew profile already contains a just-published
+DSH-plugin (for example the optional `dsh-plugin-image-mind`), the install fails
+with this error.
 
 Unblock it by adding the package (bare name, no version) under
-`minimumReleaseAgeExclude` in the profile's `pnpm-workspace.yaml`, then re-run
-the add command:
+`minimumReleaseAgeExclude` in the **Crew profile's** `pnpm-workspace.yaml`, then
+re-run the installer:
 
 ```yaml
-# ~/.dsh/profiles/web/pnpm-workspace.yaml
+# ~/.config/dsh-crew/harness/profiles/dsh-crew/pnpm-workspace.yaml
 minimumReleaseAgeExclude:
   - dsh-plugin-image-mind
   - '@ran-sh/dsh-vision@0.1.0'
 ```
 
-Notes: use a bare package name — listing multiple `pkg@version` entries for
-the same name only honors the first (first-match-wins), which can leave newer
-versions blocked. Keep the entries in `pnpm-workspace.yaml`; the verifier does
-not read `.npmrc`. The policy only applies to registry packages younger than
-one day (git-hosted installs like Crew itself are never age-checked), so the
-failure is transient and self-heals within 24 hours.
+Notes: the official DSH home (`~/.dsh`) and its `web` profile are never edited
+by Crew tooling. Use a bare package name — listing multiple `pkg@version`
+entries for the same name only honors the first (first-match-wins), which can
+leave newer versions blocked. Keep the entries in `pnpm-workspace.yaml`; the
+verifier does not read `.npmrc`. The policy only applies to registry packages
+younger than one day (git-hosted installs like Crew itself are never
+age-checked), so the failure is transient and self-heals within 24 hours.
 
 ## Uninstall
 
 DSH Crew and its Codex / Claude Code integrations are separate layers:
 
 1. In **Settings → DSH Crew**, click **Restore** for Codex and Claude Code integrations that you installed.
-2. Remove the profile plugin:
+2. Uninstall the Crew plugin from the dedicated Crew profile:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew
+node scripts/setup.mjs uninstall
 ```
 
-Removing the profile plugin does not implicitly edit `~/.codex` or `~/.claude`. Crew configuration, backups, credentials, and other DSH bundles are preserved.
+Legacy Crew installs that were previously placed into the official DSH `web`
+profile must be removed for that profile using the DSH CLI against the official
+home, without changing anything else there. Removing the Crew plugin does not
+implicitly edit `~/.codex` or `~/.claude`. Crew configuration, backups,
+credentials, and other DSH bundles are preserved.
 
 ## Development / Source install
 
@@ -186,7 +213,9 @@ node scripts/setup.mjs install
 
 The source installer:
 
-- links this local checkout into the DSH web profile (`link:<repo>`)
+- links this local checkout into the dedicated Crew profile (`dsh-crew`) under
+  the Crew-owned DSH home (`~/.config/dsh-crew/harness`), never the official
+  `web` profile (`link:<repo>`)
 - installs the Codex Desktop integration (no `codex` CLI required)
 - installs the Claude Code integration automatically when the `claude` CLI is detected (optional)
 - is idempotent — safe to re-run
@@ -205,7 +234,7 @@ node scripts/setup.mjs uninstall
 
 It removes:
 
-- DSH Crew from the DSH web profile
+- DSH Crew from the dedicated Crew profile (official web profile is never touched)
 - Codex Desktop integration
 - Claude Code integration
 
@@ -217,8 +246,10 @@ It keeps:
 
 ## Quick Start
 
-1. Start DSH as usual: `npx -y @deepseek-ai/dsh web`
-2. Open **Settings → DSH Crew**.
+1. Start the official DeepSeek Harness as usual (its home and `web` profile are
+   never modified by Crew).
+2. Open **Settings → DSH Crew** (the Crew Settings surface is served by the
+   Crew-owned Hub).
 3. Keep the fresh default workflow: Codex → **worker** role → Codex (reviewer off).
 4. Use **Refresh Harness Models** to choose ordered per-role model priorities when needed.
 5. Restart Codex Desktop / Claude Code.

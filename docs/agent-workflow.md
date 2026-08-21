@@ -208,6 +208,15 @@ Do not claim Windows behavior was verified only on Linux.
 
 ### Real DSH / provider validation
 
+- **Hard isolation rule (dsh-crew P0)**: every dsh-crew DSH test uses a
+  disposable or Crew-owned isolated `DSH_HOME` (default
+  `~/.config/dsh-crew/harness`) and a dedicated/disposable profile (default
+  `dsh-crew`). Never boot, install into, or mutate the user's normal `~/.dsh`
+  or its persistent `web` profile. Never read or copy official DSH credential
+  stores (`~/.dsh/.credentials.yaml`, `~/.dsh/settings.yaml`, provider key
+  files). Credentials must be task-scoped explicit environment variables or
+  isolated-store credentials created for the test; an absent credential is a
+  `SKIP`/`BLOCKED`, never a reason to read the official store.
 - Use disposable Git repositories for coding-worker runtime tests; never ask a worker to edit the dsh-crew source checkout unless the task explicitly allows it.
 - Use only provider/model configuration already authorized in the current environment unless the task permits a configuration change.
 - Hub and Standalone are separate execution paths and must be reported separately when both matter.

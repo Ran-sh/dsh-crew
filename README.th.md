@@ -115,14 +115,16 @@ Claude Code / Codex (orchestrator, keeps its own model)
 ติดตั้งจาก GitHub ลงในโปรไฟล์ DSH:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
 หรือสำหรับการพัฒนาในเครื่องจากซอร์ส:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 

@@ -115,14 +115,16 @@ Claude Code / Codex（協調器，保留自己的模型）
 從 GitHub 裝進 DSH profile：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
 或者從原始碼樹本機開發：
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
