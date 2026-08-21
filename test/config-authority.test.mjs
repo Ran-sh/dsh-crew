@@ -135,7 +135,7 @@ test('explicit canonical patches update authority and regenerate singular compat
   assert.equal(saved.worker_state, 'manual');
   assert.equal(saved.subagents_enabled, false);
   assert.equal(saved.execution.enabled, false);
-  // One provider selector remains authoritative in v0.3.  Worker wins when a
+  // One provider selector remains authoritative in v0.3. Worker wins when a
   // caller supplies both canonical branches in one patch.
   assert.equal(saved.worker_provider_mode, 'deepseek-official');
   assert.equal(saved.worker.provider_mode, 'deepseek-official');
@@ -149,4 +149,51 @@ test('explicit canonical patches update authority and regenerate singular compat
   assert.equal(stored.subagents_enabled, false);
   assert.equal(stored.execution.enabled, false);
   assert.equal(stored.worker.provider_mode, stored.review.provider_mode);
+});
+
+test('an unrelated legacy UI write preserves canonical-only policy state', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({}, { configFile: file });
+  const before = writeGlobalConfig({
+    worker: {
+      model_policy: {
+        escalation: { enabled: true, max_attempts: 5 },
+        escalation_priority: [{ provider: 'opencode-go', model: 'mimo-v2.5-pro' }],
+        escalation_priority_configured: true,
+      },
+    },
+  }, { configFile: file });
+  assert.equal(before.worker.model_policy.escalation.max_attempts, 5);
+
+  // This is the existing Settings UI shape: one flat field only. It must not
+  // recompile the rest of canonical state from compatibility mirrors.
+  const after = writeGlobalConfig({ max_parallel: 9 }, { configFile: file });
+  assert.equal(after.execution.max_parallel, 9);
+  assert.equal(after.worker.model_policy.escalation.enabled, true);
+  assert.equal(after.worker.model_policy.escalation.max_attempts, 5);
+  assert.deepEqual(after.worker.model_policy.escalation_priority, [
+    { provider: 'opencode-go', model: 'mimo-v2.5-pro' },
+  ]);
+  assert.equal(after.worker.model_policy.escalation_priority_configured, true);
+});
+
+test('legacy routing commands translate only their owned canonical dimensions', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({}, { configFile: file });
+  writeGlobalConfig({
+    worker: { model_policy: { escalation: { enabled: true, max_attempts: 4 } } },
+  }, { configFile: file });
+
+  const reviewPipeline = writeGlobalConfig({ collaboration_mode: 'review-pipeline' }, { configFile: file });
+  assert.equal(reviewPipeline.collaboration_mode, 'review-pipeline');
+  assert.equal(reviewPipeline.worker.state, 'auto');
+  assert.equal(reviewPipeline.review.state, 'auto');
+  assert.equal(reviewPipeline.review.auto_review, true);
+  assert.equal(reviewPipeline.worker.model_policy.escalation.max_attempts, 4);
+
+  const balanced = writeGlobalConfig({ collaboration_mode: 'balanced' }, { configFile: file });
+  assert.equal(balanced.collaboration_mode, 'balanced');
+  assert.equal(balanced.worker.state, 'auto');
+  assert.equal(balanced.review.state, 'manual');
+  assert.equal(balanced.worker.model_policy.escalation.max_attempts, 4);
 });
