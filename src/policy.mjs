@@ -20,15 +20,24 @@ function hasCanonicalAuthority(raw) {
 
 function normalizeCanonical(raw) {
   const canonical = legacy.getCanonical(raw);
+  const providerMode = legacy.normalizeWorkerProviderMode(canonical.worker?.provider_mode);
   return {
     ...canonical,
+    execution: {
+      ...canonical.execution,
+      // There is one global dispatch permission.  `execution.enabled` is a
+      // canonical mirror of the top-level switch, never a second authority.
+      enabled: canonical.subagents_enabled,
+    },
     worker: {
       ...canonical.worker,
-      provider_mode: legacy.normalizeWorkerProviderMode(canonical.worker?.provider_mode),
+      provider_mode: providerMode,
     },
     review: {
       ...canonical.review,
-      provider_mode: legacy.normalizeWorkerProviderMode(canonical.review?.provider_mode),
+      // v0.3 still exposes one Worker Provider selector.  Until per-role
+      // provider modes become a first-class feature, keep both roles aligned.
+      provider_mode: providerMode,
     },
   };
 }
