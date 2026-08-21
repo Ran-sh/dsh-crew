@@ -1,45 +1,91 @@
 // v0.3 config-authority facade over the frozen v0.2 policy implementation.
 //
-// The v0.2 module remains byte-for-byte available as policy-legacy.mjs.  New
-// callers import this facade.  For schema-v3 persisted configs the nested
-// worker/review/execution snapshot is authoritative; flat Flash/Pro fields are
-// compatibility mirrors only.  Legacy files still flow through the old
-// migration exactly as before.
+// The v0.2 module remains byte-for-byte available as policy-legacy.mjs. New
+// callers import this facade. For schema-v3 persisted configs, the nested
+// worker/review/execution/legacy snapshot is authoritative; flat Flash/Pro
+// fields are compatibility mirrors only. Legacy files still flow through the
+// old migration exactly as before.
 
 export * from './policy-legacy.mjs';
 import * as legacy from './policy-legacy.mjs';
 
 export const CONFIG_SCHEMA_VERSION = 3;
 
+function validObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function hasCanonicalAuthority(raw) {
   return Number(raw?.config_schema_version) >= CONFIG_SCHEMA_VERSION
-    && raw?.worker && typeof raw.worker === 'object'
-    && raw?.review && typeof raw.review === 'object'
-    && raw?.execution && typeof raw.execution === 'object';
+    && validObject(raw?.worker)
+    && validObject(raw?.review)
+    && validObject(raw?.execution);
+}
+
+function semanticLegacyMode(canonical) {
+  if (canonical.review.auto_review === true && canonical.review.state === 'auto') return 'review-pipeline';
+  if (canonical.worker.state === 'auto' && canonical.review.state === 'disabled'
+      && canonical.worker.model_policy.strategy === 'economy') return 'flash-only';
+  if (canonical.worker.state === 'auto' && canonical.review.state === 'disabled'
+      && canonical.worker.model_policy.strategy === 'quality') return 'pro-only';
+  if (canonical.worker.state === 'auto' && canonical.review.state === 'manual') return 'balanced';
+  return 'custom';
+}
+
+function normalizeLegacySnapshot(raw, canonical) {
+  // A nested v3 legacy snapshot is canonical compatibility metadata. Flat
+  // fields are only a fallback for transitional/pre-v3 inputs.
+  const nested = validObject(raw?.legacy) ? raw.legacy : {};
+  const source = { ...raw, ...nested };
+  const mode = legacy.COLLABORATION_MODES.includes(source.collaboration_mode)
+    ? source.collaboration_mode
+    : semanticLegacyMode(canonical);
+
+  let flash = legacy.TIER_STATES.includes(source.flash_state) ? source.flash_state : undefined;
+  let pro = legacy.TIER_STATES.includes(source.pro_state) ? source.pro_state : undefined;
+  if (mode === 'flash-only') { flash = 'auto'; pro = 'disabled'; }
+  else if (mode === 'pro-only') { flash = 'disabled'; pro = 'auto'; }
+  else if (mode === 'balanced' || mode === 'review-pipeline') { flash = 'auto'; pro = 'auto'; }
+  else {
+    flash ??= canonical.worker.state;
+    // reviewer=manual historically means the Pro tier is available/Auto but
+    // review itself is on-demand. Preserve an explicit nested pro state when
+    // present; otherwise use a conservative compatibility reconstruction.
+    pro ??= canonical.review.state === 'disabled' ? 'disabled' : 'auto';
+  }
+
+  return {
+    collaboration_mode: mode,
+    tier_policy: mode === 'flash-only' ? 'flash-only' : mode === 'pro-only' ? 'pro-only' : 'auto',
+    flash_state: flash,
+    pro_state: pro,
+  };
 }
 
 function normalizeCanonical(raw) {
-  const canonical = legacy.getCanonical(raw);
-  const providerMode = legacy.normalizeWorkerProviderMode(canonical.worker?.provider_mode);
-  return {
-    ...canonical,
+  const base = legacy.getCanonical(raw);
+  const providerMode = legacy.normalizeWorkerProviderMode(base.worker?.provider_mode);
+  const canonical = {
+    ...base,
     execution: {
-      ...canonical.execution,
-      // There is one global dispatch permission.  `execution.enabled` is a
+      ...base.execution,
+      // There is one global dispatch permission. `execution.enabled` is a
       // canonical mirror of the top-level switch, never a second authority.
-      enabled: canonical.subagents_enabled,
+      enabled: base.subagents_enabled,
     },
     worker: {
-      ...canonical.worker,
+      ...base.worker,
       provider_mode: providerMode,
     },
     review: {
-      ...canonical.review,
-      // v0.3 still exposes one Worker Provider selector.  Until per-role
-      // provider modes become a first-class feature, keep both roles aligned.
+      ...base.review,
+      // v0.3 still exposes one Worker Provider selector. Until per-role
+      // provider modes become first-class, keep both roles aligned.
       provider_mode: providerMode,
     },
   };
+  canonical.legacy = normalizeLegacySnapshot(raw, canonical);
+  return canonical;
 }
 
 function proMirror(canonical) {
@@ -60,65 +106,18 @@ function proMirror(canonical) {
 }
 
 function legacyRoutingMirror(canonical) {
-  let collaboration_mode;
-  if (canonical.review.auto_review === true && canonical.review.state === 'auto') {
-    collaboration_mode = 'review-pipeline';
-  } else if (canonical.review.state === 'disabled' && canonical.worker.model_policy.strategy === 'economy') {
-    collaboration_mode = 'flash-only';
-  } else if (canonical.review.state === 'disabled' && canonical.worker.model_policy.strategy === 'quality') {
-    collaboration_mode = 'pro-only';
-  } else if (canonical.worker.state === 'auto' && canonical.review.state === 'manual') {
-    collaboration_mode = 'balanced';
-  } else {
-    collaboration_mode = 'custom';
-  }
-
-  if (collaboration_mode === 'flash-only') {
-    return {
-      collaboration_mode,
-      tier_policy: 'flash-only',
-      flash_state: canonical.worker.state,
-      pro_state: 'disabled',
-    };
-  }
-  if (collaboration_mode === 'pro-only') {
-    return {
-      collaboration_mode,
-      tier_policy: 'pro-only',
-      flash_state: 'disabled',
-      pro_state: canonical.worker.state,
-    };
-  }
-  if (collaboration_mode === 'review-pipeline') {
-    return {
-      collaboration_mode,
-      tier_policy: 'auto',
-      flash_state: canonical.worker.state,
-      pro_state: canonical.review.state,
-    };
-  }
-  if (collaboration_mode === 'balanced') {
-    return {
-      collaboration_mode,
-      tier_policy: 'auto',
-      flash_state: 'auto',
-      pro_state: 'auto',
-    };
-  }
-  return {
-    collaboration_mode,
-    tier_policy: 'auto',
-    flash_state: canonical.worker.state,
-    pro_state: canonical.review.state,
-  };
+  // Legacy tier/UI behavior has its own canonical compatibility sub-domain.
+  // Never infer this back from flat mirrors: schema-v3 `legacy` owns it.
+  return normalizeLegacySnapshot({ legacy: canonical.legacy }, canonical);
 }
 
 /**
  * Re-exported normalizer with schema-v3 precedence.
  *
  * `legacy.normalizeGlobalConfig` remains the import path for legacy-file
- * migration.  Once schema v3 is present, exact flat mirrors are rebuilt from
- * canonical state so a stale/manual mirror cannot override runtime behavior.
+ * migration. Once schema v3 is present, flat compatibility fields are rebuilt
+ * from the canonical snapshot so a stale/manual mirror cannot override runtime
+ * behavior.
  */
 export function normalizeGlobalConfig(raw = {}) {
   const normalized = legacy.normalizeGlobalConfig(raw);
@@ -156,6 +155,7 @@ export function normalizeGlobalConfig(raw = {}) {
     execution: canonical.execution,
     worker: canonical.worker,
     review: canonical.review,
+    legacy: canonical.legacy,
   };
 }
 
