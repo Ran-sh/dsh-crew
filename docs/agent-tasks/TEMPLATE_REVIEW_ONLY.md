@@ -1,56 +1,9 @@
-Protocol: Agent Handoff Protocol v1
-Agent: CODEX | ZCODE | DEEPSEEK_HARNESS
-Mode: REVIEW_ONLY
-Source Branch: <branch>
-Source Commit: <sha | LATEST | LATEST_MAIN | LATEST_DEFAULT_BRANCH>
-Result Path: docs/agent-results/<agent>-<task>-review.md
-Delete Active Task On Completion: YES
+# REVIEW_ONLY Human Authoring Guide
 
-# Goal
+Machine authority: `ACTIVE_TASK.json`.
 
-Describe the exact review question: architecture, correctness, security, regression risk, PR/diff quality, or release readiness.
+Source, tests, configuration, CI, package, and release metadata are read-only. Writable paths are limited to `docs/agent-results/**`, plus deletion of ACTIVE task files explicitly listed in completion.
 
-# Context
+Report findings with severity and observable evidence. Do not modify code during review.
 
-Provide the minimum relevant design and constraints.
-
-# Allowed Changes
-
-- The review report path explicitly listed above.
-- Deletion of the executing agent's own ACTIVE task.
-
-# Forbidden Changes
-
-- Source code.
-- Existing tests.
-- CI, package metadata, release configuration, or provider credentials.
-
-# Required Review
-
-1. Inspect the requested source/diff/tests.
-2. Identify concrete defects, regressions, unsafe assumptions, and missing validation.
-3. Rank findings by severity.
-4. Cite file paths/symbols/observable evidence.
-5. Do not implement fixes.
-
-# Acceptance Criteria
-
-- Findings are evidence-based and scoped to the task.
-- No source files changed.
-- False certainty is avoided; unknowns are labelled.
-
-# Result / Report Contract
-
-Include:
-
-- source SHA;
-- scope reviewed;
-- findings ordered by severity;
-- evidence;
-- missing tests/unknowns;
-- overall verdict;
-- recommended next action without performing it.
-
-# Completion Commit Contract
-
-Only the requested review report and deletion of the corresponding ACTIVE task may be committed.
+Executor identity does not change permissions.

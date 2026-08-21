@@ -1,20 +1,32 @@
-# Agent task queue
+# Agent Task Contracts
 
-Permanent rules live in `../agent-workflow.md`.
+Task Contracts define work. Executors do not own fixed workflow roles.
 
-Create an ACTIVE file only while that agent has work:
+Canonical task:
 
-- `ACTIVE_ZCODE_TASK.md`
-- `ACTIVE_CODEX_TASK.md`
-- `ACTIVE_DEEPSEEK_HARNESS_TASK.md`
+`docs/agent-tasks/ACTIVE_TASK.json`
 
-The executing agent deletes only its own ACTIVE file in the completion commit.
+`ACTIVE_TASK.md` is optional and non-authoritative. Installation/migration must not create an ACTIVE task.
 
-If the expected ACTIVE file is absent, stop. Do not infer work from another agent's task, old reports, issues, nearby code, or chat history.
+Modes:
 
-Templates:
+- `IMPLEMENT` — explicit writable scope required.
+- `TEST_ONLY` — result-only writes under `docs/agent-results/**`.
+- `REVIEW_ONLY` — result-only writes under `docs/agent-results/**`.
 
-- `TEMPLATE_IMPLEMENT.md`
-- `TEMPLATE_TEST_ONLY.md`
-- `TEMPLATE_REVIEW_ONLY.md`
-- `TEMPLATE_DEEPSEEK_HARNESS.md`
+Any compatible executor may execute any mode. Missing/invalid ACTIVE means stop.
+
+## Generate a task
+
+```sh
+npm exec --yes --package=github:Ran-sh/chatgpt_workflow -- agent-workflow task create --target . \
+  --mode REVIEW_ONLY \
+  --objective "Review the requested change" \
+  --validate "node --test test/*.test.mjs" \
+  --accept "Findings are reported with evidence" \
+  --companion
+```
+
+For `IMPLEMENT`, pass explicit `--allow <path>` entries. The generator refuses to replace an existing ACTIVE task and validates before activation.
+
+Manual authors may use `TEMPLATE_TASK.json`, then validate with `.agent-workflow/validator/validate-contract.mjs`.

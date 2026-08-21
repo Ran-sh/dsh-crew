@@ -1,25 +1,17 @@
-# Stable short triggers
+# Short Triggers
 
-These messages are intentionally short. Detailed instructions live in GitHub.
+All compatible executors use one canonical task path.
 
-## ZCode
+## Canonical trigger
 
-> 拉取仓库最新目标分支，先完整读取 `docs/agent-workflow.md`，再读取并严格执行 `docs/agent-tasks/ACTIVE_ZCODE_TASK.md`。不要扩大任务范围，不要读取其他 Agent 的 ACTIVE 任务。完成后按协议提交允许的结果、删除自己的 ACTIVE 任务文件并推送；最后只回复 Source Commit SHA、Result Commit SHA、测试摘要、阻塞项和结果路径。若 ACTIVE 文件不存在则停止，不要自行猜任务。
+```text
+Pull the latest target branch. Read `docs/agent-workflow.md`, then read and validate `docs/agent-tasks/ACTIVE_TASK.json`. Execute exactly that task and do not expand scope. Write the required Result Contract/report, remove `ACTIVE_TASK.json` and its `ACTIVE_TASK.md` companion if present only when the task is complete, and commit/push only paths authorized by the Task Contract. If the ACTIVE task is missing or invalid, stop instead of inferring work.
+```
 
-## Codex
+中文：
 
-> 拉取仓库最新目标分支，先完整读取 `docs/agent-workflow.md`，再读取并严格执行 `docs/agent-tasks/ACTIVE_CODEX_TASK.md`。不要扩大任务范围，不要读取其他 Agent 的 ACTIVE 任务。完成后按协议提交允许的结果、删除自己的 ACTIVE 任务文件并推送；最后只回复 Source Commit SHA、Result Commit SHA、测试/审查摘要、阻塞项和结果路径。若 ACTIVE 文件不存在则停止，不要自行猜任务。
+> 拉取最新目标分支，完整读取 `docs/agent-workflow.md`，再读取并验证 `docs/agent-tasks/ACTIVE_TASK.json`；只执行该任务，不扩大范围。完成后写入 Result Contract，按契约删除 ACTIVE 文件并只提交允许的路径。ACTIVE 缺失或无效就停止，不要猜任务。
 
-## DeepSeek Harness
+Codex、ZCode、Claude Code、DeepSeek Harness 以及未来兼容 Executor 都使用同一入口。
 
-> 获取仓库最新目标分支，先完整读取 `docs/agent-workflow.md`，再读取并严格执行 `docs/agent-tasks/ACTIVE_DEEPSEEK_HARNESS_TASK.md`。不要扩大任务范围，不要读取其他 Agent 的 ACTIVE 任务。完成后按协议持久化允许的结果、删除自己的 ACTIVE 任务；若当前环境支持并且任务要求，再提交并推送。最后只回复 Source Commit SHA、Result Commit SHA（若有）、执行/测试摘要、阻塞项和结果路径。若 ACTIVE 文件不存在则停止，不要自行猜任务。
-
-## User → ChatGPT completion signal
-
-After an agent finishes, the user can simply say:
-
-- `ZCode 做完了，检查 GitHub。`
-- `Codex 测完了，检查 GitHub。`
-- `DeepSeek Harness 跑完了，检查 GitHub。`
-
-ChatGPT should read the repository result directly instead of asking the user to paste the full report again.
+任务完成后，用户只需告诉 ChatGPT“执行完了，检查 GitHub”，ChatGPT 直接读取结果，不要求重新粘贴整份报告。

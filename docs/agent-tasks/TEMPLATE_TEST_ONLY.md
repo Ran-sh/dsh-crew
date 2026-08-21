@@ -1,70 +1,9 @@
-Protocol: Agent Handoff Protocol v1
-Agent: CODEX | ZCODE | DEEPSEEK_HARNESS
-Mode: TEST_ONLY
-Source Branch: <branch>
-Source Commit: <sha | LATEST | LATEST_MAIN | LATEST_DEFAULT_BRANCH>
-Result Path: docs/agent-results/<agent>-<task>-report.md
-Delete Active Task On Completion: YES
+# TEST_ONLY Human Authoring Guide
 
-# Goal
+Machine authority: `ACTIVE_TASK.json`.
 
-Describe exactly what must be independently verified.
+No source, existing test, config, CI, package, or release changes. Writable paths are only under `docs/agent-results/**`; completion may delete the ACTIVE task files explicitly listed in the contract.
 
-# Context
+Use only `PASS`, `FAIL`, `PARTIAL`, `SKIP`, `BLOCKED`, `NOT RUN`. A failure is evidence, not permission to repair.
 
-List relevant features, risk areas, environment constraints, credentials/quotas, and known untestable conditions.
-
-# Allowed Changes
-
-- Result/report paths explicitly listed in this task.
-- Deletion of the executing agent's own ACTIVE task on completion.
-
-# Forbidden Changes
-
-- Source code.
-- Existing tests or assertions.
-- Schemas, build scripts, package versions, CI, and release metadata.
-- Provider credentials or global configuration unless the task explicitly permits it.
-- Any repair intended to make a failing test pass.
-
-# Required Work
-
-1. Record source SHA, branch, environment, and initial worktree status.
-2. Execute the requested validation matrix.
-3. Preserve observable evidence.
-4. Classify every requested scenario as PASS / FAIL / PARTIAL / SKIP / BLOCKED / NOT RUN.
-5. Generate the report.
-
-# Required Tests
-
-- `<command or scenario>`
-- `<command or scenario>`
-
-# Acceptance Criteria
-
-- No source modification.
-- Failures are reported, not repaired.
-- Secrets are redacted.
-- Every requested scenario has a truthful state and evidence/reason.
-
-# Result / Report Contract
-
-Report at minimum:
-
-- source commit;
-- environment;
-- exact tests/scenarios;
-- outcomes and evidence;
-- failures with severity;
-- blocked/skipped items and reasons;
-- known limitations;
-- result commit SHA when applicable.
-
-# Completion Commit Contract
-
-The final commit may contain only:
-
-- the requested report/artifacts;
-- deletion of the executing agent's own ACTIVE task.
-
-No source changes are allowed.
+Executor identity does not change permissions.
