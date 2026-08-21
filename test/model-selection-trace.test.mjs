@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { WorkerRegistry } from '../src/hub/index.mjs';
+import { jobView } from '../src/jobs.mjs';
 import { attemptFromView } from '../src/mcp-runtime.mjs';
 import { buildDirectSelectionTrace } from '../src/model-routing.mjs';
 import { createWorkflowRuntime } from '../src/workflow-runtime.mjs';
@@ -26,6 +28,30 @@ function config() {
     review: { state: 'disabled', mode: 'auto', auto_review: false, provider_mode: 'deepseek-official', model_policy: modelPolicy('reviewer') },
   };
 }
+
+function surfaceJob(trace) {
+  return {
+    id: 'job-1', sessionId: 'session-1', role: 'worker', attempt: 0, phase: 'running', tier: 'flash',
+    provider: 'p', model: 'm', selection_source: 'priority', selection_trace: trace,
+    effort: 'max', reasoning_effort: 'max', status: 'running', source: 'api', task: 'task', cwd: '/tmp',
+    turn: 0, step: 0, currentTool: null, toolCalls: 0, tokens: { input: 0, output: 0, reasoning: 0 },
+    startedAt: 'now', endedAt: null, delivery_complete: false, workspaceDiff: null,
+  };
+}
+
+test('Hub and standalone job views expose the same structured selection trace field', () => {
+  const trace = buildDirectSelectionTrace({
+    role: 'worker', logicalAttempt: 0, modelClassHint: 'flash', strategy: 'test',
+    provider: 'p', model: 'm', source: 'priority',
+  });
+  const raw = surfaceJob(trace);
+  const hubView = new WorkerRegistry({}).view(raw);
+  const standaloneView = jobView(raw);
+  assert.deepEqual(hubView.selection_trace, trace);
+  assert.deepEqual(standaloneView.selection_trace, trace);
+  assert.equal(hubView.selection_source, 'priority');
+  assert.equal(standaloneView.selection_source, 'priority');
+});
 
 test('MCP normalization enriches transport trace with logical workflow context', () => {
   const view = {
