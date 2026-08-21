@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADAPTIVE_ROUTING_REASON_CODES,
   createAdaptiveHealthStore,
+  getProcessAdaptiveHealthStore,
   normalizeAdaptiveRouting,
   rankAdaptiveCandidates,
 } from '../src/adaptive-routing.mjs';
@@ -11,6 +12,7 @@ import {
   resolveWorkerModel,
 } from '../src/model-routing.mjs';
 import { normalizeGlobalConfig, resolveModelPolicy } from '../src/policy.mjs';
+import { recordAdaptiveJobOutcome } from '../src/hub/entry.mjs';
 
 const provider = (id, models = []) => ({ id, name: id, models: models.map((model) => ({ id: model, name: model })) });
 const catalog = (...providers) => ({ providers });
@@ -50,6 +52,48 @@ test('health store keeps only bounded Crew-observed outcome and latency signals'
   assert.equal(snapshot.latency_bucket, 'slow');
   assert.equal(typeof snapshot.score, 'number');
   assert.equal(JSON.stringify(snapshot).includes('must-not-be-stored'), false);
+});
+
+test('Hub observer records only opt-in adaptive jobs and never stores raw error payloads', () => {
+  const store = createAdaptiveHealthStore();
+  const base = {
+    provider: 'a', model: 'm', role: 'worker', status: 'failed', stopReason: 'error',
+    startedAt: '2026-08-21T16:00:00.000Z', endedAt: '2026-08-21T16:00:05.000Z',
+    error: 'raw-secret-like-error', credential: 'never-store-this',
+  };
+  assert.equal(recordAdaptiveJobOutcome({ ...base, selection_trace: {} }, store), false);
+  assert.equal(store.snapshot({ provider: 'a', model: 'm' }).samples, 0);
+  assert.equal(recordAdaptiveJobOutcome({
+    ...base,
+    selection_trace: { adaptive: { enabled: true } },
+  }, store), true);
+  const snapshot = store.snapshot({ provider: 'a', model: 'm' });
+  assert.equal(snapshot.samples, 1);
+  assert.equal(snapshot.failures, 1);
+  assert.equal(snapshot.latency_bucket, 'fast');
+  assert.equal(JSON.stringify(snapshot).includes('raw-secret-like-error'), false);
+  assert.equal(JSON.stringify(snapshot).includes('never-store-this'), false);
+});
+
+test('process-local Hub health is the default resolver signal when no store is injected', () => {
+  const store = getProcessAdaptiveHealthStore();
+  store.clear();
+  try {
+    record(store, { provider: 'a', model: flash }, 'failed', 2);
+    const result = resolveWorkerModel({
+      tier: 'flash',
+      priority: [],
+      priorityConfigured: false,
+      catalog: catalog(provider('a', [flash]), provider('b', [flash])),
+      harnessDefault: { provider: 'a', model: 'other' },
+      adaptive: { enabled: true, min_samples: 2 },
+    });
+    assert.equal(result.provider, 'b');
+    assert.equal(result.selection_trace.adaptive.reason, ADAPTIVE_ROUTING_REASON_CODES.HEALTH_REORDERED);
+    assert.equal(result.selection_trace.adaptive.decision_supported, true);
+  } finally {
+    store.clear();
+  }
 });
 
 test('explicit user priority is authoritative even when health prefers another candidate', () => {
