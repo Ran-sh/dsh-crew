@@ -1,0 +1,84 @@
+{
+  "schema_version": 2,
+  "task_id": "v03-dynamic-runtime-controls-smoke",
+  "source_commit": "28ef5196723dcf755a2a60d68b48b02f77d8b1d3",
+  "status": "PASS",
+  "summary": "Real-environment TEST_ONLY smoke of PR #12 P1-B dynamic runtime controls on a persistent MCP runtime against a disposable DSH Hub (profile v03dyn, 127.0.0.1:3211): max_parallel live raise 1->2 (second workflow queued then admitted on raise, running workflow never cancelled), live lower 2->1 (no active cancellation; new workflow queued until a slot freed), persisted collaboration_mode change took effect on the NEXT workflow (default tier flash->pro) without rewriting an already-running workflow, persisted default_effort change applied on a fresh MCP session while the current session retained its startup default, Settings /config config_activation matched dsh_worker_config activation_boundaries for all tested keys (max_parallel=live, collaboration_mode=next-workflow, default_effort=next-session, vision_enabled/imagegen_enabled/hub_url=restart-required), and the Activation Boundaries client surface loaded in the disposable profile without errors. Deterministic preflight 349/349 tests pass. All temporary config changes restored byte-for-byte; config.json sha256 7cbbc8e1... and settings.yaml sha256 b3c608b8... unchanged after testing; web profile and running Hub (3080) untouched.",
+  "timeline": {
+    "started_at": "2026-08-21T16:51:43+08:00",
+    "completed_at": "2026-08-21T16:53:59+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validated",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)"
+    },
+    {
+      "name": "T02 Deterministic preflight on tested source",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile OK (already up to date); node --test test/*.test.mjs -> 349/349 pass, 0 fail; generated lib/client.js restored to HEAD; worktree clean"
+    },
+    {
+      "name": "T03 Non-secret hash snapshot before testing",
+      "status": "PASS",
+      "evidence": "~/.config/dsh-crew/config.json sha256 7cbbc8e1fb84f2a7dff6d793d259940c497b08234b1699103d786aa2eb21314d; ~/.dsh/settings.yaml sha256 b3c608b86311c10ad631306e42918f6d860350fe16ccdb38eaf317a3526095f9 (both recorded pre-test, no contents/secrets)"
+    },
+    {
+      "name": "T04 Disposable DSH profile + persistent MCP + control surface",
+      "status": "PASS",
+      "evidence": "Disposable profile v03dyn created via dsh plugin --profile, linked to exact source under test (node_modules/@ran-sh/dsh-crew -> D:/Users/48376/Desktop/dsh-crew); hub on 127.0.0.1:3211; /runtime 200 -> runtime_version 0.3.0-dev, protocol_version 1, full capabilities incl. config; one persistent MCP process (DSH_CREW_HUB=http://127.0.0.1:3211) drove all scenarios; dsh_worker_config reports runtime_controls {max_parallel:3, active:0, queued:0}; activation_boundaries: max_parallel=live, collaboration_mode=next-workflow, default_effort=next-session, hub_url/vision_enabled/imagegen_enabled=restart-required"
+    },
+    {
+      "name": "T05 LIVE raise max_parallel 1 -> 2",
+      "status": "PASS",
+      "evidence": "Set global execution.max_parallel=1 (config write, no MCP/DSH restart); refresh reads -> runtime_controls max_parallel=1; workflow W1 async sleep task -> phase running (active 1); workflow W2 -> phase queued (active 1, queued 1); set global max_parallel=2; same persistent MCP refresh -> runtime_controls max_parallel=2 active=2 queued=0 (drain admitted W2); W1 phase running (NOT cancelled/failed), W2 phase running; B_admission_ok=true"
+    },
+    {
+      "name": "T06 LIVE lower max_parallel 2 -> 1",
+      "status": "PASS",
+      "evidence": "With W1,W2 active, set global max_parallel=1 (no restart); refresh -> max_parallel=1 active=2 queued=0; W1,W2 still running (alive_on_lower both running, no cancellation); spawn W3 -> phase queued (active_on_queue 2); after one slot freed W3 -> phase running (C_admission_ok=true); no active workflow was cancelled"
+    },
+    {
+      "name": "T07 NEXT WORKFLOW persisted collaboration_mode change",
+      "status": "PASS",
+      "evidence": "Baseline global balanced (flash default). W4 started (model_class_hint flash, phase running). Persisted collaboration_mode=pro-only; refresh -> flash_state=disabled, pro_state=auto, effective_default_tier=pro. New workflow W5 (no session override) -> model_class_hint pro (next workflow observes new routing); W4 not rewritten (model_class_hint still flash, phase running). Restored balanced; new W6 -> model_class_hint flash. D_ok=true"
+    },
+    {
+      "name": "T08 NEXT SESSION persisted default_effort change",
+      "status": "PASS",
+      "evidence": "Persisted default_effort=max->high (global write, same MCP process). Same-session dsh_worker_config: session_overrides.default_effort stays max (startup default retained) while global_defaults.default_effort=high (E_after_global_change max/high). Fresh MCP session: session_overrides.default_effort=high (inherits persisted change). Restored -> global_defaults.default_effort=max. E_ok=true"
+    },
+    {
+      "name": "T09 Settings /config config_activation + Activation Boundaries client surface",
+      "status": "PASS",
+      "evidence": "Disposable hub GET /_dsh/dsh-crew/config -> config.config_activation present and matches MCP activation_boundaries for max_parallel(live), collaboration_mode(next-workflow), default_effort(next-session), hub_url/vision_enabled/imagegen_enabled(restart-required) (F match=true, 6/6). Client bundle served by the disposable profile: GET /plugins/@ran-sh/dsh-crew/client.js -> HTTP 200, 99191 bytes, contains Activation Boundaries surface, loads without client-load error (F_client.loads_ok=true)"
+    },
+    {
+      "name": "T10 Restore byte-for-byte + cleanup + repository safety",
+      "status": "PASS",
+      "evidence": "config.json restored byte-for-byte to pre-test (post-test sha256 7cbbc8e1... equals pre-test; backup removed after verifying); settings.yaml sha256 b3c608b8... unchanged; disposable profile v03dyn removed, disposable worker repo/logs/launcher removed, disposable DSH process (3211) stopped; web profile untouched (plugin still old pin), running Hub (3080) healthy; dsh-crew checkout clean with only this result contract added; no credentials/secret values appear anywhere in evidence"
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json",
+  "notes": [
+    "source_branch: test/v0.3-dynamic-runtime-controls-smoke",
+    "feature PR #12 head (source generation under test per ACTIVE metadata): 17d3d0018a375ae0ad40899210949d8bec564a87; ACTIVE prepared_from_commit 8c04452d6f41941bf2e994dba8ba5ff9536ae786",
+    "tested source_commit (LATEST resolved): 28ef5196723dcf755a2a60d68b48b02f77d8b1d3 (branch tip when this task ran)",
+    "persistent MCP process: node src/server.mjs with DSH_CREW_HUB=http://127.0.0.1:3211; disposable profile v03dyn created via the supported dsh plugin --profile mechanism with @ran-sh/dsh-crew linked to the checkout (exact source)",
+    "worker workflows used harmless sleep-command tasks in a disposable git repository to occupy admission slots; their final outcome is not part of the admission assertions, and their hub attempts were cancelled during cleanup",
+    "two earlier driver attempts (16:48, 16:50) were invalidated by a test-driver timing bug (phase/status conflation) and are not used as evidence; the authoritative run is 16:51:43 - 16:53:59",
+    "completion commit contains only this result contract and deletion of docs/agent-tasks/ACTIVE_TASK.json",
+    "result_commit: filled after push"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json --stamp",
+    "validated_at": "2026-08-21T08:57:34Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-dynamic-runtime-controls-smoke-result.json"
+  }
+}
