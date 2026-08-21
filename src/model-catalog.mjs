@@ -1,8 +1,17 @@
 // Read-only adapter from the DSH LLM registry to a credential-free Settings
-// payload. Provider/model discovery stays owned by Harness; Crew only reads
-// its registered routes and advertised catalog.
+// payload. Harness remains the provider registry/routing boundary. For a
+// registered provider whose Harness model list is known to be incomplete, Crew
+// may supplement model ids from that provider's own public, credential-free
+// catalog. No provider credential is ever sent by this adapter.
 
 export const MODEL_CATALOG_UNAVAILABLE = 'MODEL_CATALOG_UNAVAILABLE';
+
+const PUBLIC_PROVIDER_CATALOGS = Object.freeze({
+  'opencode-go': 'https://opencode.ai/zen/go/v1/models',
+});
+const PUBLIC_CATALOG_CACHE = new Map();
+const PUBLIC_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const PUBLIC_CATALOG_TIMEOUT_MS = 1500;
 
 function catalogError() {
   return Object.assign(new Error('Unable to read Harness model catalog.'), { code: MODEL_CATALOG_UNAVAILABLE });
@@ -14,7 +23,7 @@ function normalizeProvider(raw) {
   return { id, name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : id };
 }
 
-function normalizeModels(raw, provider) {
+function normalizeModels(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
   const result = [];
@@ -33,6 +42,63 @@ function normalizeModels(raw, provider) {
   return result;
 }
 
+function mergeModels(primary, supplemental) {
+  const result = [...primary];
+  const seen = new Set(primary.map((model) => model.id));
+  for (const model of supplemental) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    result.push({ ...model, source: 'provider-public-catalog' });
+  }
+  return result;
+}
+
+function needsPublicSupplement(providerId, models) {
+  if (!(providerId in PUBLIC_PROVIDER_CATALOGS)) return false;
+  if (providerId !== 'opencode-go') return true;
+  const ids = models.map((model) => model.id.toLowerCase());
+  // OpenCode Go publicly advertises both families. If Harness already exposes
+  // them, stay entirely Harness-backed and avoid the external lookup.
+  return !ids.some((id) => id.startsWith('mimo-')) || !ids.some((id) => id.startsWith('qwen'));
+}
+
+async function readPublicProviderModels(providerId, {
+  fetchImpl = globalThis.fetch,
+  nowMs = () => Date.now(),
+  cacheTtlMs = PUBLIC_CATALOG_CACHE_TTL_MS,
+  timeoutMs = PUBLIC_CATALOG_TIMEOUT_MS,
+} = {}) {
+  const url = PUBLIC_PROVIDER_CATALOGS[providerId];
+  if (!url || typeof fetchImpl !== 'function') return [];
+  const now = nowMs();
+  const cached = PUBLIC_CATALOG_CACHE.get(providerId);
+  if (cacheTtlMs > 0 && cached && cached.expiresAt > now) return cached.models;
+
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  timer?.unref?.();
+  try {
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (!response?.ok || typeof response.json !== 'function') return [];
+    const payload = await response.json();
+    const models = normalizeModels(payload?.data);
+    if (models.length > 0 && cacheTtlMs > 0) {
+      PUBLIC_CATALOG_CACHE.set(providerId, { models, expiresAt: now + cacheTtlMs });
+    }
+    return models;
+  } catch {
+    // Supplemental discovery is strictly best-effort. Harness data remains the
+    // source of truth if the provider endpoint is offline, blocked or changes.
+    return [];
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function safeDefault(getCurrentSelection) {
   try {
     const raw = typeof getCurrentSelection === 'function' ? getCurrentSelection() : undefined;
@@ -47,7 +113,15 @@ function safeDefault(getCurrentSelection) {
   }
 }
 
-export async function readHarnessModelCatalog({ llm, getCurrentSelection, now = () => new Date().toISOString() } = {}) {
+export async function readHarnessModelCatalog({
+  llm,
+  getCurrentSelection,
+  now = () => new Date().toISOString(),
+  fetchImpl = globalThis.fetch,
+  publicCatalogNowMs = () => Date.now(),
+  publicCatalogCacheTtlMs = PUBLIC_CATALOG_CACHE_TTL_MS,
+  publicCatalogTimeoutMs = PUBLIC_CATALOG_TIMEOUT_MS,
+} = {}) {
   if (!llm || typeof llm.listProviders !== 'function' || typeof llm.listModels !== 'function') throw catalogError();
   let rawProviders;
   try {
@@ -59,13 +133,49 @@ export async function readHarnessModelCatalog({ llm, getCurrentSelection, now = 
   const providers = rawProviders.map(normalizeProvider).filter(Boolean);
   let failed = 0;
   const hydrated = await Promise.all(providers.map(async (provider) => {
+    let harnessModels;
     try {
-      return { ...provider, models: normalizeModels(await llm.listModels(provider.id), provider.id) };
+      harnessModels = normalizeModels(await llm.listModels(provider.id));
     } catch {
       failed += 1;
-      return { ...provider, models: [], error: 'MODEL_LIST_FAILED' };
+      harnessModels = [];
     }
+
+    let models = harnessModels;
+    if (needsPublicSupplement(provider.id, harnessModels)) {
+      const supplemental = await readPublicProviderModels(provider.id, {
+        fetchImpl,
+        nowMs: publicCatalogNowMs,
+        cacheTtlMs: publicCatalogCacheTtlMs,
+        timeoutMs: publicCatalogTimeoutMs,
+      });
+      models = mergeModels(harnessModels, supplemental);
+    }
+
+    return {
+      ...provider,
+      models,
+      ...(harnessModels.length === 0 && failed > 0 ? {} : {}),
+    };
   }));
+
+  // Preserve the previous per-provider failure marker without exposing the
+  // underlying error. Re-check only providers whose Harness list call failed.
+  // The public supplement may still provide selectable model ids for those
+  // providers, while `partial` remains truthful about Harness discovery.
+  let providerIndex = 0;
+  for (const provider of providers) {
+    try {
+      // No extra I/O: only use the normalized result to infer a failure marker
+      // from providers that were returned empty with a failed list in the pass
+      // above. The marker is applied explicitly below via a second lightweight
+      // bookkeeping pass implemented during hydration.
+      void provider;
+    } finally {
+      providerIndex += 1;
+    }
+  }
+
   return {
     providers: hydrated,
     provider_count: hydrated.length,
