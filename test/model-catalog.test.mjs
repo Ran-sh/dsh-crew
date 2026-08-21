@@ -27,6 +27,61 @@ test('catalog reads every provider and normalizes model metadata', async () => {
   assert.equal(JSON.stringify(result).includes('secret'), false);
 });
 
+test('incomplete opencode-go catalog supplements MiMo/Qwen from the public credential-free endpoint', async () => {
+  let request;
+  const result = await readHarnessModelCatalog({
+    llm: fakeLlm([{ id: 'opencode-go', name: 'OpenCode Go' }], {
+      'opencode-go': [{ id: 'deepseek-v4-flash', name: 'DeepSeek Flash' }, { id: 'deepseek-v4-pro', name: 'DeepSeek Pro' }],
+    }),
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return {
+        ok: true,
+        json: async () => ({ data: [
+          { id: 'deepseek-v4-flash' },
+          { id: 'mimo-v2.5', name: 'MiMo-V2.5' },
+          { id: 'qwen3.8-max', name: 'Qwen3.8 Max' },
+        ] }),
+      };
+    },
+    publicCatalogCacheTtlMs: 0,
+  });
+  const provider = result.providers[0];
+  assert.deepEqual(provider.models.map((model) => model.id), ['deepseek-v4-flash', 'deepseek-v4-pro', 'mimo-v2.5', 'qwen3.8-max']);
+  assert.equal(provider.models.find((model) => model.id === 'mimo-v2.5')?.source, 'provider-public-catalog');
+  assert.equal(result.partial, false);
+  assert.equal(request.url, 'https://opencode.ai/zen/go/v1/models');
+  assert.equal(request.init.method, 'GET');
+  assert.deepEqual(request.init.headers, { accept: 'application/json' });
+  assert.doesNotMatch(JSON.stringify(request), /authorization|api[_-]?key|bearer/i);
+});
+
+test('OpenCode Go public-catalog failure leaves Harness models usable and leaks no error detail', async () => {
+  const result = await readHarnessModelCatalog({
+    llm: fakeLlm([{ id: 'opencode-go', name: 'OpenCode Go' }], {
+      'opencode-go': [{ id: 'deepseek-v4-flash', name: 'DeepSeek Flash' }],
+    }),
+    fetchImpl: async () => { throw new Error('Authorization: secret-public-catalog'); },
+    publicCatalogCacheTtlMs: 0,
+  });
+  assert.deepEqual(result.providers[0].models.map((model) => model.id), ['deepseek-v4-flash']);
+  assert.equal(result.partial, false);
+  assert.doesNotMatch(JSON.stringify(result), /secret-public-catalog|authorization/i);
+});
+
+test('complete OpenCode Go Harness catalog does not make an external request', async () => {
+  let calls = 0;
+  const result = await readHarnessModelCatalog({
+    llm: fakeLlm([{ id: 'opencode-go', name: 'OpenCode Go' }], {
+      'opencode-go': [{ id: 'mimo-v2.5' }, { id: 'qwen3.8-max' }],
+    }),
+    fetchImpl: async () => { calls += 1; throw new Error('must not run'); },
+    publicCatalogCacheTtlMs: 0,
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.model_count, 2);
+});
+
 test('one provider model-list failure produces a partial catalog', async () => {
   const result = await readHarnessModelCatalog({
     llm: fakeLlm([{ id: 'ok', name: 'OK' }, { id: 'bad', name: 'Bad' }], { ok: [{ id: 'm', name: 'M' }], bad: new Error('token=secret') }),
