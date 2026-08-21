@@ -346,7 +346,8 @@ export function createWorkflowRuntime(adapters, {
 
         if (job.cancelling) { cancelWorkflow(job); return; }
         if (decision.step === 'fail') {
-          failJob(job, Object.assign(new Error(`workflow failed: ${decision.reason}`), { code: null }));
+          const finalAttemptCode = ar.status === 'failed' ? attemptView.error_code : null;
+          failJob(job, Object.assign(new Error(`workflow failed: ${decision.reason}`), { code: finalAttemptCode }));
           return;
         }
         if (decision.step === 'escalate') {
@@ -406,7 +407,9 @@ export function createWorkflowRuntime(adapters, {
       },
     });
     job.current_attempt_id = null;
-    job.attempts.push({ ...attemptRecord(ar, 0), phase: 'review' });
+    const attemptView = { ...attemptRecord(ar, 0), phase: 'review' };
+    job.attempts.push(attemptView);
+    if (ar.status === 'failed' && attemptView.error_code) job.error_code = attemptView.error_code;
     const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
     return normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
   }
@@ -430,6 +433,7 @@ export function createWorkflowRuntime(adapters, {
       outcome: ar.outcome ?? null,
       usage: ar.usage ?? null,
       error: ar.error ?? null,
+      error_code: ar.error_code ?? ar.code ?? null,
       timed_out: ar.timed_out === true,
     };
   }
@@ -495,7 +499,7 @@ export function createWorkflowRuntime(adapters, {
         id: a.id, role: a.role, attempt: a.attempt, provider: a.provider, model: a.model,
         selection_source: a.selection_source, status: a.status, stopReason: a.stopReason,
         outcome_task: a.outcome?.task_status ?? null,
-        error: a.error ?? null, timed_out: a.timed_out === true,
+        error: a.error ?? null, error_code: a.error_code ?? null, timed_out: a.timed_out === true,
         candidate_fingerprint: a.candidate_fingerprint ?? null,
         tokens: a.usage ?? null,
       }));
