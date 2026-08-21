@@ -1,17 +1,43 @@
 # Short Triggers
 
-All compatible executors use one canonical task path.
+All compatible executors use the same authoritative task:
+
+`docs/agent-tasks/ACTIVE_TASK.json`
+
+Executor choice never changes permissions, scope, validation, or mode semantics.
 
 ## Canonical trigger
 
 ```text
-Pull the latest target branch. Read `docs/agent-workflow.md`, then read and validate `docs/agent-tasks/ACTIVE_TASK.json`. Execute exactly that task and do not expand scope. Write the required Result Contract/report, remove `ACTIVE_TASK.json` and its `ACTIVE_TASK.md` companion if present only when the task is complete, and commit/push only paths authorized by the Task Contract. If the ACTIVE task is missing or invalid, stop instead of inferring work.
+Execute ACTIVE_TASK.json according to Agent Workflow Protocol.
 ```
 
-中文：
+That is the normal user-facing trigger for Codex, ZCode, Claude Code, DeepSeek Harness, or another compatible executor.
 
-> 拉取最新目标分支，完整读取 `docs/agent-workflow.md`，再读取并验证 `docs/agent-tasks/ACTIVE_TASK.json`；只执行该任务，不扩大范围。完成后写入 Result Contract，按契约删除 ACTIVE 文件并只提交允许的路径。ACTIVE 缺失或无效就停止，不要猜任务。
+The trigger intentionally contains no project requirements. The repository workflow and Task Contract contain all execution rules.
 
-Codex、ZCode、Claude Code、DeepSeek Harness 以及未来兼容 Executor 都使用同一入口。
+## Chinese trigger
 
-任务完成后，用户只需告诉 ChatGPT“执行完了，检查 GitHub”，ChatGPT 直接读取结果，不要求重新粘贴整份报告。
+```text
+执行 ACTIVE_TASK.json，按 Agent Workflow Protocol 完成即可。
+```
+
+## Completion signal back to ChatGPT
+
+After the executor commits/pushes its result, the user only needs to say something like:
+
+```text
+Codex finished. Check GitHub.
+```
+
+or:
+
+```text
+Codex 做完了，检查 GitHub。
+```
+
+ChatGPT should read the Result Contract and repository state directly rather than asking the user to paste the report.
+
+## Human companion
+
+`docs/agent-tasks/ACTIVE_TASK.md` may exist as a non-authoritative human-readable companion. If it conflicts with `ACTIVE_TASK.json`, the JSON Task Contract wins.
