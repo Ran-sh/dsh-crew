@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import * as legacy from './install-legacy.mjs';
 import { normalizeModelPriority } from '../model-routing.mjs';
+import { runtimeActivationMetadata } from '../runtime-controls.mjs';
 import {
   CONFIG_SCHEMA_VERSION,
   configHasCanonicalAuthority,
@@ -64,6 +65,7 @@ function attachReadMetadata(config, { version, canonical }) {
     config_schema_version: version,
     config_authority: canonical ? 'canonical' : 'legacy-import',
     config_migration_required: !canonical,
+    config_activation: runtimeActivationMetadata(),
   };
 }
 
@@ -103,6 +105,7 @@ function stripReadMetadata(config) {
   const next = { ...config };
   delete next.config_authority;
   delete next.config_migration_required;
+  delete next.config_activation;
   return next;
 }
 
