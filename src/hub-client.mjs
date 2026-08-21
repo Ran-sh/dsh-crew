@@ -97,10 +97,24 @@ export async function hubAvailable() {
   return (await hubStatus()).compatible;
 }
 
+function structuredCode(body) {
+  if (typeof body?.code === 'string' && body.code.trim()) return body.code.trim();
+  if (typeof body?.policyCode === 'string' && body.policyCode.trim()) return body.policyCode.trim();
+  return null;
+}
+
+/** Build a bounded Hub request error without copying arbitrary response fields. */
+export function hubRequestError(body, status) {
+  const err = new Error(body?.error ?? `hub request failed (${status})`);
+  const code = structuredCode(body);
+  if (code) err.code = code;
+  return err;
+}
+
 async function call(path, init) {
   const res = await fetch(`${API}${path}`, init);
   const body = await res.json();
-  if (!res.ok || body.ok === false) throw new Error(body.error ?? `hub request failed (${res.status})`);
+  if (!res.ok || body.ok === false) throw hubRequestError(body, res.status);
   return body;
 }
 
