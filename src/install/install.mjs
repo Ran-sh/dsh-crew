@@ -86,7 +86,10 @@ function stripReadMetadata(config) {
 
 function mergeCanonicalPatch(current, patch) {
   const next = { ...current };
-  if (validObject(patch.execution)) next.execution = { ...current.execution, ...patch.execution };
+  if (validObject(patch.execution)) {
+    next.execution = { ...current.execution, ...patch.execution };
+    if (patch.execution.enabled !== undefined) next.subagents_enabled = Boolean(patch.execution.enabled);
+  }
   if (validObject(patch.worker)) {
     next.worker = {
       ...current.worker,
@@ -104,6 +107,15 @@ function mergeCanonicalPatch(current, patch) {
         ? { ...current.review?.model_policy, ...patch.review.model_policy }
         : current.review?.model_policy,
     };
+  }
+
+  // v0.3 still has one provider-mode control.  A direct canonical patch is
+  // allowed, but it cannot manufacture separate worker/reviewer authorities.
+  const providerMode = patch.worker?.provider_mode ?? patch.review?.provider_mode;
+  if (providerMode !== undefined) {
+    next.worker = { ...next.worker, provider_mode: providerMode };
+    next.review = { ...next.review, provider_mode: providerMode };
+    next.worker_provider_mode = providerMode;
   }
   return next;
 }
