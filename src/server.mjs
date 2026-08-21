@@ -8,6 +8,7 @@ import { hubStatus, hub } from './hub-client.mjs';
 import { hubCompatibilityMessage, resolveHubExecutionMode } from './hub-compatibility.mjs';
 import { RUNTIME_VERSION } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
+import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import {
   normalizeGlobalConfig,
   deriveLegacyConfig,
@@ -33,8 +34,9 @@ const effortSchema = z.enum(['off', 'high', 'max']).optional().describe('Reasoni
 // All dispatch decisions (dsh_run_worker AND dsh_spawn_worker, hub AND
 // standalone) go through the same policy resolver in src/policy.mjs.
 import { readGlobalConfig } from './install/install.mjs';
-const globalConfig = normalizeGlobalConfig(readGlobalConfig());
-const legacyDefaults = deriveLegacyConfig(globalConfig);
+const initialGlobalConfig = normalizeGlobalConfig(readGlobalConfig());
+const legacyDefaults = deriveLegacyConfig(initialGlobalConfig);
+const currentGlobalConfig = () => normalizeGlobalConfig(readGlobalConfig());
 const sessionConfig = {
   enabled: true,
   default_tier: legacyDefaults.default_tier,
@@ -167,6 +169,7 @@ server.registerTool('dsh_run_worker', {
   },
 }, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
+  const globalConfig = currentGlobalConfig();
   const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
   if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
   const effRole = hint.role;
@@ -211,7 +214,7 @@ server.registerTool('dsh_run_worker', {
 
 server.registerTool('dsh_worker_config', {
   title: 'Session worker configuration',
-  description: 'Read or update session-level worker settings: enable/disable dispatch, default tier/effort/timeout, execution mode, tier policy, escalation, collaboration mode, per-tier state and review behavior. Call with no arguments to read the current configuration (global defaults, session overrides, effective policy, routing guidance). Settings last for this session only.',
+  description: 'Read or update session-level worker settings: enable/disable dispatch, default tier/effort/timeout, execution mode, tier policy, escalation, collaboration mode, per-tier state and review behavior. Call with no arguments to read the current configuration, runtime control state, activation boundaries, global defaults, session overrides, effective policy and routing guidance. Settings last for this session only.',
   inputSchema: {
     enabled: z.boolean().optional().describe('false = refuse all worker dispatch this session'),
     default_tier: z.enum(['flash', 'pro']).optional(),
@@ -252,7 +255,7 @@ const SAFE_GLOBAL_KEYS = [
 ];
 
 async function buildConfigReport() {
-  const currentGlobalConfig = normalizeGlobalConfig(readGlobalConfig());
+  const globalConfig = currentGlobalConfig();
   const legacy = deriveLegacyConfig(globalConfig);
   const flashState = getEffectiveTierState(globalConfig, 'flash', sessionConfig);
   const proState = getEffectiveTierState(globalConfig, 'pro', sessionConfig);
@@ -261,11 +264,13 @@ async function buildConfigReport() {
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
   const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
+  const runtimeControls = workflowRuntime.refreshRuntimeControls();
+  const activationBoundaries = globalConfig.config_activation ?? runtimeActivationMetadata();
   const hubCompatibility = await hubStatus({ force: true });
   let effectiveWorkerProvider = null;
   let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
-  const workerProviderMode = currentGlobalConfig.worker_provider_mode ?? 'deepseek-official';
+  const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
   if (workerProviderMode === 'deepseek-official') {
     effectiveWorkerSelection = {
       flash: { provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' },
@@ -279,9 +284,9 @@ async function buildConfigReport() {
       else for (const tier of ['flash', 'pro']) {
         const selected = resolveWorkerModel({
           tier,
-          priority: currentGlobalConfig[`${tier}_model_priority`],
-          priorityConfigured: currentGlobalConfig[`${tier}_model_priority_configured`],
-          fallback: currentGlobalConfig[`${tier}_model_fallback`],
+          priority: globalConfig[`${tier}_model_priority`],
+          priorityConfigured: globalConfig[`${tier}_model_priority_configured`],
+          fallback: globalConfig[`${tier}_model_fallback`],
           catalog: body,
           harnessDefault: body.harness_default,
         });
@@ -308,10 +313,10 @@ async function buildConfigReport() {
     effective_worker_provider: effectiveWorkerProvider,
     effective_worker_selection: effectiveWorkerSelection,
     provider_resolution_error: providerResolutionError,
-    flash_model_priority: currentGlobalConfig.flash_model_priority ?? [],
-    flash_model_fallback: currentGlobalConfig.flash_model_fallback ?? 'harness-default',
-    pro_model_priority: currentGlobalConfig.pro_model_priority ?? [],
-    pro_model_fallback: currentGlobalConfig.pro_model_fallback ?? 'harness-default',
+    flash_model_priority: globalConfig.flash_model_priority ?? [],
+    flash_model_fallback: globalConfig.flash_model_fallback ?? 'harness-default',
+    pro_model_priority: globalConfig.pro_model_priority ?? [],
+    pro_model_fallback: globalConfig.pro_model_fallback ?? 'harness-default',
     subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
     collaboration_mode: collaborationMode,
     main_agent_mode: mainAgentMode,
@@ -328,7 +333,9 @@ async function buildConfigReport() {
     effective_default_tier_reason: defaultDecision.ok ? defaultDecision.guidance : (defaultDecision.error.policyCode ?? 'none'),
     routing_guidance: getRoutingGuidance(globalConfig, sessionConfig),
     session_overrides: overrides,
-    global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, currentGlobalConfig[k]])),
+    global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, globalConfig[k]])),
+    runtime_controls: runtimeControls,
+    activation_boundaries: activationBoundaries,
     hub_reachable: hubCompatibility.reachable,
     hub_compatible: hubCompatibility.compatible,
     hub_compatibility: hubCompatibility,
@@ -348,6 +355,7 @@ server.registerTool('dsh_spawn_worker', {
   },
 }, async ({ task, role, tier, legacy_tier, effort, cwd }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
+  const globalConfig = currentGlobalConfig();
   const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
   if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
   const effRole = hint.role;
