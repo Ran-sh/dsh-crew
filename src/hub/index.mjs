@@ -16,7 +16,7 @@ import {
   resolveModelPolicy,
   resolveRoleTierHint,
 } from '../policy.mjs';
-import { resolveWorkerModel, resolveModel } from '../model-routing.mjs';
+import { buildDirectSelectionTrace, resolveWorkerModel, resolveModel } from '../model-routing.mjs';
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
@@ -100,6 +100,7 @@ export class WorkerRegistry {  constructor(ctx) {
       id: job.id, sessionId: job.sessionId, role: job.role ?? 'worker', attempt: job.attempt ?? 0,
       tier: job.tier, provider: job.provider, model: job.model,
       selection_source: job.selection_source,
+      selection_trace: job.selection_trace ?? null,
       effort: job.effort, requested_effort: job.effort, reasoning_effort: job.reasoning_effort ?? null,
       status: job.status, source: job.source, task: job.task.slice(0, 300),
       cwd: job.cwd, turn: job.turn, step: job.step, currentTool: job.currentTool,
@@ -157,7 +158,23 @@ export class WorkerRegistry {  constructor(ctx) {
     const getCurrentSelection = () => this.ctx.get('agentDefaultModel')?.currentSelection?.();
     let selection;
     if (workerProviderMode === 'deepseek-official') {
-      selection = { ok: true, provider: 'deepseek-official', model: legacyModel, source: 'legacy-strict', reasoningEffort: effort };
+      selection = {
+        ok: true,
+        provider: 'deepseek-official',
+        model: legacyModel,
+        source: 'legacy-strict',
+        reasoningEffort: effort,
+        selection_trace: buildDirectSelectionTrace({
+          role: effRole,
+          logicalAttempt: attempt,
+          modelClassHint: effTier,
+          strategy: 'legacy-strict',
+          candidateSet: attempt > 0 ? 'escalation' : 'primary',
+          provider: 'deepseek-official',
+          model: legacyModel,
+          source: 'legacy-strict',
+        }),
+      };
     } else {
       let catalog;
       try {
@@ -192,6 +209,13 @@ export class WorkerRegistry {  constructor(ctx) {
           fallback: cfg[`${effTier}_model_fallback`],
           catalog,
           harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+          traceContext: {
+            role: effRole,
+            logicalAttempt: attempt,
+            modelClassHint: effTier,
+            strategy: 'legacy-tier',
+            candidateSet: attempt > 0 ? 'escalation' : 'primary',
+          },
         });
       }
       if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
@@ -207,7 +231,8 @@ export class WorkerRegistry {  constructor(ctx) {
     const sessionId = `session-${randomUUID()}`;
     const job = {
       id, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
-      selection_source: selection.source, effort, reasoning_effort: selection.reasoningEffort,
+      selection_source: selection.source, selection_trace: selection.selection_trace ?? null,
+      effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
       phase: JOB_PHASES.RUNNING,
