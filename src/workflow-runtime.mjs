@@ -35,7 +35,6 @@ function lines(value) {
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
-/** Loose verdict normalizer: APPROVE / APPROVED / PASS -> approve, etc. */
 export function normalizeReviewVerdict(value) {
   const s = String(value ?? '').trim().toLowerCase();
   if (/^(approve|approved|pass)\b/.test(s) || s === 'pass' || s === 'approve') return 'approve';
@@ -43,12 +42,13 @@ export function normalizeReviewVerdict(value) {
   return 'inconclusive';
 }
 
-/** Normalize a reviewer attempt into the canonical review record. */
 export function normalizeReview({ attemptResult, beforeCandidate, afterCandidate } = {}) {
   const parsed = parseDeliveryReport(attemptResult?.result ?? '');
   const mutation = mutationDetected(beforeCandidate, afterCandidate);
+  const reportedVerdict = normalizeReviewVerdict(parsed.sections?.Verdict ?? attemptResult?.result ?? '');
   return {
-    verdict: normalizeReviewVerdict(parsed.sections?.Verdict ?? attemptResult?.result ?? ''),
+    verdict: mutation ? 'request_changes' : reportedVerdict,
+    reported_verdict: reportedVerdict,
     findings: lines(parsed.sections?.['Review Findings']),
     evidence: lines(parsed.sections?.Evidence),
     risks: lines(parsed.sections?.Risks),
@@ -56,15 +56,13 @@ export function normalizeReview({ attemptResult, beforeCandidate, afterCandidate
     model: attemptResult?.model ?? null,
     provider: attemptResult?.provider ?? null,
     status: attemptResult?.status ?? 'failed',
-    ...(mutation ? { mutated_candidate: true } : {}),
+    ...(mutation ? { mutated_candidate: true, invalidated: true } : {}),
   };
 }
 
 function mutationDetected(before, after) {
   if (!before) return false;
   if (before.fingerprint == null) return false;
-  // candidate capture failing after the reviewer ran (e.g. worktree gone) is
-  // also treated as evidence the reviewer could have changed something.
   if (!after) return true;
   return after.fingerprint != null && before.fingerprint !== after.fingerprint;
 }
@@ -74,11 +72,9 @@ function deliveryClaimsChanges(outcome) {
 }
 
 function workspaceEvidenceOK(outcome, candidate) {
-  if (!candidate) return true; // non-coding or capture unavailable: no penalty
+  if (!candidate) return true;
   const hasChanges = Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0;
   if (outcome?.execution_status !== 'completed') return true;
-  // A completed worker that claims changes must produce a candidate with
-  // changes; a candidate listing changes is always acceptable evidence.
   return !deliveryClaimsChanges(outcome) || hasChanges;
 }
 
@@ -94,25 +90,6 @@ function sumUsage(attempts) {
   return tokens;
 }
 
-/**
- * Create a workflow runtime bound to `adapters`. Adapter interface:
- *
- *   executeAttempt(spec) -> AttemptResult  (spawn + resolve one session)
- *   spec = { id, workflowId, role, attempt, task, cwd, effort, policy, source }
- *   AttemptResult = { id, role, attempt, status, provider, model,
- *     selection_source, result, stopReason, outcome?, error?, usage? }
- *   cancelAttempt(id) -> Promise<void>
- *   allocateWorkspace(spec) ->
- *     { ok, execution_cwd, base_revision?, isolation, primary_workspace_dirty?, handle? }
- *     or { ok:false, reason, error }
- *   captureCandidate({ cwd, baseRevision }) -> candidate (optional; absent = no isolation)
- *   releaseWorkspace(handle) -> { ok, error? }
- *   buildReviewTask(task, attemptView) -> string
- *   getConfig() -> normalized config
- *
- * `spec` fields: role ("worker"|"reviewer"), task, effort, cwd (requested),
- * source, delivery ("coding"|"review").
- */
 export function createWorkflowRuntime(adapters, {
   maxParallel = 3,
   idFactory = () => `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -127,9 +104,7 @@ export function createWorkflowRuntime(adapters, {
 
   function transition(job, to, reason) {
     if (job.phase === to) return;
-    if (!canTransition(job.phase, to)) {
-      throw new Error(`illegal workflow transition ${job.phase} -> ${to}`);
-    }
+    if (!canTransition(job.phase, to)) throw new Error(`illegal workflow transition ${job.phase} -> ${to}`);
     job.phase = to;
     job.events.push({ at: clock(), phase: to, type: 'phase', reason: reason ?? to });
     log(`${job.id} ${to}`);
@@ -141,6 +116,7 @@ export function createWorkflowRuntime(adapters, {
       id: idFactory(),
       role: spec.role ?? 'worker',
       delivery: spec.delivery === 'review' ? 'review' : 'coding',
+      model_class_hint: spec.model_class_hint === 'pro' ? 'pro' : spec.model_class_hint === 'flash' ? 'flash' : null,
       original_task: spec.task,
       source: spec.source ?? 'api',
       requested_cwd: spec.cwd,
@@ -177,13 +153,16 @@ export function createWorkflowRuntime(adapters, {
     drain();
   }
 
+  function handleKickoffFailure(job, err) {
+    failJob(job, err);
+    releaseSlot();
+  }
+
   function drain() {
     while (active < maxParallel && queue.length > 0) {
       const job = queue.shift();
       active += 1;
-      kickoff(job).catch((err) => {
-        failJob(job, err);
-      });
+      kickoff(job).catch((err) => handleKickoffFailure(job, err));
     }
   }
 
@@ -203,14 +182,10 @@ export function createWorkflowRuntime(adapters, {
     job.error_code = err?.code ?? err?.policyCode ?? job.error_code ?? null;
     job.phase = JOB_PHASES.FAILED;
     setTerminal(job);
-    releaseSlot();
   }
 
   async function releaseWorkspace(job) {
     if (job.retain_workspace) {
-      // Candidate capture failed — the worktree holds the only copy of the
-      // worker's changes. Keep it and surface where it lives instead of
-      // deleting the only recoverable state.
       job.workspace_retained = true;
       return;
     }
@@ -226,10 +201,10 @@ export function createWorkflowRuntime(adapters, {
 
   async function runWorkflow(job) {
     const isReviewJob = job.role === 'reviewer' || job.delivery === 'review';
-    const config = adapters.getConfig?.() ?? {};
+    let config = {};
 
     try {
-      // --- workspace allocation (worktree isolation for coding workers) ---
+      config = adapters.getConfig?.() ?? {};
       const alloc = await adapters.allocateWorkspace?.(job);
       if (alloc && alloc.ok === false) {
         job.error = alloc.error ?? alloc.reason;
@@ -248,7 +223,6 @@ export function createWorkflowRuntime(adapters, {
       transition(job, JOB_PHASES.RUNNING, 'start');
 
       if (isReviewJob) {
-        // Explicit reviewer: one reviewer pass over the workspace.
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
         const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
         const reviewTask = adapters.buildReviewTask(job.original_task, null);
@@ -259,13 +233,12 @@ export function createWorkflowRuntime(adapters, {
         return;
       }
 
-      // --- worker attempt loop with evidence-driven escalation ---
       let attempt = 0;
       for (;;) {
         if (job.cancelling) { cancelWorkflow(job); return; }
         if (attempt > 0) transition(job, JOB_PHASES.RUNNING, `escalated attempt ${attempt}`);
         const policy = resolveModelPolicy(config, 'worker', { attempt });
-        const attemptId = attemptIdFor(adapters, job.id);
+        const attemptId = attemptIdFor(adapters, job.id, attempt === 0 ? '' : String(attempt));
         job.current_attempt_id = attemptId;
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt });
         const ar = await adapters.executeAttempt({
@@ -278,11 +251,15 @@ export function createWorkflowRuntime(adapters, {
           effort: job.effort,
           policy,
           source: job.source,
+          model_class_hint: job.model_class_hint,
+          onAttemptStarted: (actualId) => {
+            if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
+          },
         });
+        job.current_attempt_id = null;
         if (job.cancelling) { cancelWorkflow(job); return; }
-        job.attempts.push(attemptRecord(ar, attempt));
-        // Infrastructure failures (missing key, unreachable hub, cwd invalid,
-        // worktree/git problems) are NOT fixed by a stronger model.
+        const attemptView = attemptRecord(ar, attempt);
+        job.attempts.push(attemptView);
         if (ar.infra === true) {
           failJob(job, Object.assign(new Error(ar.error ?? 'infrastructure failure'), { code: WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE }));
           return;
@@ -294,33 +271,31 @@ export function createWorkflowRuntime(adapters, {
         });
         transition(job, JOB_PHASES.VERIFYING, `attempt ${attempt} complete`);
 
-        // Workspace evidence: a coding worker claiming changes must show them.
-        // Only an isolated (worktree) workspace produces a candidate — a shared
-        // user workspace is never drafted into one.
-        if (alloc?.ok && alloc.isolation === 'worktree' && job.candidate === null) {
+        // Capture the latest candidate after every attempt. Capture failure is
+        // not allowed to delete the only recoverable state: retain the worktree
+        // and preserve the worker business result, while surfacing the warning.
+        if (alloc?.ok && alloc.isolation === 'worktree') {
           const candidate = await safeCapture(adapters, job.execution_cwd, job.base_revision);
           if (candidate === null) {
-            // The worker's changes live only in the worktree; do not delete the
-            // only recoverable state when the candidate cannot be captured.
             job.candidate_capture_failed = true;
             job.retain_workspace = true;
-            job.events.push({ at: clock(), phase: job.phase, type: 'candidate/failed', message: 'candidate capture failed; worktree retained for debug' });
+            job.candidate = null;
+            job.events.push({ at: clock(), phase: job.phase, type: 'candidate/failed', attempt, message: 'candidate capture failed; worktree retained for recovery' });
           } else {
             job.candidate = candidate;
+            attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
             outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
+            if (candidate.complete === false || candidate.replayable === false) {
+              job.retain_workspace = true;
+              job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });
+            }
           }
         }
         job.outcome = outcome;
 
         const reviewRequested = !isReviewJob && shouldAutoReview(config);
         const reviewerAuto = getRoleState(config, 'reviewer') !== 'disabled';
-        const decision = decideNextStep({
-          outcome,
-          policy,
-          attempt,
-          reviewRequested,
-          reviewerAuto,
-        });
+        const decision = decideNextStep({ outcome, policy, attempt, reviewRequested, reviewerAuto });
         job.decision = { step: decision.step, phase: decision.phase, reason: decision.reason };
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/complete', attempt, decision: decision.step });
 
@@ -337,13 +312,9 @@ export function createWorkflowRuntime(adapters, {
         if (decision.step === 'review') {
           transition(job, JOB_PHASES.REVIEWING, 'automatic review');
           const before = job.candidate;
-          // The reviewer sees outcome + the SANITIZED candidate (changed files,
-          // base revision, redacted patch) — never the raw workspace.
           const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
           job.review = review;
-          // The implementation candidate stays the pre-review snapshot; the
-          // reviewer workspace is discarded after release.
           transition(job, JOB_PHASES.READY, decision.reason);
           finalize(job);
           return;
@@ -354,13 +325,9 @@ export function createWorkflowRuntime(adapters, {
       }
     } catch (err) {
       if (job.cancelling) { cancelWorkflow(job); return; }
-      job.error = err?.message ?? String(err);
-      job.phase = JOB_PHASES.FAILED;
-      job.error_code = err?.code ?? err?.policyCode ?? null;
-      setTerminal(job);
+      failJob(job, err);
     } finally {
       await releaseWorkspace(job);
-      if (job.status === 'running') {} // not reachable
       releaseSlot();
     }
   }
@@ -370,9 +337,7 @@ export function createWorkflowRuntime(adapters, {
     try {
       const c = await adapters.captureCandidate({ cwd, baseRevision });
       return c && c.ok ? c : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async function runReviewerAttempt(job, task, config, beforeCandidate, cwd = job.execution_cwd, baseRevision = job.base_revision) {
@@ -390,9 +355,13 @@ export function createWorkflowRuntime(adapters, {
       effort: job.effort,
       policy,
       source: job.source,
+      model_class_hint: 'pro',
+      onAttemptStarted: (actualId) => {
+        if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
+      },
     });
+    job.current_attempt_id = null;
     job.attempts.push({ ...attemptRecord(ar, 0), phase: 'review' });
-    // Mutation detection only applies to an isolated candidate workspace.
     const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
     return normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
   }
@@ -416,6 +385,7 @@ export function createWorkflowRuntime(adapters, {
       outcome: ar.outcome ?? null,
       usage: ar.usage ?? null,
       error: ar.error ?? null,
+      timed_out: ar.timed_out === true,
     };
   }
 
@@ -446,6 +416,7 @@ export function createWorkflowRuntime(adapters, {
       status: job.status,
       attempt: job.attempts.length,
       current_model: job.attempts[job.attempts.length - 1]?.model ?? null,
+      model_class_hint: job.model_class_hint,
       source: job.source,
       requested_cwd: job.requested_cwd,
       execution_cwd: job.execution_cwd,
@@ -469,7 +440,8 @@ export function createWorkflowRuntime(adapters, {
         id: a.id, role: a.role, attempt: a.attempt, provider: a.provider, model: a.model,
         selection_source: a.selection_source, status: a.status, stopReason: a.stopReason,
         outcome_task: a.outcome?.task_status ?? null,
-        error: a.error ?? null,
+        error: a.error ?? null, timed_out: a.timed_out === true,
+        candidate_fingerprint: a.candidate_fingerprint ?? null,
         tokens: a.usage ?? null,
       }));
       v.outcome = job.outcome;
@@ -485,7 +457,7 @@ export function createWorkflowRuntime(adapters, {
     jobs.set(job.id, job);
     if (active < maxParallel) {
       active += 1;
-      kickoff(job).catch((err) => failJob(job, err));
+      kickoff(job).catch((err) => handleKickoffFailure(job, err));
     } else {
       transition(job, JOB_PHASES.QUEUED, 'concurrency limit');
       queue.push(job);
@@ -493,9 +465,7 @@ export function createWorkflowRuntime(adapters, {
     return job;
   }
 
-  async function kickoff(job) {
-    await runWorkflow(job);
-  }
+  async function kickoff(job) { await runWorkflow(job); }
 
   async function wait(id, timeoutMs) {
     const job = jobs.get(id);
@@ -513,15 +483,12 @@ export function createWorkflowRuntime(adapters, {
     return job ? workflowView(job, opts) : undefined;
   }
 
-  function list() {
-    return [...jobs.values()].map((j) => workflowView(j));
-  }
+  function list() { return [...jobs.values()].map((j) => workflowView(j)); }
 
   async function cancel(id) {
     const job = jobs.get(id);
     if (!job) return undefined;
     cancelWorkflow(job);
-    // Remove from queue if still queued and free its slot.
     const qi = queue.indexOf(job);
     if (qi !== -1) queue.splice(qi, 1);
     return workflowView(job);
@@ -530,5 +497,4 @@ export function createWorkflowRuntime(adapters, {
   return { start, wait, get, list, cancel };
 }
 
-// re-export phases so callers / tests share one definition
 export { JOB_PHASES, TERMINAL };

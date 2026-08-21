@@ -18,12 +18,46 @@ import {
 import { startJob, waitJob, jobView, cancelJob } from './jobs.mjs';
 import { hub } from './hub-client.mjs';
 
+const SESSION_CONFIG_KEYS = [
+  'default_tier', 'default_effort', 'mode', 'default_timeout_seconds',
+  'tier_policy', 'escalate_on_failure', 'collaboration_mode', 'main_agent_mode',
+  'flash_state', 'pro_state', 'pro_reviews_flash',
+];
+
+/**
+ * Merge only defined session overrides onto the live global config before the
+ * workflow snapshots its policy. This keeps dsh_worker_config authoritative
+ * for escalation/review decisions instead of applying it only to the MCP gate.
+ */
+export function buildEffectiveRuntimeConfig(globalRaw = {}, session = {}) {
+  const patch = {};
+  for (const key of SESSION_CONFIG_KEYS) {
+    if (session?.[key] !== undefined) patch[key] = session[key];
+  }
+  if (session?.enabled === false) patch.subagents_enabled = false;
+  return normalizeGlobalConfig({ ...globalRaw, ...patch });
+}
+
+/**
+ * Translate a role/workflow attempt into the legacy model-class slot needed by
+ * Standalone and DeepSeek Official Hub routing. A user-requested strong worker
+ * starts on Pro; every escalated worker attempt also uses the strong slot.
+ */
+export function resolveAttemptTier({ role = 'worker', attempt = 0, modelClassHint } = {}) {
+  if (role === 'reviewer') return 'pro';
+  if (Number.isInteger(attempt) && attempt > 0) return 'pro';
+  if (modelClassHint === 'pro') return 'pro';
+  return 'flash';
+}
+
 /** Map a Hub/Standalone job view into the AttemptResult the runtime expects. */
 function attemptFromView(view, spec) {
   return {
     id: view?.id ?? spec.id,
     role: view?.role ?? spec.role ?? 'worker',
-    attempt: view?.attempt ?? spec.attempt ?? 0,
+    // `view.attempt` may be an adapter routing-attempt (see below); the
+    // workflow's logical attempt number is always the spec value.
+    attempt: spec.attempt ?? 0,
     provider: view?.provider ?? null,
     model: view?.model ?? null,
     selection_source: view?.selection_source ?? null,
@@ -36,8 +70,14 @@ function attemptFromView(view, spec) {
   };
 }
 
-function tierSlotFor(role) {
-  return role === 'reviewer' ? 'pro' : 'flash';
+function timedOutAttempt(view, spec, timeoutMs) {
+  return {
+    ...attemptFromView(view, spec),
+    status: 'failed',
+    stopReason: 'timeout',
+    error: `attempt timed out after ${Math.ceil(timeoutMs / 1000)}s and was cancelled before any retry`,
+    timed_out: true,
+  };
 }
 
 /**
@@ -53,30 +93,50 @@ function tierSlotFor(role) {
  */
 export function buildMcpWorkflowRuntime(deps) {
   const { getSessionConfig, resolveMode, presetForTier, readGlobalConfig, buildReviewTask } = deps;
-  const getConfig = () => normalizeGlobalConfig(readGlobalConfig());
+  const getConfig = () => buildEffectiveRuntimeConfig(readGlobalConfig(), getSessionConfig?.() ?? {});
 
   const executeAttempt = async (spec) => {
     const session = getSessionConfig?.() ?? {};
     const effort = spec.effort ?? session.default_effort ?? 'max';
     const timeoutMs = (deps.attemptTimeoutMs?.() ?? (session.default_timeout_seconds ?? 1800) * 1000);
-    const tier = tierSlotFor(spec.role);
+    const tier = resolveAttemptTier({ role: spec.role, attempt: spec.attempt, modelClassHint: spec.model_class_hint });
     const delivery = spec.role === 'reviewer' || spec.delivery === 'review' ? 'review' : 'coding';
     const source = spec.source ?? 'api';
     const preset = presetForTier?.(tier);
 
     if ((await resolveMode()) === 'hub') {
+      // Hub follow-dsh currently uses `attempt` to choose primary vs escalation
+      // model policy. For an explicit worker+pro hint, route selection through
+      // the strong pool while preserving the workflow's logical attempt number
+      // in the normalized AttemptResult.
+      const routingAttempt = spec.role === 'worker' && spec.attempt === 0 && spec.model_class_hint === 'pro'
+        ? 1
+        : spec.attempt;
       const spawned = await hub.spawn({
         task: spec.task,
         tier,
         role: spec.role,
-        attempt: spec.attempt,
+        attempt: routingAttempt,
         effort,
         cwd: spec.cwd,
         source,
         preset,
         delivery,
       });
-      const resolved = await hub.get(spawned.id, Math.min(Math.floor(timeoutMs / 1000), 600));
+      spec.onAttemptStarted?.(spawned.id);
+
+      const deadline = Date.now() + timeoutMs;
+      let resolved = spawned;
+      while (resolved?.status === 'running') {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          let cancelled = resolved;
+          try { cancelled = await hub.cancel(spawned.id); } catch {}
+          return timedOutAttempt(cancelled, spec, timeoutMs);
+        }
+        const waitSeconds = Math.max(1, Math.min(600, Math.ceil(remainingMs / 1000)));
+        resolved = await hub.get(spawned.id, waitSeconds);
+      }
       return attemptFromView(resolved, spec);
     }
 
@@ -91,7 +151,12 @@ export function buildMcpWorkflowRuntime(deps) {
       source,
       delivery,
     });
+    spec.onAttemptStarted?.(job.id);
     await waitJob(job.id, timeoutMs);
+    if (job.status === 'running') {
+      await cancelJob(job.id).catch(() => {});
+      return timedOutAttempt(jobView(job, { withResult: true }), spec, timeoutMs);
+    }
     return attemptFromView(jobView(job, { withResult: true }), spec);
   };
 
@@ -121,14 +186,12 @@ export function buildMcpWorkflowRuntime(deps) {
     if (!created.ok) {
       return { ok: false, reason: created.reason ?? 'WORKTREE_CREATE_FAILED', error: `worktree create failed: ${created.error ?? ''}` };
     }
-    const baselineDirty = false; // worktrees start clean at base by construction
-    void baselineDirty;
     return {
       ok: true,
       execution_cwd: created.worktreePath,
       base_revision: created.baseRevision,
       isolation: 'worktree',
-      primary_workspace_dirty: false,
+      primary_workspace_dirty: repo.dirty === true,
       handle: { worktreePath: created.worktreePath, repoRoot: created.repoRoot },
     };
   };

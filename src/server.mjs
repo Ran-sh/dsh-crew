@@ -39,14 +39,10 @@ const sessionConfig = {
   default_effort: legacyDefaults.default_effort,
   mode: legacyDefaults.mode, // auto | hub | standalone
   default_timeout_seconds: legacyDefaults.default_timeout_seconds,
-  // Session-level hard clamp (auto | flash-only | pro-only). Starts unset so
-  // the global collaboration mode drives the policy; explicit session
-  // tier_policy always wins while set.
   tier_policy: undefined,
   escalate_on_failure: legacyDefaults.escalate_on_failure,
   preset_flash: legacyDefaults.preset_flash ?? 'default',
   preset_pro: legacyDefaults.preset_pro ?? 'default',
-  // Session overrides for the configurable-crew fields (undefined = global).
   collaboration_mode: undefined,
   main_agent_mode: undefined,
   flash_state: undefined,
@@ -82,8 +78,6 @@ function text(obj) {
   return { content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] };
 }
 
-// Which orchestrator spawned this MCP server — stamped on every job so the
-// panel can show where a dispatch came from.
 function detectOrchestrator() {
   if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return 'claude-code';
   try {
@@ -98,7 +92,6 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ORCHESTRATOR = detectOrchestrator();
 
-/** Policy rejection rendered for the orchestrator, with a stable error code. */
 function policyRejection(decision) {
   return text({
     error: decision.error.message,
@@ -121,11 +114,7 @@ async function resolveMode() {
   return up ? 'hub' : 'standalone';
 }
 
-/**
- * Reviewer task for the automatic review pass. The candidate patch is the
- * sanitized, bounded candidate from the isolated worktree — never the raw
- * workspace or any sensitive file content.
- */
+/** Reviewer prompt built only from structured outcome + sanitized candidate. */
 function buildReviewTask(task, view) {
   const parts = [
     'You are the automatic reviewer of a completed worker implementation. REVIEW ONLY: inspect the candidate and report findings. Do NOT modify any files unless the user explicitly asks for fixes.',
@@ -148,9 +137,6 @@ function buildReviewTask(task, view) {
   return parts.join('\n');
 }
 
-// The single workflow runtime for this MCP process (session-scoped). Both
-// dsh_run_worker and dsh_spawn_worker start workflows here; Hub / Standalone
-// and worktree isolation are resolved inside the adapters.
 const workflowRuntime = buildMcpWorkflowRuntime({
   getSessionConfig: () => sessionConfig,
   resolveMode,
@@ -174,12 +160,9 @@ server.registerTool('dsh_run_worker', {
   },
 }, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  // Role+legacy-tier bridging: role is the v0.2 gate, tier/legacy_tier remain
-  // the v0.1 model-class hint. A contradictory pair is a hard error, never a
-  // silent guess. Callers that only pass tier keep the exact legacy behavior.
   const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
   if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
-  let effRole = hint.role;
+  const effRole = hint.role;
   let effTier;
   let decision;
   if (role === undefined) {
@@ -198,12 +181,10 @@ server.registerTool('dsh_run_worker', {
   const e = effort ?? sessionConfig.default_effort;
   const timeout = timeout_seconds ?? sessionConfig.default_timeout_seconds;
 
-  // The workflow runtime owns verification, escalation and the automatic
-  // reviewer pass — blocking and async share the exact same flow. `timeout`
-  // only bounds how long the caller waits, never kills the workflow.
   const spec = {
     role: effRole,
     delivery: effRole === 'reviewer' ? 'review' : 'coding',
+    model_class_hint: effTier,
     task,
     cwd: workDir,
     effort: e,
@@ -231,22 +212,18 @@ server.registerTool('dsh_worker_config', {
     mode: z.enum(['auto', 'hub', 'standalone']).optional(),
     default_timeout_seconds: z.number().int().positive().max(7200).optional(),
     tier_policy: z.enum(['auto', 'flash-only', 'pro-only']).optional().describe('session hard clamp: flash-only / pro-only pin every dispatch to one tier'),
-    escalate_on_failure: z.boolean().optional().describe('retry a failed blocking flash run once on pro (only when pro is an Auto tier)'),
+    escalate_on_failure: z.boolean().optional().describe('allow an unverified worker attempt to retry through the stronger model policy (applies to run and spawn)'),
     preset_flash: z.string().optional().describe('hub-mode agent preset for flash workers (preset id, or "default")'),
     preset_pro: z.string().optional().describe('hub-mode agent preset for pro workers (preset id, or "default")'),
     collaboration_mode: z.enum(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom']).optional().describe('session override of the global collaboration mode'),
     main_agent_mode: z.enum(['direct-allowed', 'coordinator-first', 'dispatcher-only']).optional().describe('session override of the host routing guidance'),
     flash_state: z.enum(['disabled', 'manual', 'auto']).optional().describe('session override of the flash tier state (custom mode)'),
     pro_state: z.enum(['disabled', 'manual', 'auto']).optional().describe('session override of the pro tier state (custom mode)'),
-    pro_reviews_flash: z.boolean().optional().describe('follow a successful blocking flash run with one automatic pro review'),
+    pro_reviews_flash: z.boolean().optional().describe('enable the automatic reviewer after a verified worker workflow (applies to run and spawn)'),
     reset: z.boolean().optional().describe('true = restore all defaults first'),
   },
 }, async ({ reset, ...patch }) => {
   if (reset) resetSessionConfig();
-  // Legacy escape hatch: tier_policy=auto used to remove a global
-  // flash-only/pro-only clamp for this session. The new equivalent is the
-  // balanced collaboration preset, so map it — explicit flash-only/pro-only
-  // keep their session-clamp meaning.
   if (patch.tier_policy === 'auto') {
     sessionConfig.tier_policy = undefined;
     sessionConfig.collaboration_mode = 'balanced';
@@ -256,8 +233,6 @@ server.registerTool('dsh_worker_config', {
   return text(await buildConfigReport());
 });
 
-// Global config fields safe to echo to the orchestrator. custom_providers and
-// extra_models are excluded: they can carry API keys.
 const SAFE_GLOBAL_KEYS = [
   'default_tier', 'default_effort', 'mode', 'default_timeout_seconds', 'hub_url',
   'tier_policy', 'escalate_on_failure', 'subagents_enabled', 'collaboration_mode',
@@ -270,9 +245,6 @@ const SAFE_GLOBAL_KEYS = [
 ];
 
 async function buildConfigReport() {
-  // Tier policy remains a session-start snapshot by design, but Hub model
-  // priorities are resolved live on every spawn. Re-read only those global
-  // routing fields so this report matches what the Hub will actually use.
   const currentGlobalConfig = normalizeGlobalConfig(readGlobalConfig());
   const legacy = deriveLegacyConfig(globalConfig);
   const flashState = getEffectiveTierState(globalConfig, 'flash', sessionConfig);
@@ -282,9 +254,6 @@ async function buildConfigReport() {
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
   const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
-  // Worker model routing: the Hub catalog contains public ids/names only.
-  // Resolve both tiers independently so Harness Default is never mislabeled
-  // as the effective worker provider when a priority overrides it.
   let effectiveWorkerProvider = null;
   let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
@@ -316,18 +285,15 @@ async function buildConfigReport() {
   }
   effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
   return {
-    // Effective session values (flat shape keeps /dsh-config tables working).
     enabled: sessionConfig.enabled,
     default_tier: sessionConfig.default_tier ?? legacy.default_tier,
     default_effort: sessionConfig.default_effort ?? legacy.default_effort,
     mode: sessionConfig.mode ?? legacy.mode,
     default_timeout_seconds: sessionConfig.default_timeout_seconds ?? legacy.default_timeout_seconds,
-    // Legacy tier_policy clamp (session level, highest priority when set).
     tier_policy: sessionConfig.tier_policy ?? legacy.tier_policy,
     escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
     preset_flash: sessionConfig.preset_flash ?? legacy.preset_flash,
     preset_pro: sessionConfig.preset_pro ?? legacy.preset_pro,
-    // Worker provider routing.
     worker_provider_mode: workerProviderMode,
     effective_worker_provider: effectiveWorkerProvider,
     effective_worker_selection: effectiveWorkerSelection,
@@ -336,7 +302,6 @@ async function buildConfigReport() {
     flash_model_fallback: currentGlobalConfig.flash_model_fallback ?? 'harness-default',
     pro_model_priority: currentGlobalConfig.pro_model_priority ?? [],
     pro_model_fallback: currentGlobalConfig.pro_model_fallback ?? 'harness-default',
-    // Configurable-crew effective policy.
     subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
     collaboration_mode: collaborationMode,
     main_agent_mode: mainAgentMode,
@@ -345,9 +310,6 @@ async function buildConfigReport() {
     flash_roles: globalConfig.flash_roles ?? [],
     pro_roles: globalConfig.pro_roles ?? [],
     pro_reviews_flash: sessionConfig.pro_reviews_flash ?? shouldAutoReview(globalConfig, sessionConfig),
-    // One-line effective summary for the orchestrator, plus the authoritative
-    // routing guidance. legacy_source shows whether a session tier_policy
-    // clamp or the global collaboration mode is driving the decision.
     effective_policy: `mode=${collaborationMode} flash=${flashState} pro=${proState} subagents=${sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false}`,
     legacy_source: sessionConfig.tier_policy !== undefined
       ? `session tier_policy clamp (${sessionConfig.tier_policy})`
@@ -374,23 +336,29 @@ server.registerTool('dsh_spawn_worker', {
   },
 }, async ({ task, role, tier, legacy_tier, effort, cwd }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  // Same resolver as dsh_run_worker: async dispatch must never start work a
-  // blocking path would refuse (role gate AND legacy tier gate both enforced).
   const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
   if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
+  const effRole = hint.role;
+  let effTier;
   let decision;
   if (role === undefined) {
     decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
     if (!decision.ok) return policyRejection(decision);
+    effTier = decision.tier;
   } else {
-    decision = canDispatchRole(globalConfig, hint.role, true, sessionConfig);
+    decision = canDispatchRole(globalConfig, effRole, true, sessionConfig);
     if (!decision.ok) return policyRejection(decision);
+    if (effRole === 'reviewer') effTier = 'pro';
+    else if (legacy_tier !== undefined) effTier = legacy_tier;
+    else if (tier !== undefined) effTier = tier;
+    else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
   }
   const workDir = cwd ?? process.cwd();
   const e = effort ?? sessionConfig.default_effort;
   const spec = {
-    role: hint.role,
-    delivery: hint.role === 'reviewer' ? 'review' : 'coding',
+    role: effRole,
+    delivery: effRole === 'reviewer' ? 'review' : 'coding',
+    model_class_hint: effTier,
     task,
     cwd: workDir,
     effort: e,
@@ -422,7 +390,6 @@ server.registerTool('dsh_worker_result', {
     if (!view) return text({ error: `no such workflow: ${job_id}` });
     return text(view);
   }
-  // Legacy fallback: direct Hub / standalone attempt ids.
   if (job_id.startsWith('hub-')) {
     if (!(await hubAvailable())) return text({ error: 'hub not reachable' });
     return text(await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message })));

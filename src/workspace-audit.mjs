@@ -13,7 +13,7 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { win32 } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -51,10 +51,13 @@ export async function resolveWindowsGit({ exec = execFileAsync, env = process.en
     const first = String(located.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).find(Boolean);
     if (first) return first;
   } catch {}
+  // Always compose candidate paths with Windows semantics. This helper is
+  // unit-tested on non-Windows hosts too, and host-native path.join() would
+  // otherwise turn C:\\... inputs into mixed/invalid paths on POSIX.
   const candidates = [
-    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'cmd', 'git.exe'),
-    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'git.exe'),
-    env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Git', 'cmd', 'git.exe'),
+    env.ProgramFiles && win32.join(env.ProgramFiles, 'Git', 'cmd', 'git.exe'),
+    env.ProgramFiles && win32.join(env.ProgramFiles, 'Git', 'bin', 'git.exe'),
+    env.LOCALAPPDATA && win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'cmd', 'git.exe'),
   ].filter(Boolean);
   return candidates.find((candidate) => exists(candidate));
 }
