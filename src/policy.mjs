@@ -171,25 +171,19 @@ export function normalizeGlobalConfig(raw = {}) {
 }
 
 /**
- * v0.3 model-policy view. The frozen v0.2 policy remains authoritative for all
- * existing dimensions; this facade only adds the normalized opt-in adaptive
- * sub-domain so callers never need to inspect raw config.
+ * v0.3 model-policy view. The frozen v0.2 resolver remains authoritative for
+ * every existing dimension. This facade only adds the normalized opt-in
+ * adaptive sub-domain, so direct canonical-ish v0.2 callers retain the exact
+ * priority/escalation semantics they had before schema-v3 existed.
  */
 export function resolveModelPolicy(config = {}, role = 'worker', context = {}) {
-  const normalized = normalizeGlobalConfig(config);
-  const policy = role === 'reviewer'
-    ? normalized.review?.model_policy
-    : normalized.worker?.model_policy;
-  if (!policy) {
-    const fallback = legacy.resolveModelPolicy(config, role, context);
-    return { ...fallback, adaptive: normalizeAdaptiveRouting(fallback.adaptive) };
-  }
+  const base = legacy.resolveModelPolicy(config, role, context);
+  const rawPolicy = role === 'reviewer'
+    ? config?.review?.model_policy
+    : config?.worker?.model_policy;
   return {
-    within: role,
-    role,
-    ...policy,
-    adaptive: normalizeAdaptiveRouting(policy.adaptive),
-    attempt: Number.isInteger(context?.attempt) ? context.attempt : 0,
+    ...base,
+    adaptive: normalizeAdaptiveRouting(rawPolicy?.adaptive ?? base.adaptive),
   };
 }
 
