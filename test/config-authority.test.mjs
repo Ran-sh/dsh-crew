@@ -111,22 +111,33 @@ test('schema-v3 canonical snapshot wins over conflicting legacy mirrors', (t) =>
   assert.ok(diagnostics.legacy_mirror_conflicts.includes('flash_model_priority'));
 });
 
-test('explicit canonical patches update the authority and regenerate compatibility mirrors', (t) => {
+test('explicit canonical patches update authority and regenerate singular compatibility mirrors', (t) => {
   const file = fixture(t);
   writeGlobalConfig({}, { configFile: file });
   const saved = writeGlobalConfig({
-    execution: { max_parallel: 7 },
-    worker: { state: 'manual' },
+    execution: { max_parallel: 7, enabled: false },
+    worker: { state: 'manual', provider_mode: 'deepseek-official' },
+    review: { provider_mode: 'follow-dsh' },
   }, { configFile: file });
 
   assert.equal(saved.execution.max_parallel, 7);
   assert.equal(saved.max_parallel, 7);
   assert.equal(saved.worker.state, 'manual');
   assert.equal(saved.worker_state, 'manual');
+  assert.equal(saved.subagents_enabled, false);
+  assert.equal(saved.execution.enabled, false);
+  // One provider selector remains authoritative in v0.3.  Worker wins when a
+  // caller supplies both canonical branches in one patch.
+  assert.equal(saved.worker_provider_mode, 'deepseek-official');
+  assert.equal(saved.worker.provider_mode, 'deepseek-official');
+  assert.equal(saved.review.provider_mode, 'deepseek-official');
 
   const stored = disk(file);
   assert.equal(stored.execution.max_parallel, 7);
   assert.equal(stored.max_parallel, 7);
   assert.equal(stored.worker.state, 'manual');
   assert.equal(stored.worker_state, 'manual');
+  assert.equal(stored.subagents_enabled, false);
+  assert.equal(stored.execution.enabled, false);
+  assert.equal(stored.worker.provider_mode, stored.review.provider_mode);
 });
