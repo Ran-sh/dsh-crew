@@ -10,6 +10,7 @@ import { RUNTIME_VERSION } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
+import { classifyFailure, classifyFailureCode } from './failure-classification.mjs';
 import {
   normalizeGlobalConfig,
   deriveLegacyConfig,
@@ -80,7 +81,26 @@ function presetForTier(tier) {
 }
 
 function text(obj) {
-  return { content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] };
+  let payload = obj;
+  if (obj && typeof obj === 'object' && !Array.isArray(obj) && obj.failure === undefined) {
+    if (obj.code) {
+      payload = { ...obj, failure: classifyFailureCode(obj.code) };
+    } else if (obj.status !== undefined || obj.phase !== undefined || obj.outcome !== undefined || obj.error_code !== undefined) {
+      payload = {
+        ...obj,
+        failure: classifyFailure({
+          phase: obj.phase,
+          status: obj.status,
+          errorCode: obj.error_code,
+          outcome: obj.outcome,
+          decision: obj.decision,
+          review: obj.review,
+          childAttempts: obj.child_attempts,
+        }),
+      };
+    }
+  }
+  return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }] };
 }
 
 function detectOrchestrator() {
