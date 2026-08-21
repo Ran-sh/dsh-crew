@@ -71,6 +71,7 @@ const RUNTIME_CODES = new Set([
   'WORKTREE_CREATE_FAILED',
   'CANDIDATE_CAPTURE_FAILED',
   'ATTEMPT_INFRA_FAILURE',
+  'HUB_REQUEST_FAILED',
 ]);
 
 function normalizedCode(value) {
