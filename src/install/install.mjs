@@ -147,9 +147,11 @@ export function mergeStoredGlobalConfig(stored) {
   }
   if (!has('main_agent_mode')) merged.main_agent_mode = 'coordinator-first';
   if (!has('worker_provider_mode')) merged.worker_provider_mode = 'deepseek-official';
-  // Preserve the prior release's Flash preset for existing files that predate
-  // this field; only a genuinely fresh/no-file config gets Harness Default.
-  if (!has('preset_flash')) merged.preset_flash = 'minimal';
+  // Existing configs that predate preset_flash should inherit the current safe
+  // Harness Default. The older implicit `minimal` migration is unsafe for
+  // workspace-targeted jobs on Windows; an explicit user-set `minimal` value
+  // is still preserved by the normal object merge above.
+  if (!has('preset_flash')) merged.preset_flash = 'default';
   if (!has('vision_enabled')) merged.vision_enabled = stored.vision_provider !== 'off';
   if (!has('imagegen_enabled')) merged.imagegen_enabled = stored.imagegen_provider !== 'off';
   return merged;
