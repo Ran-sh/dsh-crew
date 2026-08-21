@@ -38,7 +38,7 @@ test('a missing config file reads and normalizes to the fresh runtime workflow',
   assert.equal(config.preset_flash, 'default');
 });
 
-test('an existing pre-feature config keeps legacy modes while gaining safe model fields', () => {
+test('an existing pre-feature config keeps legacy modes while gaining safe model fields and preset', () => {
   const config = normalizeGlobalConfig(mergeStoredGlobalConfig({ tier_policy: 'auto', vision_provider: 'claude-code', imagegen_provider: 'codex' }));
   assert.equal(config.collaboration_mode, 'balanced');
   assert.equal(config.flash_state, 'auto');
@@ -47,7 +47,7 @@ test('an existing pre-feature config keeps legacy modes while gaining safe model
   assert.equal(config.worker_provider_mode, 'deepseek-official');
   assert.equal(config.vision_enabled, true);
   assert.equal(config.imagegen_enabled, true);
-  assert.equal(config.preset_flash, 'minimal');
+  assert.equal(config.preset_flash, 'default');
   assert.deepEqual(config.flash_model_priority, []);
 });
 
