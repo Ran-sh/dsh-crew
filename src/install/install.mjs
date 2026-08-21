@@ -156,20 +156,33 @@ function legacyInputFrom(next, patch) {
   delete input.execution;
   delete input.config_schema_version;
 
-  // Preset-like legacy commands own the derived role state. Schema-v3 mirrors
-  // must not accidentally act like explicit role overrides while translating
-  // those commands back into canonical form.
+  // Preset commands own derived role state. Schema-v3 mirrors from the previous
+  // preset must not masquerade as explicit overrides during translation.
   if (patch?.collaboration_mode !== undefined || patch?.tier_policy !== undefined) {
     delete input.worker_state;
     delete input.review_state;
     delete input.auto_review;
+    // Non-custom presets own both tier states. Custom deliberately keeps the
+    // previous states as its starting point.
+    if (input.collaboration_mode !== 'custom') {
+      delete input.flash_state;
+      delete input.pro_state;
+    }
   }
+
+  // Individual tier-state commands own role eligibility only; the existing
+  // role mirrors must not shadow them.
   if (patch?.flash_state !== undefined || patch?.pro_state !== undefined) {
     delete input.worker_state;
     delete input.review_state;
   }
-  if (patch?.auto_review !== undefined || patch?.pro_reviews_flash !== undefined) {
+
+  // auto_review is itself the new compatibility input. pro_reviews_flash is
+  // older, so remove the schema-v3 auto_review mirror when translating it.
+  if (patch?.auto_review !== undefined) delete input.review_state;
+  if (patch?.pro_reviews_flash !== undefined) {
     delete input.review_state;
+    delete input.auto_review;
   }
   return input;
 }
@@ -211,19 +224,23 @@ function mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, pa
     if (patch?.[flat] !== undefined) next.execution[canonical] = candidate.execution[canonical];
   }
 
-  const routingPresetKeys = ['collaboration_mode', 'tier_policy', 'flash_state', 'pro_state'];
-  if (anyPatched(patch, routingPresetKeys)) {
+  // Presets own strategy + both role states + automatic-review semantics.
+  if (patch?.collaboration_mode !== undefined || patch?.tier_policy !== undefined) {
     next.worker.state = candidate.worker.state;
     next.review.state = candidate.review.state;
     next.worker.model_policy.strategy = candidate.worker.model_policy.strategy;
     next.review.auto_review = candidate.review.auto_review;
   }
+  // Tier-state controls are narrower: changing eligibility must not reset a
+  // canonical model strategy or another future policy dimension.
+  if (patch?.flash_state !== undefined || patch?.pro_state !== undefined) {
+    next.worker.state = candidate.worker.state;
+    next.review.state = candidate.review.state;
+  }
   if (patch?.worker_state !== undefined) next.worker.state = candidate.worker.state;
   if (patch?.review_state !== undefined) next.review.state = candidate.review.state;
   if (patch?.auto_review !== undefined || patch?.pro_reviews_flash !== undefined) {
     next.review.auto_review = candidate.review.auto_review;
-    // The old auto-review controls also determined reviewer eligibility when
-    // no explicit role-state override existed.
     next.review.state = candidate.review.state;
   }
 
