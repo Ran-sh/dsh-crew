@@ -197,3 +197,20 @@ test('legacy routing commands translate only their owned canonical dimensions', 
   assert.equal(balanced.review.state, 'manual');
   assert.equal(balanced.worker.model_policy.escalation.max_attempts, 4);
 });
+
+test('cache-busted config imports still resolve the v0.3 authority facade', async (t) => {
+  const file = fixture(t);
+  const moduleUrl = new URL('../src/install/install.mjs', import.meta.url);
+  moduleUrl.searchParams.set('route-contract', `${Date.now()}-${Math.random()}`);
+  const fresh = await import(moduleUrl.href);
+  assert.equal(fresh.GLOBAL_CONFIG_SCHEMA_VERSION, 3);
+  assert.equal(typeof fresh.readGlobalConfig, 'function');
+  assert.equal(typeof fresh.writeGlobalConfig, 'function');
+
+  writeFileSync(file, JSON.stringify({ tier_policy: 'auto', max_parallel: 2 }));
+  const before = fresh.readGlobalConfig({ configFile: file });
+  assert.equal(before.config_authority, 'legacy-import');
+  const after = fresh.writeGlobalConfig({ max_parallel: 4 }, { configFile: file });
+  assert.equal(after.config_authority, 'canonical');
+  assert.equal(after.execution.max_parallel, 4);
+});
