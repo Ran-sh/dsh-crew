@@ -38,6 +38,24 @@ function sourceVersion(stored) {
   return Number.isInteger(stored?.config_schema_version) ? stored.config_schema_version : 0;
 }
 
+function legacySnapshotFrom(config = {}) {
+  const mode = legacy.COLLABORATION_MODES.includes(config.collaboration_mode)
+    ? config.collaboration_mode
+    : (config.tier_policy === 'flash-only' ? 'flash-only'
+      : config.tier_policy === 'pro-only' ? 'pro-only' : 'balanced');
+  let flash = legacy.TIER_STATES.includes(config.flash_state) ? config.flash_state : 'auto';
+  let pro = legacy.TIER_STATES.includes(config.pro_state) ? config.pro_state : 'auto';
+  if (mode === 'flash-only') { flash = 'auto'; pro = 'disabled'; }
+  else if (mode === 'pro-only') { flash = 'disabled'; pro = 'auto'; }
+  else if (mode === 'balanced' || mode === 'review-pipeline') { flash = 'auto'; pro = 'auto'; }
+  return {
+    collaboration_mode: mode,
+    tier_policy: mode === 'flash-only' ? 'flash-only' : mode === 'pro-only' ? 'pro-only' : 'auto',
+    flash_state: flash,
+    pro_state: pro,
+  };
+}
+
 function attachReadMetadata(config, { version, canonical }) {
   return {
     ...config,
@@ -48,11 +66,13 @@ function attachReadMetadata(config, { version, canonical }) {
 }
 
 function freshConfig() {
-  const normalized = normalizeLegacyGlobalConfig(legacy.GLOBAL_CONFIG_DEFAULTS);
-  return attachReadMetadata({
-    ...normalized,
+  const imported = normalizeLegacyGlobalConfig(legacy.GLOBAL_CONFIG_DEFAULTS);
+  const normalized = normalizeGlobalConfig({
+    ...imported,
+    legacy: legacySnapshotFrom(imported),
     config_schema_version: CONFIG_SCHEMA_VERSION,
-  }, { version: CONFIG_SCHEMA_VERSION, canonical: true });
+  });
+  return attachReadMetadata(normalized, { version: CONFIG_SCHEMA_VERSION, canonical: true });
 }
 
 export function mergeStoredGlobalConfig(stored) {
@@ -104,6 +124,7 @@ function cloneCanonical(config) {
         priority: [...(config.review?.model_policy?.priority ?? [])],
       },
     },
+    legacy: validObject(config.legacy) ? { ...config.legacy } : legacySnapshotFrom(config),
   };
 }
 
@@ -137,6 +158,7 @@ function mergeCanonicalPatch(current, patch) {
         : next.review?.model_policy,
     };
   }
+  if (validObject(patch.legacy)) next.legacy = { ...next.legacy, ...patch.legacy };
 
   // v0.3 still has one provider-mode control. A direct canonical patch is
   // allowed, but it cannot manufacture separate worker/reviewer authorities.
@@ -154,6 +176,7 @@ function legacyInputFrom(next, patch) {
   delete input.worker;
   delete input.review;
   delete input.execution;
+  delete input.legacy;
   delete input.config_schema_version;
 
   // Preset commands own derived role state. Schema-v3 mirrors from the previous
@@ -203,6 +226,7 @@ function mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, pa
     execution: current.execution,
     worker: current.worker,
     review: current.review,
+    legacy: current.legacy,
     subagents_enabled: current.subagents_enabled,
     main_agent_mode: current.main_agent_mode,
   });
@@ -224,18 +248,23 @@ function mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, pa
     if (patch?.[flat] !== undefined) next.execution[canonical] = candidate.execution[canonical];
   }
 
-  // Presets own strategy + both role states + automatic-review semantics.
+  // Preset commands own strategy + both role states + automatic-review
+  // semantics and the canonical legacy compatibility snapshot.
   if (patch?.collaboration_mode !== undefined || patch?.tier_policy !== undefined) {
     next.worker.state = candidate.worker.state;
     next.review.state = candidate.review.state;
     next.worker.model_policy.strategy = candidate.worker.model_policy.strategy;
     next.review.auto_review = candidate.review.auto_review;
+    next.legacy = legacySnapshotFrom(candidate);
   }
   // Tier-state controls are narrower: changing eligibility must not reset a
-  // canonical model strategy or another future policy dimension.
+  // canonical model strategy or another future policy dimension. They still
+  // update the nested legacy tier-state snapshot because that is their owned
+  // compatibility behavior.
   if (patch?.flash_state !== undefined || patch?.pro_state !== undefined) {
     next.worker.state = candidate.worker.state;
     next.review.state = candidate.review.state;
+    next.legacy = legacySnapshotFrom(candidate);
   }
   if (patch?.worker_state !== undefined) next.worker.state = candidate.worker.state;
   if (patch?.review_state !== undefined) next.review.state = candidate.review.state;
@@ -314,13 +343,15 @@ export function writeGlobalConfig(patch, { configFile = GLOBAL_CONFIG_FILE } = {
   const candidate = normalizeLegacyGlobalConfig(legacyInputFrom(compatibilityView, patch));
   let normalized = wasCanonical
     ? mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, patch)
-    : candidate;
+    : { ...candidate, legacy: legacySnapshotFrom(candidate) };
 
   const hasCanonicalPatch = validObject(patch?.worker)
     || validObject(patch?.review)
-    || validObject(patch?.execution);
+    || validObject(patch?.execution)
+    || validObject(patch?.legacy);
   if (hasCanonicalPatch) normalized = mergeCanonicalPatch(normalized, patch);
 
+  if (!validObject(normalized.legacy)) normalized.legacy = legacySnapshotFrom(candidate);
   normalized = normalizeGlobalConfig({
     ...normalized,
     config_schema_version: CONFIG_SCHEMA_VERSION,
