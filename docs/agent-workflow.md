@@ -1,30 +1,62 @@
 # Agent Handoff Protocol
 
-Workflow source: `Ran-sh/chatgpt_workflow` v1.7.0 (`4d41242fc8fc89bb595681047e6e90f460d0d65d`).
+Workflow source: `Ran-sh/chatgpt_workflow` v1.7.0 (`b931c39e4392db988c80b093eec79cb44d0ae811`).
 
-## 1. Authority model
+## 1. Operating model
 
-GitHub is the durable handoff layer. The only authoritative active task is:
+GitHub is the durable source of truth. ChatGPT is the orchestrator; Codex, ZCode, Claude Code, DeepSeek Harness, and other compatible agents are interchangeable remote execution platforms.
+
+The intended loop is:
+
+```text
+User request
+  -> ChatGPT inspects/changes GitHub directly
+  -> local or real-environment work remains
+  -> ChatGPT commits ACTIVE_TASK.json
+  -> user sends one short executor trigger
+  -> executor performs the task and commits a Result Contract
+  -> ChatGPT reads GitHub and continues
+```
+
+Do not create executor work for repository operations ChatGPT can already complete safely through GitHub.
+
+## 2. Task authority
+
+The machine-readable active task is:
 
 `docs/agent-tasks/ACTIVE_TASK.json`
 
-Codex, ZCode, Claude Code, DeepSeek Harness, or any future compatible executor may execute the same task. Executor identity never grants permissions and is not a workflow role.
+It is the only task authority. Executor names never grant permissions or determine task mode.
 
-If the task is missing or invalid, stop. Do not infer work from chat history, issues, old reports, source code, or historical executor-specific ACTIVE files.
+If the active task is missing or invalid, stop. Do not infer work from chat history, issues, old result reports, source code, historical executor-specific ACTIVE files, or another executor's task.
 
-`ACTIVE_TASK.md` may exist as a non-authoritative human companion; JSON wins on conflict.
+`docs/agent-tasks/ACTIVE_TASK.md` may exist only as a non-authoritative human companion. If it conflicts with JSON, the JSON Task Contract wins.
 
-## 2. Modes
+The normal user-facing trigger is intentionally minimal:
 
-- `IMPLEMENT` — may modify only explicit `allowed_changes`.
-- `TEST_ONLY` — verification/reporting only; writable paths are limited to `docs/agent-results/**`.
+```text
+Execute ACTIVE_TASK.json according to Agent Workflow Protocol.
+```
+
+Project requirements must not be duplicated into the trigger.
+
+## 3. Modes
+
+- `IMPLEMENT` — implementation changes only inside explicit `allowed_changes`.
+- `TEST_ONLY` — validation/reporting only; writable paths are limited to `docs/agent-results/**`.
 - `REVIEW_ONLY` — inspection/reporting only; writable paths are limited to `docs/agent-results/**`.
 
-Task permissions come from the Task Contract, not from the selected platform.
+The Task Contract, not the executor, determines scope.
 
-## 3. Start-of-task protocol
+## 4. Source revision and worktree safety
 
-Resolve the equivalent of:
+Before executing, resolve `source_branch` and `source_commit` from the Task Contract and confirm the working copy matches the requested revision.
+
+`source_commit: LATEST` means: after fetching/pulling according to repository policy, resolve and execute the current tip of `source_branch`, and record the exact SHA actually used in the Result Contract. This is the normal value for a queued task committed to the same branch because the task commit itself moves the branch tip.
+
+Use an explicit commit SHA only when the orchestrator intentionally wants execution pinned to that immutable revision. Other explicitly documented symbolic values may be used only when this workflow defines their resolution semantics.
+
+At task start, resolve the equivalent of:
 
 ```sh
 git pull --ff-only
@@ -33,45 +65,49 @@ git branch --show-current
 git status --short
 ```
 
-Validate the active task when local Node is available:
+Validate the task when local Node is available:
 
 ```sh
 node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json
 ```
 
-Confirm `source_branch` and `source_commit` before executing. Preserve dirty worktrees. Never reset, clean, stash, overwrite, or discard unrelated changes without explicit task authorization.
+Preserve dirty worktrees. Never reset, clean, stash, overwrite, force-push, or discard unrelated user changes without explicit task authorization.
 
-## 4. Scope and safety
+## 5. Scope and safety
 
-- Modify only `allowed_changes`.
-- `forbidden_changes` are hard prohibitions.
-- Everything else is read-only.
-- `result_contract` must be under `docs/agent-results/**` and included in `allowed_changes`.
-- Do not invent commands, providers, models, credentials, or environmental facts.
-- Never expose API keys, bearer tokens, cookies, signed URLs, credential files, secret environment values, or private local paths.
-- Separate defects are reported, not opportunistically fixed.
+- Modify only paths authorized by `allowed_changes`.
+- Treat `forbidden_changes` as hard prohibitions.
+- Everything not authorized is read-only.
+- `result_contract` must be inside `docs/agent-results/**` and must appear in `allowed_changes`.
+- Never expose credentials, tokens, cookies, private keys, signed URLs, secret environment values, or sensitive local paths.
+- Do not invent build, test, lint, typecheck, release, provider, model, credential, or environmental facts.
+- Preserve dirty worktrees and unrelated changes.
+- Separate defects are reported, not opportunistically fixed outside scope.
 
-## 5. Validation states
+## 6. Validation statuses
 
-Use exactly: `PASS`, `FAIL`, `PARTIAL`, `SKIP`, `BLOCKED`, `NOT RUN`.
+Use only:
 
-Never turn a blocked, skipped, partial, or not-run scenario into PASS.
+`PASS`, `FAIL`, `PARTIAL`, `SKIP`, `BLOCKED`, `NOT RUN`
 
-## 6. Execution lifecycle
+Never convert an unexecuted, skipped, partial, or blocked check into PASS.
 
-1. Resolve branch/revision and working-tree state.
-2. Read this workflow.
-3. Read and validate `ACTIVE_TASK.json`.
-4. Execute only authorized work.
-5. Run every required validation or truthfully record `BLOCKED`, `SKIP`, or `NOT RUN`.
-6. Write the Result Contract/report.
-7. Verify `acceptance_criteria`.
-8. On actual completion, delete `ACTIVE_TASK.json`; delete `ACTIVE_TASK.md` too only when the completion contract includes it.
-9. Commit/push only `completion_commit_contract` paths and follow repository branch/PR policy.
+## 7. Execution lifecycle
 
-The completion contract must include the Result Contract and `docs/agent-tasks/ACTIVE_TASK.json`.
+1. Read this workflow.
+2. Read and validate `docs/agent-tasks/ACTIVE_TASK.json`.
+3. Confirm source revision and worktree safety.
+4. Execute only the authorized scope in the real environment.
+5. Run every required validation or record why it is `BLOCKED`, `SKIP`, or `NOT RUN`.
+6. Write the required Result Contract/report.
+7. Verify completion against `acceptance_criteria`.
+8. When completion is real and `delete_active_task_on_completion` is true, remove `ACTIVE_TASK.json` and its companion when required.
+9. Commit/push only paths allowed by `completion_commit_contract` and repository policy.
+10. Stop. Do not self-assign follow-up work.
 
-## 7. Result handoff
+`completion_commit_contract` must include the Result Contract and `docs/agent-tasks/ACTIVE_TASK.json`. If task metadata says a human companion was generated, include `docs/agent-tasks/ACTIVE_TASK.md` too.
+
+## 8. Result handoff
 
 Validate machine-readable results with:
 
@@ -79,24 +115,45 @@ Validate machine-readable results with:
 node .agent-workflow/validator/validate-contract.mjs result <result-json>
 ```
 
-Results identify task/source revision, status, changed files, tests, blockers, and result path. ChatGPT or another coordinator decides the next task; executors do not self-assign follow-up work.
+The Result Contract must identify the task/source revision, execution status, changed files, validation outcomes, blockers, and result path.
 
-## 8. dsh-crew project policy
+After execution, the user may simply tell ChatGPT that the executor is finished. ChatGPT should inspect GitHub directly, evaluate the result, and decide the next action instead of asking the user to paste the report.
+
+## 9. Orchestrator boundary
+
+ChatGPT should create an ACTIVE Task only for work it cannot actually complete through GitHub or that requires the user's real execution environment, credentials, devices, runtime, GUI, provider configuration, or release tooling.
+
+Repository edits that ChatGPT can safely perform through GitHub should be performed directly rather than delegated by default.
+
+## 10. Installation and removal
+
+Workflow installation must not create an ACTIVE task. Workflow removal is ownership-based using `docs/.agent-workflow-install.json` and must refuse to proceed while an ACTIVE task exists.
+
+This repository was migrated from a pre-v1.7 workflow. The manifest distinguishes newly generated workflow-owned files from pre-existing workflow files that were modified/adopted. Automated uninstall may remove only paths recorded as workflow-owned generated files; migrated/adopted files require explicit review before deletion.
+
+The workflow is development infrastructure, not a product runtime dependency.
+
+## 11. dsh-crew project adapter
+
+Repository facts verified from this repository:
 
 ```text
 Repository: Ran-sh/dsh-crew
 Default branch: main
+Runtime/language: Node.js ESM; JavaScript source with TypeScript/TSX client code
+CI Node version: 22
 Package manager: pnpm 10 (pnpm-lock.yaml is authoritative)
 Primary source: src/
-Built/runtime assets: lib/ and generated client output as defined by repository scripts
 Tests: test/*.test.mjs
 Build: pnpm run build:client
-Primary deterministic tests: node --test test/*.test.mjs
+Primary deterministic sweep: node --test test/*.test.mjs
 CI: .github/workflows/ci.yml
 Dedicated typecheck command: none currently defined; do not invent one
 Dedicated lint command: none currently defined; do not invent one
 Result contracts: docs/agent-results/
 ```
+
+The CI workflow runs deterministic Linux unit/integration checks plus the workspace-audit test and client build, and a separate Windows path/Git-resolver regression job. Platform-specific claims must be validated on the platform they describe.
 
 ### Protected / sensitive areas
 
@@ -111,32 +168,26 @@ Unless an `IMPLEMENT` Task Contract explicitly allows them, keep these read-only
 
 ### Branch / PR policy
 
-- Do not push implementation changes directly to `main` unless the task explicitly authorizes it.
-- Prefer feature/fix branches and PRs.
+- Do not push implementation changes directly to `main` unless a task explicitly authorizes it.
+- Prefer feature/fix/chore branches and pull requests.
 - Do not force-push, rewrite published history, reset, or rebase unrelated commits unless explicitly authorized.
 
 ### Default implementation validation
 
-Unless a task narrows/expands the matrix, implementation should consider:
+Unless a task narrows or expands the matrix, implementation should consider:
 
 ```sh
 node --test test/*.test.mjs
 pnpm run build:client
 ```
 
-Platform-specific scenarios must run on the platform they validate. Do not claim Windows behavior was verified only on Linux.
+Do not claim Windows behavior was verified only on Linux.
 
 ### Real DSH / provider validation
 
-- Use disposable Git repositories for coding-worker runtime tests; never ask a worker to edit the dsh-crew source checkout unless the task explicitly does so.
+- Use disposable Git repositories for coding-worker runtime tests; never ask a worker to edit the dsh-crew source checkout unless the task explicitly allows it.
 - Use only provider/model configuration already authorized in the current environment unless the task permits a configuration change.
 - Hub and Standalone are separate execution paths and must be reported separately when both matter.
 - Standalone may require `DEEPSEEK_API_KEY`; if unavailable or unauthorized, mark the scenario `SKIP` or `BLOCKED` rather than fabricating credentials.
 - Session-level worker configuration changes require task authorization and should be restored after the test group.
-- dsh-crew internal worker/reviewer roles are project orchestration concepts; they do not change the external Agent Workflow rule that execution platforms are interchangeable.
-
-## 9. Installation/removal
-
-This repository was migrated from a pre-v1.7 workflow. `docs/.agent-workflow-install.json` distinguishes newly generated files from pre-existing workflow files that were modified/adopted. Automated uninstall may remove only generated files; migrated/adopted files require explicit review before deletion.
-
-The workflow is development infrastructure, not a product runtime dependency.
+- dsh-crew internal worker/reviewer roles are product orchestration concepts; they do not change the external Agent Workflow rule that execution platforms are interchangeable.
