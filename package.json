@@ -2,7 +2,7 @@
   "name": "@ran-sh/dsh-crew",
   "version": "0.1.0-rc.1",
   "type": "module",
-  "main": "./src/hub/index.mjs",
+  "main": "./src/hub/entry.mjs",
   "description": "DeepSeek Harness plugin: dispatch work to DSH agents from Claude Code / Codex, as native subagents with live progress",
   "dsh": {
     "bundle": {
@@ -27,7 +27,7 @@
     "zod": "^3.24.0"
   },
   "exports": {
-    ".": "./src/hub/index.mjs",
+    ".": "./src/hub/entry.mjs",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
