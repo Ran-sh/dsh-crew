@@ -1,0 +1,74 @@
+{
+  "schema_version": 2,
+  "task_id": "v0.3-model-selection-trace-real-smoke",
+  "source_commit": "3318fd8b9a6af914ef1730be2efc0c4c84423101",
+  "status": "PASS",
+  "summary": "Real-environment TEST_ONLY smoke of PR #15 model-selection trace on a disposable DSH profile (v03trace, 127.0.0.1:3212) loaded from the tested source: one genuine live Hub/MCP worker workflow completed (wf-mt2y0skc-hajq12, hub attempt hub-1-mt2y0sq9, opencode-go/deepseek-v4-flash, selection_source preferred-default, outcome success, tests PASS, real candidate src/value.mjs) and its child_attempts[0].selection_trace was emitted end-to-end with version=1 and all 11 required fields (role, logical_attempt, model_class_hint, strategy, candidate_set, ordered_candidates, selected, selection_source, fallback_reason, escalation_reason). trace.selected.provider/model/source exactly match the real executed attempt, logical_attempt 0 matches the workflow attempt number, and a recursive sensitivity scan found zero credential/token/sensitive-path material. Routing semantics were not changed by tracing (trace is metadata-only; selection_source preferred-default with a skipped ambiguous-candidate entry is the pre-existing selection behavior). Standalone reported SKIP (no authorized DEEPSEEK_API_KEY in this environment) and a natural-escalation trace assertion is NOT RUN (no escalation occurred; forced escalation intentionally avoided) - see notes. Persistent Crew/provider configuration unchanged: config.json sha256 7cbbc8e1... and settings.yaml sha256 b3c608b8... matched before and after; disposable profile/process/repos/logs removed; deterministic preflight 353/353 tests and client build PASS.",
+  "timeline": {
+    "started_at": "2026-08-21T20:45:10+08:00",
+    "completed_at": "2026-08-21T20:51:45+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/v0.3-model-selection-trace-real-smoke.json"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validated",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)"
+    },
+    {
+      "name": "T02 Checked-out revision + worktree safety",
+      "status": "PASS",
+      "evidence": "Branch test/v0.3-model-selection-trace-smoke at resolved LATEST commit 3318fd8b9a6af914ef1730be2efc0c4c84423101; PR #15 head 13fc8cd9af6fffcfeaa4445092542104b6ca5a04 is an ancestor; git status clean, no unrelated dirty state touched"
+    },
+    {
+      "name": "T03 Deterministic validation on tested source",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile OK (already up to date); node --test test/*.test.mjs -> 353/353 pass, 0 fail; pnpm run build:client OK; regenerated lib/client.js restored to HEAD afterward (worktree clean)"
+    },
+    {
+      "name": "T04 Genuine live Hub/MCP worker attempt",
+      "status": "PASS",
+      "evidence": "Disposable profile v03trace (linked exact source) on 127.0.0.1:3212; one real dsh_run_worker(role=worker) in a disposable git repo completed: workflow wf-mt2y0skc-hajq12 phase completed/status done; hub attempt hub-1-mt2y0sq9 role worker attempt 0 provider opencode-go model deepseek-v4-flash selection_source preferred-default; outcome task_status success, tests_status PASS, candidate changed_files [src/value.mjs] (delivery complete)"
+    },
+    {
+      "name": "T05 selection_trace schema on child_attempts[0]",
+      "status": "PASS",
+      "evidence": "child_attempts[0].selection_trace present; all 11 required fields present and none missing: version(=1), role(worker), logical_attempt(0), model_class_hint(flash), strategy(balanced), candidate_set(primary), ordered_candidates([...]), selected({provider,model,source}), selection_source(preferred-default), fallback_reason(null), escalation_reason(null); schema_ok=true, version_ok=true"
+    },
+    {
+      "name": "T06 trace selected matches the real executed attempt",
+      "status": "PASS",
+      "evidence": "trace.selected = {provider: opencode-go, model: deepseek-v4-flash, source: preferred-default} exactly equals child attempt provider/model/selection_source (hub-1-mt2y0sq9); trace.logical_attempt 0 equals the workflow attempt number (attempt 0); selected_matches_attempt=true, logical_attempt_matches=true"
+    },
+    {
+      "name": "T07 Sensitivity scan of the returned trace",
+      "status": "PASS",
+      "evidence": "Recursive scan of selection_trace for key/value patterns (apiKey/token/secret/cookie/authorization/bearer/credential/password/private; sk-/ghp_/AKIA/BEGIN private-key/Bearer tokens; signed URL userinfo; sensitive local paths like C:\\Users / /c/Users / Program Files / /Users/) -> 0 hits; only bounded diagnostic metadata (provider/model ids, enum source/strategy/candidate_set, reason codes) present; sensitivity_ok=true"
+    },
+    {
+      "name": "T08 Persistent configuration unchanged + cleanup/safety",
+      "status": "PASS",
+      "evidence": "config.json sha256 7cbbc8e1fb84f2a7dff6d793d259940c497b08234b1699103d786aa2eb21314d and settings.yaml sha256 b3c608b86311c10ad631306e42918f6d860350fe16ccdb38eaf317a3526095f9 identical pre-test and post-test (no provider/model config or credentials changed); session-scoped worker config used only (mode hub, balanced, no escalation, no review, presets cordis) and nothing persisted; disposable profile v03trace removed, disposable DSH process (3212) stopped, disposable repo/logs/launcher removed; dsh-crew checkout clean with only this result contract added; web profile untouched"
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/v0.3-model-selection-trace-real-smoke.json",
+  "notes": [
+    "source_branch: test/v0.3-model-selection-trace-smoke",
+    "feature PR #15 head (tracks issue #7): 13fc8cd9af6fffcfeaa4445092542104b6ca5a04; tested source_commit (LATEST resolved) 3318fd8b9a6af914ef1730be2efc0c4c84423101",
+    "standalone_validation: SKIP - no authorized DEEPSEEK_API_KEY is present in this environment, so the real standalone execution scenario cannot run without fabricating credentials (per ACTIVE). The Hub/MCP acceptance result is unaffected; deterministic tests cover the standalone trace surface.",
+    "escalation_validation: NOT RUN - the single real worker attempt succeeded without a natural escalation (selection_trace.escalation_reason null, logical_attempt 0, one child attempt). Forced escalation was intentionally not triggered because the ACTIVE forbids corrupting source/provider config/user data to manufacture it; deterministic tests already cover forced-escalation trace semantics.",
+    "no routing behavior change observed: the trace is metadata-only. The real selection (opencode-go/deepseek-v4-flash, preferred-default) equals the selection that would occur without tracing; ordered_candidates records the pre-existing preferred-default walk (deepseek-official skipped with reason_code PREFERRED_MODEL_AMBIGUOUS, opencode-go selected).",
+    "environment note: the persistent DSH web hub on 127.0.0.1:3080 was observed not running at cleanup time (it had stopped on its own between tasks; not caused by this smoke which used only the disposable profile on 3212). It was restored by launching the same installed binary (profile web, port 3080) and verified healthy - no configuration or install changes.",
+    "completion commit contains only this result contract and deletion of docs/agent-tasks/ACTIVE_TASK.json",
+    "result_commit: filled after push"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v0.3-model-selection-trace-real-smoke.json --stamp",
+    "validated_at": "2026-08-21T12:52:19Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v0.3-model-selection-trace-real-smoke.json"
+  }
+}
