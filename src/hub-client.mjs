@@ -4,6 +4,7 @@
 
 import { readGlobalConfig } from './install/install.mjs';
 import { evaluateHubHandshake, HUB_COMPATIBILITY_CODES } from './runtime-identity.mjs';
+import { buildReadinessMatrix } from './readiness-matrix.mjs';
 
 const BASE = (process.env.DSH_CREW_HUB ?? readGlobalConfig().hub_url).replace(/\/$/, '');
 const API = `${BASE}/_dsh/dsh-crew`;
@@ -21,9 +22,17 @@ const EMPTY_STATUS = Object.freeze({
 
 let lastProbe = { at: 0, status: EMPTY_STATUS };
 
+function withReadiness(status) {
+  return {
+    ...status,
+    readiness_matrix: buildReadinessMatrix({ hubCompatibility: status }),
+  };
+}
+
 function cacheStatus(status) {
-  lastProbe = { at: Date.now(), status };
-  return status;
+  const observed = withReadiness(status);
+  lastProbe = { at: Date.now(), status: observed };
+  return observed;
 }
 
 async function fetchJson(path) {
