@@ -4,7 +4,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { startJob, waitJob, cancelJob, listJobs, getJob, jobView } from './jobs.mjs';
-import { hubAvailable, hub } from './hub-client.mjs';
+import { hubStatus, hub } from './hub-client.mjs';
+import { hubCompatibilityMessage, resolveHubExecutionMode } from './hub-compatibility.mjs';
+import { RUNTIME_VERSION } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import {
   normalizeGlobalConfig,
@@ -18,7 +20,7 @@ import {
 } from './policy.mjs';
 import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
 
-const server = new McpServer({ name: 'dsh-crew', version: '0.2.0' });
+const server = new McpServer({ name: 'dsh-crew', version: RUNTIME_VERSION });
 
 const tierSchema = z.enum(['flash', 'pro']).optional().describe('Legacy worker tier (compatibility only): Flash/Pro now act as a model-class hint, not a role. Prefer role=worker / role=reviewer; the backend resolves the actual provider/model from the Model Policy.');
 const roleSchema = z.enum(['worker', 'reviewer']).optional().describe('Dispatch role: worker executes implementation / fixes / tests / search; reviewer independently reviews a completed implementation. A coding request defaults to worker; reviewer runs on explicit request or via the automatic review workflow.');
@@ -108,10 +110,15 @@ function dispatchDisabled() {
 }
 
 async function resolveMode() {
-  if (sessionConfig.mode === 'standalone') return 'standalone';
-  const up = await hubAvailable();
-  if (sessionConfig.mode === 'hub' && !up) throw new Error('session mode is "hub" but the DSH workers hub is not reachable');
-  return up ? 'hub' : 'standalone';
+  const status = await hubStatus();
+  const decision = resolveHubExecutionMode(sessionConfig.mode, status);
+  if (!decision.ok) {
+    throw Object.assign(new Error(decision.error), {
+      code: decision.code,
+      hubStatus: status,
+    });
+  }
+  return decision.mode;
 }
 
 /** Reviewer prompt built only from structured outcome + sanitized candidate. */
@@ -254,6 +261,7 @@ async function buildConfigReport() {
   for (const [k, v] of Object.entries(sessionConfig)) if (v !== undefined) overrides[k] = v;
   const collaborationMode = sessionConfig.collaboration_mode ?? globalConfig.collaboration_mode;
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
+  const hubCompatibility = await hubStatus({ force: true });
   let effectiveWorkerProvider = null;
   let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
@@ -263,7 +271,7 @@ async function buildConfigReport() {
       flash: { provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' },
       pro: { provider: 'deepseek-official', model: 'deepseek-v4-pro', source: 'legacy-strict' },
     };
-  } else if (await hubAvailable()) {
+  } else if (hubCompatibility.compatible) {
     try {
       const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/models`);
       const body = await res.json();
@@ -282,6 +290,8 @@ async function buildConfigReport() {
           : { code: selected.code, error: selected.message };
       }
     } catch (err) { providerResolutionError = err?.message ?? String(err); }
+  } else if (hubCompatibility.reachable) {
+    providerResolutionError = hubCompatibilityMessage(hubCompatibility);
   }
   effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
   return {
@@ -319,7 +329,9 @@ async function buildConfigReport() {
     routing_guidance: getRoutingGuidance(globalConfig, sessionConfig),
     session_overrides: overrides,
     global_defaults: Object.fromEntries(SAFE_GLOBAL_KEYS.map((k) => [k, currentGlobalConfig[k]])),
-    hub_reachable: await hubAvailable(),
+    hub_reachable: hubCompatibility.reachable,
+    hub_compatible: hubCompatibility.compatible,
+    hub_compatibility: hubCompatibility,
   };
 }
 
@@ -391,7 +403,8 @@ server.registerTool('dsh_worker_result', {
     return text(view);
   }
   if (job_id.startsWith('hub-')) {
-    if (!(await hubAvailable())) return text({ error: 'hub not reachable' });
+    const status = await hubStatus();
+    if (!status.compatible) return text({ error: hubCompatibilityMessage(status), code: status.code, hub_compatibility: status });
     return text(await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message })));
   }
   if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
@@ -410,7 +423,8 @@ server.registerTool('dsh_worker_cancel', {
     return text({ ...view, note: 'cancelled' });
   }
   if (job_id.startsWith('hub-')) {
-    if (!(await hubAvailable())) return text({ error: 'hub not reachable' });
+    const status = await hubStatus();
+    if (!status.compatible) return text({ error: hubCompatibilityMessage(status), code: status.code, hub_compatibility: status });
     return text(await hub.cancel(job_id).catch((e) => ({ error: e.message })));
   }
   if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
