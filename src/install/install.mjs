@@ -187,6 +187,7 @@ function legacyInputFrom(next, patch) {
     delete input.worker_state;
     delete input.review_state;
     delete input.auto_review;
+    delete input.pro_reviews_flash;
     // Non-custom presets own both tier states. Custom deliberately keeps the
     // previous states as its starting point.
     if (input.collaboration_mode !== 'custom') {
@@ -250,7 +251,7 @@ function mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, pa
     if (patch?.[flat] !== undefined) next.execution[canonical] = candidate.execution[canonical];
   }
 
-  // Preset commands own strategy + both role states + automatic-review
+  // Presets own strategy + both role states + automatic-review
   // semantics and the canonical legacy compatibility snapshot.
   if (patch?.collaboration_mode !== undefined || patch?.tier_policy !== undefined) {
     next.worker.state = candidate.worker.state;
