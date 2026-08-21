@@ -90,6 +90,15 @@ function sumUsage(attempts) {
   return tokens;
 }
 
+export function normalizeMaxParallel(value, fallback = 3) {
+  const fallbackValue = Number.isInteger(Number(fallback))
+    ? Math.max(1, Math.min(16, Number(fallback)))
+    : 3;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallbackValue;
+  return Math.max(1, Math.min(16, parsed));
+}
+
 export function createWorkflowRuntime(adapters, {
   maxParallel = 3,
   idFactory = () => `wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -99,8 +108,27 @@ export function createWorkflowRuntime(adapters, {
   const jobs = new Map();
   const queue = [];
   let active = 0;
+  let maxParallelLimit = normalizeMaxParallel(maxParallel);
 
   function log(msg) { logger?.debug?.(`workflow: ${msg}`); }
+
+  function runtimeState() {
+    return {
+      max_parallel: maxParallelLimit,
+      active,
+      queued: queue.length,
+    };
+  }
+
+  function syncLiveMaxParallel() {
+    if (typeof adapters.getRuntimeControls !== 'function') return false;
+    const controls = adapters.getRuntimeControls() ?? {};
+    if (controls.max_parallel === undefined) return false;
+    const next = normalizeMaxParallel(controls.max_parallel, maxParallelLimit);
+    if (next === maxParallelLimit) return false;
+    maxParallelLimit = next;
+    return true;
+  }
 
   function transition(job, to, reason) {
     if (job.phase === to) return;
@@ -158,12 +186,28 @@ export function createWorkflowRuntime(adapters, {
     releaseSlot();
   }
 
-  function drain() {
-    while (active < maxParallel && queue.length > 0) {
+  function drain({ sync = true } = {}) {
+    if (sync) syncLiveMaxParallel();
+    while (active < maxParallelLimit && queue.length > 0) {
       const job = queue.shift();
       active += 1;
       kickoff(job).catch((err) => handleKickoffFailure(job, err));
     }
+  }
+
+  function setMaxParallel(value) {
+    maxParallelLimit = normalizeMaxParallel(value, maxParallelLimit);
+    // Raising the limit admits queued work immediately. Lowering it never
+    // cancels already-running work: drain simply waits until active drops below
+    // the new limit.
+    drain({ sync: false });
+    return runtimeState();
+  }
+
+  function refreshRuntimeControls() {
+    syncLiveMaxParallel();
+    drain({ sync: false });
+    return runtimeState();
   }
 
   function setTerminal(job) {
@@ -453,9 +497,10 @@ export function createWorkflowRuntime(adapters, {
   }
 
   function start(spec) {
+    syncLiveMaxParallel();
     const job = createJob(spec);
     jobs.set(job.id, job);
-    if (active < maxParallel) {
+    if (active < maxParallelLimit) {
       active += 1;
       kickoff(job).catch((err) => handleKickoffFailure(job, err));
     } else {
@@ -494,7 +539,7 @@ export function createWorkflowRuntime(adapters, {
     return workflowView(job);
   }
 
-  return { start, wait, get, list, cancel };
+  return { start, wait, get, list, cancel, runtimeState, setMaxParallel, refreshRuntimeControls };
 }
 
 export { JOB_PHASES, TERMINAL };

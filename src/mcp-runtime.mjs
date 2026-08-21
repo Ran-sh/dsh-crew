@@ -94,6 +94,9 @@ function timedOutAttempt(view, spec, timeoutMs) {
 export function buildMcpWorkflowRuntime(deps) {
   const { getSessionConfig, resolveMode, presetForTier, readGlobalConfig, buildReviewTask } = deps;
   const getConfig = () => buildEffectiveRuntimeConfig(readGlobalConfig(), getSessionConfig?.() ?? {});
+  const getRuntimeControls = () => ({
+    max_parallel: getConfig().execution?.max_parallel ?? 3,
+  });
 
   const executeAttempt = async (spec) => {
     const session = getSessionConfig?.() ?? {};
@@ -218,6 +221,7 @@ export function buildMcpWorkflowRuntime(deps) {
       releaseWorkspace,
       buildReviewTask,
       getConfig,
+      getRuntimeControls,
     },
     {
       maxParallel: initialConfig.execution?.max_parallel ?? 3,
