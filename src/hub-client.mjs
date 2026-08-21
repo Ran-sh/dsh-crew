@@ -26,25 +26,59 @@ function cacheStatus(status) {
   return status;
 }
 
+async function fetchJson(path) {
+  const res = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(800) });
+  let body;
+  try { body = await res.json(); } catch { body = null; }
+  return { res, body };
+}
+
 /**
- * Probe the Hub without conflating transport reachability with protocol
- * compatibility. Callers may force a fresh probe when presenting diagnostics.
+ * Probe reachability and compatibility as separate contracts.
+ *
+ * /ping is intentionally legacy-compatible and proves only that a dsh-crew Hub
+ * is alive. /runtime is the v0.3 compatibility handshake. A legacy Hub that
+ * lacks /runtime is therefore reachable-but-incompatible instead of looking
+ * offline or being silently treated as current.
  */
 export async function hubStatus({ force = false } = {}) {
   if (!force && Date.now() - lastProbe.at < 10_000) return lastProbe.status;
   try {
-    const res = await fetch(`${API}/ping`, { signal: AbortSignal.timeout(800) });
-    let body;
-    try { body = await res.json(); } catch { body = null; }
-    if (!res.ok) {
+    const ping = await fetchJson('/ping');
+    if (!ping.res.ok) {
       return cacheStatus({
         ...EMPTY_STATUS,
         reachable: true,
         code: HUB_COMPATIBILITY_CODES.HTTP_ERROR,
-        http_status: res.status,
+        http_status: ping.res.status,
+        endpoint: 'ping',
       });
     }
-    return cacheStatus(evaluateHubHandshake(body));
+    if (ping.body?.service !== 'dsh-crew-hub') {
+      return cacheStatus(evaluateHubHandshake(ping.body));
+    }
+
+    const runtime = await fetchJson('/runtime');
+    if (runtime.res.status === 404) {
+      return cacheStatus({
+        ...EMPTY_STATUS,
+        reachable: true,
+        service: 'dsh-crew-hub',
+        code: HUB_COMPATIBILITY_CODES.PROTOCOL_MISSING,
+        endpoint: 'runtime',
+      });
+    }
+    if (!runtime.res.ok) {
+      return cacheStatus({
+        ...EMPTY_STATUS,
+        reachable: true,
+        service: 'dsh-crew-hub',
+        code: HUB_COMPATIBILITY_CODES.HTTP_ERROR,
+        http_status: runtime.res.status,
+        endpoint: 'runtime',
+      });
+    }
+    return cacheStatus(evaluateHubHandshake(runtime.body));
   } catch {
     return cacheStatus(EMPTY_STATUS);
   }
