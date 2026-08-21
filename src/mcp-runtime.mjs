@@ -51,7 +51,7 @@ export function resolveAttemptTier({ role = 'worker', attempt = 0, modelClassHin
 }
 
 /** Map a Hub/Standalone job view into the AttemptResult the runtime expects. */
-function attemptFromView(view, spec) {
+export function attemptFromView(view, spec) {
   return {
     id: view?.id ?? spec.id,
     role: view?.role ?? spec.role ?? 'worker',
@@ -67,6 +67,7 @@ function attemptFromView(view, spec) {
     outcome: view?.outcome ?? null,
     usage: view?.tokens ?? null,
     error: view?.error ?? null,
+    error_code: view?.error_code ?? view?.code ?? null,
   };
 }
 
