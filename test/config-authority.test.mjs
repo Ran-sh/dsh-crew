@@ -96,7 +96,7 @@ test('schema-v3 canonical snapshot wins over conflicting legacy mirrors', (t) =>
   tampered.flash_model_priority = [{ provider: 'wrong', model: 'wrong' }];
   tampered.collaboration_mode = 'balanced';
   tampered.tier_policy = 'auto';
-  tampered.flash_state = 'auto';
+  tampered.flash_state = 'disabled';
   tampered.pro_state = 'auto';
   writeFileSync(file, JSON.stringify(tampered, null, 2));
 
@@ -107,7 +107,9 @@ test('schema-v3 canonical snapshot wins over conflicting legacy mirrors', (t) =>
   assert.equal(config.worker_state, 'manual');
   assert.equal(config.collaboration_mode, 'flash-only');
   assert.equal(config.tier_policy, 'flash-only');
-  assert.equal(config.flash_state, 'manual');
+  // Role state and legacy tier state are separate canonical dimensions in v3:
+  // flash-only keeps its tier Auto while the worker role may be Manual.
+  assert.equal(config.flash_state, 'auto');
   assert.equal(config.pro_state, 'disabled');
   assert.deepEqual(config.flash_model_priority, [{ provider: 'opencode-go', model: 'qwen3.7-plus' }]);
 
