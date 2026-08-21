@@ -10,6 +10,7 @@ import { RUNTIME_VERSION } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
+import { classifyFailureCode } from './failure-classification.mjs';
 import {
   normalizeGlobalConfig,
   deriveLegacyConfig,
@@ -80,7 +81,10 @@ function presetForTier(tier) {
 }
 
 function text(obj) {
-  return { content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] };
+  const payload = obj && typeof obj === 'object' && !Array.isArray(obj) && obj.code && obj.failure === undefined
+    ? { ...obj, failure: classifyFailureCode(obj.code) }
+    : obj;
+  return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }] };
 }
 
 function detectOrchestrator() {
