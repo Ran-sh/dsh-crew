@@ -98,8 +98,11 @@ test('install with a real checkout + injected dep runner plans all steps and nev
     });
     assert.equal(r.ok, true);
     const joined = logs.join('\n');
-    // dry-run should mention the link + Codex + Claude-skip without executing
-    assert.match(joined, /DSH web profile would be linked/);
+    // dry-run should mention the retired old web-profile phrasing as legacy
+    // contrast, the dedicated Crew profile link, and Codex/Claude dry-run steps,
+    // all without executing anything.
+    assert.match(joined, /DSH web profile would be linked \(legacy\)/);
+    assert.match(joined, /dedicated dsh-crew profile/);
     assert.match(joined, /Codex Desktop integration \(dry-run\)/);
     assert.equal(calls.length, 0, 'dry-run must not execute installer calls');
   } finally { t.cleanup(); }
@@ -169,15 +172,42 @@ test('uninstall reports DSH profile removal failure when it fails', async () => 
   try {
     mkdirSync(join(t.dir, 'src'), { recursive: true });
     writeFileSync(join(t.dir, 'package.json'), JSON.stringify({ name: '@ran-test/dsh-crew' }));
-    // Simulate a real DSH profile that still references the package.
+    // Simulate a real Crew profile (under the isolated Crew DSH_HOME) that still
+    // references the package. The official ~/.dsh/profiles/web fixture below is
+    // the former shared-profile location and must be IGNORED by the uninstaller.
+    const crewProf = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    mkdirSync(crewProf, { recursive: true });
+    writeFileSync(join(crewProf, 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: [] } } }));
     mkdirSync(join(t.dir, '.dsh', 'profiles', 'web'), { recursive: true });
-    writeFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: [] } } }));
+    writeFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: ['@ran-test/dsh-crew'] } } }));
     const logs = [];
     // No real dsh CLI in this environment → runDsh fails → aggregated failure.
     const r = await setupUninstall({ log: (m) => logs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller(calls) });
     assert.equal(r.ok, false);
     assert.ok(r.failures.includes('dsh'), `dsh must be in failures: ${JSON.stringify(r.failures)}`);
     assert.match(logs.join('\n'), /FAILED: uninstall incomplete/);
+  } finally { t.cleanup(); }
+});
+
+test('uninstall/status ignore the official ~/.dsh/profiles/web fixture entirely', async () => {
+  const t = makeTemp();
+  const calls = [];
+  try {
+    mkdirSync(join(t.dir, 'src'), { recursive: true });
+    writeFileSync(join(t.dir, 'package.json'), JSON.stringify({ name: '@ran-test/dsh-crew' }));
+    // A leftover official web profile that still references the package must be
+    // treated as NOT a dsh-crew installation (isolated home is empty).
+    mkdirSync(join(t.dir, '.dsh', 'profiles', 'web'), { recursive: true });
+    writeFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: ['@ran-test/dsh-crew'] } } }));
+    const logs = [];
+    const r = await setupUninstall({ log: (m) => logs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller(calls) });
+    assert.equal(r.ok, true, 'isolated home has no Crew profile → uninstall is idempotent');
+    assert.match(logs.join('\n'), /already removed/, 'official web profile must be ignored, not removed/acted on');
+    // status must report not installed while an official web fixture exists.
+    const statusLogs = [];
+    await setupStatus({ log: (m) => statusLogs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller([]) });
+    assert.match(statusLogs.join('\n'), /DSH plugin: not installed/);
+    assert.match(statusLogs.join('\n'), /dedicated dsh-crew profile/);
   } finally { t.cleanup(); }
 });
 

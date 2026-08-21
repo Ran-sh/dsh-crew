@@ -115,14 +115,16 @@ Claude Code / Codex (orchestrator, keeps its own model)
 GitHub에서 DSH 프로필로 설치:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
 소스 트리에서 로컬 개발하려면:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 

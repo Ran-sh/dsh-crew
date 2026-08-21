@@ -122,3 +122,10 @@ test('the matrix script has no hardcoded real-user path in its source', () => {
   // appears in a comment saying the script must not use one).
   assert.ok(!/D:[\\/]Users|C:[\\/]Users[\\/]48376|\/Users\/48376/i.test(cleaned), 'matrix source must not hardcode a real user path');
 });
+
+test('the matrix script targets the dedicated Crew hub, never the official 3080', () => {
+  const src = require('node:fs').readFileSync(path.resolve('scripts/live-policy-matrix.mjs'), 'utf8');
+  assert.ok(!/127\.0\.0\.1:3080/.test(src), 'matrix must not hard-code the official web hub port');
+  assert.ok(/DSH_CREW_HUB/.test(src), 'matrix must honor the explicit DSH_CREW_HUB override');
+  assert.ok(/127\.0\.0\.1:3210/.test(src), 'matrix must default to the dedicated Crew hub');
+});

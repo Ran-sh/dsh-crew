@@ -1,10 +1,12 @@
-// Live policy acceptance matrix against a running DSH hub (loopback API).
+// Live policy acceptance matrix against a Crew-owned dsh-crew Hub (loopback
+// API). Targets the dedicated Crew Hub (DSH_CREW_HUB env or default
+// http://127.0.0.1:3210); it never targets or mutates the official web profile.
 //
 // Safety guarantees:
 //  - the worker cwd is always an auto-created temp fixture under os.tmpdir()
 //    (never a real user path — no hardcoded Desktop/Users paths);
-//  - the pre-test config is snapshotted and restored in a try/finally, so the
-//    matrix can never leave the DSH policy in a test state, even on error;
+//  - the pre-test Crew config is snapshotted and restored in a try/finally, so
+//    the matrix can never leave the DSH policy in a test state, even on error;
 //  - if there was no ~/.config/dsh-crew/config.json before the run, that
 //    absence cannot be recreated through the public API (the config route only
 //    merges), so the script reports it instead of pretending.
@@ -20,7 +22,7 @@ import fs, { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
-const BASE = 'http://127.0.0.1:3080/_dsh/dsh-crew';
+const BASE = (process.env.DSH_CREW_HUB ?? 'http://127.0.0.1:3210').replace(/\/$/, '') + '/_dsh/dsh-crew';
 const CREW_CONFIG = () => path.join(homedir(), '.config', 'dsh-crew', 'config.json');
 
 /** True when the global config file exists on disk before the run. */

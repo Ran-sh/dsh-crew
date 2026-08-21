@@ -115,14 +115,16 @@ O despacho se espalha. Abaixo, dezoito workers traduzem este README em paralelo:
 Instalar do GitHub em um perfil do DSH:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
 Ou, para desenvolvimento local a partir do código-fonte:
 
 ```bash
-npx -y @deepseek-ai/dsh plugin --profile web add link:/path/to/dsh-crew
+node scripts/setup.mjs install   # Safe install: see the canonical Install section of README.md (dedicated Crew home/profile; official web profile is never modified).
+Repository source: github:Ran-sh/dsh-crew
 npx -y @deepseek-ai/dsh web
 ```
 
