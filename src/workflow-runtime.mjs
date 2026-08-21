@@ -17,6 +17,7 @@
 import { resolveModelPolicy, shouldAutoReview, getRoleState } from './policy.mjs';
 import { buildOutcome, decideNextStep, JOB_PHASES, canTransition } from './workflow.mjs';
 import { parseDeliveryReport } from './delivery.mjs';
+import { classifyFailure } from './failure-classification.mjs';
 
 export const WORKFLOW_ERROR_CODES = {
   ISOLATION_UNAVAILABLE: 'ISOLATION_UNAVAILABLE',
@@ -453,6 +454,15 @@ export function createWorkflowRuntime(adapters, {
   }
 
   function workflowView(job, { withResult = false } = {}) {
+    const failure = classifyFailure({
+      phase: job.phase,
+      status: job.status,
+      errorCode: job.error_code,
+      outcome: job.outcome,
+      decision: job.decision,
+      review: job.review,
+      childAttempts: job.attempts,
+    });
     const v = {
       id: job.id,
       role: job.role,
@@ -472,6 +482,7 @@ export function createWorkflowRuntime(adapters, {
       tokens: sumUsage(job.attempts),
       error: job.error ?? null,
       error_code: job.error_code ?? null,
+      failure,
       cleanup_warning: job.cleanup_warning ?? null,
       candidate_capture_failed: job.candidate_capture_failed === true,
       workspace_retained: job.workspace_retained === true,
