@@ -59,6 +59,60 @@ function proMirror(canonical) {
   };
 }
 
+function legacyRoutingMirror(canonical) {
+  let collaboration_mode;
+  if (canonical.review.auto_review === true && canonical.review.state === 'auto') {
+    collaboration_mode = 'review-pipeline';
+  } else if (canonical.review.state === 'disabled' && canonical.worker.model_policy.strategy === 'economy') {
+    collaboration_mode = 'flash-only';
+  } else if (canonical.review.state === 'disabled' && canonical.worker.model_policy.strategy === 'quality') {
+    collaboration_mode = 'pro-only';
+  } else if (canonical.worker.state === 'auto' && canonical.review.state === 'manual') {
+    collaboration_mode = 'balanced';
+  } else {
+    collaboration_mode = 'custom';
+  }
+
+  if (collaboration_mode === 'flash-only') {
+    return {
+      collaboration_mode,
+      tier_policy: 'flash-only',
+      flash_state: canonical.worker.state,
+      pro_state: 'disabled',
+    };
+  }
+  if (collaboration_mode === 'pro-only') {
+    return {
+      collaboration_mode,
+      tier_policy: 'pro-only',
+      flash_state: 'disabled',
+      pro_state: canonical.worker.state,
+    };
+  }
+  if (collaboration_mode === 'review-pipeline') {
+    return {
+      collaboration_mode,
+      tier_policy: 'auto',
+      flash_state: canonical.worker.state,
+      pro_state: canonical.review.state,
+    };
+  }
+  if (collaboration_mode === 'balanced') {
+    return {
+      collaboration_mode,
+      tier_policy: 'auto',
+      flash_state: 'auto',
+      pro_state: 'auto',
+    };
+  }
+  return {
+    collaboration_mode,
+    tier_policy: 'auto',
+    flash_state: canonical.worker.state,
+    pro_state: canonical.review.state,
+  };
+}
+
 /**
  * Re-exported normalizer with schema-v3 precedence.
  *
@@ -72,6 +126,7 @@ export function normalizeGlobalConfig(raw = {}) {
 
   const canonical = normalizeCanonical(raw);
   const pro = proMirror(canonical);
+  const routing = legacyRoutingMirror(canonical);
   return {
     ...normalized,
     config_schema_version: CONFIG_SCHEMA_VERSION,
@@ -82,6 +137,10 @@ export function normalizeGlobalConfig(raw = {}) {
     mode: canonical.execution.mode,
     max_parallel: canonical.execution.max_parallel,
     isolation: canonical.execution.isolation,
+    collaboration_mode: routing.collaboration_mode,
+    tier_policy: routing.tier_policy,
+    flash_state: routing.flash_state,
+    pro_state: routing.pro_state,
     worker_state: canonical.worker.state,
     review_state: canonical.review.state,
     auto_review: canonical.review.auto_review === true,
