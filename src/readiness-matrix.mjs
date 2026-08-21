@@ -14,6 +14,7 @@ export const READINESS_REASON_CODES = Object.freeze({
   PROVIDER_CATALOG_RESOLVED: 'PROVIDER_CATALOG_RESOLVED',
   PROVIDER_CATALOG_UNAVAILABLE: 'PROVIDER_CATALOG_UNAVAILABLE',
   PROVIDER_CATALOG_NOT_REQUIRED: 'PROVIDER_CATALOG_NOT_REQUIRED',
+  PROVIDER_MODE_UNKNOWN: 'PROVIDER_MODE_UNKNOWN',
   NO_CI_EVIDENCE: 'NO_CI_EVIDENCE',
   NO_EXECUTION_EVIDENCE: 'NO_EXECUTION_EVIDENCE',
   CREDENTIAL_STATUS_NOT_PROBED: 'CREDENTIAL_STATUS_NOT_PROBED',
@@ -86,7 +87,7 @@ function defaultRows() {
 export function buildReadinessMatrix({
   platform = process.platform,
   hubCompatibility = null,
-  workerProviderMode = 'deepseek-official',
+  workerProviderMode = null,
   providerCatalogChecked = false,
   providerCatalogOk = false,
   evidence = {},
@@ -116,7 +117,12 @@ export function buildReadinessMatrix({
     );
   }
 
-  if (workerProviderMode === 'deepseek-official') {
+  if (workerProviderMode == null) {
+    rows.provider_catalog = baseRow(
+      'provider_catalog', 'live-runtime', 'NOT_RUN',
+      READINESS_REASON_CODES.PROVIDER_MODE_UNKNOWN, 'none',
+    );
+  } else if (workerProviderMode === 'deepseek-official') {
     rows.provider_catalog = baseRow(
       'provider_catalog', 'live-runtime', 'SKIP',
       READINESS_REASON_CODES.PROVIDER_CATALOG_NOT_REQUIRED, 'runtime-policy',
