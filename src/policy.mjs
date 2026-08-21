@@ -8,7 +8,9 @@
 
 export * from './policy-legacy.mjs';
 import * as legacy from './policy-legacy.mjs';
+import { normalizeAdaptiveRouting } from './adaptive-routing.mjs';
 
+export { normalizeAdaptiveRouting };
 export const CONFIG_SCHEMA_VERSION = 3;
 
 function validObject(value) {
@@ -62,6 +64,13 @@ function normalizeLegacySnapshot(raw, canonical) {
   };
 }
 
+function modelPolicyWithAdaptive(basePolicy, rawPolicy) {
+  return {
+    ...basePolicy,
+    adaptive: normalizeAdaptiveRouting(rawPolicy?.adaptive),
+  };
+}
+
 function normalizeCanonical(raw) {
   const base = legacy.getCanonical(raw);
   const providerMode = legacy.normalizeWorkerProviderMode(base.worker?.provider_mode);
@@ -76,12 +85,14 @@ function normalizeCanonical(raw) {
     worker: {
       ...base.worker,
       provider_mode: providerMode,
+      model_policy: modelPolicyWithAdaptive(base.worker.model_policy, raw?.worker?.model_policy),
     },
     review: {
       ...base.review,
       // v0.3 still exposes one Worker Provider selector. Until per-role
       // provider modes become first-class, keep both roles aligned.
       provider_mode: providerMode,
+      model_policy: modelPolicyWithAdaptive(base.review.model_policy, raw?.review?.model_policy),
     },
   };
   canonical.legacy = normalizeLegacySnapshot(raw, canonical);
@@ -156,6 +167,29 @@ export function normalizeGlobalConfig(raw = {}) {
     worker: canonical.worker,
     review: canonical.review,
     legacy: canonical.legacy,
+  };
+}
+
+/**
+ * v0.3 model-policy view. The frozen v0.2 policy remains authoritative for all
+ * existing dimensions; this facade only adds the normalized opt-in adaptive
+ * sub-domain so callers never need to inspect raw config.
+ */
+export function resolveModelPolicy(config = {}, role = 'worker', context = {}) {
+  const normalized = normalizeGlobalConfig(config);
+  const policy = role === 'reviewer'
+    ? normalized.review?.model_policy
+    : normalized.worker?.model_policy;
+  if (!policy) {
+    const fallback = legacy.resolveModelPolicy(config, role, context);
+    return { ...fallback, adaptive: normalizeAdaptiveRouting(fallback.adaptive) };
+  }
+  return {
+    within: role,
+    role,
+    ...policy,
+    adaptive: normalizeAdaptiveRouting(policy.adaptive),
+    attempt: Number.isInteger(context?.attempt) ? context.attempt : 0,
   };
 }
 
