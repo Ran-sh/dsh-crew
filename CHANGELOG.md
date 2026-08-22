@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-08-22
+
+### Fixed
+
+- Aligns the published DSH peer/dev package cohort with the authoritative official `@deepseek-ai/dsh@0.1.1-rc.2` release cohort, preventing npm's default resolver from mixing the stale `0.1.0-rc.6` pins with `dsh-tools@0.1.0-rc.8` and failing with `ERESOLVE`.
+- Adds a disposable plain-npm-install regression gate for the packed candidate without resolver bypass flags.
+
 ## 0.3.0 — 2026-08-22
 
 DSH Crew v0.3 focuses on runtime compatibility, canonical configuration authority, explainable model routing, live runtime controls, release/readiness diagnostics, and hard isolation from the official DeepSeek Harness profile.

@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-INSTALL-COMPAT-REMEDIATION",
+  "source_commit": "a238766f41d6dc197c1293f09023e87fe35f39c5",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "V031_READY: BLOCKED — the v0.3.1 candidate fixes the published v0.3.0 default-install peer conflict and passes the standalone plain-npm gate, frozen install, full deterministic tests, client build, and package audit. The required normal-resolver install alongside the supported official @deepseek-ai/dsh@0.1.1-rc.2 cohort was stopped after npm resource expansion, so the cohort acceptance gate is not PASS.",
+  "timeline": {
+    "started_at": "2026-08-22T21:30:00+08:00",
+    "completed_at": "2026-08-22T22:14:31+08:00"
+  },
+  "changed_files": [
+    "package.json",
+    "pnpm-lock.yaml",
+    "CHANGELOG.md",
+    "src/runtime-identity.mjs",
+    "scripts/verify-npm-install.mjs"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validation and source checkout",
+      "status": "PASS",
+      "evidence": "The task validator returned VALID TASK CONTRACT. The worktree was on main after fast-forward pull at exact source commit a238766f41d6dc197c1293f09023e87fe35f39c5 and was clean before execution."
+    },
+    {
+      "name": "T02 Published v0.3.0 default npm install reproduction",
+      "status": "PASS",
+      "evidence": "A fresh disposable normal npm install of @ran-sh/dsh-crew@0.3.0 exited 1 with ERESOLVE. The graph showed dsh-crew requiring @deepseek-ai/dsh-agent@0.1.0-rc.6 while npm selected @deepseek-ai/dsh-tools@0.1.0-rc.8, whose peer requires @deepseek-ai/dsh-agent@^0.1.0-rc.8; the rc.6 spine-demo/instructions packages accepted the older tools range, creating the mixed-cohort conflict."
+    },
+    {
+      "name": "T03 Authoritative public DSH manifest and cohort audit",
+      "status": "PASS",
+      "evidence": "Public registry manifests and dist-tags identified @deepseek-ai/dsh@0.1.1-rc.2 as the supported latest/next cohort. The direct DSH peer packages used by dsh-crew all exposed 0.1.1-rc.2, while the implicated rc.6/rc.8 manifests confirmed the reproduced conflict."
+    },
+    {
+      "name": "T04 Minimal peer metadata compatibility fix",
+      "status": "PASS",
+      "evidence": "All 20 direct DSH peer and dev dependency pins were aligned to the exact authoritative 0.1.1-rc.2 cohort, with no wildcard weakening or resolver bypass. The lockfile was regenerated only through pnpm."
+    },
+    {
+      "name": "T05 v0.3.1 package/runtime/changelog identity",
+      "status": "PASS",
+      "evidence": "package.json version, src/runtime-identity.mjs RUNTIME_VERSION, and the top CHANGELOG.md release heading consistently identify 0.3.1 and describe the install compatibility fix."
+    },
+    {
+      "name": "T06 Frozen dependency installation",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0 after the DSH cohort lockfile update."
+    },
+    {
+      "name": "T07 Packed candidate standalone plain npm install",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install returned NPM_INSTALL_CONTRACT=PASS candidate=0.3.1 official_dsh=not-run. The disposable candidate tarball installed with npm's normal resolver and no peer bypass; the installed package/runtime were 0.3.1 and src/hub/entry.mjs plus lib/client.js were present. A manual smoke installed 208 packages successfully."
+    },
+    {
+      "name": "T08 Packed candidate with official DSH cohort",
+      "status": "BLOCKED",
+      "evidence": "A disposable normal-resolver install of the candidate alongside @deepseek-ai/dsh@0.1.1-rc.2 did not complete within safe resource/time bounds; npm expanded to roughly 900 MB and sustained high CPU for several minutes, so it was stopped with Ctrl+C. No resolver bypass flag was used and no PASS was claimed."
+    },
+    {
+      "name": "T09 Full deterministic test sweep",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs exited 0 with 426 tests passed, 0 failed, 0 cancelled, and 0 skipped."
+    },
+    {
+      "name": "T10 Client build and generated-artifact boundary",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0. The tracked generated lib/client.js build side effect was restored, leaving no unintended generated-artifact diff."
+    },
+    {
+      "name": "T11 npm pack dry-run and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew version 0.3.1 with 86 payload files. The audit found no ACTIVE task/result, temporary, secret, node_modules, or test-only payload entries."
+    },
+    {
+      "name": "T12 Final diff and workspace hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed. Disposable directories created for the v0.3.0 reproduction and v0.3.1 smoke attempts were removed; the remaining implementation scope is limited to the task's allowed package, lockfile, changelog, runtime identity, and scripts paths pending result/task completion files."
+    }
+  ],
+  "blockers": [
+    "The required disposable normal-resolver install of the v0.3.1 candidate alongside @deepseek-ai/dsh@0.1.1-rc.2 did not complete within safe resource/time bounds; npm consumed roughly 900 MB and sustained high CPU, so the run was stopped. No resolver bypass was used, therefore the official DSH cohort gate cannot be marked PASS."
+  ],
+  "result_path": "docs/agent-results/TASK-V031-INSTALL-COMPAT-REMEDIATION-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to a238766f41d6dc197c1293f09023e87fe35f39c5.",
+    "The candidate is prepared only: @ran-sh/dsh-crew@0.3.1 was not published, no npm registry mutation or dist-tag mutation occurred, no git tag was created or changed, and no GitHub Release was created or changed.",
+    "The regression gate defaults to the standalone candidate install; its optional official-cohort mode records the exact host as @deepseek-ai/dsh@0.1.1-rc.2 and uses npm's normal resolver without bypass flags.",
+    "No official DSH state, credential store, provider key file, or secret was accessed or modified.",
+    "Completion is limited to the authorized implementation paths, this Result Contract, and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-INSTALL-COMPAT-REMEDIATION-result.json --stamp",
+    "validated_at": "2026-08-22T14:15:25Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-INSTALL-COMPAT-REMEDIATION-result.json"
+  }
+}
