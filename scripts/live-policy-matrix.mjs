@@ -158,7 +158,7 @@ if (isMain) {
     await setConfig({ collaboration_mode: 'review-pipeline' });
     {
       const c = await getConfig();
-      check('I1: review-pipeline keeps raw pro_reviews_flash on disk', c.pro_reviews_flash === false, `raw=${c.pro_reviews_flash}`);
+      check('I1: review-pipeline GET exposes normalized pro_reviews_flash=true', c.pro_reviews_flash === true, `normalized=${c.pro_reviews_flash}`);
       const { normalizeGlobalConfig, shouldRunProReview } = await import('../src/policy.mjs');
       check('I1b: review-pipeline effective pro_reviews_flash=true (policy layer)', shouldRunProReview(normalizeGlobalConfig(c)) === true);
       const r = await spawn({ task: 't', cwd: CWD });
