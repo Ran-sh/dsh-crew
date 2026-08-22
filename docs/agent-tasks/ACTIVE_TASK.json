@@ -1,0 +1,55 @@
+{
+  "id": "TASK-REPO-BRANCH-CLEANUP",
+  "mode": "IMPLEMENT",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Reduce repository branch clutter by deleting only branches that are provably merged or patch-equivalent to main, while preserving every branch with unique unmerged work.",
+  "context": "The repository currently has many historical feature, fix, test, release, workflow, and temporary branches, and there are no open pull requests at task creation time. README.md and README.zh.md were just simplified directly on main and must not be changed by this task. This is branch/ref housekeeping only; do not merge speculative work or alter product files.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json"
+  ],
+  "forbidden_changes": [
+    "main branch history or force-pushes",
+    "git tags or GitHub Releases",
+    "npm registry state or dist-tags",
+    "README.md or README.zh.md",
+    "package.json, pnpm-lock.yaml, CHANGELOG.md, src/**, test/**, scripts/**, agents/**, commands/**, codex/**, statusline/**, .github/**, docs/agent-workflow.md, or other product/workflow files",
+    "deleting any branch with an open pull request",
+    "deleting any branch that contains unique unmerged or non-equivalent work without an already-merged pull request proving disposition",
+    "automatically merging, rebasing, cherry-picking, or force-updating historical branches",
+    "credential, provider, DSH profile, or runtime-state changes",
+    "unrelated files outside allowed_changes"
+  ],
+  "validation": [
+    "Validate this Task Contract first: node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json",
+    "Checkout main, git pull --ff-only, record exact HEAD and require a clean worktree before branch operations.",
+    "Run git fetch --prune origin and inventory every local and remote branch before cleanup.",
+    "Re-check GitHub for open pull requests immediately before deletion; never delete an open-PR head branch.",
+    "Protect main unconditionally. Do not delete or move any tag.",
+    "For each remote branch other than main, classify it using repository history and PR evidence. It is eligible for deletion only if at least one safe proof is true: (a) its tip is an ancestor of origin/main; (b) it is the head branch of a pull request whose mergedAt is non-null; or (c) git cherry / patch-equivalence analysis shows no unique branch patch remains relative to origin/main. Record the proof used per deleted branch.",
+    "If a branch has unique commits/patches and no merged-PR proof, preserve it and record the reason. Closed-but-unmerged or superseded branches are not enough by name alone; require ancestry, merged-PR, or patch-equivalence proof before deletion.",
+    "Delete eligible remote branches with normal non-force ref deletion only. Delete local branches only when the same safe proof applies; never delete the currently checked out main branch.",
+    "After cleanup, git fetch --prune origin again and record the final local/remote branch inventory plus deleted and preserved lists.",
+    "Verify origin/main commit SHA is unchanged by the branch cleanup operations and the worktree has no tracked product changes.",
+    "Write schema_version 2 Result Contract to docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json with before/after counts, every deleted branch and proof, every preserved non-main branch and reason, and explicit BRANCH_CLEANUP: PASS or BLOCKED.",
+    "Stamp and revalidate the result: node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json --stamp, then validate the stamped result again before commit."
+  ],
+  "acceptance_criteria": [
+    "No open-PR branch, main, tag, release, npm state, product file, README, workflow file, credential, or DSH runtime state is changed.",
+    "Every deleted branch has recorded ancestry, merged-PR, or patch-equivalence proof that its work is already represented on main.",
+    "Every branch with unique unmerged work is preserved and listed with the reason it was retained.",
+    "Remote and local stale merged branches are reduced as far as safely provable without speculative merging.",
+    "origin/main points to the same commit before and after ref cleanup except for the authorized task/result completion commits on main; no force-push occurs.",
+    "The Result Contract is validator-stamped PASS only if all safety conditions hold; otherwise it states BLOCKED with exact blockers.",
+    "On completion, ACTIVE_TASK.json is deleted and only the authorized Result Contract plus task deletion are committed/pushed on main."
+  ],
+  "result_contract": "docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY"
+  }
+}
