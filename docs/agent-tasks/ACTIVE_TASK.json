@@ -1,0 +1,60 @@
+{
+  "id": "TASK-V031-RELEASE-GATE-FINAL",
+  "mode": "TEST_ONLY",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Run the final non-publishing release gate for @ran-sh/dsh-crew@0.3.1 from the exact prepared release target dd414a352065e983e1be1b845287e99a50ade9c5. Prove that the stale distribution-test blocker is resolved, the redesigned bounded DSH cohort audit remains PASS, the packed candidate installs with npm's normal resolver, all deterministic/build/package checks pass, and no 0.3.1 public release state exists. Do not modify product, documentation, tests, package metadata, branches, tags, Releases, or npm registry state.",
+  "context": "The previous gate TASK-V031-GATE-REDESIGN-HISTORY-PRUNE proved the redesigned authoritative manifest audit PASS (20 direct DSH peers, 21 manifests, 177 cross-cohort checks), real packed-candidate default npm install PASS, frozen install PASS, client build PASS, pack audit PASS, npm publish dry-run PASS, and public 0.3.1 absence. Its sole blocker was test/distribution.test.mjs still requiring legacy README web-profile installation text after the README had intentionally been simplified to the supported isolated source workflow. That stale test was corrected on main in dd414a352065e983e1be1b845287e99a50ade9c5. This task is the final proof only. The exact release candidate target is dd414a352065e983e1be1b845287e99a50ade9c5; the queued ACTIVE task commit must never become the package/tag target. Use a disposable detached worktree at the exact target for candidate/package validation. The official DSH compatibility check must use the existing bounded manifest audit and must not invoke full @deepseek-ai/dsh host installation/resolution.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json"
+  ],
+  "forbidden_changes": [
+    "package.json, pnpm-lock.yaml, CHANGELOG.md, src/runtime-identity.mjs",
+    "README.md, README.zh.md, test/**, scripts/**, src/**, lib/** or any product/documentation/test source",
+    "branch creation/deletion/merge/rebase/cherry-pick/force-push",
+    "npm publish, npm dist-tag mutation, npm unpublish/deprecate, or any registry write",
+    "git tag creation/deletion/rewrite/retargeting",
+    "GitHub Release creation/deletion/mutation",
+    "secrets and credentials",
+    "official user DSH home/profile/credential stores",
+    "unrelated files outside allowed_changes"
+  ],
+  "validation": [
+    "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json",
+    "verify dd414a352065e983e1be1b845287e99a50ade9c5 is an ancestor of queued main and create/use a disposable detached worktree at exactly that commit for release validation",
+    "node --test test/distribution.test.mjs and require all tests PASS",
+    "pnpm install --frozen-lockfile",
+    "pnpm run verify:npm-install and require NPM_INSTALL_CONTRACT=PASS candidate=0.3.1",
+    "pnpm run verify:npm-install:official and require both DSH_COHORT_AUDIT=PASS for official_dsh=0.1.1-rc.2 and NPM_INSTALL_CONTRACT=PASS; do not run a full official DSH install/resolution",
+    "node --test test/*.test.mjs and require zero failures",
+    "pnpm run build:client, then restore any deterministic tracked generated artifact side effect so the target worktree is clean",
+    "verify package.json version, src/runtime-identity.mjs RUNTIME_VERSION, and top CHANGELOG entry are consistently 0.3.1",
+    "npm pack --dry-run --json with payload audit for forbidden task/result/temp/secret/node_modules/test-only artifacts",
+    "npm publish --dry-run --access public from the exact target only; no real publish",
+    "fresh public checks that @ran-sh/dsh-crew@0.3.1 is absent from npm, remote tag v0.3.1 is absent, and GitHub Release v0.3.1 is absent",
+    "git diff --check and clean disposable target/main worktrees before Result Contract assembly"
+  ],
+  "acceptance_criteria": [
+    "The corrected primary documentation distribution test passes without restoring legacy web-profile installation instructions.",
+    "The packed 0.3.1 candidate materially installs with npm's normal resolver and no --legacy-peer-deps, --force, --omit=peer, or equivalent bypass.",
+    "The bounded official DSH cohort manifest audit completes and PASSes against @deepseek-ai/dsh@0.1.1-rc.2 without full host resolution/materialization.",
+    "Full deterministic tests have zero failures, client build passes, frozen install passes, version identity is consistently 0.3.1, pack payload audit passes, and npm publish dry-run passes.",
+    "No real npm/tag/GitHub Release mutation occurs and fresh public checks confirm 0.3.1/tag/Release remain absent.",
+    "No source/docs/test/package/branch/tag mutation occurs in this TEST_ONLY task; completion contains only the Result Contract and deletion of ACTIVE_TASK.json.",
+    "If every required gate passes, Result status is PASS and summary includes exactly V031_RELEASE_READY: PASS. Otherwise return BLOCKED/FAIL with precise evidence and do not publish."
+  ],
+  "result_contract": "docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 43,
+    "candidate_version": "0.3.1",
+    "release_target_commit": "dd414a352065e983e1be1b845287e99a50ade9c5",
+    "official_dsh_version": "0.1.1-rc.2",
+    "no_publish": true
+  }
+}
