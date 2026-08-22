@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -9,6 +9,8 @@ import {
   crewDshRuntimeRoot,
   resolveDshCli,
   ensureCrewDshRuntime,
+  ensureCrewPluginRegistration,
+  removeCrewPluginRegistration,
   buildDshInvocation,
   runResolvedDsh,
   quoteWindowsArg,
@@ -17,6 +19,20 @@ import {
 function tempHome() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-runtime-test-'));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+function pluginRoot(home, name = '@ran-test/dsh-crew', version = '0.3.2-test') {
+  const root = join(home, 'checkout');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'index.js'), 'module.exports = {}\n');
+  writeFileSync(join(root, 'cordis.patch.yml'), '[]\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name,
+    version,
+    main: './index.js',
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }, null, 2));
+  return root;
 }
 
 test('Crew-owned reusable runtime wins over global dsh and npx', () => {
@@ -115,5 +131,101 @@ test('runResolvedDsh always injects Crew DSH_HOME and never targets official web
     assert.equal(call.options.env.DSH_HOME, join(t.dir, '.config', 'dsh-crew', 'harness'));
     assert.ok(call.args.includes('dsh-crew'));
     assert.ok(!call.args.includes('web'));
+  } finally { t.cleanup(); }
+});
+
+test('offline Crew registration is loader-visible and idempotent', () => {
+  const t = tempHome();
+  try {
+    const root = pluginRoot(t.dir);
+    const first = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(first.changed, true);
+    assert.equal(realpathSync(first.linkPath), realpathSync(root));
+    assert.equal(realpathSync(first.resolvedEntry), realpathSync(join(root, 'index.js')));
+    const profile = JSON.parse(readFileSync(first.profileManifest, 'utf8'));
+    assert.equal(profile.dependencies['@ran-test/dsh-crew'], `link:${root.replace(/\\/g, '/')}`);
+    assert.equal(profile.dsh.profile.bundles.filter((name) => name === '@ran-test/dsh-crew').length, 1);
+
+    const second = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(second.ok, true, JSON.stringify(second));
+    assert.equal(second.changed, false);
+    assert.equal(realpathSync(second.linkPath), realpathSync(root));
+  } finally { t.cleanup(); }
+});
+
+test('offline Crew registration replaces a stale link while preserving unrelated profile state', () => {
+  const t = tempHome();
+  try {
+    const firstRoot = pluginRoot(join(t.dir, 'first'));
+    const secondRoot = pluginRoot(join(t.dir, 'second'));
+    const profileDir = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-dsh-crew',
+      private: true,
+      dependencies: { '@deepseek-ai/dsh-base': '0.1.1-rc.2', '@ran-test/other': '1.0.0' },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@ran-test/other'] } },
+    }, null, 2));
+    const first = ensureCrewPluginRegistration({ home: t.dir, root: firstRoot });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const second = ensureCrewPluginRegistration({ home: t.dir, root: secondRoot });
+    assert.equal(second.ok, true, JSON.stringify(second));
+    assert.equal(realpathSync(second.linkPath), realpathSync(secondRoot));
+    const profile = JSON.parse(readFileSync(second.profileManifest, 'utf8'));
+    assert.equal(profile.dependencies['@deepseek-ai/dsh-base'], '0.1.1-rc.2');
+    assert.equal(profile.dependencies['@ran-test/other'], '1.0.0');
+    assert.deepEqual(profile.dsh.profile.bundles.slice(0, 2), ['@deepseek-ai/dsh-base', '@ran-test/other']);
+    assert.equal(profile.dsh.profile.bundles.filter((name) => name === '@ran-test/dsh-crew').length, 1);
+  } finally { t.cleanup(); }
+});
+
+test('offline Crew registration fails closed on malformed metadata and link conflicts', () => {
+  const malformed = tempHome();
+  try {
+    const root = pluginRoot(malformed.dir);
+    const profileDir = join(malformed.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ dependencies: [] }));
+    const result = ensureCrewPluginRegistration({ home: malformed.dir, root });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CREW_PROFILE_METADATA_INVALID');
+  } finally { malformed.cleanup(); }
+
+  const conflict = tempHome();
+  try {
+    const root = pluginRoot(conflict.dir);
+    const profileDir = join(conflict.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    const linkDir = join(profileDir, 'node_modules', '@ran-test', 'dsh-crew');
+    mkdirSync(linkDir, { recursive: true });
+    writeFileSync(join(linkDir, 'do-not-delete.txt'), 'user-owned\n');
+    const result = ensureCrewPluginRegistration({ home: conflict.dir, root });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CREW_PLUGIN_LINK_CONFLICT');
+    assert.equal(existsSync(join(linkDir, 'do-not-delete.txt')), true);
+  } finally { conflict.cleanup(); }
+});
+
+test('offline Crew registration removal is symmetric, safe, and idempotent', () => {
+  const t = tempHome();
+  try {
+    const root = pluginRoot(t.dir);
+    const first = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const profileBefore = JSON.parse(readFileSync(first.profileManifest, 'utf8'));
+    profileBefore.dependencies['@ran-test/other'] = '1.0.0';
+    profileBefore.dsh.profile.bundles.unshift('@ran-test/other');
+    writeFileSync(first.profileManifest, JSON.stringify(profileBefore, null, 2));
+
+    const removed = removeCrewPluginRegistration({ home: t.dir, name: '@ran-test/dsh-crew' });
+    assert.equal(removed.ok, true, JSON.stringify(removed));
+    assert.equal(removed.removed, true);
+    assert.equal(existsSync(first.linkPath), false);
+    const profileAfter = JSON.parse(readFileSync(first.profileManifest, 'utf8'));
+    assert.equal(profileAfter.dependencies['@ran-test/dsh-crew'], undefined);
+    assert.equal(profileAfter.dependencies['@ran-test/other'], '1.0.0');
+    assert.deepEqual(profileAfter.dsh.profile.bundles, ['@ran-test/other']);
+    const second = removeCrewPluginRegistration({ home: t.dir, name: '@ran-test/dsh-crew' });
+    assert.deepEqual(second, { ok: true, removed: false });
   } finally { t.cleanup(); }
 });
