@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V030-RELEASE-GATE",
+  "source_commit": "4b530fbf814e6d4714277675509a290f52e99be9",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "release_gate: RELEASE_READY. The v0.3.0 release candidate at main commit 4b530fbf814e6d4714277675509a290f52e99be9 is ready for publication. The full deterministic sweep, client build, version consistency checks, npm pack dry-run and payload audit passed; v0.3.0 is authoritatively absent as the remote git tag, GitHub Release, and npm registry version. No tag, GitHub Release, npm publication, registry mutation, product edit, installer mutation, credential access, or DSH runtime-state mutation was performed.",
+  "timeline": {
+    "started_at": "2026-08-22T20:20:48+08:00",
+    "completed_at": "2026-08-22T20:21:20+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "T02 Source revision and clean-worktree provenance",
+      "status": "PASS",
+      "evidence": "After git pull --ff-only, git rev-parse HEAD = 4b530fbf814e6d4714277675509a290f52e99be9, git branch --show-current = main, and the pre-execution git status was clean. Post-validation git status was also clean after restoring the build-generated lib/client.js artifact."
+    },
+    {
+      "name": "T03 Full deterministic sweep",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs completed with exit code 0; the full repository deterministic test sweep passed."
+    },
+    {
+      "name": "T04 Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client completed successfully and generated lib/client.js; the generated tracked artifact was restored to the executed source revision afterward."
+    },
+    {
+      "name": "T05 Release version consistency",
+      "status": "PASS",
+      "evidence": "package.json version = 0.3.0, src/runtime-identity.mjs RUNTIME_VERSION = 0.3.0, and the CHANGELOG.md release heading is 0.3.0; the machine check reported all_consistent=true."
+    },
+    {
+      "name": "T06 npm pack dry-run metadata",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json succeeded without publishing and reported @ran-sh/dsh-crew@0.3.0, size 894210 bytes, unpackedSize 1617105 bytes, and entryCount 85."
+    },
+    {
+      "name": "T07 npm payload audit",
+      "status": "PASS",
+      "evidence": "The complete 85-entry dry-run file list matched the package.json files/exports intent; forbidden and unexpected arrays were empty, no .tgz was included, and no ACTIVE task, agent result, temporary/build scratch, local environment, credential/secret, or test-only artifact was present."
+    },
+    {
+      "name": "T08 Repository integrity after validation",
+      "status": "PASS",
+      "evidence": "git diff --check passed and the final git status was clean; package, test, and build checks left no tracked product changes."
+    },
+    {
+      "name": "T09 Remote git tag absence",
+      "status": "PASS",
+      "evidence": "git ls-remote --refs origin refs/tags/v0.3.0 returned no ref, authoritatively confirming that remote tag v0.3.0 is absent."
+    },
+    {
+      "name": "T10 GitHub Release absence",
+      "status": "PASS",
+      "evidence": "GitHub Releases API request for Ran-sh/dsh-crew tag v0.3.0 returned HTTP 404, authoritatively confirming that the release is absent."
+    },
+    {
+      "name": "T11 npm registry version absence",
+      "status": "PASS",
+      "evidence": "The configured npm registry request for @ran-sh/dsh-crew/0.3.0 returned HTTP 404, authoritatively confirming that the package version is absent."
+    },
+    {
+      "name": "T12 Non-publishing and isolation boundary",
+      "status": "PASS",
+      "evidence": "Only read-only git/API/registry queries and npm pack --dry-run were used; no tag, GitHub Release, npm publish, dist-tag, registry mutation, version edit, product edit, installer mutation, credential access, or official DSH store/runtime mutation occurred."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V030-RELEASE-GATE-result.json",
+  "notes": [
+    "source_branch: main; source_commit resolved from source_commit=LATEST to 4b530fbf814e6d4714277675509a290f52e99be9.",
+    "Workflow source: docs/agent-workflow.md, Agent Handoff Protocol v1.8.0.",
+    "npm pack dry-run metadata: filename ran-sh-dsh-crew-0.3.0.tgz, size 894210 bytes, unpackedSize 1617105 bytes, entryCount 85; the archive was not created by the dry-run.",
+    "The result is RELEASE_READY only because every required release-gate check completed with PASS evidence.",
+    "Completion commit is restricted to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json; no tag or publication action is authorized by this task."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-RELEASE-GATE-result.json --stamp",
+    "validated_at": "2026-08-22T12:21:59Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V030-RELEASE-GATE-result.json"
+  }
+}
