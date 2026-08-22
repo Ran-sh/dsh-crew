@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-DSH-LATEST-RUNTIME-AUDIT",
+  "source_commit": "2969760ba569b580bb20128b92e64e508285c9fc",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "Official DeepSeek Harness runtime audit passed. The execution-time npm @latest for @deepseek-ai/dsh resolved to 0.1.1-rc.2, with dist-tags latest and next both resolving to that exact version. A separate official local runtime prefix was installed from the npm registry and its CLI reported 0.1.1-rc.2; the official web profile started successfully on port 3080. Protected official ~/.dsh state remained byte/hash identical across the update. The Crew-owned runtime/profile was not modified and remained isolated at 0.1.1-rc.2 with its Hub stopped.",
+  "timeline": {
+    "started_at": "2026-08-22T17:49:00+08:00",
+    "completed_at": "2026-08-22T18:17:00+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/dsh-latest-runtime-audit-result.json"
+  ],
+  "tests": [
+    {
+      "name": "Task contract and source revision",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT; branch test/dsh-latest-runtime-audit executed at source commit 2969760ba569b580bb20128b92e64e508285c9fc."
+    },
+    {
+      "name": "Execution-time npm latest resolution",
+      "status": "PASS",
+      "evidence": "npm view @deepseek-ai/dsh dist-tags --json returned latest=0.1.1-rc.2 and next=0.1.1-rc.2; npm view @deepseek-ai/dsh@latest version --json returned 0.1.1-rc.2. No @next-only version was installed."
+    },
+    {
+      "name": "Official @latest runtime installation and CLI version",
+      "status": "PASS",
+      "evidence": "The installed top-level official package version and CLI output were both 0.1.1-rc.2, exactly matching npm @latest. Resolved source was the npm registry package @deepseek-ai/dsh; CLI entry was the independent official local runtime prefix at node_modules/@deepseek-ai/dsh/lib/bin.js."
+    },
+    {
+      "name": "Official web Harness after update",
+      "status": "PASS",
+      "evidence": "The updated official CLI started the official ~/.dsh web profile on 127.0.0.1:3080; the web root returned HTTP 200 after restart."
+    },
+    {
+      "name": "Protected official ~/.dsh persistent state",
+      "status": "PASS",
+      "evidence": "The protected set of settings.yaml, .credentials.yaml, profiles/**, and sessions/** remained 78 files and 3,184,216 total bytes with aggregate SHA-256 E00D590857C56C0467EA1DC86FEC1ABC7B324DBBDF0B92A903E770CED3E3FA44 before and after. .credentials.yaml remained 208 bytes/SHA-256 819FECDCBB0F35851C6B09357281DC190F3ECFD50A9A0432D5D3A651E528F02; settings.yaml remained 1332 bytes/SHA-256 B3C608B86311C10AD631306E42918F6D860350FE16CCDB38EAF317A3526095F9. No file contents or credential values were printed, copied, migrated, or committed."
+    },
+    {
+      "name": "Crew-owned runtime/profile isolation",
+      "status": "PASS",
+      "evidence": "Crew remained installed only in its dedicated DSH_HOME/profile; runtime version stayed 0.1.1-rc.2, runtime package SHA-256 stayed DC930C0B18158F49AE3753CEAF6B1B7AE71DC6C8F45C85A2D679B142024ADDF7, and Crew profile package SHA-256 stayed 11149ED3D0258A109CBFCD6498649851BF48B771CED3579429ADBEC70456EB14. Hub 3210 was not running, so no Crew process or configuration was changed by the audit."
+    },
+    {
+      "name": "Bounded release-audit metadata",
+      "status": "PASS",
+      "evidence": "npm @latest metadata reported 62 direct dependencies, peerDependencies=null, and canonical dependency-object SHA-256 019BB6D884CA80F5EDA76DE51F4F98668CACCC8809D7E553616ABC17236A376E. Compatibility-relevant direct ranges included @deepseek-ai/cordis=^4.0.1, @deepseek-ai/dsh-base=^0.1.1-rc.2, and @deepseek-ai/dsh-web-app=^0.1.1-rc.2. The repository's existing dsh-crew peer/dev constraints remain 0.1.0-rc.6 for the DSH agent family and ^0.1.0-rc.5 for the SDK pair; no release-prep changes were made in this TEST_ONLY audit."
+    },
+    {
+      "name": "Result validator --stamp",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/dsh-latest-runtime-audit-result.json --stamp -> VALID RESULT CONTRACT (exit 0)."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/dsh-latest-runtime-audit-result.json",
+  "notes": [
+    "source_branch: test/dsh-latest-runtime-audit",
+    "Official runtime was installed in a separate non-Crew local runtime prefix from the npm registry; persistent official ~/.dsh state was not used as an install target and remained unchanged.",
+    "The first standard npm install attempt was bounded and terminated after prolonged ideal-tree computation before a completed prefix appeared; the exact same npm registry @latest package was then installed successfully with the machine's pnpm/Node toolchain in the independent official runtime prefix. No ~/.dsh or Crew state was changed by the aborted attempt.",
+    "The official web process was left running healthy on port 3080. Crew remains installed in isolated state but its Hub is stopped; no Crew runtime/profile upgrade or reconfiguration was performed.",
+    "Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json are the only authorized repository changes for completion."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/dsh-latest-runtime-audit-result.json --stamp",
+    "validated_at": "2026-08-22T10:18:08Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/dsh-latest-runtime-audit-result.json"
+  }
+}
