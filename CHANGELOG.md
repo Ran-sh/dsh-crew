@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-08-23
+
+### Fixed
+
+- Registers local Crew plugins directly in the isolated Crew profile, preserving pnpm release-age policy while keeping install, uninstall, and reinstall lifecycle operations offline and idempotent.
+
 ## 0.3.1 — 2026-08-22
 
 ### Fixed

@@ -1,0 +1,109 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-INSTALLER-POLICY-LIFECYCLE",
+  "source_commit": "ba0aac529057cedcc3f6d310bffe443f8f98e3da",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "WINDOWS_LIFECYCLE_ACCEPTANCE: PASS — the installer now registers the local Crew plugin offline and idempotently, without weakening pnpm minimumReleaseAge; targeted and full deterministic validation passed, first install/status/install-idempotence/uninstall/residual/uninstall-idempotence/reinstall all passed on the real Windows checkout, and no forbidden state or policy was changed. final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T00:00:00+08:00",
+    "completed_at": "2026-08-23T00:38:20+08:00"
+  },
+  "changed_files": [
+    "scripts/setup.mjs",
+    "src/dsh-cli-runtime.mjs",
+    "test/dsh-cli-runtime.test.mjs",
+    "package.json",
+    "src/runtime-identity.mjs",
+    "CHANGELOG.md",
+    "docs/agent-results/TASK-V032-INSTALLER-POLICY-LIFECYCLE-result.json"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task contract, main checkout, and clean baseline",
+      "status": "PASS",
+      "evidence": "After checkout main and pull --ff-only, queued HEAD was ba0aac529057cedcc3f6d310bffe443f8f98e3da. node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json returned VALID TASK CONTRACT, and the pre-implementation worktree was clean."
+    },
+    {
+      "name": "T02 Published target and stable checkout preflight",
+      "status": "PASS",
+      "evidence": "The read-only public npm packument reported @ran-sh/dsh-crew latest/version 0.3.1; the stable checkout initially reported package/runtime identity 0.3.1. The Crew-owned profile was linked to D:/Users/48376/Desktop/dsh-crew, while preflight status showed DSH installed and Codex/Claude not installed; Claude CLI was present and therefore applicable."
+    },
+    {
+      "name": "T03 Root cause and policy-preserving diagnosis",
+      "status": "PASS",
+      "evidence": "The prior direct Crew-runtime registration path reproduced pnpm ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION for 16 fresh @aws-sdk lockfile entries. The read-only pnpm policy probe was undefined (unset) before implementation; no global config, lockfile, resolver bypass, or release-age exemption was used."
+    },
+    {
+      "name": "T04 Offline registration regression coverage",
+      "status": "PASS",
+      "evidence": "The new runtime tests cover loader-visible registration, same-process idempotence, stale-link replacement with unrelated dependency/bundle preservation, malformed metadata and real-directory conflict fail-closed behavior, safe path/package validation, and symmetric idempotent removal. node --test test/dsh-cli-runtime.test.mjs passed 10/10."
+    },
+    {
+      "name": "T05 Targeted installer/runtime/isolation suite",
+      "status": "PASS",
+      "evidence": "node --test test/dsh-cli-runtime.test.mjs test/dsh-profile-isolation.test.mjs test/setup.test.mjs test/setup-cli.test.mjs test/installer.test.mjs passed 45/45 with zero failures."
+    },
+    {
+      "name": "T06 Frozen install, client build, and full deterministic suite",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0; pnpm run build:client exited 0; node --test test/*.test.mjs passed 434/434 with zero failures. The deterministic tracked lib/client.js build side effect was restored after build and each real install."
+    },
+    {
+      "name": "T07 Version 0.3.2 preparation",
+      "status": "PASS",
+      "evidence": "package.json, src/runtime-identity.mjs, and the top CHANGELOG.md entry consistently report/describe 0.3.2. No npm publish, tag, Release, branch rewrite, or registry mutation was performed."
+    },
+    {
+      "name": "T08 First real Windows install and status",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs install exited 0 and reported offline Crew profile linking, Codex integration, and Claude integration. Follow-up status reported DSH plugin installed, Codex Desktop integration installed, and Claude Code integration installed."
+    },
+    {
+      "name": "T09 Loader usability, identity, and install idempotence",
+      "status": "PASS",
+      "evidence": "A second real install exited 0 and reported the offline registration already current. The profile dependency remained link:D:/Users/48376/Desktop/dsh-crew with exactly one Crew bundle and a realpath to the stable checkout. Crew runtime @deepseek-ai/dsh@0.1.1-rc.2 with --profile dsh-crew --dump-default-config exited 0 with output containing dsh-crew."
+    },
+    {
+      "name": "T10 Uninstall without purge and uninstall idempotence",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs uninstall exited 0 without --purge and removed Codex, Claude, and the DSH Crew registration offline. A second uninstall exited 0 and reported the DSH registration already removed."
+    },
+    {
+      "name": "T11 Crew-owned residual audit",
+      "status": "PASS",
+      "evidence": "Post-uninstall status reported all three integrations not installed. Crew config remained present, the profile directory remained retained, plugin dependency/bundle/link were absent, no managed Codex files or dsh-crew MCP entry remained, no managed Claude settings entry/permission remained, and retained dsh-crew backups were present. No official ~/.dsh state was inspected."
+    },
+    {
+      "name": "T12 Final real reinstall and installed state",
+      "status": "PASS",
+      "evidence": "The final node scripts/setup.mjs install exited 0; status again reported DSH plugin, Codex Desktop, and Claude Code installed. The profile link realpath was D:/Users/48376/Desktop/dsh-crew, package.json version and RUNTIME_VERSION were both 0.3.2, and the loader smoke returned status 0."
+    },
+    {
+      "name": "T13 Minimum-release-age and isolation invariants",
+      "status": "PASS",
+      "evidence": "The read-only pnpm config probe returned minimumReleaseAge=undefined before and after the real lifecycle. No global pnpm policy was mutated; no official ~/.dsh/web profile, credentials, secrets, tokens, cookies, or API keys were read or changed."
+    },
+    {
+      "name": "T14 Repository scope and hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed; generated lib/client.js was restored; the remaining intentional product/result changes are confined to the allowed completion contract paths."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V032-INSTALLER-POLICY-LIFECYCLE-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to ba0aac529057cedcc3f6d310bffe443f8f98e3da.",
+    "minimumReleaseAge before lifecycle: undefined (unset); after lifecycle: undefined (unset); no global pnpm configuration or security policy mutation occurred.",
+    "The implementation replaces the DSH/pnpm forwarding registration call with a Crew-owned offline manifest plus Windows-safe junction/link update, validates the package/bundle path, proves the intended package entry, preserves unrelated profile state, and keeps uninstall symmetric and offline.",
+    "TDD checkpoint history: RED regression checkpoint bd20fed; GREEN implementation checkpoint aa2817f. Final completion adds the authorized 0.3.2 identity/changelog and Result Contract changes.",
+    "No --purge was used. Crew config/backups were retained. No npm/tag/Release/branch mutation occurred.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-INSTALLER-POLICY-LIFECYCLE-result.json --stamp",
+    "validated_at": "2026-08-22T16:38:50Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-INSTALLER-POLICY-LIFECYCLE-result.json"
+  }
+}
