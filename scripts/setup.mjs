@@ -12,6 +12,13 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import * as realInstaller from '../src/install/install.mjs';
 import { crewDshHome, crewProfileDir, CREW_PROFILE_NAME } from '../src/install/install.mjs';
+import {
+  ensureCrewDshRuntime,
+  resolveDshCli,
+  runResolvedDsh,
+  describeDshCli,
+  removeCrewPluginRegistration,
+} from '../src/dsh-cli-runtime.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -39,13 +46,14 @@ function run(cmd, args, opts = {}) {
  * `runDsh` with the dedicated dsh-crew profile and the Crew DSH_HOME in the
  * child process environment. The official ``web`` profile is never a target.
  */
-export function detectDsh({ allowDownload = false } = {}) {
-  if (commandExists('dsh')) return { kind: 'dsh', cli: 'dsh' };
-  if (!commandExists('npx')) return null;
-  if (allowDownload) return { kind: 'npx', cli: 'npx -y @deepseek-ai/dsh' };
-  const probe = run('npx --no-install @deepseek-ai/dsh --version', [], { shell: true });
-  if (probe.ok) return { kind: 'npx-local', cli: 'npx --no-install @deepseek-ai/dsh' };
-  return null;
+export function detectDsh({ allowDownload = false, home = homedir(), includeCompatibility = true } = {}) {
+  const resolved = resolveDshCli({
+    home,
+    allowDownload,
+    includeCompatibility,
+  });
+  if (!resolved) return null;
+  return { ...resolved, cli: resolved.command, description: describeDshCli(resolved) };
 }
 
 /**
@@ -54,9 +62,10 @@ export function detectDsh({ allowDownload = false } = {}) {
  * isolated home, so tests can point it at a disposable root.
  */
 export function runDsh(dsh, args, { home = homedir() } = {}) {
-  const argStr = args.map((a) => (/^[A-Za-z0-9_./:@-]+$/.test(a) ? a : JSON.stringify(a))).join(' ');
-  const cmd = `${dsh.cli} plugin --profile ${CREW_PROFILE_NAME} ${argStr}`;
-  return run(cmd, [], { shell: true, env: { ...process.env, DSH_HOME: crewDshHome({ home }) } });
+  const resolved = dsh?.command
+    ? dsh
+    : { kind: dsh?.kind ?? 'legacy', command: dsh?.cli ?? dsh, args: [] };
+  return runResolvedDsh(resolved, ['plugin', '--profile', CREW_PROFILE_NAME, ...args], { home });
 }
 
 export function readPackageName(root = ROOT) {
@@ -128,11 +137,18 @@ export async function setupInstall({
 
   const name = readPackageName(root);
   if (!name) return { ok: false, error: 'package.json name missing' };
-  // Install is the one operation allowed to fetch the DSH CLI via npx. A
-  // dry-run only checks that npx exists; detectDsh itself performs no network.
-  const dsh = detectDsh({ allowDownload: true });
+  // Prefer an explicit/global or reusable Crew-owned runtime. If only npx is
+  // available, install a reusable copy under Crew state before falling back to
+  // the transient download path. Dry-run never provisions or downloads.
+  let dsh = detectDsh({ allowDownload: false, home });
+  if (!dryRun && (!dsh || dsh.kind === 'npx-local')) {
+    const boot = ensureCrewDshRuntime({ home });
+    if (boot.ok) dsh = boot.cli;
+    else log(`- reusable Crew DSH runtime unavailable (${boot.code ?? 'unknown'}); trying compatibility fallback`);
+  }
+  if (!dsh) dsh = detectDsh({ allowDownload: !dryRun, home });
   if (!dsh) {
-    log('✗ DSH CLI not detected (dsh or npx)');
+    log('✗ DSH CLI not detected (Crew runtime, dsh, or npx)');
     return { ok: false, error: 'DSH CLI not found' };
   }
   if (dryRun) {
@@ -140,7 +156,7 @@ export async function setupInstall({
     // plans a link into the dedicated dsh-crew profile only. The legacy phrasing
     // is kept here as an explicit contrast so existing CLI tests/people see the
     // change, never as a command that targets the official web profile.
-    mark(log, true, `DSH web profile would be linked (legacy) — now: dedicated dsh-crew profile under the Crew DSH_HOME; the official web profile is never modified (${dsh.kind} add "link:${root}")`);
+    mark(log, true, `DSH web profile would be linked (legacy) — now: dedicated dsh-crew profile under the Crew DSH_HOME; the official web profile is never modified (${dsh.description ?? dsh.kind} add "link:${root}")`);
   } else {
     const add = runDsh(dsh, ['add', `link:${root}`], { home });
     if (!add.ok) {
@@ -200,17 +216,13 @@ export async function setupUninstall({
 
     const name = readPackageName(root);
     if (!name) fail('dsh', 'DSH plugin removal failed: package name missing');
-    else if (!profileHasPackage(home, name)) mark(log, true, 'DSH crew profile already removed (dedicated Crew DSH_HOME, official web profile ignored)');
     else {
-      // Uninstall must not surprise the user or CI by downloading a CLI just
-      // to probe. Use only an already available dsh / locally resolvable npx.
-      const dsh = detectDsh();
-      if (!dsh) fail('dsh', 'DSH plugin removal failed: DSH CLI not found');
-      else {
-        const rm = runDsh(dsh, ['remove', name], { home });
-        if (!rm.ok) fail('dsh', `DSH crew profile removal failed: ${(rm.stderr || rm.stdout || '').trim().slice(0, 300)}`);
-        else mark(log, true, 'DSH crew profile removed');
-      }
+      // Removing a registration is intentionally metadata-only and offline.
+      // Calling `dsh plugin remove` delegates to pnpm, which may resolve the
+      // whole profile and unexpectedly reach the network during uninstall.
+      const removed = removeCrewPluginRegistration({ home, name });
+      if (!removed.ok) fail('dsh', `DSH crew profile removal failed (${removed.code ?? 'unknown'})`);
+      else mark(log, true, removed.removed ? 'DSH crew profile removed (offline, Crew-owned state)' : 'DSH crew profile already removed (dedicated Crew DSH_HOME, official web profile ignored)');
     }
   }
 
