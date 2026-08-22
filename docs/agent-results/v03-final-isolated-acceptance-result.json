@@ -1,0 +1,116 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V03-FINAL-ISOLATED-ACCEPTANCE",
+  "source_commit": "28e989de7161587e14c69148cb559dfb1a23df5d",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "Deterministic v0.3 acceptance passed on the latest target-branch tip, and all Crew-local safety checks completed without modifying the official Harness. Real DSH/Hub acceptance could not start because no runnable DSH CLI was available locally: npx-based CLI resolution stalled during package execution/dependency resolution, and the official loopback web endpoint was unreachable. Crew remains uninstalled in the dedicated isolated state.",
+  "timeline": {
+    "started_at": "2026-08-22T13:40:00+08:00",
+    "completed_at": "2026-08-22T14:00:00+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/v03-final-isolated-acceptance-result.json"
+  ],
+  "tests": [
+    {
+      "name": "Task Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "Source revision and worktree safety",
+      "status": "PASS",
+      "evidence": "Target branch test/v0.3-final-isolated-acceptance was fetched and already up to date at 28e989de7161587e14c69148cb559dfb1a23df5d; worktree was clean before validation and is clean apart from this authorized Result Contract."
+    },
+    {
+      "name": "Deterministic repository tests",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 420 tests, 420 pass, 0 fail, 0 skipped."
+    },
+    {
+      "name": "Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0 and produced the client bundle; the generated tracked lib/client.js was restored because generated output is outside the authorized write scope."
+    },
+    {
+      "name": "Isolated Crew installer safety surface",
+      "status": "PASS",
+      "evidence": "Installer reports Crew DSH_HOME as ~/.config/dsh-crew/harness, profile dsh-crew, and Hub http://127.0.0.1:3210. install --dry-run, status, and uninstall --dry-run all exited 0; status reported the Crew plugin and integrations as not installed."
+    },
+    {
+      "name": "Official Harness integrity before/after probes",
+      "status": "PASS",
+      "evidence": "Non-secret metadata/hash comparison remained identical for .credentials.yaml (208 bytes, SHA-256 819FECDCBB0F3585...), settings.yaml (1332 bytes, SHA-256 B3C608B86311C10A...), profiles/web/package.json (185 bytes, SHA-256 207430228A8315C78...), and profiles/web/cordis.yml (223 bytes, SHA-256 C300DCF2EBC5F020...). No credential contents were read, printed, copied, or modified."
+    },
+    {
+      "name": "Official Harness health before Crew installation",
+      "status": "BLOCKED",
+      "evidence": "No runnable dsh executable was present; npx --no-install could not resolve it, and npx -y @deepseek-ai/dsh --version plus npx --yes --package @deepseek-ai/dsh dsh --help stalled with no output and were terminated. Official loopback checks to port 3080 were unreachable, so normal official web startup could not be verified."
+    },
+    {
+      "name": "Genuine completed Hub/MCP worker and sanitized selection trace",
+      "status": "BLOCKED",
+      "evidence": "The Crew-owned DSH Hub could not be installed or started because the DSH CLI runtime was unavailable; no worker execution or selection_trace claim was fabricated."
+    },
+    {
+      "name": "Live max_parallel and activation-boundary semantics",
+      "status": "PARTIAL",
+      "evidence": "Deterministic runtime-control tests covering raise/lower admission and live/session/restart boundaries passed within the 420-test sweep; the required real Hub exercise was blocked by the missing DSH CLI."
+    },
+    {
+      "name": "Adaptive routing acceptance",
+      "status": "PARTIAL",
+      "evidence": "Deterministic adaptive-routing tests passed, including opt-in, bounded warming, explicit-priority preservation, process-local health, restart reset, and traceability; the real isolated Hub exercise was blocked by the missing DSH CLI."
+    },
+    {
+      "name": "Structured failure-code propagation",
+      "status": "PARTIAL",
+      "evidence": "Deterministic propagation/classification tests passed in the repository sweep; a real Hub -> client -> attempt -> workflow chain could not be exercised without the DSH runtime."
+    },
+    {
+      "name": "Readiness and catalog diagnostics",
+      "status": "PARTIAL",
+      "evidence": "Deterministic readiness/catalog tests passed, including informational hints remaining non-failing; live Harness catalog evidence was unavailable because the DSH Hub could not start."
+    },
+    {
+      "name": "Standalone official execution",
+      "status": "SKIP",
+      "evidence": "DEEPSEEK_API_KEY was absent from the process environment. node scripts/smoke-real.mjs <repo> standalone exited 2 with the intended blocked-style message; official credential stores were not read."
+    },
+    {
+      "name": "macOS smoke",
+      "status": "SKIP",
+      "evidence": "Executor platform is Windows, not macOS."
+    },
+    {
+      "name": "Final isolated state",
+      "status": "PASS",
+      "evidence": "Because real acceptance was blocked, the task-required safe state was preserved: setup status reports dsh-crew not installed, Codex integration not installed, and Claude Code integration not installed; no dsh-crew process remained."
+    },
+    {
+      "name": "Result Contract validator",
+      "status": "NOT RUN",
+      "evidence": "The validator --stamp step is the next protocol step after this draft is written."
+    }
+  ],
+  "blockers": [
+    "No runnable @deepseek-ai/dsh CLI was available locally; npx package execution/dependency resolution stalled, preventing official and Crew-isolated Harness startup.",
+    "Official web health could not be verified because the normal CLI was unavailable and loopback port 3080 was unreachable.",
+    "Real Crew Hub worker, live controls, adaptive routing, catalog, and end-to-end failure propagation gates could not be exercised without the isolated DSH runtime."
+  ],
+  "result_path": "docs/agent-results/v03-final-isolated-acceptance-result.json",
+  "notes": [
+    "source_branch: test/v0.3-final-isolated-acceptance",
+    "source_commit resolved from source_commit: LATEST",
+    "official/default DSH state was treated as read-only; no official profile installation, removal, or configuration write was attempted",
+    "Crew-owned isolated home/profile/port were the only intended Crew targets: ~/.config/dsh-crew/harness, dsh-crew, and 3210",
+    "Only the Result Contract is authorized to remain as a tracked repository change; ACTIVE_TASK.json will be removed after validator stamping per the task contract"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-final-isolated-acceptance-result.json --stamp",
+    "validated_at": "2026-08-22T06:00:07Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-final-isolated-acceptance-result.json"
+  }
+}
