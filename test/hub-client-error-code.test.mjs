@@ -24,3 +24,15 @@ test('Hub request error uses a bounded fallback code when the server omitted one
   assert.equal(err.message, 'hub request failed (503)');
   assert.equal(err.code, HUB_REQUEST_FAILED);
 });
+
+test('bounded machine-code rule: malformed, lowercase, oversized codes never propagate', () => {
+  assert.equal(hubRequestError({ error: 'x', code: 'no_worker_model_available' }, 400).code, HUB_REQUEST_FAILED);
+  assert.equal(hubRequestError({ error: 'x', code: 'Mixed_Case' }, 400).code, HUB_REQUEST_FAILED);
+  assert.equal(hubRequestError({ error: 'x', code: '_LEADING' }, 400).code, HUB_REQUEST_FAILED);
+  assert.equal(hubRequestError({ error: 'x', code: 'A'.repeat(65) }, 400).code, HUB_REQUEST_FAILED);
+  assert.equal(hubRequestError({ error: 'x', policyCode: 'not_a_machine_code' }, 400).code, HUB_REQUEST_FAILED);
+  // valid bounded codes still propagate; an invalid code falls through to a
+  // valid policyCode instead of being copied verbatim.
+  assert.equal(hubRequestError({ error: 'x', code: 'NO_WORKER_MODEL_AVAILABLE' }, 400).code, 'NO_WORKER_MODEL_AVAILABLE');
+  assert.equal(hubRequestError({ error: 'x', code: 'broken', policyCode: 'ROLE_DISABLED' }, 400).code, 'ROLE_DISABLED');
+});

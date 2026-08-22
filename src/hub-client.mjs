@@ -5,6 +5,7 @@
 import { readGlobalConfig } from './install/install.mjs';
 import { evaluateHubHandshake, HUB_COMPATIBILITY_CODES } from './runtime-identity.mjs';
 import { buildReadinessMatrix } from './readiness-matrix.mjs';
+import { isBoundedMachineCode } from './structured-error-code.mjs';
 
 const BASE = (process.env.DSH_CREW_HUB ?? readGlobalConfig().hub_url).replace(/\/$/, '');
 const API = `${BASE}/_dsh/dsh-crew`;
@@ -100,8 +101,8 @@ export async function hubAvailable() {
 }
 
 function structuredCode(body) {
-  if (typeof body?.code === 'string' && body.code.trim()) return body.code.trim();
-  if (typeof body?.policyCode === 'string' && body.policyCode.trim()) return body.policyCode.trim();
+  if (isBoundedMachineCode(body?.code)) return body.code;
+  if (isBoundedMachineCode(body?.policyCode)) return body.policyCode;
   return null;
 }
 
