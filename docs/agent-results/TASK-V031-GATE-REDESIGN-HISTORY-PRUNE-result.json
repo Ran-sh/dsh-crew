@@ -1,0 +1,101 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-GATE-REDESIGN-HISTORY-PRUNE",
+  "source_commit": "1bfef5106ce2c5c03e40985b0e77eb4525f612df",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "V031_RELEASE_READY: BLOCKED — the bounded authoritative DSH cohort audit, real candidate npm install, frozen install, client build, package audits, publish dry-run, public absence checks, and conservative branch cleanup passed. The required full deterministic sweep remains blocked by one pre-existing distribution test failure: the test requires legacy README npm/profile wording that the task's pre-existing simplified README no longer contains, and both README files plus unrelated test fixes are forbidden here.",
+  "timeline": {
+    "started_at": "2026-08-22T23:00:00+08:00",
+    "completed_at": "2026-08-22T23:17:46+08:00"
+  },
+  "changed_files": [
+    "scripts/verify-npm-install.mjs",
+    "test/verify-npm-install.test.mjs"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract, source revision, and clean main baseline",
+      "status": "PASS",
+      "evidence": "The task validator returned VALID TASK CONTRACT. After checkout and pull --ff-only, main was clean at exact source commit 1bfef5106ce2c5c03e40985b0e77eb4525f612df and matched origin/main."
+    },
+    {
+      "name": "T02 Bounded cohort audit regression coverage",
+      "status": "PASS",
+      "evidence": "node --test test/verify-npm-install.test.mjs exited 0 with 4 passed and 0 failed. Tests cover exact/caret cohort evaluation, authoritative-manifest PASS, missing-manifest fail-closed behavior, and incompatible cross-cohort range fail-closed behavior using injected deterministic manifests without network, credentials, or official DSH state."
+    },
+    {
+      "name": "T03 Frozen dependency installation",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0 with the lockfile already up to date; no pnpm-lock.yaml change was produced."
+    },
+    {
+      "name": "T04 Candidate default npm install gate",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install returned NPM_INSTALL_CONTRACT=PASS candidate=0.3.1 official_dsh=not-run. The packed candidate was materially installed with npm's normal resolver and no peer-resolution bypass; package/runtime identity and required entries were verified."
+    },
+    {
+      "name": "T05 Bounded official DSH cohort manifest audit",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official returned DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.1 official_dsh=0.1.1-rc.2:manifest-audit. It fetched only the official manifest plus the 20 direct Crew DSH peer manifests, validated exact identity/cohort presence, and checked all relevant DSH dependency/optional/peer ranges without full host resolution or materialization."
+    },
+    {
+      "name": "T06 Full deterministic test sweep",
+      "status": "FAIL",
+      "evidence": "node --test test/*.test.mjs completed with 430 tests, 429 passed, 1 failed. The sole failure is test/distribution.test.mjs: its primary documentation assertion still requires the legacy regex npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew, but the task's pre-existing simplified README no longer contains that text. The targeted distribution test reproduced 2 passed and 1 failed. README.md, README.zh.md, and unrelated test changes are forbidden by this task, so the failure was not altered or relabeled."
+    },
+    {
+      "name": "T07 Client build and generated-artifact cleanup",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0 and built lib/client.js. The deterministic tracked build side effect was restored, leaving no lib/client.js product diff."
+    },
+    {
+      "name": "T08 npm pack dry-run and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.1, 86 files, unpacked size 1,595,588 bytes, tarball size 884,947 bytes, and integrity metadata. The audit found no ACTIVE task/result, temporary, secret, credential, node_modules, or test-only payload entries."
+    },
+    {
+      "name": "T09 Non-publishing npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public exited 0 for @ran-sh/dsh-crew@0.3.1 from the prepared candidate state. No registry mutation occurred."
+    },
+    {
+      "name": "T10 Public candidate/tag/Release absence",
+      "status": "PASS",
+      "evidence": "The public npm packument returned HTTP 200 with dist-tags.latest=0.3.0 and no 0.3.1 version; git ls-remote found no remote refs/tags/v0.3.1; the public GitHub Releases API returned HTTP 404 for v0.3.1."
+    },
+    {
+      "name": "T11 Conservative branch classification and open-PR safety",
+      "status": "PASS",
+      "evidence": "After fetch --prune, all 12 remaining remote non-main branches and 10 local non-main branches were classified with ancestry and git cherry results. GitHub PR #15 was verified closed without mergedAt, PR #34 was verified merged with non-null mergedAt and explicitly superseding #15, and the immediate pre-deletion open-PR count was 0."
+    },
+    {
+      "name": "T12 Branch cleanup and final ref safety",
+      "status": "PASS",
+      "evidence": "Only remote feat/v0.3-model-selection-trace was deleted by normal git push origin --delete, using PR #15 supersession by merged PR #34 plus no still-needed unique code as proof. No local branch was deleted because no local counterpart existed and all other local branches retained unique work. After fetch --prune, 11 remote non-main and 10 local non-main branches remained; origin/main stayed 1bfef5106ce2c5c03e40985b0e77eb4525f612df, open PR count remained 0, and the tag inventory was not mutated."
+    },
+    {
+      "name": "T13 Final diff and scope hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed. Before Result Contract assembly the worktree contained only the authorized scripts/verify-npm-install.mjs and test/verify-npm-install.test.mjs changes; package.json, pnpm-lock.yaml, README files, product runtime files, tags, Releases, credentials, and official DSH state were untouched."
+    }
+  ],
+  "blockers": [
+    "The required full deterministic sweep has one pre-existing failure in test/distribution.test.mjs because it asserts legacy README text that the task's pre-existing simplified README.md no longer contains. This task forbids README.md, README.zh.md, and unrelated test changes, so the full required gate cannot be proven PASS and the release verdict must remain BLOCKED."
+  ],
+  "result_path": "docs/agent-results/TASK-V031-GATE-REDESIGN-HISTORY-PRUNE-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 1bfef5106ce2c5c03e40985b0e77eb4525f612df. The package version and src/runtime-identity.mjs remain 0.3.1; no package or lockfile dependency was added.",
+    "The redesigned official gate uses built-in fetch and a bounded implementation of exact, caret, tilde, and comparator range checks. It fails closed on malformed, missing, mismatched, wildcard, unsupported, or incompatible manifests/ranges and does not invoke npm install for the official DSH graph.",
+    "The one deleted remote branch was feat/v0.3-model-selection-trace at 13fc8cd. PR #15 states it was superseded by PR #34; merged PR #34 states it rebuilt the integration on current main without stale branch history and supersedes PR #15. No local branch with that name existed.",
+    "Preserved remote branches with unique work: feat/v0.3-model-selection-trace-integrated (+2 cherry positives), fix/opencode-go-public-model-catalog (+3), ops/opencode-go-catalog-remediation (+2), release/v0.3.0-publish (+3), test/dsh-latest-runtime-audit (+2), test/opencode-go-catalog-diagnosis (+2), test/v0.3-dynamic-runtime-controls-smoke (+3 and 1 equivalent), test/v0.3-final-isolated-acceptance (+3), test/v0.3-final-opencode-acceptance (+2), test/v0.3-model-selection-trace-smoke (+11), and test/v0.3-runtime-compat-smoke (+2). The OpenCode catalog/remediation branches were explicitly retained because no safe equivalence or supersession proof was established.",
+    "Preserved local non-main branches are feat/v0.3-model-selection-trace-integrated, ops/opencode-go-catalog-remediation, release/v0.3.0-publish, test/dsh-latest-runtime-audit, test/opencode-go-catalog-diagnosis, test/v0.3-dynamic-runtime-controls-smoke, test/v0.3-final-isolated-acceptance, test/v0.3-final-opencode-acceptance, test/v0.3-model-selection-trace-smoke, and test/v0.3-runtime-compat-smoke; each retains unique work and no local branch was deleted.",
+    "No npm publish/registry mutation, dist-tag mutation, git tag mutation, GitHub Release mutation, force-push, main rewrite, merge, rebase, cherry-pick, credential access, official DSH state change, or README change occurred. Completion is limited to the authorized gate script/test changes, this Result Contract, and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-GATE-REDESIGN-HISTORY-PRUNE-result.json --stamp",
+    "validated_at": "2026-08-22T15:19:58Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-GATE-REDESIGN-HISTORY-PRUNE-result.json"
+  }
+}

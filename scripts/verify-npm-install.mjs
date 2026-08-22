@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 
 // Regression gate for the published-package peer contract.
-// This intentionally uses npm's default resolver: no peer-resolution bypass
-// or equivalent override is permitted here.
+// This intentionally uses npm's default resolver for the candidate install:
+// no peer-resolution bypass or equivalent override is permitted here.
 //
-// The candidate itself is materially installed from its packed tarball. The
-// official DSH coexistence check is resolver-only (`--package-lock-only`) so
-// npm must accept the complete peer graph without expanding the very large DSH
-// dependency tree onto disk.
+// The official DSH check is deliberately bounded. It audits authoritative
+// public registry manifests and cross-cohort ranges instead of materializing
+// or fully resolving the very large official DSH dependency graph.
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -18,9 +17,188 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const registry = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org/';
-const candidateVersion = '0.3.1';
-const supportedDshVersion = '0.1.1-rc.2';
+export const candidateVersion = '0.3.1';
+export const supportedDshVersion = '0.1.1-rc.2';
 const verifyOfficialDsh = process.argv.includes('--with-official-dsh');
+const DSH_PACKAGE = '@deepseek-ai/dsh';
+const DSH_PREFIX = '@deepseek-ai/dsh-';
+const MAX_DIRECT_PEERS = 64;
+
+function isDshPackage(name) {
+  return name === DSH_PACKAGE || name.startsWith(DSH_PREFIX);
+}
+
+function parseVersion(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(value);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+function compareVersions(left, right) {
+  for (const key of ['major', 'minor', 'patch']) {
+    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
+  }
+  if (left.prerelease.length === 0 && right.prerelease.length === 0) return 0;
+  if (left.prerelease.length === 0) return 1;
+  if (right.prerelease.length === 0) return -1;
+  const length = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = left.prerelease[index];
+    const b = right.prerelease[index];
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (a === b) continue;
+    const aNumber = /^\d+$/.test(a);
+    const bNumber = /^\d+$/.test(b);
+    if (aNumber && bNumber) return Number(a) > Number(b) ? 1 : -1;
+    if (aNumber !== bNumber) return aNumber ? -1 : 1;
+    return a > b ? 1 : -1;
+  }
+  return 0;
+}
+
+function upperBoundForCaret(version) {
+  if (version.major > 0) return { major: version.major + 1, minor: 0, patch: 0, prerelease: [] };
+  if (version.minor > 0) return { major: 0, minor: version.minor + 1, patch: 0, prerelease: [] };
+  return { major: 0, minor: 0, patch: version.patch + 1, prerelease: [] };
+}
+
+function upperBoundForTilde(version) {
+  return { major: version.major, minor: version.minor + 1, patch: 0, prerelease: [] };
+}
+
+function satisfiesComparator(version, operator, expected) {
+  const comparison = compareVersions(version, expected);
+  if (operator === '>') return comparison > 0;
+  if (operator === '>=') return comparison >= 0;
+  if (operator === '<') return comparison < 0;
+  if (operator === '<=') return comparison <= 0;
+  return comparison === 0;
+}
+
+function satisfiesAlternative(version, alternative) {
+  const normalized = alternative.trim();
+  if (!normalized || /[*xX]|workspace:|^npm:|^file:|^git:/.test(normalized)) return false;
+  const tokens = normalized.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  return tokens.every((token) => {
+    const prefix = /^(\^|~|>=|<=|>|<|=)/.exec(token)?.[1] ?? '';
+    const raw = prefix ? token.slice(prefix.length) : token;
+    const expected = parseVersion(raw);
+    if (!expected) return false;
+    if (prefix === '^') {
+      return compareVersions(version, expected) >= 0 && compareVersions(version, upperBoundForCaret(expected)) < 0;
+    }
+    if (prefix === '~') {
+      return compareVersions(version, expected) >= 0 && compareVersions(version, upperBoundForTilde(expected)) < 0;
+    }
+    return satisfiesComparator(version, prefix, expected);
+  });
+}
+
+export function satisfiesCohortRange(versionString, range) {
+  const version = parseVersion(versionString);
+  if (!version || typeof range !== 'string') return false;
+  return range.split(/\s*\|\|\s*/).some((alternative) => satisfiesAlternative(version, alternative));
+}
+
+function assertManifest(manifest, expectedName, expectedVersion) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`invalid registry manifest for ${expectedName}@${expectedVersion}`);
+  }
+  if (manifest.name !== expectedName || manifest.version !== expectedVersion) {
+    throw new Error(`registry manifest identity mismatch for ${expectedName}@${expectedVersion}`);
+  }
+  return manifest;
+}
+
+function manifestUrl(registryUrl, name, version) {
+  const encodedName = name.startsWith('@') ? name.replace('/', '%2f') : encodeURIComponent(name);
+  return `${registryUrl.replace(/\/+$/, '')}/${encodedName}/${encodeURIComponent(version)}`;
+}
+
+export async function fetchPublicManifest(name, version, {
+  registryUrl = registry,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (typeof fetchImpl !== 'function') throw new Error('global fetch is unavailable');
+  const response = await fetchImpl(manifestUrl(registryUrl, name, version), {
+    headers: { accept: 'application/json', 'user-agent': 'dsh-crew-v031-cohort-audit' },
+  });
+  if (!response?.ok) throw new Error(`public manifest unavailable for ${name}@${version} (HTTP ${response?.status ?? 'unknown'})`);
+  let manifest;
+  try {
+    manifest = await response.json();
+  } catch {
+    throw new Error(`public manifest was not valid JSON for ${name}@${version}`);
+  }
+  return assertManifest(manifest, name, version);
+}
+
+function dshReferences(manifest) {
+  return [
+    ...Object.entries(manifest.dependencies ?? {}),
+    ...Object.entries(manifest.optionalDependencies ?? {}),
+    ...Object.entries(manifest.peerDependencies ?? {}),
+  ].filter(([name]) => isDshPackage(name));
+}
+
+function assertCrossCohortRanges(manifest, label) {
+  const references = dshReferences(manifest);
+  for (const [name, range] of references) {
+    if (!satisfiesCohortRange(supportedDshVersion, range)) {
+      throw new Error(`${label} has incompatible ${name} range ${JSON.stringify(range)} for ${supportedDshVersion}`);
+    }
+  }
+  return references.length;
+}
+
+export async function auditOfficialDshCohort({
+  candidateManifest,
+  registryUrl = registry,
+  fetchManifest = (name, version) => fetchPublicManifest(name, version, { registryUrl }),
+} = {}) {
+  if (!candidateManifest || typeof candidateManifest !== 'object') throw new Error('candidate package manifest is missing');
+  if (candidateManifest.version !== candidateVersion) throw new Error(`package.json must be ${candidateVersion}`);
+
+  const directPeers = Object.entries(candidateManifest.peerDependencies ?? {})
+    .filter(([name]) => isDshPackage(name));
+  if (directPeers.length === 0 || directPeers.length > MAX_DIRECT_PEERS) {
+    throw new Error(`candidate DSH peer count is outside the bounded audit limit: ${directPeers.length}`);
+  }
+  for (const [name, range] of directPeers) {
+    if (range !== supportedDshVersion) {
+      throw new Error(`candidate peer ${name} must pin exact cohort ${supportedDshVersion}, got ${JSON.stringify(range)}`);
+    }
+  }
+
+  const officialManifest = assertManifest(
+    await fetchManifest(DSH_PACKAGE, supportedDshVersion),
+    DSH_PACKAGE,
+    supportedDshVersion,
+  );
+  const manifests = [officialManifest];
+  let crossCohortChecks = assertCrossCohortRanges(officialManifest, `${DSH_PACKAGE}@${supportedDshVersion}`);
+
+  for (const [name] of directPeers) {
+    const manifest = assertManifest(await fetchManifest(name, supportedDshVersion), name, supportedDshVersion);
+    manifests.push(manifest);
+    crossCohortChecks += assertCrossCohortRanges(manifest, `${name}@${supportedDshVersion}`);
+  }
+
+  return {
+    marker: 'PASS',
+    candidate: candidateVersion,
+    officialDsh: supportedDshVersion,
+    directPeerCount: directPeers.length,
+    manifestCount: manifests.length,
+    crossCohortChecks,
+  };
+}
 
 function run(args, cwd = root) {
   const result = spawnSync(npmCommand, args, {
@@ -54,59 +232,45 @@ async function assertInstalled(prefix, label) {
   }
 }
 
-async function assertOfficialResolution(prefix) {
-  const lock = JSON.parse(await readFile(path.join(prefix, 'package-lock.json'), 'utf8'));
-  const packages = lock.packages ?? {};
-  const crew = packages['node_modules/@ran-sh/dsh-crew'];
-  const dsh = packages['node_modules/@deepseek-ai/dsh'];
+async function main() {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dsh-crew-v031-install-'));
+  const paths = {
+    pack: await mkdtemp(path.join(tempRoot, 'pack-')),
+    standalone: await mkdtemp(path.join(tempRoot, 'standalone-')),
+  };
 
-  if (crew?.version !== candidateVersion) {
-    throw new Error(`official DSH resolver gate did not lock @ran-sh/dsh-crew@${candidateVersion}`);
-  }
-  if (dsh?.version !== supportedDshVersion) {
-    throw new Error(`official DSH resolver gate did not lock @deepseek-ai/dsh@${supportedDshVersion}`);
+  try {
+    const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+    if (packageJson.version !== candidateVersion) throw new Error(`package.json must be ${candidateVersion}`);
+
+    const packed = run(['pack', '--json', '--pack-destination', paths.pack]);
+    if (packed.status !== 0) fail('npm pack', packed);
+    const packInfo = JSON.parse(packed.stdout)[0];
+    const tarball = path.join(paths.pack, packInfo.filename);
+
+    const standalone = run([
+      'install', '--prefix', paths.standalone, '--no-save', '--package-lock=false', '--ignore-scripts', '--no-audit', '--no-fund',
+      '--registry', registry, tarball,
+    ]);
+    if (standalone.status !== 0) fail('plain npm candidate install', standalone);
+    await assertInstalled(paths.standalone, 'standalone candidate');
+
+    let officialMarker = 'not-run';
+    if (verifyOfficialDsh) {
+      const audit = await auditOfficialDshCohort({ candidateManifest: packageJson, registryUrl: registry });
+      officialMarker = `${supportedDshVersion}:manifest-audit`;
+      console.log(`DSH_COHORT_AUDIT=PASS official_dsh=${audit.officialDsh} direct_peers=${audit.directPeerCount} manifests=${audit.manifestCount} cross_cohort_checks=${audit.crossCohortChecks}`);
+    }
+
+    console.log(`NPM_INSTALL_CONTRACT=PASS candidate=${candidateVersion} official_dsh=${officialMarker}`);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
   }
 }
 
-const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dsh-crew-v031-install-'));
-const paths = {
-  pack: await mkdtemp(path.join(tempRoot, 'pack-')),
-  standalone: await mkdtemp(path.join(tempRoot, 'standalone-')),
-  host: await mkdtemp(path.join(tempRoot, 'official-host-')),
-};
-
-try {
-  const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  if (packageJson.version !== candidateVersion) throw new Error(`package.json must be ${candidateVersion}`);
-
-  const packed = run(['pack', '--json', '--pack-destination', paths.pack]);
-  if (packed.status !== 0) fail('npm pack', packed);
-  const packInfo = JSON.parse(packed.stdout)[0];
-  const tarball = path.join(paths.pack, packInfo.filename);
-
-  const standalone = run([
-    'install', '--prefix', paths.standalone, '--no-save', '--package-lock=false', '--ignore-scripts', '--no-audit', '--no-fund',
-    '--registry', registry, tarball,
-  ]);
-  if (standalone.status !== 0) fail('plain npm candidate install', standalone);
-  await assertInstalled(paths.standalone, 'standalone candidate');
-
-  if (verifyOfficialDsh) {
-    await writeFile(path.join(paths.host, 'package.json'), `${JSON.stringify({
-      name: 'dsh-crew-v031-official-resolver-gate',
-      version: '0.0.0',
-      private: true,
-    }, null, 2)}\n`);
-
-    const withOfficialHost = run([
-      'install', '--prefix', paths.host, '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund',
-      '--registry', registry, `@deepseek-ai/dsh@${supportedDshVersion}`, tarball,
-    ]);
-    if (withOfficialHost.status !== 0) fail('default npm resolver candidate + official DSH', withOfficialHost);
-    await assertOfficialResolution(paths.host);
-  }
-
-  console.log(`NPM_INSTALL_CONTRACT=PASS candidate=${candidateVersion} official_dsh=${verifyOfficialDsh ? `${supportedDshVersion}:resolver-lock` : 'not-run'}`);
-} finally {
-  await rm(tempRoot, { recursive: true, force: true });
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
 }
