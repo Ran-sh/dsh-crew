@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-WINDOWS-LIFECYCLE-ACCEPTANCE",
+  "source_commit": "61538489a16aa4b6e618eef81eb48ff26cb18a7f",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "WINDOWS_LIFECYCLE_ACCEPTANCE: BLOCKED — the stable-checkout install reached the Crew-owned DSH profile-link step but pnpm's active supply-chain minimum-release-age policy rejected 16 fresh lockfile entries with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION. No resolver bypass or repository mutation was used. final_machine_state: PREEXISTING_PARTIAL_UNCHANGED (DSH plugin installed; Codex and Claude integrations not installed); the full lifecycle did not pass, so no installed-state PASS is claimed.",
+  "timeline": {
+    "started_at": "2026-08-23T00:03:00+08:00",
+    "completed_at": "2026-08-23T00:14:46+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task contract, main revision, and clean baseline",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json returned VALID TASK CONTRACT. After checkout main and pull --ff-only, queued HEAD was 61538489a16aa4b6e618eef81eb48ff26cb18a7f and the repository worktree was clean."
+    },
+    {
+      "name": "T02 v0.3.1 target and product-equivalence audit",
+      "status": "PASS",
+      "evidence": "Remote refs/tags/v0.3.1^{} resolved exactly to dd414a352065e983e1be1b845287e99a50ade9c5. git diff --name-only dd414a352065e983e1be1b845287e99a50ade9c5..HEAD returned only docs/agent-results/TASK-V031-POSTPUBLISH-CLOSEOUT-result.json, docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json, and docs/agent-tasks/ACTIVE_TASK.json; every difference was allowed Agent Workflow bookkeeping."
+    },
+    {
+      "name": "T03 Public npm 0.3.1/latest verification",
+      "status": "PASS",
+      "evidence": "The read-only public npm packument reported @ran-sh/dsh-crew, version 0.3.1 with matching package metadata, and dist-tags.latest=0.3.1. No registry write was performed."
+    },
+    {
+      "name": "T04 Stable checkout package/runtime identity",
+      "status": "PASS",
+      "evidence": "The stable checkout reported package.json version 0.3.1 and src/runtime-identity.mjs RUNTIME_VERSION 0.3.1."
+    },
+    {
+      "name": "T05 Secret-free Crew-owned preflight",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs status reported DSH plugin installed in the dedicated dsh-crew profile, Codex Desktop integration not installed, and Claude Code integration not installed. Claude CLI was present, so Claude was applicable rather than skipped. The Crew-owned profile package metadata showed @ran-sh/dsh-crew linked to D:/Users/48376/Desktop/dsh-crew; no official ~/.dsh or credential store was inspected."
+    },
+    {
+      "name": "T06 First real stable-checkout install",
+      "status": "BLOCKED",
+      "evidence": "node scripts/setup.mjs install exited 1 at the DSH Crew-owned profile-link step. The detailed Crew-runtime command reported ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION: 16 @aws-sdk lockfile entries were newer than the active minimumReleaseAge cutoff. The installer did not reach Codex or Claude integration steps. No --legacy-peer-deps, --force, --omit=peer, policy relaxation, lockfile edit, or other resolver bypass was used."
+    },
+    {
+      "name": "T07 Post-failure status and Crew registration safety",
+      "status": "PASS",
+      "evidence": "After the blocked install, node scripts/setup.mjs status still reported DSH plugin installed, Codex integration not installed, and Claude integration not installed. The Crew-owned profile retained dependency_spec=link:D:/Users/48376/Desktop/dsh-crew and a realpath to the stable checkout. The deterministic client build side effect in lib/client.js was restored and the repository remained clean."
+    },
+    {
+      "name": "T08 Required first installed-state assertions",
+      "status": "BLOCKED",
+      "evidence": "The required first-install status could not satisfy the contract because T06 exited before Codex and Claude integrations were installed; the lifecycle was stopped rather than relabeled as PASS."
+    },
+    {
+      "name": "T09 Uninstall without --purge",
+      "status": "NOT RUN",
+      "evidence": "Not run because the required first install was blocked before completing and the preflight DSH state was pre-existing. No uninstall mutation was attempted to mask the failed install."
+    },
+    {
+      "name": "T10 Post-uninstall residual audit",
+      "status": "NOT RUN",
+      "evidence": "Not run because T09 was not reached. No claim is made about a post-uninstall state."
+    },
+    {
+      "name": "T11 Reinstall and final installed-state verification",
+      "status": "NOT RUN",
+      "evidence": "Not run because the first install gate was blocked. No final installed-state PASS is claimed."
+    },
+    {
+      "name": "T12 Official-state, secret, and mutation boundary",
+      "status": "PASS",
+      "evidence": "No official ~/.dsh or web profile was read, hashed, enumerated, or modified; no credentials, tokens, API keys, cookies, or secrets were printed; no npm, tag, Release, branch, registry, source, package, test, script, or workflow mutation occurred."
+    },
+    {
+      "name": "T13 Final repository hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed and git status remained clean before Result Contract assembly. The only intended completion changes are this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+    }
+  ],
+  "blockers": [
+    "The real stable-checkout install cannot complete at the Crew-owned DSH profile-link step because pnpm rejects 16 fresh @aws-sdk lockfile entries under the active minimumReleaseAge supply-chain policy. The task forbids resolver bypasses and product/lockfile changes, so the lifecycle cannot proceed or be reported as PASS in this execution."
+  ],
+  "result_path": "docs/agent-results/TASK-V031-WINDOWS-LIFECYCLE-ACCEPTANCE-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 61538489a16aa4b6e618eef81eb48ff26cb18a7f.",
+    "The DSH plugin was already installed in the preflight state, but Codex and Claude integrations were not installed. The failed idempotent install left that pre-existing partial state unchanged.",
+    "The installer temporarily regenerated tracked lib/client.js during its client-build phase; the deterministic generated side effect was restored before result assembly and no repository product change remains.",
+    "No --purge was used. No uninstall or reinstall was attempted after the first install was blocked, and no retained Crew config/backups were deleted.",
+    "No official DSH home/profile/credential store, unrelated user file, secret, token, npm registry, tag, Release, branch, or product file was accessed or mutated.",
+    "Completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-WINDOWS-LIFECYCLE-ACCEPTANCE-result.json --stamp",
+    "validated_at": "2026-08-22T16:15:36Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-WINDOWS-LIFECYCLE-ACCEPTANCE-result.json"
+  }
+}
