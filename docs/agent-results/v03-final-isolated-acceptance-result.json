@@ -110,7 +110,7 @@
   "result_validation": {
     "status": "PASS",
     "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-final-isolated-acceptance-result.json --stamp",
-    "validated_at": "2026-08-22T06:00:07Z",
+    "validated_at": "2026-08-22T06:08:34Z",
     "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-final-isolated-acceptance-result.json"
   }
 }
