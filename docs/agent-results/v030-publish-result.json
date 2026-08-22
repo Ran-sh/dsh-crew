@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V030-PUBLISH",
+  "source_commit": "1236f6a4ced0f0d1f589151086fd369fd2df6dc0",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "Publication was blocked before every irreversible action because the executor lacks npm and GitHub API authentication. Read-only release preflight passed for the exact release commit, package/runtime version, absent remote tag, absent npm package version, and non-mutating tag-push permission. npm whoami returned 401; the PATH gh command is an npm package rather than a usable authenticated GitHub CLI, and gh release/auth checks could not authenticate. No detached release worktree was created, no package was installed or published, no tag or GitHub Release was created, and no official Harness or Crew state was modified.",
+  "timeline": {
+    "started_at": "2026-08-22T18:35:00+08:00",
+    "completed_at": "2026-08-22T18:46:00+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/v030-publish-result.json"
+  ],
+  "tests": [
+    {
+      "name": "Task contract validation and task-branch source",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT; task branch tip was 1236f6a4ced0f0d1f589151086fd369fd2df6dc0."
+    },
+    {
+      "name": "Exact release commit preflight",
+      "status": "PASS",
+      "evidence": "Release commit b9b05b4bc7b25b8b723fce2f4d631c6316cbca85 resolved locally and was an ancestor of origin/main. package.json at that commit was exactly version 0.3.0 and src/runtime-identity.mjs declared RUNTIME_VERSION='0.3.0'."
+    },
+    {
+      "name": "Existing remote tag check",
+      "status": "PASS",
+      "evidence": "git ls-remote origin refs/tags/v0.3.0 refs/tags/v0.3.0^{} returned no ref, so no existing tag was modified or rewritten."
+    },
+    {
+      "name": "Existing npm package check",
+      "status": "PASS",
+      "evidence": "npm view @ran-sh/dsh-crew@0.3.0 version --json returned registry E404/not found; no package version was republished."
+    },
+    {
+      "name": "Non-mutating tag push permission check",
+      "status": "PASS",
+      "evidence": "git push --dry-run origin b9b05b4bc7b25b8b723fce2f4d631c6316cbca85:refs/tags/v0.3.0 exited 0 and reported a new tag without mutating the remote."
+    },
+    {
+      "name": "npm publish authentication",
+      "status": "BLOCKED",
+      "evidence": "npm whoami exited 1 with HTTP 401 Unauthorized. No token value was inspected or printed."
+    },
+    {
+      "name": "GitHub API authentication and release preflight",
+      "status": "BLOCKED",
+      "evidence": "gh release view/auth status could not authenticate; PATH gh resolved to the npm gh.ps1 package rather than a usable authenticated GitHub CLI. GitHub Release existence and create permission could not be safely verified."
+    },
+    {
+      "name": "Detached release worktree install/test/build/pack dry-run",
+      "status": "NOT RUN",
+      "evidence": "Not started because required npm/GitHub authentication preflight failed. No temporary worktree was created and the task branch remained source-clean."
+    },
+    {
+      "name": "npm publish, git tag, and GitHub Release",
+      "status": "NOT RUN",
+      "evidence": "No irreversible publication action was attempted after the authentication blockers were observed."
+    },
+    {
+      "name": "Official Harness and Crew state protection",
+      "status": "PASS",
+      "evidence": "Official web Harness remained HTTP 200 on port 3080; Crew Hub port 3210 was not running. This task did not install, modify, or stop either runtime/profile state."
+    },
+    {
+      "name": "Result validator --stamp",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v030-publish-result.json --stamp -> VALID RESULT CONTRACT (exit 0)."
+    }
+  ],
+  "blockers": [
+    "npm whoami returned 401 Unauthorized, so npm publish authorization could not be proven.",
+    "A usable authenticated GitHub CLI/API was unavailable: PATH gh is the npm gh package, and GitHub Release existence/create permission could not be verified without authentication."
+  ],
+  "result_path": "docs/agent-results/v030-publish-result.json",
+  "notes": [
+    "source_branch: release/v0.3.0-publish",
+    "target release commit: b9b05b4bc7b25b8b723fce2f4d631c6316cbca85; target package: @ran-sh/dsh-crew@0.3.0; target tag/release: v0.3.0",
+    "No temporary detached worktree was created; no dependency install, test/build, npm pack, npm publish, git tag creation, or GitHub Release creation occurred.",
+    "No auth token, API key, official ~/.dsh state, Crew DSH_HOME/profile/runtime state, or tracked source/release content was modified.",
+    "Completion remains limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v030-publish-result.json --stamp",
+    "validated_at": "2026-08-22T10:46:24Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v030-publish-result.json"
+  }
+}
