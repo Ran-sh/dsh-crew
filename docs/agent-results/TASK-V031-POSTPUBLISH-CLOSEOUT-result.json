@@ -1,0 +1,91 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-POSTPUBLISH-CLOSEOUT",
+  "source_commit": "79b573a797acd5aadcb5c988c1da8ea5cba5eaf3",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "release_finalization: PASS — @ran-sh/dsh-crew@0.3.1 is public and latest; annotated v0.3.1 resolves exactly to dd414a352065e983e1be1b845287e99a50ade9c5; GitHub Releases v0.3.1 and v0.3.0 are non-draft/non-prerelease and attached to their exact tags; the fresh default-resolver npm install passed. No npm publish or registry write occurred.",
+  "timeline": {
+    "started_at": "2026-08-22T23:35:00+08:00",
+    "completed_at": "2026-08-23T00:01:27+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task contract, source revision, and clean main baseline",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json returned VALID TASK CONTRACT. After checkout main and pull --ff-only, queued main was 79b573a797acd5aadcb5c988c1da8ea5cba5eaf3 and the worktree was clean."
+    },
+    {
+      "name": "T02 Prior final release gate provenance",
+      "status": "PASS",
+      "evidence": "docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json passed normal validation, has status PASS, contains V031_RELEASE_READY: PASS, and names release_target_commit dd414a352065e983e1be1b845287e99a50ade9c5."
+    },
+    {
+      "name": "T03 Public npm 0.3.1 and latest metadata",
+      "status": "PASS",
+      "evidence": "The public npm packument reported package @ran-sh/dsh-crew, version 0.3.1 present with matching name/version metadata, and dist-tags.latest=0.3.1. This was read-only; npm publish and all registry writes were skipped."
+    },
+    {
+      "name": "T04 Pre-mutation tag, Release, and GitHub authentication safety",
+      "status": "PASS",
+      "evidence": "Before mutation, remote v0.3.1 refs and GitHub Release v0.3.1 were absent. Existing remote v0.3.0 peeled exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369. The installed GitHub CLI auth status succeeded for github.com and the authenticated username was recorded as Ran-sh only."
+    },
+    {
+      "name": "T05 Exact annotated v0.3.1 tag creation and verification",
+      "status": "PASS",
+      "evidence": "Created annotated tag v0.3.1 at dd414a352065e983e1be1b845287e99a50ade9c5 and pushed it once. Remote refs/tags/v0.3.1^{} resolved exactly to dd414a352065e983e1be1b845287e99a50ade9c5; no existing tag was rewritten."
+    },
+    {
+      "name": "T06 GitHub Release v0.3.1 final state",
+      "status": "PASS",
+      "evidence": "Created Release v0.3.1 attached to tag v0.3.1 using the 0.3.1 CHANGELOG section as notes. Final API verification reported tag_name=v0.3.1, draft=false, prerelease=false, and the notes began with ## 0.3.1 — 2026-08-22."
+    },
+    {
+      "name": "T07 Exact v0.3.0 tag and Release closeout",
+      "status": "PASS",
+      "evidence": "Re-verified the existing v0.3.0 tag peeled exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369. The first GraphQL creation attempt encountered a network connect failure; a fresh lookup confirmed no Release had been created, then the REST create succeeded without rollback or deletion. Final API verification reported tag_name=v0.3.0, draft=false, prerelease=false, and notes beginning with ## 0.3.0 — 2026-08-22."
+    },
+    {
+      "name": "T08 Fresh default-resolver npm install smoke",
+      "status": "PASS",
+      "evidence": "A fresh disposable npm install of @ran-sh/dsh-crew@0.3.1 from the public registry exited 0 using npm's normal resolver with no --legacy-peer-deps, --force, --omit=peer, or equivalent bypass. Installed package verification reported package_version=0.3.1, runtime_version=0.3.1, src/hub/entry.mjs present, and lib/client.js present."
+    },
+    {
+      "name": "T09 Post-mutation public state re-verification",
+      "status": "PASS",
+      "evidence": "After mutations, npm still reported 0.3.1 as latest; remote v0.3.1 and v0.3.0 peeled to dd414a352065e983e1be1b845287e99a50ade9c5 and e20f392a8babdaa4d37ffe3239ab3f8885a4a369 respectively; both GitHub Releases were present, non-draft, and non-prerelease."
+    },
+    {
+      "name": "T10 Release-note provenance",
+      "status": "PASS",
+      "evidence": "Read-only GitHub API verification confirmed the v0.3.1 Release body starts with the 0.3.1 CHANGELOG section and the v0.3.0 Release body starts with the 0.3.0 CHANGELOG section."
+    },
+    {
+      "name": "T11 No prohibited registry or repository mutation",
+      "status": "PASS",
+      "evidence": "No npm publish, dist-tag mutation, unpublish/deprecate, existing tag rewrite, Release deletion/rewrite, branch mutation, force-push, source/package/test/workflow edit, credential output, or official DSH state access occurred."
+    },
+    {
+      "name": "T12 Final worktree and scope hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed and main remained clean after all external release operations. No repository file was changed before Result Contract assembly; completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V031-POSTPUBLISH-CLOSEOUT-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 79b573a797acd5aadcb5c988c1da8ea5cba5eaf3.",
+    "release_target_commit: dd414a352065e983e1be1b845287e99a50ade9c5; previous_release_target_commit: e20f392a8babdaa4d37ffe3239ab3f8885a4a369.",
+    "Public final state: @ran-sh/dsh-crew@0.3.1 exists with dist-tags.latest=0.3.1; v0.3.1 and v0.3.0 resolve to their approved immutable targets; both GitHub Releases are non-draft/non-prerelease.",
+    "The transient first v0.3.0 GraphQL creation failure was preserved as evidence; a fresh 404 check preceded the successful REST retry, and no published asset was deleted or rolled back.",
+    "No npm token, GitHub token, OTP, cookie, private key, credential, or other auth material was printed, copied, inspected, or committed.",
+    "Completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-POSTPUBLISH-CLOSEOUT-result.json --stamp",
+    "validated_at": "2026-08-22T16:02:32Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-POSTPUBLISH-CLOSEOUT-result.json"
+  }
+}
