@@ -26,19 +26,21 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(client, new RegExp(`ModuleLoader__\\.load\\(\\{ id: ["']${manifest.name.replace('/', '\\/')}["']`));
 });
 
-test('primary documentation uses the verified GitHub-only distribution workflow', () => {
-  const install = 'npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew';
-  const remove = 'npx -y @deepseek-ai/dsh plugin --profile web remove @ran-sh/dsh-crew';
-  const legacyRemove = 'npx -y @deepseek-ai/dsh plugin --profile web remove @zseven-w/dsh-crew';
+test('primary documentation uses the supported isolated source workflow', () => {
+  const clone = 'git clone https://github.com/Ran-sh/dsh-crew.git';
+  const install = 'node scripts/setup.mjs install';
+  const uninstall = 'node scripts/setup.mjs uninstall';
+  const legacyWebAdd = 'npx -y @deepseek-ai/dsh plugin --profile web add github:Ran-sh/dsh-crew';
 
   for (const file of ['README.md', 'README.zh.md']) {
     const doc = read(file);
+    assert.match(doc, new RegExp(clone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.match(doc, new RegExp(install.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(doc, new RegExp(remove.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(doc, new RegExp(legacyRemove.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.ok(doc.indexOf(install) < doc.indexOf('git clone https://github.com/Ran-sh/dsh-crew.git'));
-    assert.match(doc, /ZSeven-W\/dsh-crew/);
-    assert.doesNotMatch(doc, /npm:\s*<code>@zseven-w\/dsh-crew<\/code>/);
+    assert.match(doc, new RegExp(uninstall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(doc, /~\/\.config\/dsh-crew\/harness/);
+    assert.match(doc, /profile:\s*dsh-crew/);
+    assert.match(doc, /official [`']?web[`']? profile|官方 [`']?web[`']? profile/);
+    assert.doesNotMatch(doc, new RegExp(legacyWebAdd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });
 
