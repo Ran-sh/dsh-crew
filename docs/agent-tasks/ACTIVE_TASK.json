@@ -1,0 +1,72 @@
+{
+  "id": "TASK-V032-FULL-FUNCTION-ACCEPTANCE",
+  "mode": "TEST_ONLY",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Perform a comprehensive, release-grade full-function acceptance of the prepared dsh-crew v0.3.2 candidate on the user's real Windows machine after the installer lifecycle fix. Validate deterministic coverage plus real installed runtime behavior, MCP/control surfaces, Hub/plugin loading, routing/model policy, worker/reviewer workflows, cancellation/failure propagation, Codex/Claude integrations, packaging/installability, isolation, and final installed state. Do not modify product code or publish anything.",
+  "context": "TASK-V032-INSTALLER-POLICY-LIFECYCLE completed PASS and left the real machine INSTALLED. Candidate product commit is 25ae0ab18b9f123886d24a54c472c33f0ec15ccb, package/runtime identity 0.3.2. The preceding lifecycle proved first install/status/idempotent install/uninstall/residual/idempotent uninstall/reinstall on Windows, with Crew DSH plugin, Codex, and Claude installed at final state and official ~/.dsh untouched. This new task exists because the user explicitly requested full-function validation, not merely installer lifecycle or deterministic tests. Treat 25ae0ab18b9f123886d24a54c472c33f0ec15ccb as the immutable candidate target; the queue commit may differ only by ACTIVE_TASK bookkeeping. Full PASS requires at least one real end-to-end worker execution and one real reviewer execution through supported installed runtime paths; if no configured backend can execute them without reading/exporting secrets, report BLOCKED rather than pretending deterministic tests are equivalent to live function. Use disposable workspaces for live jobs and never inspect credential stores directly.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json"
+  ],
+  "forbidden_changes": [
+    "all product/source/test/package/version/lockfile/README/workflow/installer changes",
+    "npm publish, dist-tag mutation, unpublish/deprecate, or registry writes",
+    "git tag/Release/branch mutation, merge, rebase, cherry-pick, reset, or force-push",
+    "official ~/.dsh, official web profile, official DSH credentials/config stores, or unrelated user files",
+    "reading/printing/exporting tokens, API keys, passwords, cookies, OTPs, private keys, or credential file contents",
+    "--purge or destructive deletion of Crew config/backups",
+    "security/resolver bypasses such as --force, --legacy-peer-deps, --omit=peer, or weakening pnpm policy",
+    "unrelated files outside the Result Contract"
+  ],
+  "validation": [
+    "Validate this Task Contract after checkout main and git pull --ff-only. Record queued HEAD and verify candidate commit 25ae0ab18b9f123886d24a54c472c33f0ec15ccb is an ancestor. `git diff --name-only 25ae0ab18b9f123886d24a54c472c33f0ec15ccb..HEAD` must contain only docs/agent-tasks/ACTIVE_TASK.json before execution; otherwise stop BLOCKED because the candidate changed.",
+    "Confirm package.json version and src/runtime-identity.mjs RUNTIME_VERSION are both 0.3.2. Confirm public npm latest may still be 0.3.1; do not publish 0.3.2.",
+    "Record secret-free real-machine preflight using `node scripts/setup.mjs status`. Require final state from prior task to still be installed: DSH plugin installed in dedicated dsh-crew profile, Codex Desktop integration installed, Claude Code integration installed. Verify the Crew-owned profile link resolves to D:/Users/48376/Desktop/dsh-crew. Do not inspect official ~/.dsh/web state.",
+    "Run `pnpm install --frozen-lockfile`, then targeted high-signal suites covering setup/installer, DSH runtime/profile isolation, MCP/runtime/workflow, routing/model policy/catalog, failure propagation, workspace isolation, Hub/client/compatibility, configuration/readiness/migration, delivery/security, and Windows behavior. Record grouped counts by functional surface.",
+    "Run the complete deterministic suite `node --test test/*.test.mjs`. Require zero failures, zero cancelled tests, and record exact pass/skip counts. Any failure prevents FULL_FUNCTION_ACCEPTANCE: PASS.",
+    "Run `pnpm run build:client` and restore any deterministic tracked lib/client.js side effect so the worktree remains clean. Treat build success as the UI/client compile gate, not by itself as a runtime UI PASS.",
+    "Run `pnpm run verify:npm-install` and `pnpm run verify:npm-install:official`. Require normal npm resolver installability of the packed 0.3.2 candidate and the bounded official DSH 0.1.1-rc.2 cohort audit to pass without --legacy-peer-deps/--force/--omit=peer. Run `npm pack --dry-run --json` and audit payload for expected entry files and absence of ACTIVE_TASK, Result Contracts, secrets, node_modules, temp files, and test-only artifacts. `npm publish --dry-run --access public` is allowed and must remain non-mutating.",
+    "Exercise the installed Crew-owned DSH runtime from the dedicated Crew DSH_HOME/profile without reading official DSH state. Require the plugin/profile loader smoke to succeed, `--dump-default-config` or equivalent safe config load to succeed, package/link identity to resolve to the stable checkout, and no loader/runtime exception. If the DSH CLI supports a bounded local host/web start using the Crew profile, start it with a timeout and verify local health/plugin load plus the Crew client/settings surface can be served without console/runtime startup errors; do not use the official web profile. If host command is genuinely unavailable in this DSH release, record NOT_APPLICABLE with evidence rather than inventing a command.",
+    "Perform a real MCP stdio protocol smoke against `node src/server.mjs`: initialize, `tools/list`, and clean shutdown using an MCP client/protocol harness. Record every advertised tool name and count. Require the expected worker/config/job-control surfaces to be present. Exercise all read-only/session-only control/status/config tools with disposable/session-scoped inputs and verify structured responses, runtime identity 0.3.2, readiness/config reporting, routing guidance, and no protocol errors.",
+    "Exercise session configuration transitions through the MCP surface: read defaults, disable worker dispatch and prove dispatch rejects with the expected structured policy code, reset/reenable, toggle representative collaboration/main-agent/tier/effort settings, verify effective policy/routing guidance changes, then reset to defaults. This must be session-only and must not mutate global config files.",
+    "Run at least one REAL end-to-end worker workflow from the installed runtime in a disposable Git workspace. Use a harmless self-contained task that creates or edits only disposable files and can be objectively checked. Require the workflow to complete, return structured outcome/delivery evidence, and verify the expected filesystem result. Do not read credentials; simply use an already configured supported backend through normal runtime resolution. If no backend is runnable, mark the full acceptance BLOCKED.",
+    "Run at least one REAL reviewer workflow on a completed disposable candidate. Require reviewer role enforcement, review-only behavior, structured findings/evidence/verdict, and no unauthorized file modification by the reviewer. If automatic review-pipeline mode is supported and can run with the available backend, exercise one worker->reviewer pipeline and verify both phases; otherwise the explicit real reviewer run is mandatory and any unavailable auto-review subfeature must be separately evidenced.",
+    "Exercise non-blocking job control end-to-end: spawn/start a disposable worker job, list/get/poll it, obtain final result, and verify job views/progress are coherent. Exercise cancellation with a deliberately bounded long-running disposable task; require cancellation to propagate to a terminal cancelled/failed-with-cancel classification without leaving an orphan process/job. Clean all disposable workspaces afterward.",
+    "Exercise controlled error/failure propagation without touching real user data: invoke one invalid/conflicting routing/config request and one deliberately failing disposable worker task or unreachable-safe condition. Require stable structured error codes/classification and no silent fallback to the host doing the worker's task itself. Verify escalation/retry behavior only where configured and bounded; do not cause network abuse or destructive failures.",
+    "Validate routing/model-selection/model-catalog behavior at runtime in addition to tests: obtain current provider/model readiness through supported Crew APIs, resolve representative worker and reviewer selections, verify legacy flash/pro hints map to model class rather than role, verify disabled/manual/auto role policy boundaries, and confirm no secret values are surfaced. Where a provider is intentionally unavailable, readiness must say so accurately; this alone is not a failure unless it prevents the mandatory live worker/reviewer runs.",
+    "Validate Codex and Claude integrations on the real machine using only Crew-managed, non-secret integration metadata: confirm installed MCP/config entries point to the stable checkout/current server command, managed files/settings are syntactically valid, and no duplicate stale Crew entries exist. Do not open or print unrelated host config or credentials. If safe CLI-level MCP discovery is available for Codex/Claude without sending a user task, use it as an extra smoke; otherwise metadata validation plus the direct MCP smoke is sufficient.",
+    "Validate configuration/readiness/migration surfaces using disposable config roots where mutation is needed. Confirm default config, legacy migration, activation boundaries, readiness matrix, model priority/fallback semantics, and workspace isolation all behave according to their tests and supported APIs. Do not mutate the user's retained real config except session-only runtime settings that reset before completion.",
+    "Run final real-machine `node scripts/setup.mjs status` and a non-destructive idempotent `node scripts/setup.mjs install` only if needed to prove the installed state remains healthy; do NOT uninstall during this full-function gate because the prior lifecycle already proved uninstall/reinstall. Final machine state must remain installed with DSH, Codex, and Claude integrations present. Recheck repository cleanliness and `git diff --check`.",
+    "Write a schema-v2 Result Contract at docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json. Include a `feature_matrix` in notes/evidence covering at minimum: installer/lifecycle, DSH profile/runtime, MCP protocol/tools, session config, Hub/plugin/UI build/runtime, routing/model catalog, blocking worker, reviewer, auto-review if applicable, async jobs, cancellation, failure propagation, config/readiness/migration, workspace isolation/security, Codex integration, Claude integration, npm/package installability, official DSH cohort compatibility. Each item must be PASS/FAIL/BLOCKED/NOT_APPLICABLE with concrete evidence; do not collapse missing live evidence into generic PASS.",
+    "Full success requires summary to include exactly `FULL_FUNCTION_ACCEPTANCE: PASS` and notes/summary to include `final_machine_state: INSTALLED`. Any core live worker/reviewer/MCP/runtime failure, deterministic failure, package installability failure, integration regression, or inability to prove a mandatory surface must produce BLOCKED/FAIL instead. Stamp and validate the Result Contract, delete ACTIVE_TASK, commit/push only the Result plus ACTIVE_TASK deletion, then stop."
+  ],
+  "acceptance_criteria": [
+    "Candidate provenance is exact: product target remains 25ae0ab18b9f123886d24a54c472c33f0ec15ccb / version 0.3.2 and no product mutation occurs in this TEST_ONLY task.",
+    "All deterministic tests pass and the client build/package/installability/official-DSH cohort gates pass.",
+    "Installed Crew DSH profile/runtime loads cleanly from Crew-owned state and the MCP server completes a real protocol handshake with expected tool surfaces.",
+    "At least one real worker and one real reviewer complete end-to-end through the installed runtime in disposable workspaces; deterministic mocks alone are insufficient for PASS.",
+    "Async job list/get/result plus cancellation and controlled failure propagation work with coherent structured terminal states and no orphan jobs/processes.",
+    "Routing/model policy/catalog, session config, readiness/config/migration, Hub/client, workspace isolation/security, Codex integration, and Claude integration are each explicitly evidenced in the feature matrix.",
+    "No official ~/.dsh/web profile/credential store or secret material is inspected or changed, and no registry/tag/Release/branch/product mutation occurs.",
+    "The machine remains installed and healthy at completion: DSH Crew plugin, Codex integration, and Claude integration installed; final_machine_state: INSTALLED.",
+    "Result Contract is validator-stamped and summary contains `FULL_FUNCTION_ACCEPTANCE: PASS` only if every mandatory core feature above is proven."
+  ],
+  "result_contract": "docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 44,
+    "candidate_version": "0.3.2",
+    "candidate_target_commit": "25ae0ab18b9f123886d24a54c472c33f0ec15ccb",
+    "stable_checkout": "D:/Users/48376/Desktop/dsh-crew",
+    "mandatory_live_worker": true,
+    "mandatory_live_reviewer": true,
+    "final_machine_state_on_pass": "INSTALLED",
+    "no_publish": true,
+    "test_only": true
+  }
+}
