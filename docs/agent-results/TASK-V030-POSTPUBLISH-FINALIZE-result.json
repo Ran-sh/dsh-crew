@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V030-POSTPUBLISH-FINALIZE",
+  "source_commit": "0fd20209ee4f87263da53d96e324dbfe133fb87e",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "release_finalization: BLOCKED. @ran-sh/dsh-crew@0.3.0 is publicly present with dist-tags.latest=0.3.0, and annotated tag v0.3.0 was created and pushed to the exact approved release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369. GitHub Release creation could not complete because the installed GitHub CLI requested interactive login and the non-interactive executor could not authenticate; the Release API remains HTTP 404. No tag rollback, rewrite, npm mutation, or credential workaround was attempted.",
+  "timeline": {
+    "started_at": "2026-08-22T21:10:00+08:00",
+    "completed_at": "2026-08-22T21:23:11+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "T02 Queued source and prior-result provenance",
+      "status": "PASS",
+      "evidence": "After pull, the primary worktree was clean on main at 0fd20209ee4f87263da53d96e324dbfe133fb87e. Approved target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 remained an ancestor. Release Gate result was PASS/RELEASE_READY; prior resume result was validator-stamped BLOCKED and reported no tag or Release creation."
+    },
+    {
+      "name": "T03 Public npm package verification",
+      "status": "PASS",
+      "evidence": "Direct public npm registry packument request returned HTTP 200; @ran-sh/dsh-crew@0.3.0 was present with version 0.3.0 and dist integrity/shasum metadata. The packument contained one version."
+    },
+    {
+      "name": "T04 npm latest dist-tag verification",
+      "status": "PASS",
+      "evidence": "The public packument reported dist-tags.latest=0.3.0. The installed npm CLI's packument lookup path returned E404, which was recorded as a CLI-path discrepancy rather than treated as a registry absence; the direct authoritative packument was HTTP 200 with latest=0.3.0."
+    },
+    {
+      "name": "T05 Exact release-target version verification",
+      "status": "PASS",
+      "evidence": "git show of e20f392a8babdaa4d37ffe3239ab3f8885a4a369 confirmed package.json version 0.3.0, src/runtime-identity.mjs RUNTIME_VERSION 0.3.0, and the CHANGELOG.md heading ## 0.3.0 —."
+    },
+    {
+      "name": "T06 Pre-mutation tag and Release absence",
+      "status": "PASS",
+      "evidence": "Immediately before mutation, refs/tags/v0.3.0 was absent from origin and the GitHub Release API returned HTTP 404 for v0.3.0."
+    },
+    {
+      "name": "T07 Exact annotated tag creation and push",
+      "status": "PASS",
+      "evidence": "Created annotated tag v0.3.0 at e20f392a8babdaa4d37ffe3239ab3f8885a4a369, pushed it once, and verified both local and remote peeled tag targets equal the approved release target."
+    },
+    {
+      "name": "T08 GitHub Release creation",
+      "status": "BLOCKED",
+      "evidence": "Two non-destructive creation attempts used the v0.3.0 CHANGELOG section as notes. The GitHub CLI failed with an interactive-login requirement and exit 1; the executor could not complete login interactively and did not expose or retry credentials."
+    },
+    {
+      "name": "T09 GitHub Release final state",
+      "status": "BLOCKED",
+      "evidence": "A fresh GitHub Releases API lookup after the failed attempts returned HTTP 404, so no non-draft/non-prerelease Release exists yet. The correctly pushed tag was preserved; no rollback or retargeting was attempted."
+    },
+    {
+      "name": "T10 Default disposable npm install",
+      "status": "FAIL",
+      "evidence": "A fresh npm install of @ran-sh/dsh-crew@0.3.0 with default peer resolution exited 1 with ERESOLVE because the published DSH peer graph contains incompatible requested ranges, including dsh-agent rc.6 versus a transitive rc.8 requirement."
+    },
+    {
+      "name": "T11 Disposable registry artifact smoke with legacy peer resolution",
+      "status": "PASS",
+      "evidence": "A fresh disposable install from the public npm registry using --legacy-peer-deps --ignore-scripts succeeded. Installed package.json reported version 0.3.0 and expected src/hub/entry.mjs and lib/client.js files were present. All disposable smoke directories were removed afterward; official DSH state was not accessed."
+    },
+    {
+      "name": "T12 Repository safety and finalization boundary",
+      "status": "PASS",
+      "evidence": "No second npm publish, npm registry mutation, tag rewrite, Release deletion, source/version/workflow edit, credential exposure, official DSH access, or persistent runtime mutation occurred. The primary worktree had no product/workflow changes and git diff --check passed before result assembly."
+    }
+  ],
+  "blockers": [
+    "GitHub Release v0.3.0 could not be created because the GitHub CLI requested interactive login in the executor environment; the Release remains absent while the exact v0.3.0 tag is already public and correctly targets e20f392a8babdaa4d37ffe3239ab3f8885a4a369."
+  ],
+  "result_path": "docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json",
+  "notes": [
+    "source_branch: main; source_commit resolved from source_commit=LATEST to 0fd20209ee4f87263da53d96e324dbfe133fb87e.",
+    "release_target_commit: e20f392a8babdaa4d37ffe3239ab3f8885a4a369; tag v0.3.0 resolves exactly to this commit and was never moved or rewritten.",
+    "Public state at completion: npm @ran-sh/dsh-crew@0.3.0 present with latest=0.3.0; remote tag v0.3.0 present at the approved target; GitHub Release v0.3.0 absent due blocked CLI login.",
+    "No npm token, GitHub token, OTP, cookie, private key, credential, or other secret value was printed, copied, inspected, or committed.",
+    "Completion commit is restricted to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json --stamp",
+    "validated_at": "2026-08-22T13:24:02Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json"
+  }
+}
