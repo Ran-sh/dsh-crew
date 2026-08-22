@@ -1,0 +1,89 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-RELEASE-GATE-FINAL",
+  "source_commit": "e47984268dc467495a5f630dabfdfa971dd25f98",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "V031_RELEASE_READY: PASS — the exact dd414a352065e983e1be1b845287e99a50ade9c5 release target passed the corrected distribution test, bounded official DSH cohort audit, packed-candidate normal npm install, deterministic/build/package gates, and fresh public 0.3.1 absence checks. No publishing or other release mutation occurred.",
+  "timeline": {
+    "started_at": "2026-08-22T23:22:00+08:00",
+    "completed_at": "2026-08-22T23:32:26+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task contract, source revision, ancestry, and worktree safety",
+      "status": "PASS",
+      "evidence": "The task validator returned VALID TASK CONTRACT. After checkout and pull --ff-only, main was clean at e47984268dc467495a5f630dabfdfa971dd25f98 and matched origin/main. The exact release target dd414a352065e983e1be1b845287e99a50ade9c5 was verified as an ancestor and used in a separate detached worktree; the queued task commit was not used as the package target."
+    },
+    {
+      "name": "T02 Prepared release-target version identity",
+      "status": "PASS",
+      "evidence": "In the detached dd414a352065e983e1be1b845287e99a50ade9c5 worktree, package.json version was 0.3.1, src/runtime-identity.mjs RUNTIME_VERSION was 0.3.1, and the top CHANGELOG.md entry was 0.3.1 dated 2026-08-22."
+    },
+    {
+      "name": "T03 Frozen dependency installation",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0 in the exact release-target worktree; the lockfile remained unchanged."
+    },
+    {
+      "name": "T04 Corrected primary distribution test",
+      "status": "PASS",
+      "evidence": "node --test test/distribution.test.mjs exited 0 with 3 passed and 0 failed. The stale legacy README web-profile assertion is resolved by the prepared test correction without restoring legacy installation instructions."
+    },
+    {
+      "name": "T05 Packed candidate normal-resolver installation",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install exited 0 with NPM_INSTALL_CONTRACT=PASS candidate=0.3.1 official_dsh=not-run. The packed candidate materially installed with npm's normal resolver and no --legacy-peer-deps, --force, --omit=peer, or equivalent bypass."
+    },
+    {
+      "name": "T06 Bounded official DSH cohort manifest audit",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official exited 0 with DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS. The existing bounded authoritative manifest audit was used; no full official DSH host resolution or materialization was invoked."
+    },
+    {
+      "name": "T07 Full deterministic test sweep",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs exited 0 with 430 passed, 0 failed, 0 cancelled, and 0 skipped."
+    },
+    {
+      "name": "T08 Client build and generated-artifact cleanup",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0. The deterministic tracked lib/client.js build side effect was restored, leaving the exact target worktree clean."
+    },
+    {
+      "name": "T09 npm pack dry-run and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.1 with 86 files, unpackedSize 1595929 bytes, and tarball size 884901 bytes. The payload contained no ACTIVE task/result, temporary, secret, credential, node_modules, or test-only artifacts."
+    },
+    {
+      "name": "T10 Non-publishing npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public exited 0 from the exact release target and reported @ran-sh/dsh-crew@0.3.1 with public access and latest tag in dry-run mode. No registry mutation occurred."
+    },
+    {
+      "name": "T11 Fresh public candidate, tag, and Release absence",
+      "status": "PASS",
+      "evidence": "The npm packument returned no 0.3.1 version and dist-tags.latest=0.3.0; git ls-remote found no remote refs/tags/v0.3.1; the GitHub Releases API returned HTTP 404 for v0.3.1."
+    },
+    {
+      "name": "T12 Final diff and scope hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed. The exact target worktree was clean after artifact restoration and its detached worktree registration was removed. The main worktree remained clean before Result Contract assembly; no source, documentation, test, package metadata, branch, tag, Release, registry, credential, or official DSH state was modified."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to e47984268dc467495a5f630dabfdfa971dd25f98. release_target_commit=dd414a352065e983e1be1b845287e99a50ade9c5 was verified separately and used for all release-candidate/package checks.",
+    "The official DSH compatibility check used only the bounded manifest audit against @deepseek-ai/dsh@0.1.1-rc.2 and did not invoke full official host installation/resolution.",
+    "No npm publish, registry or dist-tag mutation, git tag mutation, GitHub Release mutation, branch mutation, force-push, credential access, official DSH state change, or source/test/documentation/package change occurred.",
+    "Completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json --stamp",
+    "validated_at": "2026-08-22T15:33:30Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-RELEASE-GATE-FINAL-result.json"
+  }
+}
