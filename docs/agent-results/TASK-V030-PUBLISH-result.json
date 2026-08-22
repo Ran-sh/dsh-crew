@@ -1,0 +1,117 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V030-PUBLISH",
+  "source_commit": "938d92acac36b673be70074529df80f4b9a081ff",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "release_publication: BLOCKED. All non-mutating release preflight checks except npm identity authorization passed, but npm whoami exited 1, so the executor could not verify an authenticated identity authorized to publish the @ran-sh scope. Per the task contract, execution stopped before npm publication, tag creation/push, GitHub Release creation, or post-publication smoke; no irreversible publication mutation occurred.",
+  "timeline": {
+    "started_at": "2026-08-22T20:22:00+08:00",
+    "completed_at": "2026-08-22T20:33:22+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "T02 Source revision, ancestry, and queued-task diff",
+      "status": "PASS",
+      "evidence": "After pull, primary worktree was clean on main at 938d92acac36b673be70074529df80f4b9a081ff. Release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 is an ancestor. Diff 4b530fbf814e6d4714277675509a290f52e99be9 through e20f392a8babdaa4d37ffe3239ab3f8885a4a369 contains only addition of the Release Gate Result Contract and deletion of ACTIVE_TASK.json; diff from the target through queued HEAD contains only ACTIVE_TASK.json addition."
+    },
+    {
+      "name": "T03 Release Gate evidence",
+      "status": "PASS",
+      "evidence": "docs/agent-results/TASK-V030-RELEASE-GATE-result.json was re-read and confirmed schema_version 2, status PASS, result_validation.status PASS, release_gate: RELEASE_READY, and an empty blockers array."
+    },
+    {
+      "name": "T04 Exact release-target disposable checkout and version checks",
+      "status": "PASS",
+      "evidence": "A disposable detached worktree resolved exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369. In that worktree package.json version, src/runtime-identity.mjs RUNTIME_VERSION, and the CHANGELOG release heading were all 0.3.0. The worktree was removed after preflight."
+    },
+    {
+      "name": "T05 npm pack dry-run and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json from the exact release target reported @ran-sh/dsh-crew@0.3.0, size 891134 bytes, unpackedSize 1605815 bytes, and 85 entries. The audit found zero forbidden task/result/temp/secret/test-only entries and produced no disposable archive artifact."
+    },
+    {
+      "name": "T06 npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public completed successfully from the exact release-target worktree; no registry mutation occurred."
+    },
+    {
+      "name": "T07 Remote tag absence",
+      "status": "PASS",
+      "evidence": "git ls-remote --refs origin refs/tags/v0.3.0 returned no ref, authoritatively confirming the tag was absent before any mutation."
+    },
+    {
+      "name": "T08 GitHub Release absence",
+      "status": "PASS",
+      "evidence": "GitHub Releases API lookup for Ran-sh/dsh-crew v0.3.0 returned HTTP 404, authoritatively confirming the release was absent before any mutation."
+    },
+    {
+      "name": "T09 npm registry version absence",
+      "status": "PASS",
+      "evidence": "The configured npm registry lookup for @ran-sh/dsh-crew@0.3.0 returned HTTP 404, authoritatively confirming the version was absent before any mutation."
+    },
+    {
+      "name": "T10 GitHub authentication preflight",
+      "status": "PASS",
+      "evidence": "gh auth status --hostname github.com exited 0 and reported usable authenticated GitHub access without exposing credentials."
+    },
+    {
+      "name": "T11 Tag push permission dry-run",
+      "status": "PASS",
+      "evidence": "A non-mutating git push --dry-run of the exact release target to refs/tags/v0.3.0 exited 0, proving the configured GitHub remote authentication/permission path without creating the tag."
+    },
+    {
+      "name": "T12 npm identity and scope authorization",
+      "status": "BLOCKED",
+      "evidence": "npm whoami --registry https://registry.npmjs.org/ exited 1. No npm identity was exposed or assumed, and @ran-sh scope authorization could not be verified; the npm scope access query was not attempted without an authenticated identity."
+    },
+    {
+      "name": "T13 npm publication",
+      "status": "NOT RUN",
+      "evidence": "Not run because the required npm authentication/scope-authorization preflight was BLOCKED."
+    },
+    {
+      "name": "T14 Annotated v0.3.0 tag creation and push",
+      "status": "NOT RUN",
+      "evidence": "Not run because the required npm authentication/scope-authorization preflight was BLOCKED; remote tag remained absent."
+    },
+    {
+      "name": "T15 GitHub Release creation",
+      "status": "NOT RUN",
+      "evidence": "Not run because publication did not begin; GitHub Release remained absent."
+    },
+    {
+      "name": "T16 Post-publication registry install smoke",
+      "status": "NOT RUN",
+      "evidence": "Not run because no npm publication occurred and the registry version remained absent."
+    },
+    {
+      "name": "T17 No irreversible mutation and primary-worktree safety",
+      "status": "PASS",
+      "evidence": "No npm publish, tag creation/push, GitHub Release creation, unpublish, deprecate, rollback, version edit, product edit, credential access, official DSH access, or persistent runtime mutation occurred. The disposable release worktree was removed; the primary worktree remained free of product/workflow changes."
+    }
+  ],
+  "blockers": [
+    "npm whoami --registry https://registry.npmjs.org/ exited 1, so an authenticated identity authorized to publish the @ran-sh scope could not be verified; publication was stopped before the first irreversible mutation."
+  ],
+  "result_path": "docs/agent-results/TASK-V030-PUBLISH-result.json",
+  "notes": [
+    "source_branch: main; queued source_commit resolved from source_commit=LATEST to 938d92acac36b673be70074529df80f4b9a081ff.",
+    "release_target_commit: e20f392a8babdaa4d37ffe3239ab3f8885a4a369; no release operation used the queued ACTIVE-task commit as a package or tag target.",
+    "All public pre-publication states were absent when checked: remote tag v0.3.0, GitHub Release v0.3.0, and @ran-sh/dsh-crew@0.3.0 in the npm registry.",
+    "No secret values, tokens, cookies, keys, or private authentication material were printed, copied, inspected, or committed.",
+    "Completion commit is restricted to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-PUBLISH-result.json --stamp",
+    "validated_at": "2026-08-22T12:34:20Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V030-PUBLISH-result.json"
+  }
+}
