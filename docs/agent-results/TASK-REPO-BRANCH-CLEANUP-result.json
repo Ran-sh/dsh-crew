@@ -1,0 +1,73 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-REPO-BRANCH-CLEANUP",
+  "source_commit": "050f919f10383f4eb4c70607daa85c42ae2339a8",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "BRANCH_CLEANUP: PASS — after prune, every deleted branch had ancestry or patch-equivalence proof, no open-PR branch was deleted, all unique unmerged branches were preserved, main remained protected, and the worktree stayed clean.",
+  "timeline": {
+    "started_at": "2026-08-22T22:42:00+08:00",
+    "completed_at": "2026-08-22T22:54:55+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract and clean main baseline",
+      "status": "PASS",
+      "evidence": "The task validator returned VALID TASK CONTRACT. main was checked out, pulled with --ff-only, and had a clean worktree before branch operations; origin/main was 050f919f10383f4eb4c70607daa85c42ae2339a8."
+    },
+    {
+      "name": "T02 Pruned branch inventory",
+      "status": "PASS",
+      "evidence": "git fetch --prune origin removed four stale remote-tracking refs. The post-prune inventory contained 34 remote non-main branches and 27 local non-main branches before cleanup. main was protected and no tag operation was performed."
+    },
+    {
+      "name": "T03 Open pull request safety checks",
+      "status": "PASS",
+      "evidence": "The authoritative GitHub API reported zero open pull requests before deletion, including the immediate pre-deletion recheck, and zero open pull requests after cleanup."
+    },
+    {
+      "name": "T04 Branch proof classification",
+      "status": "PASS",
+      "evidence": "Each remote non-main branch was checked with ancestry and git cherry patch-equivalence analysis. Twenty-two branches were eligible for deletion by ancestry or patch-equivalence proof; twelve branches had unique positive cherry patches and were preserved."
+    },
+    {
+      "name": "T05 Remote branch deletion boundary",
+      "status": "PASS",
+      "evidence": "Exactly 22 eligible remote branches were deleted with one normal git push origin --delete operation. No force-push, merge, rebase, cherry-pick, tag mutation, or main ref update was used."
+    },
+    {
+      "name": "T06 Local branch deletion boundary",
+      "status": "PASS",
+      "evidence": "Exactly 17 eligible local branches were deleted with git branch -d. Unique local branches and the checked-out main branch were preserved."
+    },
+    {
+      "name": "T07 Final prune and inventory",
+      "status": "PASS",
+      "evidence": "After a second git fetch --prune origin, the final inventory contained origin/main plus 12 preserved remote non-main branches, and 11 local branches total including main plus 10 preserved non-main branches."
+    },
+    {
+      "name": "T08 Main, worktree, and mutation safety",
+      "status": "PASS",
+      "evidence": "origin/main remained 050f919f10383f4eb4c70607daa85c42ae2339a8 before and after ref cleanup; the current branch remained main, git diff --check passed, and git status --short was empty. The remote tag inventory remained present without any tag command or mutation, and no npm, Release, README, product, workflow, credential, provider, or DSH state was touched."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 050f919f10383f4eb4c70607daa85c42ae2339a8. The completion commit is the only subsequent authorized main advancement.",
+    "Deleted remote branches proven by tip ancestry: chore/agent-workflow-stable-refresh, codex/feat-harness-model-priority, codex/final-harness-model-priority-closeout, codex/github-npx-distribution, docs/simple-readme-one-click, docs/v0.3-architecture-roadmap, feat/auditable-agent-delivery, feat/v0.2-roles, feat/v0.2-runtime-completion, feat/v0.3-config-authority, feat/v0.3-runtime-compat-contract, feature/configurable-crew, fix/hub-windows-cwd, fix/installer-marketplace-yflag, fix/legacy-flash-preset-migration, fix/policy-routing-refinement, fix/setup-exit-code, fix/v0.2-runtime-hardening, fix/v0.3-hub-service-error-code, fix/worker-provider-routing, and tmp/p1b-sync-safety. For each, git merge-base --is-ancestor origin/<branch> origin/main passed.",
+    "Deleted remote branch chore/agent-workflow-v1.7 by patch-equivalence: git cherry origin/main origin/chore/agent-workflow-v1.7 produced no unique positive patch; associated PR #11 had non-null mergedAt.",
+    "Deleted local branches by the same ancestry proof: codex/feat-harness-model-priority, codex/final-harness-model-priority-closeout, codex/github-npx-distribution, docs/simple-readme-one-click, feat/auditable-agent-delivery, feat/v0.2-roles, feat/v0.2-runtime-completion, feature/configurable-crew, fix/hub-windows-cwd, fix/installer-marketplace-yflag, fix/p0-isolated-dsh-profile, fix/policy-routing-refinement, fix/setup-exit-code, fix/v0.2-runtime-hardening, fix/v0.3-hub-service-error-code-zcode, fix/v0.3-isolated-runtime-final-acceptance, and fix/worker-provider-routing. The three local-only historical refs were already ancestors of origin/main even though their remote-tracking refs had been pruned.",
+    "Preserved remote origin/feat/v0.3-model-selection-trace: 9 unique positive cherry patches; PR #15 is closed without mergedAt. Preserved origin/feat/v0.3-model-selection-trace-integrated: 2 unique positive patches. Preserved origin/fix/opencode-go-public-model-catalog: 3 unique positive patches. Preserved origin/ops/opencode-go-catalog-remediation: 2 unique positive patches. Each had no merged-PR proof.",
+    "Preserved remote origin/release/v0.3.0-publish: 3 unique positive patches; origin/test/dsh-latest-runtime-audit: 2; origin/test/opencode-go-catalog-diagnosis: 2; origin/test/v0.3-dynamic-runtime-controls-smoke: 3 unique and 1 equivalent; origin/test/v0.3-final-isolated-acceptance: 3; origin/test/v0.3-final-opencode-acceptance: 2; origin/test/v0.3-model-selection-trace-smoke: 11; origin/test/v0.3-runtime-compat-smoke: 2. Each had no merged-PR proof and was retained.",
+    "Preserved local non-main branches with unique work: feat/v0.3-model-selection-trace-integrated, ops/opencode-go-catalog-remediation, release/v0.3.0-publish, test/dsh-latest-runtime-audit, test/opencode-go-catalog-diagnosis, test/v0.3-dynamic-runtime-controls-smoke, test/v0.3-final-isolated-acceptance, test/v0.3-final-opencode-acceptance, test/v0.3-model-selection-trace-smoke, and test/v0.3-runtime-compat-smoke. No local branch with unique unmerged work was deleted.",
+    "No npm registry state, git tag, GitHub Release, README, product/workflow file, credential, provider configuration, official DSH profile, or runtime state was mutated. Completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json --stamp",
+    "validated_at": "2026-08-22T14:57:02Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-REPO-BRANCH-CLEANUP-result.json"
+  }
+}
