@@ -21,6 +21,7 @@ import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
+import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -558,7 +559,10 @@ export async function apply(ctx) {
           }
           return sendJson(res, 404, { ok: false, error: 'unknown jobs endpoint' });
         } catch (err) {
-          return sendJson(res, 400, { ok: false, error: err?.message ?? String(err) });
+          const code = boundedMachineCodeFromError(err);
+          const body = { ok: false, error: err?.message ?? String(err) };
+          if (code) body.code = code;
+          return sendJson(res, 400, body);
         }
       },
     }));

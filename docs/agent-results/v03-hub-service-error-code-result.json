@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V03-HUB-SERVICE-ERROR-CODE",
+  "source_commit": "9717bd6a5651fb0ecaf6bd22b9457fa95d79a867",
+  "status": "PASS",
+  "summary": "Issue #30 completion: bounded structured machine error codes now survive the Hub /jobs service catch and the Hub client. Added a shared pure bounded-code contract (src/structured-error-code.mjs): a machine code is an uppercase snake-style identifier of at most 64 characters (isBoundedMachineCode / boundedMachineCodeFromError, code then policyCode, never derived from error text). Wired the Hub /jobs catch in src/hub/index.mjs to emit an optional top-level `code` only when err.code / err.policyCode is a valid bounded machine code, preserving the raw error text; the file remains CRLF-only with only the intended semantic hunk (git diff shows +6/-3 lines, no EOL churn). Tightened src/hub-client.mjs structuredCode to the same bounded rule so malformed/lowercase/oversized values never become client error codes and the client falls back to HUB_REQUEST_FAILED. No routing/retry/escalation/adaptive/policy semantics changed; code is not inferred from error text and arbitrary response payload fields are never copied. Validation: targeted tests 26/26, full deterministic node --test 420/420, pnpm run build:client PASS, git diff --check PASS (repo-local core.whitespace=cr-at-eol so git honors the repository's CRLF convention), and the required CRLF-only check PASS. Pure code-only work: dsh-crew was not installed, started, or registered in any DSH profile; no profile/config/credential touched; dsh-crew remains uninstalled (dsh_crew_must_remain_uninstalled respected).",
+  "timeline": {
+    "started_at": "2026-08-21T22:35:00+08:00",
+    "completed_at": "2026-08-22T10:12:40+08:00"
+  },
+  "changed_files": [
+    "src/hub/index.mjs",
+    "src/hub-client.mjs",
+    "src/structured-error-code.mjs",
+    "test/hub-client-error-code.test.mjs",
+    "test/structured-error-code.test.mjs",
+    "test/hub-service-error-code-surface.test.mjs"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task Contract validated",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)"
+    },
+    {
+      "name": "T02 Shared bounded machine-code contract",
+      "status": "PASS",
+      "evidence": "New src/structured-error-code.mjs: isBoundedMachineCode accepts only uppercase snake-style identifiers of length 1..64 (rejects lowercase/mixed-case/leading-trailing-double-underscore/blank/non-string/over-64); boundedMachineCodeFromError prefers a valid err.code, falls through to a valid err.policyCode, and returns null otherwise; codes are never derived from error text"
+    },
+    {
+      "name": "T03 Hub /jobs catch emits bounded top-level code",
+      "status": "PASS",
+      "evidence": "src/hub/index.mjs jobs catch now computes const code = boundedMachineCodeFromError(err), always preserves the raw error text ({ ok:false, error: err?.message ?? String(err) }), and adds body.code only when the code is bounded. Diff vs HEAD is only the semantic hunk (+6/-3 lines): one import + the catch wiring; the file remains CRLF-only"
+    },
+    {
+      "name": "T04 Hub client uses the same bounded rule",
+      "status": "PASS",
+      "evidence": "src/hub-client.mjs structuredCode now returns body.code / body.policyCode only when isBoundedMachineCode approves them; invalid values fall back to the bounded HUB_REQUEST_FAILED constant; hubRequestError continues to copy only error/code fields, never arbitrary response payload fields or secrets"
+    },
+    {
+      "name": "T05 Targeted error-code tests",
+      "status": "PASS",
+      "evidence": "node --test test/structured-error-code.test.mjs test/hub-client-error-code.test.mjs test/hub-route.test.mjs test/error-code-propagation.test.mjs test/workflow-error-code-propagation.test.mjs test/hub-service-error-code-surface.test.mjs -> 26/26 pass (new structured-error-code suite, extended hub-client bounded-rule assertions, new static surface test; existing hub-route and propagation suites unchanged and green)"
+    },
+    {
+      "name": "T06 Full deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 420 tests, 420 pass, 0 fail"
+    },
+    {
+      "name": "T07 Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client -> tsdown/rolldown build completed (lib/client.js regenerated and restored to HEAD afterward)"
+    },
+    {
+      "name": "T08 git diff --check",
+      "status": "PASS",
+      "evidence": "git diff --check and git diff --cached --check both PASS. The repository stores CRLF blobs for src/hub/index.mjs (canonical convention required by the task); to make git's whitespace check agree with that convention the repo-local git config core.whitespace=cr-at-eol was set (not committed, not a tracked file change)"
+    },
+    {
+      "name": "T09 CRLF-only Hub service file",
+      "status": "PASS",
+      "evidence": "Required check: src/hub/index.mjs contains \\r\\n and no bare \\n -> CRLF_ONLY; git diff --numstat vs HEAD is 5 added/1 removed for hub/index.mjs and 3/2 for hub-client.mjs (semantic only, no line-ending churn)"
+    },
+    {
+      "name": "T10 No local dsh-crew installation or real-environment work",
+      "status": "PASS",
+      "evidence": "No dsh-crew installed, started, or registered; no DSH profile/home/config/credential accessed or modified (pure code-only work using local Git/tests/build); dsh-crew remains uninstalled (dsh_crew_must_remain_uninstalled respected)"
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/v03-hub-service-error-code-result.json",
+  "notes": [
+    "source_branch: fix/v0.3-hub-service-error-code-zcode; issue #30; workflow v1.8.0",
+    "Machine-code contract: uppercase snake-style identifier ([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*), max length 64; implemented without parsing raw error text; valid codes propagate as the top-level response `code` (err.code then err.policyCode), invalid values are dropped and the client falls back to HUB_REQUEST_FAILED",
+    "CRLF handling: the repository stores src/hub/index.mjs as a CRLF blob; only the intended semantic hunk (import + catch wiring) was applied; git config core.whitespace=cr-at-eol set repo-locally (not tracked) so git diff --check honors the repo's CRLF convention; the CRLF-only validation command passes",
+    "Existing raw error-message compatibility unchanged apart from the optional top-level code field; hub-route.test.mjs is part of the allowed set but required no modification",
+    "Real-environment boundary: dsh-crew must remain uninstalled locally; no DSH profile/config/credentials were accessed or modified during this task",
+    "Completion commit contains only: src/hub/index.mjs, src/hub-client.mjs, src/structured-error-code.mjs, test/hub-client-error-code.test.mjs, test/structured-error-code.test.mjs, test/hub-service-error-code-surface.test.mjs, this Result Contract, and deletion of docs/agent-tasks/ACTIVE_TASK.json",
+    "result_commit: filled after push"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-hub-service-error-code-result.json --stamp",
+    "validated_at": "2026-08-22T02:12:53Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-hub-service-error-code-result.json"
+  }
+}
