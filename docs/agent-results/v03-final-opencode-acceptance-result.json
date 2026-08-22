@@ -1,0 +1,118 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V03-FINAL-OPENCODE-ACCEPTANCE",
+  "source_commit": "9afad0a82d1eaa01e37dbd7d3f0ccef39dc2886a",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "Final v0.3 OpenCode acceptance passed in the isolated Crew state. The target branch was pulled at source commit 9afad0a82d1eaa01e37dbd7d3f0ccef39dc2886a. Deterministic validation passed (426/426 tests, client build, policy probe), the live policy matrix passed 15/15, genuine OpenCode-backed MCP workers completed with sanitized provider/model selection traces, live concurrency/session activation and adaptive routing evidence passed, and a bounded policy rejection propagated as SUBAGENTS_DISABLED with normalized POLICY_REJECTED classification. Official Harness health and five non-secret ~/.dsh metadata/hash checks were unchanged. Crew was exercised through isolated install/status/uninstall and reinstalled only in Crew-owned state; no executor secret was persisted.",
+  "timeline": {
+    "started_at": "2026-08-22T16:20:00+08:00",
+    "completed_at": "2026-08-22T17:25:17+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/v03-final-opencode-acceptance-result.json"
+  ],
+  "tests": [
+    {
+      "name": "Task contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "Deterministic repository tests",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 426 passed, 0 failed, 0 skipped."
+    },
+    {
+      "name": "Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0; the generated tracked lib/client.js was restored to the source revision and is absent from the completion diff."
+    },
+    {
+      "name": "Policy probe",
+      "status": "PASS",
+      "evidence": "node scripts/policy-probe.mjs -> 13/13 checks passed, including effective policy reporting, disabled dispatch, tier clamp, manual semantics, and reset."
+    },
+    {
+      "name": "Live schema-v3 policy matrix",
+      "status": "PASS",
+      "evidence": "node scripts/live-policy-matrix.mjs printed all 15 checks PASS, including review-pipeline I1 and I1b; the temporary fixture and completed background jobs were cleaned up."
+    },
+    {
+      "name": "Crew Hub compatibility and catalog readiness",
+      "status": "PASS",
+      "evidence": "Crew-owned Hub port 3210 returned runtime compatibility HTTP 200 and the live catalog returned HTTP 200 with 4 providers and 9 models. Readiness reported hub_compatibility PASS and provider_catalog PASS; info-only NOT_RUN rows remained non-failing."
+    },
+    {
+      "name": "Genuine OpenCode-backed MCP worker",
+      "status": "PASS",
+      "evidence": "A real MCP workflow completed in an isolated worktree with outcome success and tests PASS. Child attempt evidence selected provider opencode-alt, model deepseek-v4-flash, source priority, with a sanitized selection_trace and no sensitive fields. A separate Pro session workflow selected deepseek-v4-pro and also completed with tests PASS."
+    },
+    {
+      "name": "Live max_parallel and activation boundaries",
+      "status": "PASS",
+      "evidence": "Three genuine workloads showed max_parallel=1 admission with queued jobs; raising to 2 admitted a second running job, lowering to 1 left both active jobs running and retained the queued job. A next-workflow session override changed the effective default to Pro, exposed documented next-workflow/next-session boundaries, and completed using the Pro OpenCode model; reset returned balanced/Flash defaults."
+    },
+    {
+      "name": "Live adaptive routing",
+      "status": "PASS",
+      "evidence": "With adaptive enabled, automatic candidates first reported INSUFFICIENT_HISTORY, then HEALTH_REORDERED after bounded Crew-observed failures and selected opencode-alt for successful workers. The trace recorded warming/mature samples, scores, ordered candidates, and applied=true. Explicit priority remained authoritative with EXPLICIT_PRIORITY and source priority. Restarting the isolated Hub reset all candidate samples to zero and returned to INSUFFICIENT_HISTORY."
+    },
+    {
+      "name": "Bounded failure propagation and normalized classification",
+      "status": "PASS",
+      "evidence": "A live MCP dispatch-disabled probe returned machine code SUBAGENTS_DISABLED; the MCP client surfaced failure.category=policy, reason_code=POLICY_REJECTED, and source_code=SUBAGENTS_DISABLED. Raw error text was not used for classification or persisted in the Result Contract."
+    },
+    {
+      "name": "Isolated install/status/uninstall and final reinstall",
+      "status": "PASS",
+      "evidence": "Status reported the Crew plugin installed only in the dedicated dsh-crew profile. Real uninstall removed the Crew-owned registration offline and status then reported not installed. Final offline Crew-owned link installation restored the plugin; final status reported DSH plugin installed while Codex and Claude integrations remained not installed. The direct package-manager installer path was bounded by its release-age policy, so the supported offline Crew-owned fallback was used without changing repository files."
+    },
+    {
+      "name": "Official Harness health and persistent-state integrity",
+      "status": "PASS",
+      "evidence": "Official web Harness on port 3080 returned HTTP 200 before and after acceptance. Non-secret bytes/SHA-256 metadata for .credentials.yaml (208), settings.yaml (1332), profiles/web/package.json (185), cordis.yml (223), and pnpm-lock.yaml (115) matched exactly before/after. Credential contents were never read, printed, copied, or modified."
+    },
+    {
+      "name": "Executor secret handling",
+      "status": "PASS",
+      "evidence": "Already-configured ZCode-local OpenCode provider keys were injected transiently into the isolated Hub process only. Crew state contains provider env references, not secret values; no OpenCode API-key value was written to repository files or this Result Contract."
+    },
+    {
+      "name": "Standalone DeepSeek Official applicability",
+      "status": "PASS",
+      "evidence": "Legitimate SKIP on this executor: DEEPSEEK_API_KEY was absent from the process environment, so scripts/smoke-real.mjs standalone exited with its documented blocked result without reading official credential files."
+    },
+    {
+      "name": "macOS smoke applicability",
+      "status": "PASS",
+      "evidence": "Legitimate SKIP because the executor is Windows, not macOS."
+    },
+    {
+      "name": "Final isolated state",
+      "status": "PASS",
+      "evidence": "Crew remains installed only in Crew-owned DSH_HOME/profile state with Hub port 3210; the official web profile and official Harness remain separate and healthy. No tracked repository file other than this Result Contract was changed before completion cleanup."
+    },
+    {
+      "name": "Result validator --stamp",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-final-opencode-acceptance-result.json --stamp -> VALID RESULT CONTRACT (exit 0)."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/v03-final-opencode-acceptance-result.json",
+  "notes": [
+    "source_branch: test/v0.3-final-opencode-acceptance",
+    "source_commit is the pulled branch tip used for acceptance: 9afad0a82d1eaa01e37dbd7d3f0ccef39dc2886a",
+    "Crew isolation: Crew-owned DSH_HOME ~/.config/dsh-crew/harness, profile dsh-crew, Hub port 3210, reusable @deepseek-ai/dsh@0.1.1-rc.2 runtime",
+    "Official/default ~/.dsh state was protected; only non-secret metadata/hash evidence was captured and it matched exactly before/after.",
+    "Standalone DeepSeek Official and macOS are applicability SKIPs documented as PASS checks above; no official credential store was read.",
+    "Completion commit is restricted to this Result Contract plus deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-final-opencode-acceptance-result.json --stamp",
+    "validated_at": "2026-08-22T09:26:40Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-final-opencode-acceptance-result.json"
+  }
+}
