@@ -1,0 +1,53 @@
+{
+  "id": "TASK-V030-POSTPUBLISH-FINALIZE",
+  "mode": "TEST_ONLY",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Finalize the already-published @ran-sh/dsh-crew@0.3.0 release by verifying the npm registry state, creating the exact v0.3.0 git tag and GitHub Release for the approved release target, and completing post-publication registry smoke checks.",
+  "context": "Issue #42 tracks v0.3.0 publication. The user manually completed npm publish from the previously approved release target commit e20f392a8babdaa4d37ffe3239ab3f8885a4a369 after the automated executor was blocked by interactive npm 2FA. The manual terminal reported '+ @ran-sh/dsh-crew@0.3.0'. This task must independently verify the public registry state before creating any GitHub release state. Do not publish npm again. The exact release target remains e20f392a8babdaa4d37ffe3239ab3f8885a4a369, not the queued task/result commits on main.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json"
+  ],
+  "forbidden_changes": [
+    "npm publish, npm unpublish, npm deprecate, npm dist-tag mutation, or any npm registry mutation",
+    "moving, deleting, force-updating, or retargeting v0.3.0 after creation",
+    "package.json, pnpm-lock.yaml, CHANGELOG.md, release/version metadata, product source, tests, workflows, installer files, or agent workflow files",
+    "the user's normal ~/.dsh, official DSH web profile, credential stores, provider key files, or other secrets",
+    "unrelated files outside allowed_changes"
+  ],
+  "validation": [
+    "Validate this Task Contract first: node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json",
+    "After git pull --ff-only, record exact main HEAD, branch, and clean pre-execution git status; do not discard or overwrite unrelated dirty worktree changes.",
+    "Re-read docs/agent-results/TASK-V030-RELEASE-GATE-result.json and docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json to confirm prior provenance, approved release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369, and that the previous automated publish attempt did not create tag or GitHub Release state.",
+    "Independently query the configured npm registry and require @ran-sh/dsh-crew@0.3.0 to exist publicly with version 0.3.0. If it is absent or unverifiable, stop BLOCKED before creating tag or GitHub Release.",
+    "Verify npm dist-tag latest currently resolves to 0.3.0 or record the exact observed state; do not mutate dist-tags.",
+    "Verify the exact release target commit e20f392a8babdaa4d37ffe3239ab3f8885a4a369 still contains package version 0.3.0, runtime identity 0.3.0, and the v0.3.0 CHANGELOG entry.",
+    "Freshly confirm remote refs/tags/v0.3.0 is absent and GitHub Release v0.3.0 is absent before mutation. If either already exists, verify it targets the exact approved commit and is consistent; never move or rewrite it. Inconsistent pre-existing state is BLOCKED.",
+    "Create an annotated git tag v0.3.0 pointing exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369 and push that tag to origin. Never tag the current queued main HEAD.",
+    "Verify the remote v0.3.0 tag resolves to the exact approved release target commit.",
+    "Create GitHub Release v0.3.0 from the exact v0.3.0 tag, using the v0.3.0 CHANGELOG section as release notes. Do not mark it as prerelease or draft.",
+    "Verify the published GitHub Release exists, is non-draft/non-prerelease, and is associated with v0.3.0.",
+    "In a disposable directory outside official DSH config/state, install @ran-sh/dsh-crew@0.3.0 from the public npm registry and perform a package/runtime smoke sufficient to prove the registry artifact installs and identifies as 0.3.0. Do not read or mutate official DSH credential/config stores.",
+    "Run git diff --check and record final git status; release finalization must not leave tracked product/workflow changes.",
+    "Write schema_version 2 Result Contract to docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json with explicit release_finalization conclusion RELEASE_COMPLETE or BLOCKED and evidence for registry, tag, GitHub Release, and smoke checks.",
+    "Stamp and revalidate the result: node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json --stamp, then validate the stamped result again before commit."
+  ],
+  "acceptance_criteria": [
+    "@ran-sh/dsh-crew@0.3.0 is independently confirmed present on the public npm registry before any GitHub release mutation.",
+    "The remote annotated tag v0.3.0 exists and resolves exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369.",
+    "A non-draft, non-prerelease GitHub Release v0.3.0 exists for that tag with release notes derived from the v0.3.0 CHANGELOG section.",
+    "A disposable fresh-registry install/package smoke of @ran-sh/dsh-crew@0.3.0 PASSes without touching official DSH state.",
+    "No second npm publish, registry mutation, tag rewrite, source/version/workflow edit, credential exposure, or official DSH store mutation occurs.",
+    "The Result Contract is validator-stamped PASS and states RELEASE_COMPLETE only if every required finalization check passes; otherwise BLOCKED with precise state and blockers.",
+    "On real completion, ACTIVE_TASK.json is deleted and only the authorized Result Contract plus task deletion are committed/pushed."
+  ],
+  "result_contract": "docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V030-POSTPUBLISH-FINALIZE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY"
+  }
+}
