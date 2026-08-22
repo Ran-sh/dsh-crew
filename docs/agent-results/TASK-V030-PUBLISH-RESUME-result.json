@@ -1,0 +1,97 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V030-PUBLISH-RESUME",
+  "source_commit": "5e2bef54cc9847ca17ca578717f8e2e52beeb322",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "release_publication: BLOCKED. All required preflight checks passed, including restored npm identity rss1001, @ran-sh scope org/access query, GitHub authentication, exact release-target provenance, absence of the tag/Release/npm version, and npm publish dry-run. The one formal npm publish attempt from exact release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 exited 1; a follow-up registry check remained HTTP 404. The required publication did not complete, so no tag or GitHub Release was created and no retry/workaround was attempted.",
+  "timeline": {
+    "started_at": "2026-08-22T20:40:00+08:00",
+    "completed_at": "2026-08-22T21:07:39+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "T02 Queued source and release-target provenance",
+      "status": "PASS",
+      "evidence": "After pull, primary worktree was clean on main at 5e2bef54cc9847ca17ca578717f8e2e52beeb322. Release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 remained an ancestor. The gate result is PASS/RELEASE_READY and the prior publication result is BLOCKED with validator PASS and one blocker."
+    },
+    {
+      "name": "T03 Public-state absence preflight",
+      "status": "PASS",
+      "evidence": "Fresh checks confirmed remote refs/tags/v0.3.0 absent, GitHub Release v0.3.0 absent by API HTTP 404, and @ran-sh/dsh-crew@0.3.0 absent from the npm registry by HTTP 404."
+    },
+    {
+      "name": "T04 npm identity and scope authorization preflight",
+      "status": "PASS",
+      "evidence": "npm whoami --registry https://registry.npmjs.org/ succeeded with username rss1001. The non-secret npm org/access query npm org ls ran-sh --json also succeeded, confirming the configured identity's scope/org access path without exposing credentials."
+    },
+    {
+      "name": "T05 GitHub authentication and tag push permission preflight",
+      "status": "PASS",
+      "evidence": "gh auth status --hostname github.com exited 0, and a non-mutating git push --dry-run for the exact target to refs/tags/v0.3.0 exited 0."
+    },
+    {
+      "name": "T06 Exact release-target disposable worktree",
+      "status": "PASS",
+      "evidence": "A disposable detached worktree resolved exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369. package.json identified @ran-sh/dsh-crew version 0.3.0, runtime identity was 0.3.0, and the CHANGELOG heading was 0.3.0."
+    },
+    {
+      "name": "T07 npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public completed successfully from the exact release-target worktree without registry mutation."
+    },
+    {
+      "name": "T08 Formal npm publication",
+      "status": "BLOCKED",
+      "evidence": "The single authorized npm publish --access public attempt from the exact release-target worktree exited 1. The executor did not expose or retry private CLI diagnostics, and the task requires stopping when the publication step cannot be completed safely."
+    },
+    {
+      "name": "T09 Registry state after failed publication attempt",
+      "status": "PASS",
+      "evidence": "Immediate read-only registry verification returned HTTP 404 for @ran-sh/dsh-crew@0.3.0, so no visible npm publication or partial published version was detected."
+    },
+    {
+      "name": "T10 Annotated git tag creation and push",
+      "status": "NOT RUN",
+      "evidence": "Not run because formal npm publication was BLOCKED; the remote v0.3.0 tag remained absent and was not created or modified."
+    },
+    {
+      "name": "T11 GitHub Release creation",
+      "status": "NOT RUN",
+      "evidence": "Not run because formal npm publication was BLOCKED; the v0.3.0 GitHub Release remained absent."
+    },
+    {
+      "name": "T12 Post-publication registry install smoke",
+      "status": "NOT RUN",
+      "evidence": "Not run because no npm publication completed and the registry version remained absent."
+    },
+    {
+      "name": "T13 Safety and cleanup boundary",
+      "status": "PASS",
+      "evidence": "No retry, OTP workaround, unpublish, deprecate, rollback, tag mutation, Release mutation, source/version/workflow edit, credential exposure, official DSH access, or persistent runtime mutation occurred. The disposable release worktree was removed."
+    }
+  ],
+  "blockers": [
+    "The formal npm publish --access public command exited 1 from the exact approved release target, and the required package version remained absent from the registry; publication could not be completed safely, so tag and GitHub Release creation were stopped before mutation."
+  ],
+  "result_path": "docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json",
+  "notes": [
+    "source_branch: main; source_commit resolved from source_commit=LATEST to 5e2bef54cc9847ca17ca578717f8e2e52beeb322.",
+    "release_target_commit: e20f392a8babdaa4d37ffe3239ab3f8885a4a369; the queued task/result commit was never used as the package or release target.",
+    "The preflight npm identity username was recorded as rss1001; no token, OTP, cookie, credential, or other secret value was printed, copied, inspected, or committed.",
+    "No public release state was created or changed: npm version remained 404, remote tag remained absent, and GitHub Release remained absent.",
+    "Completion commit is restricted to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json --stamp",
+    "validated_at": "2026-08-22T13:08:23Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json"
+  }
+}
