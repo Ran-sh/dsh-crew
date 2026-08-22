@@ -1,0 +1,58 @@
+{
+  "id": "TASK-V030-PUBLISH-RESUME",
+  "mode": "IMPLEMENT",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Resume the v0.3.0 publication after npm authentication was restored, publish @ran-sh/dsh-crew@0.3.0 from the exact approved release target, create the matching git tag and GitHub Release, verify the published artifact, and stop.",
+  "context": "GitHub issue #42 tracks publication. The final release gate passed RELEASE_READY. The first publication attempt stopped safely before any irreversible mutation because npm whoami was unauthenticated. The user has now completed npm login in the same working environment and npm whoami returns rss1001. The immutable release target remains e20f392a8babdaa4d37ffe3239ab3f8885a4a369; do not publish or tag the queued ACTIVE-task/result commits. Reuse prior gate/preflight evidence where still valid and rerun only the minimum checks necessary to prove current auth/absence state before publication.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json"
+  ],
+  "forbidden_changes": [
+    "package.json, pnpm-lock.yaml, CHANGELOG.md, src/**, test/**, scripts/**, .github/**, installer behavior, workflow files, or any other product/release-source edits",
+    "moving, rewriting, deleting, or force-updating any published tag or release",
+    "npm unpublish, deprecate, dist-tag mutation unrelated to the initial publish, or any rollback action",
+    "reading, printing, copying, or committing npm tokens, OTP values, GitHub tokens, cookies, credentials, or other secrets",
+    "the user's normal ~/.dsh, official DSH profiles, credential/config stores, provider key files, or persistent DSH runtime state",
+    "unrelated files outside allowed_changes"
+  ],
+  "validation": [
+    "Validate this Task Contract first with node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json.",
+    "Pull main with git pull --ff-only, record exact queued HEAD and clean-worktree provenance, and verify release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 is still an ancestor and unchanged.",
+    "Re-read docs/agent-results/TASK-V030-RELEASE-GATE-result.json and docs/agent-results/TASK-V030-PUBLISH-result.json; confirm the gate is PASS/RELEASE_READY and the prior publication attempt was BLOCKED before any irreversible mutation.",
+    "Re-confirm that remote refs/tags/v0.3.0, GitHub Release v0.3.0, and npm version @ran-sh/dsh-crew@0.3.0 are still absent. If any already exists unexpectedly, stop and report the exact observed state instead of overwriting it.",
+    "Verify current npm identity with npm whoami --registry https://registry.npmjs.org/ and record the username only. Confirm that this authenticated identity is authorized to publish under the @ran-sh scope using a non-secret npm org/team/access query appropriate to the installed npm CLI. If scope authorization cannot be proven, stop BLOCKED before any mutation.",
+    "Re-confirm GitHub authentication and a dry-run push permission path for refs/tags/v0.3.0 without creating it.",
+    "From a disposable detached worktree at exactly e20f392a8babdaa4d37ffe3239ab3f8885a4a369, re-check package name/version and run npm publish --dry-run --access public. Do not use the queued main HEAD as the package source.",
+    "After all preflight checks pass, publish @ran-sh/dsh-crew@0.3.0 from the exact release-target worktree with npm publish --access public. If npm requires interactive 2FA/OTP that cannot be completed in the executor environment, stop BLOCKED at this point; do not create the git tag or GitHub Release. Never expose an OTP or token in logs/results.",
+    "After npm publish succeeds, verify registry metadata shows @ran-sh/dsh-crew@0.3.0 publicly available and resolves to version 0.3.0 before continuing.",
+    "Create an annotated git tag v0.3.0 pointing exactly to e20f392a8babdaa4d37ffe3239ab3f8885a4a369, verify the target locally, then push that tag once. Never move or recreate it if push reports that it already exists.",
+    "Create the GitHub Release for tag v0.3.0 using the v0.3.0 CHANGELOG section as release notes, with a normal non-draft, non-prerelease release. Verify the created release points to v0.3.0.",
+    "In a disposable directory, perform a clean registry install/package smoke for @ran-sh/dsh-crew@0.3.0 using the public npm registry and verify the installed package reports version 0.3.0 and expected package entry files are present. Do not install into or mutate official DSH state.",
+    "Write schema_version 2 Result Contract to docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json with exact evidence for preflight, npm publication, tag target/push, GitHub Release, registry metadata, and post-publication smoke. Distinguish PASS, BLOCKED, FAIL, PARTIAL, and NOT RUN accurately.",
+    "Stamp and revalidate the result with node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json --stamp, validate the stamped result again, then commit/push only the authorized Result Contract plus deletion of ACTIVE_TASK.json and stop."
+  ],
+  "acceptance_criteria": [
+    "No irreversible release mutation occurs unless current npm scope authorization, GitHub permission, exact release-target provenance, and absence checks all pass.",
+    "The npm package is published exactly as @ran-sh/dsh-crew@0.3.0 from release target e20f392a8babdaa4d37ffe3239ab3f8885a4a369 and is publicly resolvable from the npm registry.",
+    "Remote annotated tag v0.3.0 exists exactly at e20f392a8babdaa4d37ffe3239ab3f8885a4a369 and is not moved or rewritten.",
+    "A non-draft, non-prerelease GitHub Release for v0.3.0 exists with release notes derived from CHANGELOG.md.",
+    "A disposable post-publication install smoke of @ran-sh/dsh-crew@0.3.0 succeeds without touching official DSH state.",
+    "No source, version, lockfile, CHANGELOG, CI, installer, workflow, credential, official DSH, or unrelated repository changes occur.",
+    "If npm interactive 2FA or any authorization state blocks publication, the task stops before tag/Release creation and reports BLOCKED rather than attempting workarounds or exposing secrets.",
+    "If any failure occurs after npm publication, do not unpublish, delete/move tags, or roll back; preserve published state and report PARTIAL/FAIL with exact recovery needs.",
+    "The final Result Contract is validator-stamped PASS only when npm publication, exact tag, GitHub Release, and post-publication smoke all succeed; ACTIVE_TASK.json is then deleted and the allowed completion commit is pushed."
+  ],
+  "result_contract": "docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V030-PUBLISH-RESUME-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "release_target_commit": "e20f392a8babdaa4d37ffe3239ab3f8885a4a369",
+    "issue": 42,
+    "resumes_task": "TASK-V030-PUBLISH"
+  }
+}
