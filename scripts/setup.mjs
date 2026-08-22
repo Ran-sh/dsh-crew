@@ -14,6 +14,7 @@ import * as realInstaller from '../src/install/install.mjs';
 import { crewDshHome, crewProfileDir, CREW_PROFILE_NAME } from '../src/install/install.mjs';
 import {
   ensureCrewDshRuntime,
+  ensureCrewPluginRegistration,
   resolveDshCli,
   runResolvedDsh,
   describeDshCli,
@@ -158,12 +159,12 @@ export async function setupInstall({
     // change, never as a command that targets the official web profile.
     mark(log, true, `DSH web profile would be linked (legacy) — now: dedicated dsh-crew profile under the Crew DSH_HOME; the official web profile is never modified (${dsh.description ?? dsh.kind} add "link:${root}")`);
   } else {
-    const add = runDsh(dsh, ['add', `link:${root}`], { home });
-    if (!add.ok) {
-      log(`✗ DSH crew profile link failed:\n${(add.stderr || add.stdout || '').slice(0, 400)}`);
+    const registration = ensureCrewPluginRegistration({ home, root, name });
+    if (!registration.ok) {
+      log(`✗ DSH crew profile link failed (${registration.code ?? 'unknown'})`);
       return { ok: false, error: 'DSH profile link failed' };
     }
-    mark(log, true, 'DSH crew profile linked (dedicated Crew DSH_HOME, profile dsh-crew)');
+    mark(log, true, `DSH crew profile linked offline (dedicated Crew DSH_HOME, profile dsh-crew; ${registration.changed ? 'updated' : 'already current'})`);
   }
 
   if (dryRun) mark(log, true, 'Codex Desktop integration (dry-run)');

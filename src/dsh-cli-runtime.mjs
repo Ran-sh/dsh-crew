@@ -6,13 +6,26 @@
 // allowing a download.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { createRequire } from 'node:module';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { crewDshHome, crewProfileDir } from './install/install.mjs';
 
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
 export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
+const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base'];
+const PROFILE_PATCH_TEMPLATE = '[]\n';
+const PROFILE_PNPM_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n';
 
 function defaultFindCommand(name) {
   const probe = process.platform === 'win32' ? 'where.exe' : 'which';
@@ -217,6 +230,165 @@ export function describeDshCli(cli) {
   return `${cli.kind}${version}`;
 }
 
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSafePackageName(name) {
+  return typeof name === 'string'
+    && /^(?:@[^/\s]+\/)?[^/\s]+$/u.test(name)
+    && !name.split('/').some((part) => part === '.' || part === '..');
+}
+
+function isWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function fileSpec(target) {
+  return `link:${target.replace(/\\/g, '/')}`;
+}
+
+function profileLinkPath(profileRoot, name) {
+  return join(profileRoot, 'node_modules', ...name.split('/'));
+}
+
+function readPluginRoot(root, expectedName) {
+  if (typeof root !== 'string' || !isAbsolute(root)) return { ok: false, code: 'INVALID_CREW_PLUGIN_ROOT' };
+  let targetRoot;
+  try { targetRoot = realpathSync(root); } catch { return { ok: false, code: 'CREW_PLUGIN_ROOT_NOT_FOUND' }; }
+  const packageFile = join(targetRoot, 'package.json');
+  let pkg;
+  try { pkg = JSON.parse(readFileSync(packageFile, 'utf8')); } catch { return { ok: false, code: 'CREW_PLUGIN_MANIFEST_INVALID' }; }
+  if (!isObject(pkg) || !isSafePackageName(pkg.name) || (expectedName !== undefined && pkg.name !== expectedName)) {
+    return { ok: false, code: 'CREW_PLUGIN_MANIFEST_INVALID' };
+  }
+  const patchSpec = pkg.dsh?.bundle?.patch;
+  if (typeof patchSpec !== 'string' || !patchSpec.trim()) return { ok: false, code: 'CREW_PLUGIN_BUNDLE_INVALID' };
+  const patchPath = resolve(targetRoot, patchSpec);
+  if (!isWithin(targetRoot, patchPath) || !existsSync(patchPath)) return { ok: false, code: 'CREW_PLUGIN_BUNDLE_INVALID' };
+  return { ok: true, targetRoot, packageFile, packageName: pkg.name, packageVersion: pkg.version ?? null, patchPath, pkg };
+}
+
+function readProfileManifestForRegistration(profileRoot) {
+  const profileManifest = join(profileRoot, 'package.json');
+  if (!existsSync(profileManifest)) {
+    return {
+      profileManifest,
+      manifest: {
+        name: `dsh-profile-${profileRoot.split(/[\\/]/u).at(-1)}`,
+        private: true,
+        dependencies: {},
+        dsh: { profile: { bundles: [...CREW_PROFILE_DEFAULT_BUNDLES] } },
+      },
+      created: true,
+    };
+  }
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(profileManifest, 'utf8')); } catch { return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' }; }
+  if (!isObject(manifest)) return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  if (manifest.dependencies !== undefined && !isObject(manifest.dependencies)) return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  if (manifest.dependencies && Object.values(manifest.dependencies).some((value) => typeof value !== 'string')) {
+    return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  }
+  if (manifest.dsh !== undefined && !isObject(manifest.dsh)) return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  if (manifest.dsh?.profile !== undefined && !isObject(manifest.dsh.profile)) return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  const bundles = manifest.dsh?.profile?.bundles;
+  if (bundles !== undefined && (!Array.isArray(bundles) || bundles.some((name) => !isSafePackageName(name)))) {
+    return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  }
+  return { profileManifest, manifest, created: false };
+}
+
+function ensureProfileScaffold(profileRoot) {
+  mkdirSync(profileRoot, { recursive: true });
+  let changed = false;
+  const patchFile = join(profileRoot, 'cordis.patch.yml');
+  if (!existsSync(patchFile)) { writeFileSync(patchFile, PROFILE_PATCH_TEMPLATE); changed = true; }
+  const workspaceFile = join(profileRoot, 'pnpm-workspace.yaml');
+  if (!existsSync(workspaceFile)) { writeFileSync(workspaceFile, PROFILE_PNPM_WORKSPACE); changed = true; }
+  return changed;
+}
+
+function ensureDirectoryLink(linkPath, targetRoot) {
+  let stat;
+  try { stat = lstatSync(linkPath); } catch { stat = null; }
+  if (stat && !stat.isSymbolicLink()) return { ok: false, code: 'CREW_PLUGIN_LINK_CONFLICT' };
+  if (stat) {
+    try {
+      if (realpathSync(linkPath) === targetRoot) return { ok: true, changed: false };
+    } catch {}
+    unlinkSync(linkPath);
+  }
+  mkdirSync(dirname(linkPath), { recursive: true });
+  symlinkSync(targetRoot, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+  return { ok: true, changed: true };
+}
+
+/**
+ * Register a local Crew plugin without invoking DSH's pnpm-forwarding plugin
+ * command. The profile manifest and one loader-visible directory link are the
+ * only state changed; no dependency resolution or policy bypass is attempted.
+ */
+export function ensureCrewPluginRegistration({ home = homedir(), root, name } = {}) {
+  const plugin = readPluginRoot(root, name);
+  if (!plugin.ok) return plugin;
+  const profileRoot = crewProfileDir({ home });
+  const profile = readProfileManifestForRegistration(profileRoot);
+  if (profile.ok === false) return profile;
+  const scaffoldChanged = ensureProfileScaffold(profileRoot);
+  const current = profile.manifest;
+  const dependencies = { ...(current.dependencies ?? {}) };
+  const currentBundles = current.dsh?.profile?.bundles ?? [...CREW_PROFILE_DEFAULT_BUNDLES];
+  const nextBundles = [];
+  let seen = false;
+  for (const bundle of currentBundles) {
+    if (bundle === plugin.packageName) {
+      if (!seen) { nextBundles.push(bundle); seen = true; }
+    } else nextBundles.push(bundle);
+  }
+  if (!seen) nextBundles.push(plugin.packageName);
+  dependencies[plugin.packageName] = fileSpec(plugin.targetRoot);
+  const next = {
+    ...current,
+    dependencies,
+    dsh: {
+      ...(current.dsh ?? {}),
+      profile: { ...(current.dsh?.profile ?? {}), bundles: nextBundles },
+    },
+  };
+  const manifestChanged = JSON.stringify(current) !== JSON.stringify(next) || profile.created;
+  const linkPath = profileLinkPath(profileRoot, plugin.packageName);
+  let link;
+  try { link = ensureDirectoryLink(linkPath, plugin.targetRoot); } catch { return { ok: false, code: 'CREW_PLUGIN_LINK_FAILED' }; }
+  if (!link.ok) return link;
+  try {
+    if (manifestChanged) writeFileSync(profile.profileManifest, JSON.stringify(next, null, 2) + '\n');
+    // Resolve the intended package entry from the validated checkout. Node's
+    // package-name resolution cache can retain the old target after a stale
+    // junction is replaced in the same process, so loader visibility is proven
+    // by the link target plus a normal package entry resolution from that
+    // target rather than by trusting a cached package-name lookup.
+    const resolvedEntry = createRequire(join(plugin.targetRoot, 'package.json')).resolve('.');
+    const resolvedRoot = realpathSync(linkPath);
+    if (resolvedRoot !== plugin.targetRoot || !isWithin(plugin.targetRoot, realpathSync(resolvedEntry))) {
+      return { ok: false, code: 'CREW_PLUGIN_NOT_LOADABLE' };
+    }
+    return {
+      ok: true,
+      changed: scaffoldChanged || manifestChanged || link.changed,
+      profileRoot,
+      profileManifest: profile.profileManifest,
+      linkPath,
+      targetRoot: plugin.targetRoot,
+      packageName: plugin.packageName,
+      packageVersion: plugin.packageVersion,
+      patchPath: plugin.patchPath,
+      resolvedEntry,
+    };
+  } catch { return { ok: false, code: 'CREW_PLUGIN_NOT_LOADABLE' }; }
+}
+
 /**
  * Remove one Crew plugin registration without invoking a package manager.
  * This is intentionally limited to the derived Crew profile directory so a
@@ -224,17 +396,30 @@ export function describeDshCli(cli) {
  * anything merely to remove a stale registration.
  */
 export function removeCrewPluginRegistration({ home = homedir(), name, profileRoot = crewProfileDir({ home }) } = {}) {
-  if (typeof name !== 'string' || !name || name.split('/').some((part) => !part || part === '.' || part === '..')) {
+  if (!isSafePackageName(name)) {
     return { ok: false, code: 'INVALID_CREW_PLUGIN_NAME' };
   }
   const packageFile = join(profileRoot, 'package.json');
   if (!existsSync(packageFile)) return { ok: true, removed: false };
   let pkg;
   try { pkg = JSON.parse(readFileSync(packageFile, 'utf8')); } catch { return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' }; }
+  if (!isObject(pkg)
+    || (pkg.dependencies !== undefined && !isObject(pkg.dependencies))
+    || (pkg.dsh !== undefined && !isObject(pkg.dsh))
+    || (pkg.dsh?.profile !== undefined && !isObject(pkg.dsh.profile))
+    || (pkg.dsh?.profile?.bundles !== undefined
+      && (!Array.isArray(pkg.dsh.profile.bundles)
+        || pkg.dsh.profile.bundles.some((item) => !isSafePackageName(item))))) {
+    return { ok: false, code: 'CREW_PROFILE_METADATA_INVALID' };
+  }
   const hadDependency = Boolean(pkg.dependencies?.[name]);
   const bundles = Array.isArray(pkg.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles : [];
   const hadBundle = bundles.includes(name);
   if (!hadDependency && !hadBundle) return { ok: true, removed: false };
+  const linkPath = profileLinkPath(profileRoot, name);
+  let linkStat;
+  try { linkStat = lstatSync(linkPath); } catch { linkStat = null; }
+  if (linkStat && !linkStat.isSymbolicLink()) return { ok: false, code: 'CREW_PLUGIN_LINK_CONFLICT' };
   const next = { ...pkg };
   if (hadDependency) {
     next.dependencies = { ...pkg.dependencies };
@@ -245,7 +430,6 @@ export function removeCrewPluginRegistration({ home = homedir(), name, profileRo
     next.dsh = { ...pkg.dsh, profile: { ...pkg.dsh.profile, bundles: bundles.filter((item) => item !== name) } };
   }
   writeFileSync(packageFile, JSON.stringify(next, null, 2) + '\n');
-  const packageParts = name.split('/');
-  rmSync(join(profileRoot, 'node_modules', ...packageParts), { recursive: true, force: true });
+  if (linkStat) unlinkSync(linkPath);
   return { ok: true, removed: true };
 }

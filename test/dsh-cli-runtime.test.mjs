@@ -224,7 +224,7 @@ test('offline Crew registration removal is symmetric, safe, and idempotent', () 
     const profileAfter = JSON.parse(readFileSync(first.profileManifest, 'utf8'));
     assert.equal(profileAfter.dependencies['@ran-test/dsh-crew'], undefined);
     assert.equal(profileAfter.dependencies['@ran-test/other'], '1.0.0');
-    assert.deepEqual(profileAfter.dsh.profile.bundles, ['@ran-test/other']);
+    assert.deepEqual(profileAfter.dsh.profile.bundles, ['@ran-test/other', '@deepseek-ai/dsh-base']);
     const second = removeCrewPluginRegistration({ home: t.dir, name: '@ran-test/dsh-crew' });
     assert.deepEqual(second, { ok: true, removed: false });
   } finally { t.cleanup(); }
