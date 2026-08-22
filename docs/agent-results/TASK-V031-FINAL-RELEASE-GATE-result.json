@@ -1,0 +1,97 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V031-FINAL-RELEASE-GATE",
+  "source_commit": "75cc90b6328f5f4d5c1ca232cfd091aef615becd",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "V031_RELEASE_READY: BLOCKED — the prepared release target fae8cd8aee7b07159308760d113f4bdec7139996 passes version identity, frozen install, standalone normal-resolver installation, deterministic tests, client build, package audits, publish dry-run, and public absence checks. The official DSH resolver-lock gate did not complete within the environment's safe resource/time boundary, so publication is not authorized by this gate.",
+  "timeline": {
+    "started_at": "2026-08-22T22:18:00+08:00",
+    "completed_at": "2026-08-22T22:40:22+08:00"
+  },
+  "changed_files": [],
+  "tests": [
+    {
+      "name": "T01 Task Contract, branch, ancestry, and worktree safety",
+      "status": "PASS",
+      "evidence": "The task validator returned VALID TASK CONTRACT. After checkout/pull, main was at 75cc90b6328f5f4d5c1ca232cfd091aef615becd and matched origin/main with a clean pre-execution status. The exact prepared release target fae8cd8aee7b07159308760d113f4bdec7139996 was verified as an ancestor and was used in a separate detached worktree; the queued task commit was not used as the package/tag target."
+    },
+    {
+      "name": "T02 Prepared release-target version identity",
+      "status": "PASS",
+      "evidence": "In the detached fae8cd8aee7b07159308760d113f4bdec7139996 worktree, package.json reported version 0.3.1, src/runtime-identity.mjs contained RUNTIME_VERSION 0.3.1, and the top CHANGELOG.md entry was ## 0.3.1 — 2026-08-22."
+    },
+    {
+      "name": "T03 Frozen dependency installation",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0 in the prepared release-target worktree. The lockfile remained unchanged and the target worktree was clean after installation."
+    },
+    {
+      "name": "T04 Packed candidate standalone normal-resolver install",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install returned NPM_INSTALL_CONTRACT=PASS candidate=0.3.1 official_dsh=not-run. The candidate tarball was materially installed in a disposable directory with npm's normal resolver and no peer-resolution bypass."
+    },
+    {
+      "name": "T05 Candidate with official DSH resolver-lock cohort",
+      "status": "BLOCKED",
+      "evidence": "pnpm run verify:npm-install:official invoked the prepared resolver-only mode using npm's default resolver and --package-lock-only. The npm child ran for approximately 11 minutes, consumed about 1.3 GB working set with sustained high CPU, emitted no completion or PASS evidence, and was stopped safely. No --legacy-peer-deps, --force, --omit=peer, or equivalent bypass was used, and the full official graph was not materialized."
+    },
+    {
+      "name": "T06 Full deterministic test sweep",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs exited 0: 426 passed, 0 failed, 0 cancelled, 0 skipped."
+    },
+    {
+      "name": "T07 Client build and generated-artifact boundary",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0 and built lib/client.js. The deterministic tracked build side effect was restored in the disposable target worktree, leaving it clean."
+    },
+    {
+      "name": "T08 npm pack dry-run and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.1, 86 files, unpacked size 1,611,105 bytes, tarball size 892,630 bytes, and integrity metadata. The payload audit passed with no ACTIVE task/result, temporary, secret, credential, node_modules, or test-only entries."
+    },
+    {
+      "name": "T09 Non-publishing npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public exited 0 from the exact prepared release-target worktree and reported @ran-sh/dsh-crew@0.3.1 with tag latest/public access in dry-run mode. No registry mutation occurred."
+    },
+    {
+      "name": "T10 Public npm absence of 0.3.1",
+      "status": "PASS",
+      "evidence": "The authoritative public npm packument returned HTTP 200, dist-tags.latest=0.3.0, and no versions entry for 0.3.1."
+    },
+    {
+      "name": "T11 Remote v0.3.1 tag absence",
+      "status": "PASS",
+      "evidence": "git ls-remote --refs origin refs/tags/v0.3.1* returned no refs; the remote v0.3.1 tag is absent."
+    },
+    {
+      "name": "T12 GitHub Release v0.3.1 absence",
+      "status": "PASS",
+      "evidence": "The public GitHub Releases API lookup for v0.3.1 returned HTTP 404, confirming that no matching Release exists."
+    },
+    {
+      "name": "T13 Final diff, status, and isolation hygiene",
+      "status": "PASS",
+      "evidence": "The prepared target worktree passed git diff --check and was clean after restoring the build artifact. The main worktree remained clean before Result Contract assembly; the detached target worktree and task-created temporary directories were removed."
+    }
+  ],
+  "blockers": [
+    "The required official DSH coexistence resolver-lock gate did not complete: pnpm run verify:npm-install:official used npm's normal resolver with --package-lock-only but ran for approximately 11 minutes at about 1.3 GB working set and sustained high CPU without producing PASS or lock evidence, so it was stopped. Because this acceptance gate is incomplete, the overall result must remain BLOCKED and publication is not authorized."
+  ],
+  "result_path": "docs/agent-results/TASK-V031-FINAL-RELEASE-GATE-result.json",
+  "notes": [
+    "source_branch: main; queued source HEAD after pull was 75cc90b6328f5f4d5c1ca232cfd091aef615becd. release_target_commit: fae8cd8aee7b07159308760d113f4bdec7139996, verified separately and never replaced by the queued task commit.",
+    "The prepared @ran-sh/dsh-crew@0.3.1 candidate remains unpublished. No npm registry mutation, dist-tag mutation, git tag mutation, or GitHub Release mutation occurred.",
+    "The official DSH check used the prepared resolver-only package-lock mode; no full official DSH dependency materialization and no resolver bypass occurred.",
+    "Public pre-publication state at completion: npm 0.3.1 absent, remote v0.3.1 tag absent, and GitHub Release v0.3.1 absent.",
+    "No official DSH state, credential store, provider key file, or secret was accessed or modified. Completion is limited to this Result Contract and deletion of docs/agent-tasks/ACTIVE_TASK.json."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V031-FINAL-RELEASE-GATE-result.json --stamp",
+    "validated_at": "2026-08-22T14:41:18Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V031-FINAL-RELEASE-GATE-result.json"
+  }
+}
