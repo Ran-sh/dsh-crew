@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -166,7 +166,7 @@ test('uninstall calls the installer for Codex and Claude, and treats an absent D
   } finally { t.cleanup(); }
 });
 
-test('uninstall reports DSH profile removal failure when it fails', async () => {
+test('uninstall removes a Crew registration offline without invoking DSH/pnpm', async () => {
   const t = makeTemp();
   const calls = [];
   try {
@@ -181,11 +181,15 @@ test('uninstall reports DSH profile removal failure when it fails', async () => 
     mkdirSync(join(t.dir, '.dsh', 'profiles', 'web'), { recursive: true });
     writeFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { '@ran-test/dsh-crew': 'link:.' }, dsh: { profile: { bundles: ['@ran-test/dsh-crew'] } } }));
     const logs = [];
-    // No real dsh CLI in this environment → runDsh fails → aggregated failure.
     const r = await setupUninstall({ log: (m) => logs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller(calls) });
-    assert.equal(r.ok, false);
-    assert.ok(r.failures.includes('dsh'), `dsh must be in failures: ${JSON.stringify(r.failures)}`);
-    assert.match(logs.join('\n'), /FAILED: uninstall incomplete/);
+    assert.equal(r.ok, true);
+    assert.match(logs.join('\n'), /DSH crew profile removed \(offline, Crew-owned state\)/);
+    const profilePkg = JSON.parse(readFileSync(join(crewProf, 'package.json'), 'utf8'));
+    assert.equal(profilePkg.dependencies?.['@ran-test/dsh-crew'], undefined);
+    // The official web fixture remains untouched because all removal is
+    // derived from the isolated Crew profile path.
+    const officialPkg = JSON.parse(readFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), 'utf8'));
+    assert.ok(officialPkg.dependencies?.['@ran-test/dsh-crew']);
   } finally { t.cleanup(); }
 });
 

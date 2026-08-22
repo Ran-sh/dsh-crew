@@ -1,0 +1,130 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V03-ISOLATED-RUNTIME-FINAL-ACCEPTANCE",
+  "source_commit": "b4125bfc4003500039338546b1e5ebe426d43033",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "Implemented and exercised a reusable Crew-owned DSH runtime path for the isolated final acceptance. Deterministic repository tests (426/426) and the client build pass. The official Harness runtime was reused from the Crew-owned isolated runtime at @deepseek-ai/dsh@0.1.1-rc.2; official ~/.dsh persistent files remained byte/hash unchanged and the official web Harness remained healthy on port 3080. Crew install, isolated Hub compatibility, status, and final uninstall were completed without leaving a Crew process or official-profile registration. The live worker was created and reached a genuine terminal failure with a sanitized selection trace, but could not complete because the Crew-owned profile had no authorized API key. The live policy matrix also has one real failure (I1: raw pro_reviews_flash remained true). Per protocol, Crew is left uninstalled and the overall result is BLOCKED.",
+  "timeline": {
+    "started_at": "2026-08-22T14:00:00+08:00",
+    "completed_at": "2026-08-22T14:47:22+08:00"
+  },
+  "changed_files": [
+    "scripts/setup.mjs",
+    "src/dsh-cli-runtime.mjs",
+    "test/setup.test.mjs",
+    "test/dsh-cli-runtime.test.mjs",
+    "docs/agent-results/v03-isolated-runtime-final-acceptance-result.json"
+  ],
+  "tests": [
+    {
+      "name": "Task contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT (exit 0)."
+    },
+    {
+      "name": "Reusable Crew-owned DSH runtime resolution and deterministic Windows invocation",
+      "status": "PASS",
+      "evidence": "Targeted resolver/setup suite passed 20/20. Explicit CLI and Crew-owned runtime precedence, no-network resolution, reusable runtime provisioning, Crew DSH_HOME injection, Windows .cmd quoting, and offline status/uninstall behavior are covered. Actual runtime resolved as @deepseek-ai/dsh@0.1.1-rc.2 from Crew-owned isolated state."
+    },
+    {
+      "name": "Full deterministic test suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> 426 passed, 0 failed, 0 skipped."
+    },
+    {
+      "name": "Client build",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0; generated tracked lib/client.js was restored to the source revision and is not part of the completion diff."
+    },
+    {
+      "name": "Official persistent ~/.dsh integrity",
+      "status": "PASS",
+      "evidence": "Non-secret metadata and SHA-256 evidence for .credentials.yaml, settings.yaml, profiles/web/package.json, profiles/web/cordis.yml, and profiles/web/pnpm-lock.yaml matched before/after. Credential contents were never read or recorded."
+    },
+    {
+      "name": "Official Harness health after runtime reuse",
+      "status": "PASS",
+      "evidence": "Official default web Harness started with the Crew-owned runtime entry and default official DSH_HOME; http://127.0.0.1:3080/ returned HTTP 200. The official process was left running healthy."
+    },
+    {
+      "name": "Isolated Crew install/status/uninstall",
+      "status": "PASS",
+      "evidence": "Real install reported the isolated dsh-crew profile and integrations installed; final status reported DSH plugin, Codex, and Claude integrations not installed. The final uninstall path removed only the Crew-owned registration offline after the package-manager network probe was unavailable. Crew Hub port 3210 became unreachable, no Crew process remained, and official web health stayed HTTP 200."
+    },
+    {
+      "name": "Crew Hub/runtime compatibility and readiness catalog",
+      "status": "PASS",
+      "evidence": "Isolated Hub on http://127.0.0.1:3210 with profile dsh-crew returned HTTP 200 for runtime, ping, and models. Catalog evidence reported provider_count 1 and model_count 3."
+    },
+    {
+      "name": "Genuine completed worker and sanitized selection trace",
+      "status": "BLOCKED",
+      "evidence": "A genuine job was accepted and reached terminal failed state. The observed trace selected provider deepseek-official, model deepseek-v4-flash, source preferred-default, with no sensitive fields. Completion was blocked because the Crew-owned isolated profile had no authorized API key; the official credential store was not read."
+    },
+    {
+      "name": "Live max_parallel and activation boundaries",
+      "status": "PARTIAL",
+      "evidence": "Deterministic tests pass raise/lower and activation-boundary semantics. Live admission/queue behavior was not fully proven because the authorized worker credential gate prevented a completed workload."
+    },
+    {
+      "name": "Adaptive routing isolated roundtrip and audit behavior",
+      "status": "PARTIAL",
+      "evidence": "Deterministic adaptive-routing coverage passes. Live isolated config enable/disable roundtrip passed and restored enabled=false, window_size=8, min_samples=2; full real warming/reorder/restart execution was not completed because worker execution was credential-blocked."
+    },
+    {
+      "name": "Structured failure propagation",
+      "status": "PARTIAL",
+      "evidence": "Deterministic propagation tests and policy probes pass, and the live worker produced a sanitized terminal failure. The complete live Hub-to-client-to-attempt-to-workflow chain could not be proven without an authorized worker credential."
+    },
+    {
+      "name": "Live policy matrix",
+      "status": "FAIL",
+      "evidence": "node scripts/live-policy-matrix.mjs -> 14/15 passed. I1 failed: review-pipeline expected raw pro_reviews_flash=false but observed raw=true. Other matrix cases and restore checks passed."
+    },
+    {
+      "name": "Policy probe",
+      "status": "PASS",
+      "evidence": "node scripts/policy-probe.mjs -> 13/13 passed against the local MCP surface."
+    },
+    {
+      "name": "Standalone execution",
+      "status": "SKIP",
+      "evidence": "No explicitly authorized/Crew-owned DEEPSEEK_API_KEY was present. node scripts/smoke-real.mjs standalone exited with the expected blocked result without reading official credential files."
+    },
+    {
+      "name": "macOS execution",
+      "status": "SKIP",
+      "evidence": "Executor is Windows; macOS-only smoke was not run."
+    },
+    {
+      "name": "Final local state",
+      "status": "PASS",
+      "evidence": "Because live gates were BLOCKED/FAIL, Crew was left uninstalled. The Crew-owned runtime was retained for reuse, no Crew process remained, the isolated Hub was down, and the official Harness remained healthy."
+    },
+    {
+      "name": "Result validator --stamp",
+      "status": "NOT RUN",
+      "evidence": "Will be executed after this draft's final timeline is written."
+    }
+  ],
+  "blockers": [
+    "The Crew-owned isolated profile had no authorized API key, so a genuine successful worker and the full live worker-dependent acceptance gates could not complete; the official credential store was not read.",
+    "Live policy matrix I1 failed because review-pipeline observed raw pro_reviews_flash=true where false was expected.",
+    "Live max_parallel, adaptive warming/reorder/restart, and the complete end-to-end failure propagation chain remain unproven because worker execution was credential-blocked."
+  ],
+  "result_path": "docs/agent-results/v03-isolated-runtime-final-acceptance-result.json",
+  "notes": [
+    "source_branch: fix/v0.3-isolated-runtime-final-acceptance",
+    "source_commit is the branch tip pulled before implementation: b4125bfc4003500039338546b1e5ebe426d43033",
+    "exact DSH runtime: @deepseek-ai/dsh@0.1.1-rc.2; source: Crew-owned pnpm runtime under isolated Crew DSH_HOME ~/.config/dsh-crew/harness, profile dsh-crew, Hub port 3210",
+    "Official persistent ~/.dsh state was preserved; no credential value, token, API key, secret, or raw vendor payload was copied, exposed, or committed.",
+    "Completion state follows the task rule for any live FAIL/BLOCKED gate: Crew uninstalled and official Harness healthy."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-isolated-runtime-final-acceptance-result.json --stamp",
+    "validated_at": "2026-08-22T06:48:16Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/v03-isolated-runtime-final-acceptance-result.json"
+  }
+}
