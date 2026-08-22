@@ -1,0 +1,68 @@
+{
+  "id": "TASK-V03-HUB-SERVICE-ERROR-CODE",
+  "mode": "IMPLEMENT",
+  "source_branch": "fix/v0.3-hub-service-error-code-zcode",
+  "source_commit": "LATEST",
+  "objective": "Finish issue #30 by preserving bounded structured machine error codes through the Hub /jobs service catch and Hub client without changing routing, retry, escalation, installation, or runtime behavior.",
+  "context": "Most of issue #30 is already implemented on main: adapter/view propagation and workflow failure classification are present. The remaining defect is that src/hub/index.mjs catches hub.spawn() errors and currently returns only { ok:false, error }, discarding err.code / err.policyCode. src/hub-client.mjs also currently accepts any non-blank code string. Implement one shared pure bounded-code helper if useful, wire the Hub jobs catch to emit a top-level code only when err.code or err.policyCode is a valid machine code, and make the Hub client use the same bounded rule. Preserve raw error text for compatibility, never derive codes from error text, never copy arbitrary response fields, and preserve src/hub/index.mjs CRLF line endings exactly apart from the intended semantic hunk. dsh-crew must remain uninstalled locally; do not start or install DSH Crew or modify any DSH profile/config/credentials. This is code-only work using local Git/tests/build.",
+  "allowed_changes": [
+    "src/hub/index.mjs",
+    "src/hub-client.mjs",
+    "src/structured-error-code.mjs",
+    "test/hub-client-error-code.test.mjs",
+    "test/hub-route.test.mjs",
+    "test/structured-error-code.test.mjs",
+    "test/hub-service-error-code-surface.test.mjs",
+    "docs/agent-results/v03-hub-service-error-code-result.json"
+  ],
+  "forbidden_changes": [
+    "any file outside allowed_changes except deletion of docs/agent-tasks/ACTIVE_TASK.json at completion",
+    "package.json, pnpm-lock.yaml, VERSION, release metadata, or .github/workflows/**",
+    "installer/setup/profile behavior or any file under src/install/** or scripts/setup.mjs",
+    "credentials, secrets, ~/.dsh, official Harness profiles, ~/.config/dsh-crew, or any persistent user configuration",
+    "installing, starting, or registering dsh-crew in any local DeepSeek Harness profile",
+    "routing, retry, escalation, adaptive-routing, model-selection, or policy semantic changes",
+    "normalizing or rewriting src/hub/index.mjs line endings; keep its existing CRLF format",
+    "machine-code inference from error message text or arbitrary vendor/provider strings"
+  ],
+  "validation": [
+    "node --test test/structured-error-code.test.mjs test/hub-client-error-code.test.mjs test/hub-route.test.mjs test/error-code-propagation.test.mjs test/workflow-error-code-propagation.test.mjs",
+    "node --test test/*.test.mjs",
+    "pnpm run build:client",
+    "git diff --check",
+    "node -e \"const fs=require('node:fs');const s=fs.readFileSync('src/hub/index.mjs','utf8');if(!s.includes('\\r\\n')||s.replace(/\\r\\n/g,'').includes('\\n'))throw new Error('src/hub/index.mjs must remain CRLF-only');console.log('CRLF_ONLY')\"",
+    "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/v03-hub-service-error-code-result.json --stamp"
+  ],
+  "acceptance_criteria": [
+    "A valid bounded machine code emitted as err.code survives the Hub /jobs catch as the top-level response code.",
+    "When err.code is absent or invalid, a valid bounded err.policyCode survives as the top-level response code.",
+    "Malformed, lowercase, whitespace-only, over-64-character, or otherwise non-machine-code values are not propagated by the service and do not become client error codes; the client falls back to HUB_REQUEST_FAILED.",
+    "The machine-code contract is explicit and bounded (uppercase snake-style identifier, maximum length 64) and is implemented without parsing raw error text.",
+    "Hub client errors do not copy arbitrary response payload fields or secrets.",
+    "Existing raw error-message compatibility remains unchanged apart from addition of the optional top-level code field.",
+    "src/hub/index.mjs remains CRLF-only and its diff contains only the intended import/helper/catch wiring, not whole-file line-ending churn.",
+    "All targeted tests, full deterministic tests, client build, and git diff checks pass.",
+    "No local dsh-crew installation, Hub startup, DSH profile mutation, credential access, or real-environment smoke is performed.",
+    "The Result Contract uses schema_version 2, records second-precision timezone-aware timeline fields, is stamped by the installed v1.8 validator with --stamp, and accurately reports changed files/tests/risks."
+  ],
+  "result_contract": "docs/agent-results/v03-hub-service-error-code-result.json",
+  "completion_commit_contract": [
+    "src/hub/index.mjs",
+    "src/hub-client.mjs",
+    "src/structured-error-code.mjs",
+    "test/hub-client-error-code.test.mjs",
+    "test/hub-route.test.mjs",
+    "test/structured-error-code.test.mjs",
+    "test/hub-service-error-code-surface.test.mjs",
+    "docs/agent-results/v03-hub-service-error-code-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 30,
+    "workflow_version": "1.8.0",
+    "real_environment_required": false,
+    "dsh_crew_must_remain_uninstalled": true
+  }
+}
