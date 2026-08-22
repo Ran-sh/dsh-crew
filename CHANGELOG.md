@@ -25,10 +25,12 @@ DSH Crew v0.3 focuses on runtime compatibility, canonical configuration authorit
 
 ### Compatibility and safety
 
+- Final v0.3 acceptance was completed against the execution-time npm `@latest` for official DeepSeek Harness, `@deepseek-ai/dsh@0.1.1-rc.2`.
 - Legacy Flash/Pro and collaboration-mode inputs remain supported as compatibility commands while canonical schema-v3 state is authoritative.
 - Explicit provider/model priorities remain authoritative and are never reordered by adaptive routing.
 - Credentials, quota, pricing, and raw vendor payloads are never used as adaptive-routing inputs.
 - Real-environment acceptance verified official Harness state remained unchanged across Crew install/status/uninstall/reinstall.
+- Existing DSH peer/dev package constraints are intentionally not bulk-bumped with the top-level CLI because official subpackages do not share one synchronized version line; compatibility is validated against the real Harness runtime instead of guessed from package names.
 
 ### Validation
 
@@ -40,6 +42,6 @@ Final isolated acceptance on Windows completed successfully:
 - Live schema-v3 policy matrix passed 15/15.
 - Genuine OpenCode-backed MCP worker and reviewer-class execution passed with sanitized selection traces.
 - Live concurrency raise/lower, activation boundaries, adaptive routing, structured error propagation, readiness/catalog, isolated install/status/uninstall, and final isolated reinstall all passed.
-- Official Harness returned HTTP 200 before and after acceptance; protected `~/.dsh` metadata/hash evidence was unchanged.
+- Official Harness `@deepseek-ai/dsh@0.1.1-rc.2` returned HTTP 200 on the official web profile after update; protected `~/.dsh` metadata/hash evidence was unchanged.
 - Standalone DeepSeek Official was legitimately skipped because no `DEEPSEEK_API_KEY` was supplied to the executor.
 - macOS smoke remains applicability-skipped because the final executor was Windows.
