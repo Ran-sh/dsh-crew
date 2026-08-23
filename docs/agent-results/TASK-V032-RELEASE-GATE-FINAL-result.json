@@ -1,0 +1,102 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-RELEASE-GATE-FINAL",
+  "source_commit": "6a0cdb43d9c8c901fb096097715aac2d7c5889b2",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "release_gate: RELEASE_READY — immutable_release_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21 is an ancestor of source HEAD with only allowed Result/ACTIVE bookkeeping afterward; v0.3.2 deterministic, package, normal npm install, official cohort, scoped registry, tag, Release, and validated Harness-native full-function gates all pass. No publication or release-state mutation occurred. final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T13:06:00+08:00",
+    "completed_at": "2026-08-23T13:13:00+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V032-RELEASE-GATE-FINAL-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Checkout, source revision, task contract, and clean baseline",
+      "status": "PASS",
+      "evidence": "checkout main and git pull --ff-only completed; source HEAD resolved to 6a0cdb43d9c8c901fb096097715aac2d7c5889b2; the task validator returned VALID TASK CONTRACT; the repository baseline was clean."
+    },
+    {
+      "name": "T02 Immutable product target ancestry and post-target scope",
+      "status": "PASS",
+      "evidence": "17d3eb50ef74993e4ed61dba82a1bfef6659dd21 is an ancestor of source HEAD. git diff --name-only target..HEAD returned exactly docs/agent-results/TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json, docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json, and docs/agent-tasks/ACTIVE_TASK.json; forbidden path count was 0."
+    },
+    {
+      "name": "T03 v0.3.2 identity and Harness acceptance provenance",
+      "status": "PASS",
+      "evidence": "Package name is @ran-sh/dsh-crew; package.json and src/runtime-identity.mjs both report 0.3.2; CHANGELOG.md contains the 0.3.2 entry. TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json passed normal Result validation, has status PASS/result_validation PASS, all test entries PASS, empty blockers, and summary markers FULL_FUNCTION_ACCEPTANCE: PASS plus final_machine_state: INSTALLED."
+    },
+    {
+      "name": "T04 Frozen dependency installation",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile exited 0 with dependencies already up to date under pnpm 11.7.0; no lockfile or product diff was produced."
+    },
+    {
+      "name": "T05 Complete deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs reported tests=449, pass=449, fail=0, cancelled=0, skipped=0, todo=0."
+    },
+    {
+      "name": "T06 Client build and generated-artifact hygiene",
+      "status": "PASS",
+      "evidence": "pnpm run build:client exited 0; tsdown completed and lib/client.js was regenerated, then the deterministic tracked lib/client.js side effect was restored to HEAD."
+    },
+    {
+      "name": "T07 Normal npm candidate install",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install exited 0 with NPM_INSTALL_CONTRACT=PASS candidate=0.3.2 official_dsh=not-run. The verifier used the normal npm resolver without --legacy-peer-deps, --force, --omit=peer, or equivalent bypass."
+    },
+    {
+      "name": "T08 Official DSH cohort audit and candidate install",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official exited 0 with DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.2 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T09 npm pack payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.2, 86 files, package size 888180 bytes, unpacked size 1607531 bytes. Required runtime/client/setup files were present; ACTIVE_TASK, docs/agent-results, tests, node_modules, secrets, temp, credential, and tarball artifacts were absent."
+    },
+    {
+      "name": "T10 Non-mutating npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public exited 0 and reported @ran-sh/dsh-crew@0.3.2 with public latest-tag packaging details. This was a dry-run only; no registry write occurred."
+    },
+    {
+      "name": "T11 Scoped public npm registry state",
+      "status": "PASS",
+      "evidence": "Read-only scoped packument for @ran-sh/dsh-crew reported dist-tags.latest=0.3.1, versions 0.3.0 and 0.3.1 present, and 0.3.2 absent. The unrelated unscoped dsh-crew package was not queried or used."
+    },
+    {
+      "name": "T12 Git tags and GitHub Release preconditions",
+      "status": "PASS",
+      "evidence": "Read-only git ls-remote resolved v0.3.0^{ } to e20f392a8babdaa4d37ffe3239ab3f8885a4a369 and v0.3.1^{ } to dd414a352065e983e1be1b845287e99a50ade9c5; no v0.3.2 tag ref was present. GitHub API lookup for release v0.3.2 returned 404/not found."
+    },
+    {
+      "name": "T13 Final machine and acceptance-process state",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs status reported DSH plugin, Codex Desktop integration, and Claude Code integration installed. Port 3210 was free, node processes matching the Crew MCP server were 0, and no release-gate task-created Hub/MCP process or disposable repository/worktree remained. Pre-existing historical detached worktrees were preserved and not mutated."
+    },
+    {
+      "name": "T14 Repository hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed after build cleanup and the worktree was clean except for this Result Contract while drafting. No product, package, version, documentation, lockfile, workflow, validator, registry, tag, Release, or configuration mutation occurred."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V032-RELEASE-GATE-FINAL-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 6a0cdb43d9c8c901fb096097715aac2d7c5889b2.",
+    "immutable_release_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21; every post-target path is allowed Result/ACTIVE bookkeeping only.",
+    "All registry, tag, Release, npm pack, and publish checks were read-only or dry-run. No npm publish, dist-tag mutation, tag mutation, GitHub Release mutation, branch mutation, force-push, credential access, official DSH access, uninstall, reinstall, purge, or destructive cleanup was performed.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-RELEASE-GATE-FINAL-result.json --stamp",
+    "validated_at": "2026-08-23T05:15:21Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-RELEASE-GATE-FINAL-result.json"
+  }
+}
