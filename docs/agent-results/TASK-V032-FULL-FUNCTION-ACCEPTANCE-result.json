@@ -1,0 +1,157 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-FULL-FUNCTION-ACCEPTANCE",
+  "source_commit": "7f848cfd66520e6a370de6b8dc6c3b42f4296868",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "FULL_FUNCTION_ACCEPTANCE: BLOCKED — deterministic validation (434/434), client build, npm installability and official-DSH cohort audit (20 peers / 21 manifests / 177 cross-cohort checks), installed Crew DSH profile/runtime (profile loader, config dumps, bounded web boot with dsh-crew-hub runtime 0.3.2 and Crew client surface), real MCP stdio protocol (initialize dsh-crew 0.3.2, 6 tools, structured read-only/session calls, clean shutdown), session configuration transitions (SUBAGENTS_DISABLED rejection, policy/routing toggles, exact reset), async job control and cancellation (terminal cancelled/failed classifications, no orphan processes), controlled failure propagation (ROLE_TIER_CONFLICT, EXECUTION_FAILED/escalation_disabled, REVIEW_INCONCLUSIVE; no silent fallback), routing/model-catalog runtime surfaces (hub-live provider endpoint, selection traces, truthful readiness matrix), Codex and Claude integration metadata (single stable-checkout registrations), and final machine state all PASSED on the real Windows machine. The mandatory real worker and real reviewer end-to-end executions are BLOCKED: the configured provider route opencode-alt (worker_provider_mode follow-dsh, flash/pro_model_priority) has no credential — llm-pi-ai reports OPENCODE_ALT_API_KEY not set, no provider credential env var is present (only VISION_API_KEY), DEEPSEEK_API_KEY is absent for standalone, and TEST_ONLY forbids config/provider changes and credential-store reads. final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T10:45:00+08:00",
+    "completed_at": "2026-08-23T11:09:30+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task contract validation and queued provenance",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT. After checkout main + git pull --ff-only, queued HEAD = 7f848cfd66520e6a370de6b8dc6c3b42f4296868; candidate 25ae0ab18b9f123886d24a54c472c33f0ec15ccb is an ancestor; git diff --name-only 25ae0ab..HEAD contains only docs/agent-tasks/ACTIVE_TASK.json."
+    },
+    {
+      "name": "T02 Version identity",
+      "status": "PASS",
+      "evidence": "package.json version = 0.3.2; src/runtime-identity.mjs RUNTIME_VERSION = '0.3.2'. Read-only npm registry check: @ran-sh/dsh-crew latest = 0.9.0 (registry moved beyond 0.3.1 since task authoring; nothing was published or mutated)."
+    },
+    {
+      "name": "T03 Secret-free machine preflight",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs status: DSH plugin installed (dedicated dsh-crew profile), Codex Desktop integration installed, Claude Code integration installed. Crew-owned profile package.json pins @ran-sh/dsh-crew = link:D:/Users/48376/Desktop/dsh-crew and node_modules link realpath resolves to D:\\Users\\48376\\Desktop\\dsh-crew; bundles [@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app, @ran-sh/dsh-crew]. Official ~/.dsh/web state never inspected."
+    },
+    {
+      "name": "T04 Frozen lockfile install",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile -> Already up to date (pnpm v11.7.0, Node v24.18.1, Windows 10.0.22631)."
+    },
+    {
+      "name": "T05 Targeted high-signal suites by functional surface",
+      "status": "PASS",
+      "evidence": "Grouped runs (node --test --test-concurrency=1, TAP reporter, 53 files partitioned, no overlap): setup/installer 44/44; DSH runtime/profile isolation 13/13; MCP/runtime/workflow 77/77; routing/model policy/catalog 134/134; failure propagation 26/26; workspace isolation 29/29; Hub/client/compatibility 29/29; config/readiness/migration 42/42; delivery/security 40/40. All pass, zero cancelled/skipped in every group."
+    },
+    {
+      "name": "T06 Complete deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> tests 434, pass 434, fail 0, cancelled 0, skipped 0, todo 0 (duration 11845ms)."
+    },
+    {
+      "name": "T07 Client build gate",
+      "status": "PASS",
+      "evidence": "pnpm run build:client -> tsdown complete (entry.cjs 110.75 kB, gzip 26.65 kB), scripts/build-client.mjs wrapped lib/client.js (107158 B) as module @ran-sh/dsh-crew. Regenerated lib/client.js restored to tracked state; worktree clean after restore."
+    },
+    {
+      "name": "T08 npm installability of packed 0.3.2 candidate",
+      "status": "PASS",
+      "evidence": "The in-repo verify:npm-install script is version-pinned to candidateVersion '0.3.1' and its own guard refuses to run at 0.3.2 (stale guard; defect noted). Faithful equivalent executed with identical steps/flags: npm pack -> ran-sh-dsh-crew-0.3.2.tgz (887149 B); plain npm install --prefix <tmp> --no-save --package-lock=false --ignore-scripts --no-audit --no-fund (no --legacy-peer-deps/--force/--omit=peer) -> PASS; installed package.json 0.3.2, RUNTIME_VERSION 0.3.2, src/hub/entry.mjs and lib/client.js present."
+    },
+    {
+      "name": "T09 Bounded official DSH cohort audit",
+      "status": "PASS",
+      "evidence": "Same audit logic and helpers as the in-repo script (fetchPublicManifest, satisfiesCohortRange): candidate peers pinned exactly 0.1.1-rc.2, direct_peers=20, manifests=21, cross_cohort_checks=177 -> DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2."
+    },
+    {
+      "name": "T10 Pack payload and publish dry-run",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json: 86 files, expected entries present (package.json, README.md, LICENSE, src/server.mjs, src/hub/entry.mjs, lib/client.js, scripts/setup.mjs, cordis.patch.yml); no ACTIVE_TASK/agent-results/test-only/temp/secret artifacts (only .mcp.json, the intentional secret-free MCP discovery config, 138 B). npm publish --dry-run --access public -> non-mutating success notice; no registry write."
+    },
+    {
+      "name": "T11 Installed Crew DSH runtime smoke",
+      "status": "PASS",
+      "evidence": "Crew DSH CLI = crew-runtime@0.1.1-rc.2 under Crew DSH_HOME (~/.config/dsh-crew/harness). dsh --profile dsh-crew --dump-config: exit 0, composed 18 KB profile tree including the @ran-sh/dsh-crew layer (dsh-crew-hub) and the profile's cordis.patch.yml layer; --dump-default-config: exit 0 (507 lines). Bounded web boot (dsh --profile dsh-crew --port 3199 --no-open, Crew DSH_HOME): startup line 'dsh web: http://127.0.0.1:3199', page HTTP 200 (14782 B) with __ModuleLoader__ requesting @ran-sh/dsh-crew; /_dsh/dsh-crew/runtime returned 200 {\"ok\":true,\"service\":\"dsh-crew-hub\",\"runtime_version\":\"0.3.2\",\"protocol_version\":1,\"capabilities\":[\"jobs\",\"jobs-wait\",\"jobs-cancel\",\"roles\",\"attempt-index\",\"model-policy\",\"model-catalog\",\"presets\",\"config\"]}; no console/runtime startup errors."
+    },
+    {
+      "name": "T12 Real MCP stdio protocol smoke",
+      "status": "PASS",
+      "evidence": "MCP SDK client (StdioClientTransport) against node src/server.mjs: initialize -> serverInfo {name dsh-crew, version 0.3.2}; tools/list -> exactly 6 tools: dsh_run_worker, dsh_worker_config, dsh_spawn_worker, dsh_worker_status, dsh_worker_result, dsh_worker_cancel. dsh_worker_config {} -> 37-key structured report (effective policy, routing guidance, global defaults incl. hub_url 127.0.0.1:3210, runtime controls, activation boundaries, readiness matrix); dsh_worker_status -> []; dsh_worker_result {job_id missing} -> structured error 'no such job ... (expected a wf- workflow id)'; clean shutdown."
+    },
+    {
+      "name": "T13 Session configuration transitions",
+      "status": "PASS",
+      "evidence": "Via dsh_worker_config on the live server: read defaults (enabled true, effort max, mode auto, flash/pro auto, balanced, direct-allowed); enabled=false -> dsh_run_worker rejected with code SUBAGENTS_DISABLED and failure classification POLICY_REJECTED; toggle collaboration_mode=review-pipeline + main_agent_mode=coordinator-first + default_effort=high + tier_policy=pro-only -> effective_policy changed to 'mode=review-pipeline flash=disabled pro=auto' and routing guidance changed to review-pipeline semantics; reset -> report matches initial exactly. Session-only; no global config mutation."
+    },
+    {
+      "name": "T14 REAL worker workflow (mandatory live)",
+      "status": "BLOCKED",
+      "evidence": "Real blocking run through the installed runtime (hub live on 127.0.0.1:3210, disposable git workspace 62f0ed9): workflow wf-mt57z5kq created, isolated worktree under Temp/dsh-crew-worktrees, baseline captured, primary_workspace_dirty=false, hub attempt hub-1 dispatched provider=opencode-alt model=deepseek-v4-flash (selection_source=priority) -> llm-pi-ai error: 'no credential for provider route \"opencode-alt\"; its profile resolves OPENCODE_ALT_API_KEY, which is not set' -> workflow terminal EXECUTION_FAILED / escalation_disabled; candidate captured; NO silent fallback (host did not perform the task). Root cause is environment credential absence, not a runtime defect: env scan (names only) finds only VISION_API_KEY; no provider credential env vars; DEEPSEEK_API_KEY absent (standalone row CREDENTIAL_STATUS_NOT_PROBED). TEST_ONLY forbids config/provider changes; credential stores must not be read. Per Task Contract this condition requires BLOCKED, not PASS."
+    },
+    {
+      "name": "T15 REAL reviewer workflow (mandatory live)",
+      "status": "BLOCKED",
+      "evidence": "Explicit role=reviewer run on the completed disposable candidate: reviewer role enforced (review-only), hub attempt hub-4 dispatched provider=opencode-alt model=deepseek-v4-pro (strategy strong) -> same llm-pi-ai credential error -> workflow completed with structured review object {verdict inconclusive, findings [], evidence [], risks [], delivery_complete false, status failed} and failure classification REVIEW_INCONCLUSIVE; no unauthorized file modification (shared isolation, no changes). The real reviewer agent execution is blocked by the same absent credential; the reviewer role/review-only machinery itself functioned end-to-end."
+    },
+    {
+      "name": "T16 Async job control",
+      "status": "PASS",
+      "evidence": "dsh_spawn_worker -> {phase created, status running, id wf-..., isolation shared}; dsh_worker_status lists all session workflows with coherent phase/status/attempt/model; dsh_worker_result {job_id, wait_seconds} returns terminal views with child_attempts, selection_trace, outcome, delivery, candidate; failed attempts are EXECUTION_FAILED with escalation_disabled terminal (escalate_on_failure=false in config) — job control mechanics fully coherent; the underlying agent attempt failed on credentials as recorded in T14/T15."
+    },
+    {
+      "name": "T17 Cancellation and bounded long-running job",
+      "status": "PASS",
+      "evidence": "Spawned a deliberately bounded long-running worker task (wait 120s), cancelled immediately: terminal {phase cancelled, status cancelled, failure category cancelled / CANCELLED, error null, cleanup_warning null, workspace_retained false}; no orphan process or job remained; dsh_worker_status confirmed terminal cancelled view. Escalation semantics (session escalate_on_failure=true) exercised: attempt 0 flash fail -> bounded attempt 1 pro fail -> workflow failed; no infinite retry."
+    },
+    {
+      "name": "T18 Controlled error/failure propagation",
+      "status": "PASS",
+      "evidence": "Invalid/conflicting request: role=reviewer + legacy_tier=flash -> structured code ROLE_TIER_CONFLICT with no workflow created. Deliberately failing disposable worker task -> EXECUTION_FAILED / escalation_disabled with full failure classification; no silent fallback to the host doing the worker's task. Disabled/manual tier boundaries: flash_state=disabled/manual shifts the resolved model class (worker dispatched on deepseek-v4-pro) — legacy hints map to model class, not role gate. Escalation bounded per policy; no network abuse."
+    },
+    {
+      "name": "T19 Routing/model-selection/model-catalog runtime",
+      "status": "PASS",
+      "evidence": "Hub-live /_dsh/dsh-crew/provider: {worker_provider_mode follow-dsh, effective_worker_selection flash=opencode-alt/deepseek-v4-flash, pro=opencode-alt/deepseek-v4-pro, source priority}; /_dsh/dsh-crew/models: 4 providers / 9 models, harness_default deepseek-official, health attention=false. Selection traces in child_attempts show candidate_set primary/escalation, strategy balanced/strong, legacy flash/pro hints resolved to model class (deepseek-v4-flash / deepseek-v4-pro) rather than role. Readiness matrix live: PASS 2 (hub_compatibility LIVE_CHECK_PASSED, provider_catalog PROVIDER_CATALOG_RESOLVED), FAIL 0, BLOCKED 0, NOT_RUN 9 (real-execution rows correctly NOT_RUN — no execution evidence). No secret values surfaced in any response (credential errors reference env var names only)."
+    },
+    {
+      "name": "T20 Codex Desktop integration metadata",
+      "status": "PASS",
+      "evidence": "~/.codex/config.toml parses as valid TOML; single mcp_servers entry dsh-crew = {command 'node', args ['D:/Users/48376/Desktop/dsh-crew/src/server.mjs']} (no duplicate/stale crew entries); agent TOMLs ds-flash/ds-pro/ds-reviewer/ds-worker each parse valid and reference the stable checkout/server.mjs; prompts dsh-config.md + dsh-status.md present; 18 timestamped dsh-crew-backup files are installer pre-edit snapshots, not active duplicates. Only Crew-managed, non-secret metadata inspected."
+    },
+    {
+      "name": "T21 Claude Code integration metadata",
+      "status": "PASS",
+      "evidence": "~/.claude/settings.json parses valid JSON; enabledPlugins['dsh-crew@dsh-crew']=true; extraKnownMarketplaces.dsh-crew = {source directory, path D:\\Users\\48376\\Desktop\\dsh-crew} (folder-plugin marketplace = stable checkout; plugin .mcp.json uses ${CLAUDE_PLUGIN_ROOT}/src/server.mjs); permissions.allow contains exactly the 6 mcp__plugin_dsh-crew_dsh-crew__dsh_*_worker tool permissions; statusLine includes the checkout's statusline/worker-segment reference; .claude-plugin/marketplace.json name dsh-crew. No duplicate stale crew registrations."
+    },
+    {
+      "name": "T22 Config/readiness/migration surfaces (disposable roots)",
+      "status": "PASS",
+      "evidence": "Disposable-root runtime smoke: legacy-shaped config file (no schema_version) read -> merged defaults preserved (default_tier flash, mode auto, timeout 600) -> writeGlobalConfig patch -> read-back round-trip on the disposable file, root removed after. Semantics (legacy migration, activation boundaries, readiness matrix, model priority/fallback, workspace isolation) additionally covered by the passing deterministic suites: config-activation-surface, config-authority, config-migration-v2, config-readiness, config-readiness-surface, default-config, readiness-matrix, workspace-audit, workspace-isolation, worktree-runtime (71 tests across groups)."
+    },
+    {
+      "name": "T23 Final machine state and idempotent install",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs install (idempotent, non-destructive): dependencies already present (skipped), client build, 'DSH crew profile linked offline (dedicated Crew DSH_HOME, profile dsh-crew; already current)', Codex Desktop integration, Claude Code integration — all OK. No uninstall/purge performed. Final status: DSH plugin installed (dedicated dsh-crew profile), Codex installed, Claude installed. Official ~/.dsh untouched. Worktree clean; git diff --check clean; lib/client.js deterministic side effect restored."
+    },
+    {
+      "name": "T24 Result contract validation",
+      "status": "NOT RUN",
+      "evidence": "Stamped by the installed validator immediately after this draft was completed (see result_validation)."
+    }
+  ],
+  "blockers": [
+    "No runnable provider backend for mandatory live worker/reviewer executions: configured route opencode-alt (worker_provider_mode follow-dsh; flash_model_priority/pro_model_priority = opencode-alt) reports no credential — llm-pi-ai: OPENCODE_ALT_API_KEY not set (not in process environment, not in the credentials service). Environment scan (names only) shows no provider credential env vars (only VISION_API_KEY); DEEPSEEK_API_KEY absent so standalone is not runnable either (readiness row standalone_official = CREDENTIAL_STATUS_NOT_PROBED). TEST_ONLY forbids provider/config changes and credential-store reads; per Task Contract this mandates BLOCKED for the mandatory live worker and reviewer runs.",
+    "Automatic worker->reviewer pipeline cannot be evidenced without a successful worker execution (same credential root cause); the explicit reviewer path was exercised instead (T15) and is likewise blocked at the agent attempt."
+  ],
+  "result_path": "docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json",
+  "notes": [
+    "Environment: Windows 10.0.22631, Node v24.18.1, pnpm v11.7.0; repository on main at queued HEAD 7f848cf; candidate 25ae0ab (0.3.2); no product/source/test/package/version/lockfile/workflow/installer changes made; no publish, no tag/branch/release mutation; no official ~/.dsh, ~/.dsh/web, credential store or secret material inspected; no --purge or destructive deletion; no resolver bypass flags used.",
+    "Registry fact: public npm latest for @ran-sh/dsh-crew is 0.9.0 as of 2026-08-23 (the task context anticipated it 'may still be 0.3.1'); the 0.3.2 candidate was never published and no dist-tag or registry write occurred. npm publish --dry-run stayed non-mutating.",
+    "feature_matrix: {\"installer/lifecycle\":{\"status\":\"PASS\",\"evidence\":\"idempotent install + final status both PASS; profile link resolves to stable checkout; prior lifecycle acceptance (TASK-V032-INSTALLER-POLICY-LIFECYCLE) already proved first install/status/idempotence/uninstall/reinstall on this machine\"},\"dsh_profile_runtime\":{\"status\":\"PASS\",\"evidence\":\"profile compose dumps exit 0 incl. @ran-sh/dsh-crew layer; bounded web boot served page 200 with Crew client and /_dsh/dsh-crew/runtime 200 runtime_version 0.3.2\"},\"mcp_protocol_tools\":{\"status\":\"PASS\",\"evidence\":\"initialize dsh-crew 0.3.2, tools/list = 6 expected worker/config/job-control tools, structured responses, clean shutdown\"},\"session_config\":{\"status\":\"PASS\",\"evidence\":\"disable->SUBAGENTS_DISABLED, toggles changed effective policy + routing guidance, reset exact\"},\"hub_plugin_ui_build_runtime\":{\"status\":\"PASS\",\"evidence\":\"hub live handshake with capabilities list; page serves __ModuleLoader__ + @ran-sh/dsh-crew client; build:client PASS; runtime endpoint identity 0.3.2\"},\"routing_model_catalog\":{\"status\":\"PASS\",\"evidence\":\"provider/models endpoints resolved; selection traces flash/pro->opencode-alt with legacy hints mapped to model class; readiness matrix truthful (PASS 2 / NOT_RUN 9); no secrets surfaced\"},\"blocking_worker\":{\"status\":\"BLOCKED\",\"evidence\":\"real attempt dispatched (worktree isolation, baseline, candidate capture, EXECUTION_FAILED/escalation_disabled terminal, no silent fallback) but agent execution blocked: no credential for configured route opencode-alt\"},\"reviewer\":{\"status\":\"BLOCKED\",\"evidence\":\"explicit reviewer attempt dispatched on pro selection; same credential blocker; role enforcement + review-only structure + structured review object proven\"},\"auto_review\":{\"status\":\"BLOCKED\",\"evidence\":\"requires a successful worker execution first (same root cause); explicit reviewer path exercised instead; reviewer_pipeline readiness row NOT_RUN accurately\"},\"async_jobs\":{\"status\":\"PASS\",\"evidence\":\"spawn/list/get/poll/result coherent with terminal views, attempts, selection traces; no job-view incoherence\"},\"cancellation\":{\"status\":\"PASS\",\"evidence\":\"immediate cancel of bounded long-running job -> terminal cancelled/CANCELLED, error null, worktree released, no orphan process/job (see note on one stale worktree from a FAILED job, cleaned manually)\"},\"failure_propagation\":{\"status\":\"PASS\",\"evidence\":\"ROLE_TIER_CONFLICT structured pre-dispatch rejection; EXECUTION_FAILED/escalation_disabled structured; REVIEW_INCONCLUSIVE; bounded escalation attempt 0->1; no silent fallback to host\"},\"config_readiness_migration\":{\"status\":\"PASS\",\"evidence\":\"disposable-root legacy read/merge/write round-trip + 71 passing deterministic tests across config/readiness/activation/migration surfaces\"},\"workspace_isolation_security\":{\"status\":\"PASS\",\"evidence\":\"live worker runs used isolated worktrees under Crew-owned Temp/dsh-crew-worktrees, primary workspace stayed clean (dirty=false), baseline/diff redaction + candidate capture; workspace-audit/isolation/worktree tests pass; official ~/.dsh untouched\"},\"codex_integration\":{\"status\":\"PASS\",\"evidence\":\"valid config.toml with single dsh-crew MCP entry -> stable checkout server.mjs; 4 agent TOMLs valid; prompts present; no stale dups\"},\"claude_integration\":{\"status\":\"PASS\",\"evidence\":\"settings.json valid; enabledPlugins dsh-crew@dsh-crew; directory marketplace = stable checkout; 6 tool allow permissions; statusline segment; single registration\"},\"npm_package_installability\":{\"status\":\"PASS\",\"evidence\":\"packed 0.3.2 plain npm install PASS (no bypass flags); payload audit clean (86 files, expected entries, no forbidden artifacts); publish dry-run non-mutating; in-repo verify script guard pinned to 0.3.1 noted as stale (equivalent verification for 0.3.2 PASS)\"},\"official_dsh_cohort_compatibility\":{\"status\":\"PASS\",\"evidence\":\"bounded audit PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177; Crew profile composes official bundles dsh-base + dsh-web-app\"}}",
+    "Defects/observations (not fixed; out of TEST_ONLY scope): 1) scripts/verify-npm-install.mjs pins candidateVersion='0.3.1' so the script's own guard refuses to run on the 0.3.2 candidate ('package.json must be 0.3.1'); the identical verification executed for 0.3.2 passes (T08/T09). 2) One of eight disposable hub worktrees (dsh-crew-wf-mt57z5kq-6x5m07-5f00ebcd) remained registered after a FAILED job even though the workflow reported workspace_retained=false and cleanup_warning=null; it was removed manually with git worktree remove --force; the other seven cleaned correctly — possible Windows lock-timing edge in failed-job cleanup, low severity, candidate for follow-up. 3) Booting the Crew DSH web runtime spawns helper grandchildren (an npm install helper process and per-boot MCP server subprocesses) that survived a tree-kill of the web server; these were cleaned manually before completion (not a product defect claim, but worth verifying the intended lifecycle of those subprocesses).",
+    "Live-run hygiene: all live jobs used disposable git workspace C:/Users/48376/AppData/Local/Temp/dsh-funct-accept/live-ws (removed after evidence collection) and Crew-owned worktrees under the OS temp dir; the acceptance hub (booted solely for this test on 127.0.0.1:3210, the configured hub_url) was shut down at completion; ports 3210/3199 free; no orphan node processes remain (verified via tasklist + netstat after cleanup).",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json --stamp",
+    "validated_at": "2026-08-23T03:12:05Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-FULL-FUNCTION-ACCEPTANCE-result.json"
+  }
+}
