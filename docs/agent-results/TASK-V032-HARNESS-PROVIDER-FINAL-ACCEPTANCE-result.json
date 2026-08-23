@@ -1,0 +1,87 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE",
+  "source_commit": "5680c68a1181b557524169221f138eeda3249346",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "FULL_FUNCTION_ACCEPTANCE: PASS — the Crew-owned DeepSeek Harness catalog exposed opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro, and real Crew Hub/MCP execution successfully completed a flash worker, explicit pro reviewer, and automatic flash-worker-to-pro-reviewer pipeline without direct credential-store access or ad-hoc key injection. Cancellation, worktree cleanup, exact Crew config restoration, process/port cleanup, and installed final state all passed. final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T12:42:00+08:00",
+    "completed_at": "2026-08-23T13:01:20+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Checkout, source revision, task contract, identity, and installed baseline",
+      "status": "PASS",
+      "evidence": "checkout main and git pull --ff-only completed at source SHA 5680c68a1181b557524169221f138eeda3249346; the worktree was clean; node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json returned VALID TASK CONTRACT; package.json and RUNTIME_VERSION both report 0.3.2; node scripts/setup.mjs status reported DSH plugin, Codex Desktop, and Claude Code installed."
+    },
+    {
+      "name": "T02 Crew-owned Harness runtime and provider catalog",
+      "status": "PASS",
+      "evidence": "The reusable Crew runtime resolved as @deepseek-ai/dsh@0.1.1-rc.2 under C:/Users/48376/.config/dsh-crew/harness with profile dsh-crew. Crew-only dump-config/default-config commands exited 0 and exposed the @ran-sh/dsh-crew layer. The bounded Crew Hub runtime endpoint returned service dsh-crew-hub/runtime_version 0.3.2/protocol_version 1; /models returned 4 providers including opencode-go with deepseek-v4-flash and deepseek-v4-pro, and health reported attention=false with no warnings."
+    },
+    {
+      "name": "T03 Pre-mutation Crew config snapshot and temporary route override",
+      "status": "PASS",
+      "evidence": "Before mutation, ~/.config/dsh-crew/config.json was snapshotted outside the repository as 3164 bytes with SHA-256 b6a93a095a8151da37fc3e187a69024f84ce3a3bae85ecf0b7b7d58bb42e1047. Crew's writeGlobalConfig temporarily set worker_provider_mode=follow-dsh and flash/pro priorities to opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro. The live /provider endpoint reflected both exact selections with source=priority. No credential or auth store was read or changed."
+    },
+    {
+      "name": "T04 Real flash worker through Crew Hub/MCP",
+      "status": "PASS",
+      "evidence": "Blocking workflow wf-mt5c1aae-5c4oa2 executed through the real MCP stdio server and Crew Hub on disposable git repository C:/Users/48376/AppData/Local/Temp/dsh-crew-harness-live-1787460837673. It reached done/completed/verified with provider=opencode-go, model=deepseek-v4-flash, isolation=worktree, candidate_available=true, candidate_changed=[src/answer.mjs], outcome_task=success, tests=PASS, primary_workspace_dirty=false, and cleanup_warning=null. No host fallback performed the task."
+    },
+    {
+      "name": "T05 Real explicit pro reviewer through Crew Hub/MCP",
+      "status": "PASS",
+      "evidence": "Reviewer workflow wf-mt5c3a3b-q1puvg inspected the completed worker candidate through the real Crew path with provider=opencode-go and model=deepseek-v4-pro. It reached done/completed, returned verdict=approve with delivery_complete=true, findings/evidence/risks counts 1/5/1, and mutated_candidate=false. The reviewer was shared/review-only and introduced no candidate mutation."
+    },
+    {
+      "name": "T06 Real automatic worker-to-reviewer pipeline",
+      "status": "PASS",
+      "evidence": "With the temporary canonical collaboration_mode=review-pipeline and the same Crew-owned Harness priorities, workflow wf-mt5c4ukx-6d3m0x reached done/completed with decision step=review. Its same-workflow child attempts were worker opencode-go/deepseek-v4-flash done/success followed by reviewer opencode-go/deepseek-v4-pro done/success; the automatic review returned approve, delivery_complete=true, findings/evidence/risks counts 1/4/1, and mutated_candidate=false."
+    },
+    {
+      "name": "T07 Cancellation semantics and worktree allocation",
+      "status": "PASS",
+      "evidence": "Async workflow wf-mt5c7e17-ekx2fm reached running with isolation=worktree and an allocated C:/Users/48376/AppData/Local/Temp/dsh-crew-worktrees/... path before dsh_worker_cancel. It terminated as phase=cancelled/status=cancelled with workspace_retained=false and cleanup_warning=null; no child attempt remained."
+    },
+    {
+      "name": "T08 Task-created worktree/repository cleanup",
+      "status": "PASS",
+      "evidence": "The three task-created worktrees were removed with git worktree remove --force from their exact disposable repositories; both disposable repositories and the temporary Hub log directory were removed. Independent checks reported all known task repo/worktree paths absent and no task-created worktree remained registered or on disk."
+    },
+    {
+      "name": "T09 Finally cleanup: Hub, MCP processes, port, and config restoration",
+      "status": "PASS",
+      "evidence": "The acceptance Hub PID 9820 and its child process tree were terminated; port 3210 is free and node processes matching the task's src/server.mjs are 0. The Crew config was restored from the exact snapshot and rechecked at 3164 bytes with SHA-256 b6a93a095a8151da37fc3e187a69024f84ce3a3bae85ecf0b7b7d58bb42e1047; exactBytes=true and exactDigest=true."
+    },
+    {
+      "name": "T10 Final installed machine state and isolation boundary",
+      "status": "PASS",
+      "evidence": "After cleanup, node scripts/setup.mjs status again reported DSH plugin, Codex Desktop integration, and Claude Code integration installed. Only Crew-owned DSH_HOME/profile was used; official ~/.dsh/web and all credential/token stores were not read or changed. No provider-key environment injection, install/uninstall/purge, product change, npm mutation, tag, Release, or branch mutation occurred."
+    },
+    {
+      "name": "T11 Repository hygiene",
+      "status": "PASS",
+      "evidence": "git diff --check passed and the repository remained clean while drafting except for this Result Contract. No product source, tests, package metadata, README, CHANGELOG, lockfile, workflow, or validator files were modified."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 5680c68a1181b557524169221f138eeda3249346.",
+    "Harness was the provider/credential authority for all successful live worker/reviewer executions. No OpenCode auth store, Harness credential file/store, API key, token, cookie, OTP, or auth header was opened, copied, hashed, printed, or injected.",
+    "The MCP child emitted the bounded Windows diagnostic 'ps is not recognized' from existing orchestrator detection; it did not affect connection, route selection, model execution, workflow verification, review, or cleanup. No product change was made because this task is TEST_ONLY.",
+    "The temporary routing override used Crew's own writer and was restored byte-for-byte in the finally cleanup path. final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json --stamp",
+    "validated_at": "2026-08-23T05:01:54Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-HARNESS-PROVIDER-FINAL-ACCEPTANCE-result.json"
+  }
+}
