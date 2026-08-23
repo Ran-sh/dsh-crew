@@ -238,9 +238,15 @@ export function createWorkflowRuntime(adapters, {
     if (!job.workspaceHandle) return;
     try {
       const r = await adapters.releaseWorkspace(job.workspaceHandle);
-      if (!r || r.ok !== true) job.cleanup_warning = r?.error ?? 'worktree cleanup failed';
+      if (!r || r.ok !== true) {
+        // A failed cleanup leaves the isolated workspace in place; say so
+        // truthfully instead of claiming a clean release.
+        job.cleanup_warning = r?.error ?? 'worktree cleanup failed';
+        job.workspace_retained = true;
+      }
     } catch (err) {
       job.cleanup_warning = err?.message ?? String(err);
+      job.workspace_retained = true;
     }
     job.workspaceHandle = null;
   }

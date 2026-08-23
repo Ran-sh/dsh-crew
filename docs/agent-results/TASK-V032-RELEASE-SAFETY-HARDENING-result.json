@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-RELEASE-SAFETY-HARDENING",
+  "source_commit": "112fcfa2484afe3c91b12f914763d179cfb9091d",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "V032_RELEASE_SAFETY: BLOCKED — the unexpected public 0.9.0/latest state is classified DIFFERENT_PUBLISHER with decisive evidence: the scoped @ran-sh/dsh-crew package only ever published 0.3.0 and 0.3.1 (latest=0.3.1, maintainer rss1001); the 0.9.0 belongs to the UNscoped package `dsh-crew` by stuarthu2026 (Stuart Hu) at github.com/stuarthu/dsh-crew, whose gitHead 7bc7181... is not an object in this repository and whose tarball metadata (author, README, CHANGELOG) shows an independent DSH role-crew project. The earlier '0.9.0 on @ran-sh/dsh-crew' observation was a package-name collision from querying the unscoped name; the prior Result Contract's registry line is corrected here. Per fail-closed instruction, npm is NOT mutated to 'fix' the foreign package and release safety remains BLOCKED pending the recommended human/account-security follow-up. All code gates PASSED: the npm-install verifier now derives the candidate version from package.json (verify:npm-install and verify:npm-install:official both PASS for candidate 0.3.2 natively, DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2, 20 peers/21 manifests/177 cross-cohort checks; 10/10 verifier regression tests), worktree cleanup is now bounded and truthful (transient lock retry, verified fallback, persistent failures surface workspace_retained=true + cleanup_warning; 10 new isolation/runtime regression tests), full deterministic suite 449/449 with the 15 new tests, client build PASS with tracked side effects restored, git diff --check clean, pack/publish dry-runs non-mutating with a clean 86-file payload. OpenCode CLI readiness could not be probed (CLI absent from PATH and standard locations; nothing installed or mutated). final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T11:35:00+08:00",
+    "completed_at": "2026-08-23T12:08:30+08:00"
+  },
+  "changed_files": [
+    "scripts/verify-npm-install.mjs",
+    "test/verify-npm-install.test.mjs",
+    "src/workspace-isolation.mjs",
+    "src/workflow-runtime.mjs",
+    "test/workspace-isolation.test.mjs",
+    "test/workflow-runtime.test.mjs",
+    "CHANGELOG.md",
+    "docs/agent-results/TASK-V032-RELEASE-SAFETY-HARDENING-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Task contract validation and clean baseline",
+      "status": "PASS",
+      "evidence": "After checkout main + git pull --ff-only, node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json -> VALID TASK CONTRACT. Source resolved to LATEST: HEAD 112fcfa2484afe3c91b12f914763d179cfb9091d (queued commit 'chore: queue v0.3.2 release-safety hardening'); working tree clean."
+    },
+    {
+      "name": "T02 Scoped @ran-sh/dsh-crew registry audit (read-only)",
+      "status": "PASS",
+      "evidence": "registry=https://registry.npmjs.org/: dist-tags latest=0.3.1; versions [0.3.0, 0.3.1]; maintainers [rss1001 <483763727@qq.com>]; created 2026-08-22T13:12:39.276Z; 0.3.0 published 2026-08-22T13:12:39.619Z, 0.3.1 published 2026-08-22T15:43:23.981Z; @ran-sh/dsh-crew@0.9.0 -> E404 'No match found for version 0.9.0'. The repo's own package has exactly the intended published timeline (0.3.1 baseline, 0.3.2 unpublished candidate)."
+    },
+    {
+      "name": "T03 Unscoped dsh-crew registry audit (read-only)",
+      "status": "PASS",
+      "evidence": "The package actually carrying 0.9.0/latest is the UNscoped `dsh-crew`: dist-tags latest=0.9.0; 17 versions 0.1.0..0.9.0 published 2026-08-18T00:15:52Z .. 2026-08-21T23:06:08Z; maintainers [stuarthu2026 <stuarthu2002@hotmail.com>]. It predates @ran-sh/dsh-crew (created 2026-08-18 vs 2026-08-22)."
+    },
+    {
+      "name": "T04 Unscoped 0.9.0 manifest metadata (non-secret)",
+      "status": "PASS",
+      "evidence": "dsh-crew@0.9.0: description 'DeepSeek Harness (dsh) plugin: run work as a small crew of role agents...'; repository git+https://github.com/stuarthu/dsh-crew.git; homepage github.com/stuarthu/dsh-crew#readme; gitHead 7bc71817156bf6e7f2965d2746a8ccfe1dde4685; engines node>=18; peerDependencies @deepseek-ai/dsh-tool-subagent:*; license MIT; _npmUser 'GitHub Actions <npm-oidc-no-reply@github.com>' (CI-published). No secret or auth material read or printed."
+    },
+    {
+      "name": "T05 Local git all-refs provenance audit",
+      "status": "PASS",
+      "evidence": "All refs audited: 3 tags (upstream-baseline-2026-08-18, v0.3.0, v0.3.1), 15 remote branches (feature/fix/test/release/ops only), 302 commits across --all: zero 0.9.0 references; no 0.9.0 strings in package.json/CHANGELOG.md/README.md; `git cat-file -e 7bc71817156bf6e7f2965d2746a8ccfe1dde4685` -> NOT an object in this repository. The 0.9.0 artifact is therefore provably NOT sourced from Ran-sh/dsh-crew."
+    },
+    {
+      "name": "T06 Disposable tarball metadata inspection (no execution)",
+      "status": "PASS",
+      "evidence": "npm pack dsh-crew@0.9.0 downloaded the tarball (230570 B) to a disposable directory (no lifecycle scripts executed); extracted and inspected package.json/README.md/CHANGELOG.md metadata only: author 'Stuart Hu', own repository URL, own README (English/中文) describing an independent 'small crew of role agents' DSH plugin, own CHANGELOG ('0.9.0 — 2026-08-22'). No relation to Ran-sh/dsh-crew authorship or history. Disposable directory removed afterward."
+    },
+    {
+      "name": "T07 Provenance classification",
+      "status": "PASS",
+      "evidence": "Classification: DIFFERENT_PUBLISHER. The @ran-sh/dsh-crew package itself is unaffected (only 0.3.0/0.3.1 ever, latest 0.3.1, maintainer rss1001); the 0.9.0 belongs to a different publisher (stuarthu2026 / Stuart Hu / github.com/stuarthu/dsh-crew) with an independent project. The prior acceptance's 'unexpected latest=0.9.0' was a name-collision reading of the unscoped package; this Result corrects that record. Per validation instruction, npm was NOT mutated to 'fix' anything; release safety remains BLOCKED (fail-closed) with the recommended follow-ups recorded in notes/blockers. This task never publishes 0.3.2."
+    },
+    {
+      "name": "T08 Verifier unit tests",
+      "status": "PASS",
+      "evidence": "node --test test/verify-npm-install.test.mjs -> 10/10 pass: candidate version derived from manifest (0.3.2 and 9.9.9 temp manifests), no hard-coded '0.3.1'/v031 source constant, 0.3.2 manifest passes its own version guard with expectedCandidateVersion 0.3.2, mismatched manifest fails closed (package.json must be 9.9.9 / expectedCandidateVersion required), missing-manifest and cross-cohort failures preserved, assertInstalled accepts matching package/runtime identity and fails on mismatched package version, mismatched runtime version, and missing hub entry/client artifact."
+    },
+    {
+      "name": "T09 verify:npm-install gate for candidate 0.3.2",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install -> NPM_INSTALL_CONTRACT=PASS candidate=0.3.2 official_dsh=not-run (plain npm resolver install of the packed 0.3.2 tarball; no --legacy-peer-deps/--force/--omit=peer). No manual-equivalent fallback used."
+    },
+    {
+      "name": "T10 verify:npm-install:official gate for candidate 0.3.2",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official -> DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.2 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T11 Worktree cleanup unit regressions (workspace-isolation)",
+      "status": "PASS",
+      "evidence": "node --test test/workspace-isolation.test.mjs -> 16/16: git-remove success path unchanged; locked worktree surfaces WORKTREE_LOCKED + cleanupBlocked; NEW: transient lock retried (remove called >=2) then recovers; persistent lock after bounded retries surfaces 'worktree still registered' and never ok:true; verified fallback success only when registration AND directory are gone; non-Crew-owned paths are never fs-deleted (file kept); the primary repository root is never treated as disposable."
+    },
+    {
+      "name": "T12 Workflow runtime cleanup truthfulness regressions",
+      "status": "PASS",
+      "evidence": "node --test test/workflow-runtime.test.mjs -> 19/19: NEW: failed cleanup (adapter ok:false) -> workspace_retained=true + cleanup_warning /worktree locked/; cleanup adapter exception -> retained=true + warning; successful cleanup after a failed job -> retained=false, warning null; cancelled workflow still runs cleanup and reports a truthful release. Existing retain-on-capture-failure and all state-machine behaviors preserved."
+    },
+    {
+      "name": "T13 Targeted workspace/workflow suites",
+      "status": "PASS",
+      "evidence": "node --test test/workspace-isolation.test.mjs test/workflow-runtime.test.mjs test/workflow.test.mjs -> 53 tests, 53 pass, 0 fail, 0 cancelled, 0 skipped."
+    },
+    {
+      "name": "T14 Complete deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs -> tests 449, pass 449, fail 0, cancelled 0, skipped 0 (was 434 before this task; +15 new regression tests)."
+    },
+    {
+      "name": "T15 Client build and repository hygiene",
+      "status": "PASS",
+      "evidence": "pnpm run build:client -> Build complete (entry.cjs 110.75 kB), lib/client.js wrapped (107158 B) and restored to tracked state; git diff --check clean; only the 8 authorized source/test/CHANGELOG files are modified."
+    },
+    {
+      "name": "T16 pack/publish dry-runs (non-mutating)",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json: ran-sh-dsh-crew-0.3.2.tgz, 86 files; expected entries present (package.json, README.md, LICENSE, src/server.mjs, src/hub/entry.mjs, src/workspace-isolation.mjs, src/workflow-runtime.mjs, lib/client.js); no ACTIVE_TASK/agent-results/test-only/temp/secret artifacts. npm publish --dry-run --access public: dry-run success notice only; no registry write."
+    },
+    {
+      "name": "T17 OpenCode readiness probe",
+      "status": "NOT RUN",
+      "evidence": "opencode is not available on this machine: not on PATH, absent from ~/.opencode/bin, ~/.local/bin, APPDATA npm dirs; `npx --no-install opencode --version` -> 404 (no npm package named opencode). Per instruction the probe is conditional on availability; nothing was installed, configured, or mutated, and no credential file was opened. User-side step for the later live gate: install the OpenCode CLI and log in, or store a credential for a configured DSH route (e.g., OPENCODE_ALT_API_KEY) through the Crew web Models page — out of scope for this task."
+    },
+    {
+      "name": "T18 Final machine state and hygiene",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs status -> DSH plugin installed (dedicated dsh-crew profile), Codex Desktop integration installed, Claude Code integration installed; final_machine_state: INSTALLED. No Hub ports listening (3210/3199 free), zero node.exe processes remain after killing the one npm child orphaned by the Windows npm.cmd wrapper during the verify gate runs, no worktrees created by this task (the 67 pre-existing entries under Temp/dsh-crew-worktrees were not touched). Official ~/.dsh untouched; no uninstall/purge; no publish; no tag/branch/release mutation."
+    }
+  ],
+  "blockers": [
+    "Release safety BLOCKED (fail-closed): the unexpected public 0.9.0/latest state is NOT provably tied to this repository — it is provably a DIFFERENT_PUBLISHER artifact (unscoped package `dsh-crew` by stuarthu2026 / Stuart Hu at github.com/stuarthu/dsh-crew; gitHead 7bc7181 not an object here; independent README/CHANGELOG; earlier 0.9.0 observation was a name-collision with the unscoped package). npm was NOT mutated to 'fix' it. Recommended human/account-security follow-up: (1) have the rss1001 npm account holder verify account credentials/sessions (the scoped package itself shows a clean 0.3.0/0.3.1-only history, so no evidence of compromise — verification is routine fail-closed hygiene); (2) be aware that `npm install dsh-crew` (unscoped) would install the foreign package — always use @ran-sh/dsh-crew in install/publish commands; (3) before any future publish of 0.3.2 or later, re-run this audit and confirm the dist-tag/version state of the scoped package; (4) optionally monitor the unscoped package for behavior changes suggesting typosquatting (no evidence of that today — it is an active legitimate-looking independent project).",
+    "OpenCode readiness could not be confirmed: the opencode CLI is not installed on this machine (PATH, standard locations, and npx --no-install all negative) and this TEST_ONLY/IMPLEMENT task is forbidden from installing or configuring providers. The later mandatory live worker/reviewer gate therefore still requires a user-side step: install+login the OpenCode CLI, or store OPENCODE_ALT_API_KEY (or another configured route's credential) through the Crew web Models page / credentials service."
+  ],
+  "result_path": "docs/agent-results/TASK-V032-RELEASE-SAFETY-HARDENING-result.json",
+  "notes": [
+    "Registry state timeline recorded 2026-08-23: scoped @ran-sh/dsh-crew dist-tags latest=0.3.1, versions [0.3.0 (2026-08-22T13:12:39Z), 0.3.1 (2026-08-22T15:43:23Z)], maintainer rss1001 <483763727@qq.com>, created 2026-08-22T13:12:39Z; unscoped dsh-crew dist-tags latest=0.9.0, versions 0.1.0..0.9.0 (2026-08-18T00:15:52Z..2026-08-21T23:06:08Z), maintainer stuarthu2026 <stuarthu2002@hotmail.com>, repository github.com/stuarthu/dsh-crew.",
+    "Correction to the record: the prior TASK-V032-FULL-FUNCTION-ACCEPTANCE Result Contract stated '@ran-sh/dsh-crew latest = 0.9.0'; that reading used the unscoped package name. The scoped registry state is and was clean (latest=0.3.1).",
+    "Verifier fix evidence: scripts/verify-npm-install.mjs now exports readCandidateVersion() (derives the candidate version from the checkout's package.json), auditOfficialDshCohort() requires an explicit expectedCandidateVersion (fail-closed on mismatch), assertInstalled() is exported with an explicit expected version, the temp prefix is version-agnostic ('dsh-crew-install-verify-'), and the cohort-audit user-agent no longer carries a stale version label ('dsh-crew-cohort-audit'). No source constant edit is needed for the next candidate version; the 0.3.2 gates pass natively (T09/T10). All prior resolver/cohort guarantees preserved (same npm flags, same bounded manifest audit, same peer pinning).",
+    "Worktree cleanup fix evidence: cleanupIsolatedWorkspace() now (a) retries `git worktree remove --force` a bounded 3 times with 150ms backoff (injectable) to recover transient Windows locks, (b) only runs the filesystem fallback for Crew-owned 'dsh-crew-*' paths distinct from the primary root, (c) verifies via `git worktree list --porcelain` that the registration is gone AND the directory is gone before ever claiming removed:true, and (d) reports WORKTREE_LOCKED/cleanupBlocked with the real reason otherwise. workflow-runtime releaseWorkspace() now sets workspace_retained=true plus a non-empty cleanup_warning whenever the release adapter fails or throws, so a persistent cleanup failure is never presented as a clean release. Primary/allowed worktree deletion invariants covered by regression tests (T11/T12).",
+    "Observation (pre-existing, not fixed in this task's scope): the Windows npm.cmd wrapper spawned via spawnSync(shell:true) in the verify script occasionally leaves an orphaned `npm install` child process that outlives the script; it was killed during hygiene (T18). This does not affect the verifier's correctness; a shell:false spawn refactor is out of scope and tracked as an observation.",
+    "OpenCode readiness detail: the DSH harness catalog still advertises provider routes opencode-go / opencode-alt / opencode-muse with models deepseek-v4-flash and deepseek-v4-pro; the configured flash/pro priority remains opencode-alt (from the Crew global config). Provider/model identities recorded from the earlier hub handshake; no credential values, auth files, or token material were read or printed at any point.",
+    "Compliance: read-only registry queries only (no auth config/tokens touched); the 0.9.0 tarball was fetched without executing any scripts and inspected metadata-only in a disposable directory that was removed; no npm/GitHub release/tag/branch/provider/auth mutation; no package.json/runtime-identity/lockfile changes (candidate remains 0.3.2); the stable machine install was not uninstalled or purged and remains INSTALLED (DSH plugin, Codex Desktop integration, Claude Code integration).",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-RELEASE-SAFETY-HARDENING-result.json --stamp",
+    "validated_at": "2026-08-23T04:09:45Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-RELEASE-SAFETY-HARDENING-result.json"
+  }
+}

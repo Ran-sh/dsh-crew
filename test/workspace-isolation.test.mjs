@@ -137,10 +137,89 @@ test('cleanupIsolatedWorkspace reports a locked worktree instead of hiding it', 
   const { runner } = fakeRunner([
     { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
+    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${WORKTREE}\nHEAD ${REV}\n\nworktree /repo\nHEAD ${REV}\n\n` } },
   ]);
-  const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner });
+  const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
   assert.equal(r.ok, false);
   assert.equal(r.reason, WORKTREE_LOCKED);
+  assert.equal(r.cleanupBlocked, true);
+});
+
+test('cleanupIsolatedWorkspace retries a transient lock and recovers', async () => {
+  const { runner, calls } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+    {
+      pat: /^worktree remove --force /,
+      out: (calls) => {
+        const removes = calls.filter((x) => x.args[0] === 'worktree' && x.args[1] === 'remove');
+        return removes.length <= 1 ? { code: 128, stderr: 'fatal: Unable to delete ... locked\n' } : { stdout: '' };
+      },
+    },
+  ]);
+  const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
+  assert.equal(r.ok, true);
+  assert.equal(r.removed, true);
+  const removes = calls.filter((x) => x.args[0] === 'worktree' && x.args[1] === 'remove');
+  assert.ok(removes.length >= 2, `expected a bounded retry, got ${removes.length} remove calls`);
+});
+
+test('cleanupIsolatedWorkspace never claims success while the worktree stays registered', async () => {
+  const { runner, calls } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+    { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unknown switch `x`\n' } },
+    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${WORKTREE}\nHEAD ${REV}\n\nworktree /repo\nHEAD ${REV}\n\n` } },
+  ]);
+  const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, WORKTREE_LOCKED);
+  assert.equal(r.cleanupBlocked, true);
+  assert.match(r.error, /still registered/);
+  assert.ok(calls.some((x) => x.args[0] === 'worktree' && x.args[1] === 'list'), 'registration verification ran');
+});
+
+test('cleanupIsolatedWorkspace verified fallback success when registration and directory are gone', async () => {
+  const prefix = mkdtempSync(join(tmpdir(), 'dsh-crew-fallback-'));
+  try {
+    writeFileSync(join(prefix, 'keep.txt'), 'x');
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
+    ]);
+    const r = await cleanupIsolatedWorkspace({ worktreePath: prefix, git: runner, backoffMs: 0 });
+    assert.equal(r.ok, true);
+    assert.equal(r.removed, true);
+    assert.equal(existsSync(prefix), false, 'directory removed before claiming success');
+  } finally {
+    rmSync(prefix, { recursive: true, force: true });
+  }
+});
+
+test('cleanupIsolatedWorkspace refuses to fs-delete non-Crew-owned paths', async () => {
+  const prefix = mkdtempSync(join(tmpdir(), 'user-ws-'));
+  try {
+    writeFileSync(join(prefix, 'data.txt'), 'keep');
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${prefix}\nHEAD ${REV}\n\n` } },
+    ]);
+    const r = await cleanupIsolatedWorkspace({ worktreePath: prefix, git: runner, backoffMs: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(r.cleanupBlocked, true);
+    assert.equal(existsSync(join(prefix, 'data.txt')), true, 'non-Crew-owned path must not be deleted');
+  } finally {
+    rmSync(prefix, { recursive: true, force: true });
+  }
+});
+
+test('cleanupIsolatedWorkspace never treats the primary repository root as disposable', async () => {
+  const { runner } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+    { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
+  ]);
+  const r = await cleanupIsolatedWorkspace({ worktreePath: '/repo', repoRoot: '/repo', git: runner, backoffMs: 0 });
+  assert.equal(r.ok, false);
   assert.equal(r.cleanupBlocked, true);
 });
 

@@ -17,12 +17,22 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const registry = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org/';
-export const candidateVersion = '0.3.1';
 export const supportedDshVersion = '0.1.1-rc.2';
 const verifyOfficialDsh = process.argv.includes('--with-official-dsh');
 const DSH_PACKAGE = '@deepseek-ai/dsh';
 const DSH_PREFIX = '@deepseek-ai/dsh-';
 const MAX_DIRECT_PEERS = 64;
+
+/**
+ * The candidate version is derived from the candidate package manifest at the
+ * checkout root instead of a hard-coded release literal, so the verifier never
+ * needs a source edit for the next candidate version. The audit guard still
+ * requires the passed-in manifest to match this authoritative value.
+ */
+export async function readCandidateVersion({ rootDir = root, readFileImpl = readFile } = {}) {
+  const packageJson = await readFileImpl(path.join(rootDir, 'package.json'), 'utf8');
+  return JSON.parse(packageJson).version;
+}
 
 function isDshPackage(name) {
   return name === DSH_PACKAGE || name.startsWith(DSH_PREFIX);
@@ -127,7 +137,7 @@ export async function fetchPublicManifest(name, version, {
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('global fetch is unavailable');
   const response = await fetchImpl(manifestUrl(registryUrl, name, version), {
-    headers: { accept: 'application/json', 'user-agent': 'dsh-crew-v031-cohort-audit' },
+    headers: { accept: 'application/json', 'user-agent': 'dsh-crew-cohort-audit' },
   });
   if (!response?.ok) throw new Error(`public manifest unavailable for ${name}@${version} (HTTP ${response?.status ?? 'unknown'})`);
   let manifest;
@@ -159,11 +169,17 @@ function assertCrossCohortRanges(manifest, label) {
 
 export async function auditOfficialDshCohort({
   candidateManifest,
+  expectedCandidateVersion,
   registryUrl = registry,
   fetchManifest = (name, version) => fetchPublicManifest(name, version, { registryUrl }),
 } = {}) {
   if (!candidateManifest || typeof candidateManifest !== 'object') throw new Error('candidate package manifest is missing');
-  if (candidateManifest.version !== candidateVersion) throw new Error(`package.json must be ${candidateVersion}`);
+  if (typeof expectedCandidateVersion !== 'string' || expectedCandidateVersion.length === 0) {
+    throw new Error('expectedCandidateVersion is required (derive it with readCandidateVersion)');
+  }
+  if (candidateManifest.version !== expectedCandidateVersion) {
+    throw new Error(`package.json must be ${expectedCandidateVersion}`);
+  }
 
   const directPeers = Object.entries(candidateManifest.peerDependencies ?? {})
     .filter(([name]) => isDshPackage(name));
@@ -192,7 +208,7 @@ export async function auditOfficialDshCohort({
 
   return {
     marker: 'PASS',
-    candidate: candidateVersion,
+    candidate: expectedCandidateVersion,
     officialDsh: supportedDshVersion,
     directPeerCount: directPeers.length,
     manifestCount: manifests.length,
@@ -220,20 +236,20 @@ function fail(label, result) {
   throw new Error(`${label} failed (exit ${result.status}): ${detail}`);
 }
 
-async function assertInstalled(prefix, label) {
+export async function assertInstalled(prefix, label, expectedVersion) {
   const packageRoot = path.join(prefix, 'node_modules', '@ran-sh', 'dsh-crew');
   const packageJson = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
   const runtimeSource = await readFile(path.join(packageRoot, 'src', 'runtime-identity.mjs'), 'utf8');
   const runtimeVersion = runtimeSource.match(/RUNTIME_VERSION\s*=\s*'([^']+)'/)?.[1];
   const entryExists = await readFile(path.join(packageRoot, 'src', 'hub', 'entry.mjs')).then(() => true, () => false);
   const clientExists = await readFile(path.join(packageRoot, 'lib', 'client.js')).then(() => true, () => false);
-  if (packageJson.version !== candidateVersion || runtimeVersion !== candidateVersion || !entryExists || !clientExists) {
-    throw new Error(`${label} did not install the expected ${candidateVersion} package/runtime entries`);
+  if (packageJson.version !== expectedVersion || runtimeVersion !== expectedVersion || !entryExists || !clientExists) {
+    throw new Error(`${label} did not install the expected ${expectedVersion} package/runtime entries`);
   }
 }
 
 async function main() {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dsh-crew-v031-install-'));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dsh-crew-install-verify-'));
   const paths = {
     pack: await mkdtemp(path.join(tempRoot, 'pack-')),
     standalone: await mkdtemp(path.join(tempRoot, 'standalone-')),
@@ -241,6 +257,7 @@ async function main() {
 
   try {
     const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+    const candidateVersion = await readCandidateVersion();
     if (packageJson.version !== candidateVersion) throw new Error(`package.json must be ${candidateVersion}`);
 
     const packed = run(['pack', '--json', '--pack-destination', paths.pack]);
@@ -253,11 +270,15 @@ async function main() {
       '--registry', registry, tarball,
     ]);
     if (standalone.status !== 0) fail('plain npm candidate install', standalone);
-    await assertInstalled(paths.standalone, 'standalone candidate');
+    await assertInstalled(paths.standalone, 'standalone candidate', candidateVersion);
 
     let officialMarker = 'not-run';
     if (verifyOfficialDsh) {
-      const audit = await auditOfficialDshCohort({ candidateManifest: packageJson, registryUrl: registry });
+      const audit = await auditOfficialDshCohort({
+        candidateManifest: packageJson,
+        expectedCandidateVersion: candidateVersion,
+        registryUrl: registry,
+      });
       officialMarker = `${supportedDshVersion}:manifest-audit`;
       console.log(`DSH_COHORT_AUDIT=PASS official_dsh=${audit.officialDsh} direct_peers=${audit.directPeerCount} manifests=${audit.manifestCount} cross_cohort_checks=${audit.crossCohortChecks}`);
     }

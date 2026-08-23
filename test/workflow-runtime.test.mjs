@@ -302,6 +302,63 @@ test('automatic reviewer input includes the sanitized candidate', async () => {
   assert.ok(lastView.candidate.changed_files.includes('src/a.mjs'));
 });
 
+// ---------- cleanup truthfulness ----------
+
+test('failed worktree cleanup reports workspace_retained with a cleanup warning', async () => {
+  const a = makeAdapter({ workers: ['throw'] });
+  a.releaseWorkspace = async () => ({ ok: false, error: 'worktree locked: permission denied' });
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.phase, JOB_PHASES.FAILED);
+  assert.equal(v.workspace_retained, true, 'failed cleanup must never claim a clean release');
+  assert.match(v.cleanup_warning, /worktree locked/);
+});
+
+test('cleanup adapter exceptions surface as retained workspace with a warning', async () => {
+  const a = makeAdapter({ workers: ['throw'] });
+  a.releaseWorkspace = async () => { throw new Error('release exploded'); };
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id);
+  assert.equal(v.workspace_retained, true);
+  assert.match(v.cleanup_warning, /release exploded/);
+});
+
+test('successful cleanup reports workspace_retained false and no warning even after a failed job', async () => {
+  const a = makeAdapter({ workers: ['throw'] });
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.phase, JOB_PHASES.FAILED);
+  assert.equal(v.workspace_retained, false);
+  assert.equal(v.cleanup_warning, null);
+});
+
+test('cancelled workflows still run cleanup and report a truthful release', async () => {
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const a = makeAdapter({});
+  const orig = a.executeAttempt;
+  a.executeAttempt = async (spec) => { if (spec.attempt === 0) await gate; return orig(spec); };
+  let releaseCalls = 0;
+  a.releaseWorkspace = async () => { releaseCalls += 1; return { ok: true }; };
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
+  await new Promise((r) => setTimeout(r, 20));
+  await rt.cancel(job.id);
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  const v = rt.get(job.id);
+  assert.equal(v.phase, JOB_PHASES.CANCELLED);
+  assert.equal(v.workspace_retained, false);
+  assert.equal(v.cleanup_warning, null);
+  assert.ok(releaseCalls >= 1, 'cleanup ran for the cancelled workflow');
+});
+
 // ---------- verdict normalizer ----------
 
 test('normalizeReviewVerdict handles free text', () => {

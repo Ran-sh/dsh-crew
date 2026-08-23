@@ -5,6 +5,8 @@
 ### Fixed
 
 - Registers local Crew plugins directly in the isolated Crew profile, preserving pnpm release-age policy while keeping install, uninstall, and reinstall lifecycle operations offline and idempotent.
+- Derives the authoritative npm-install verifier candidate version from the candidate `package.json` instead of a hard-coded release literal, so `verify:npm-install` and `verify:npm-install:official` work directly for the current candidate without source edits; removes version-stale temp/user-agent labels and keeps the bounded official DSH cohort audit fail-closed.
+- Makes disposable worktree cleanup on Windows bounded and truthful: transient cleanup locks are retried with a small backoff, the filesystem fallback only touches Crew-owned worktree paths and verifies the git registration before claiming success, and a workflow whose cleanup fails reports `workspace_retained: true` with a non-empty `cleanup_warning` instead of a clean release. Allowed/primary worktrees are never treated as disposable.
 
 ## 0.3.1 — 2026-08-22
 

@@ -246,18 +246,77 @@ async function mainRepoRoot(run, worktreePath) {
   return resolve(dir, '..');
 }
 
-export async function cleanupIsolatedWorkspace({ worktreePath, repoRoot, git } = {}) {
+const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+
+const pathIdentity = (value) => {
+  const resolved = resolve(String(value));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+};
+
+async function worktreeRegistered({ worktreePath, git, cwd }) {
+  const res = await runGit(git, ['worktree', 'list', '--porcelain'], { cwd });
+  if (!res.ok) return null;
+  const target = pathIdentity(worktreePath);
+  for (const block of String(res.stdout).split('\n\n')) {
+    const path = block.split('\n').find((line) => line.startsWith('worktree '))?.slice('worktree '.length)?.trim();
+    if (path && pathIdentity(path) === target) return true;
+  }
+  return false;
+}
+
+/**
+ * Bounded, truthful cleanup of a Crew-owned disposable worktree. Transient
+ * Windows locks (index lock, AV scan, lingering handle) are retried with a
+ * small backoff; a persistent failure surfaces `cleanupBlocked: true` with the
+ * real reason and is never reported as removed. The filesystem fallback only
+ * runs for Crew-owned worktree paths and claims success only after it verifies
+ * the registration is gone and no directory remains — success is never claimed
+ * while a worktree stays registered or on disk.
+ */
+export const WORKTREE_CLEANUP_RETRIES = 3;
+export const WORKTREE_CLEANUP_BACKOFF_MS = 150;
+
+export async function cleanupIsolatedWorkspace({
+  worktreePath,
+  repoRoot,
+  git,
+  retries = WORKTREE_CLEANUP_RETRIES,
+  backoffMs = WORKTREE_CLEANUP_BACKOFF_MS,
+} = {}) {
   const run = git ?? defaultRunner;
   if (!worktreePath) return { ok: false, reason: NOT_GIT_REPOSITORY, error: 'worktree path required' };
   const root = repoRoot ?? (await mainRepoRoot(run, worktreePath));
+  const owned = basename(resolve(worktreePath)).startsWith(WORKTREE_PREFIX);
+
   if (root) {
-    const res = await runGit(run, ['worktree', 'remove', '--force', worktreePath], { cwd: root });
-    if (res.ok) return { ok: true, removed: true, actions: [`removed worktree ${worktreePath}`] };
-    if (/modified or untracked files|Unable to delete|permission denied|locked|not allow/i.test(res.error)) return { ok: false, reason: WORKTREE_LOCKED, error: res.error, cleanupBlocked: true };
-    if (/not a git repository|not (?:in )?a worktree/i.test(res.error)) return { ok: false, reason: NOT_GIT_REPOSITORY, error: res.error };
+    // Preferred path: `git worktree remove --force` (removes registration and
+    // directory atomically). Retry bounded times to recover transient locks.
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      const res = await runGit(run, ['worktree', 'remove', '--force', worktreePath], { cwd: root });
+      if (res.ok) return { ok: true, removed: true, actions: [`removed worktree ${worktreePath}`] };
+      if (attempt < retries - 1) await sleep(backoffMs);
+    }
   }
-  try { rmSync(worktreePath, { recursive: true, force: true }); return { ok: true, removed: true, actions: [`rm -rf ${worktreePath}`] }; }
-  catch (err) { return { ok: false, reason: WORKTREE_LOCKED, error: String(err?.message ?? err), cleanupBlocked: true }; }
+
+  // Last resort, only for Crew-owned disposable paths: remove the directory and
+  // verify the git registration actually went away before claiming success.
+  if (owned && root && pathIdentity(worktreePath) !== pathIdentity(root)) {
+    try {
+      rmSync(worktreePath, { recursive: true, force: true });
+    } catch (err) {
+      return { ok: false, reason: WORKTREE_LOCKED, error: `worktree cleanup failed: ${err?.message ?? String(err)}`, cleanupBlocked: true };
+    }
+    const registered = root ? await worktreeRegistered({ worktreePath, git: run, cwd: root }) : null;
+    if (registered === false && !existsSync(worktreePath)) {
+      return { ok: true, removed: true, actions: [`cleaned worktree files ${worktreePath}`] };
+    }
+    if (registered === true) {
+      return { ok: false, reason: WORKTREE_LOCKED, error: `worktree still registered after cleanup: ${worktreePath}`, cleanupBlocked: true };
+    }
+    return { ok: false, reason: WORKTREE_LOCKED, error: `could not verify worktree removal for ${worktreePath}`, cleanupBlocked: true };
+  }
+
+  return { ok: false, reason: WORKTREE_LOCKED, error: `worktree cleanup failed while ${worktreePath} remains (${root ? 'not a Crew-owned disposable path' : 'main repository root unresolvable'})`, cleanupBlocked: true };
 }
 
 export async function staleWorktrees({ git, allowed = [] } = {}) {
