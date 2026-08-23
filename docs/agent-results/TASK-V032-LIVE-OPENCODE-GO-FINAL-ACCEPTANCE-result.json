@@ -1,0 +1,116 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE",
+  "source_commit": "e938e485681364047b16a0999b6d80f78fc91e53",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "FULL_FUNCTION_ACCEPTANCE: BLOCKED — OpenCode Go real inference is PROVEN at CLI level (opencode 1.18.21; one OpenCode Go credential; bounded direct smokes returned exact deterministic outputs for opencode-go/deepseek-v4-flash 'flash-smoke-ok-42' and opencode-go/deepseek-v4-pro 'pro-smoke-ok-7', both exit 0, zero error events). The temporary Crew routing override to opencode-go was applied through Crew's own writer, the live Hub confirmed /provider flash=opencode-go/deepseek-v4-flash and pro=opencode-go/deepseek-v4-pro, and real dispatch traces through the Hub/MCP path selected exactly those routes (worker flash and reviewer pro attempts). However, the DSH harness provider route opencode-go requires its own credential — llm-pi-ai reports OPENCODE_GO_API_KEY not set (not in process env — env scan shows only VISION_API_KEY — and not in the credentials service); the OpenCode CLI login does not feed the harness route, and no auth/config mutation is authorized by this task. Therefore the mandatory real worker, explicit reviewer, and automatic review-pipeline agent EXECUTIONS are BLOCKED at credential resolution (deterministic pre-dispatch route selection proven; no silent host fallback occurred). Cancellation and post-job worktree cleanup PASSED: terminal CANCELLED semantics, the cancelled workflow's worktree was actually removed (registration + directory), and every worktree created by this task is gone. Post-hardening regressions PASSED 57/57 (workspace-isolation, workflow-runtime, runtime-hardening, model-routing). The Crew config was restored byte-for-byte: restored SHA-256 b6a93a095a8151da37fc3e187a69024f84ce3a3bae85ecf0b7b7d58bb42e1047 EXACTLY equals the pre-test digest (3164 bytes). final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T12:15:00+08:00",
+    "completed_at": "2026-08-23T12:31:00+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Baseline: checkout main, pull, identity, installed state",
+      "status": "PASS",
+      "evidence": "Already on main; git pull --ff-only -> Already up to date; resolved source SHA e938e485681364047b16a0999b6d80f78fc91e53; working tree clean; package.json version 0.3.2 and RUNTIME_VERSION '0.3.2'; node scripts/setup.mjs status -> DSH plugin installed (dedicated dsh-crew profile), Codex Desktop integration installed, Claude Code integration installed."
+    },
+    {
+      "name": "T02 Task Contract validation",
+      "status": "PARTIAL",
+      "evidence": "The installed validator (node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json) returns INVALID: 'unknown task property: schema_version' and 'unknown task property: allowed_external_test_mutations'. The repo's TEMPLATE_TASK.json and the validator's TASK_KEYS do not include those two keys, which the queued task uses (likely a newer orchestrator template). The task's core contract (mode TEST_ONLY, allowed_changes, completion_commit_contract, result_contract, deletion flag) is unambiguous and complete; the operator explicitly instructed execution of this task, so it proceeded with this discrepancy recorded. The same validator later stamps and validates the Result Contract (PASS)."
+    },
+    {
+      "name": "T03 OpenCode CLI secret-free preflight",
+      "status": "PASS",
+      "evidence": "opencode CLI 1.18.21 at C:/Users/48376/AppData/Roaming/npm/opencode. `opencode auth list` -> exactly 1 credential: 'OpenCode Go api' (identity only; auth.json never opened/read). `opencode models` -> includes opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro (plus vision-exp and many other models). Required version/credential/models all present."
+    },
+    {
+      "name": "T04 Direct CLI inference smoke — opencode-go/deepseek-v4-flash",
+      "status": "PASS",
+      "evidence": "`opencode run --model opencode-go/deepseek-v4-flash --format json 'Reply with exactly: flash-smoke-ok-42'` (bounded, timeout 150s): exit 0; events [step_start,text,step_finish]; text part exactly 'flash-smoke-ok-42'; zero error events; stderr empty. Real authenticated model execution proven (not model-list-only)."
+    },
+    {
+      "name": "T05 Direct CLI inference smoke — opencode-go/deepseek-v4-pro",
+      "status": "PASS",
+      "evidence": "`opencode run --model opencode-go/deepseek-v4-pro --format json 'Reply with exactly: pro-smoke-ok-7'` (bounded, timeout 180s): exit 0; text part exactly 'pro-smoke-ok-7'; zero error events. Real authenticated pro model execution proven."
+    },
+    {
+      "name": "T06 Pre-mutation Crew config snapshot",
+      "status": "PASS",
+      "evidence": "Before any mutation, ~/.config/dsh-crew/config.json captured byte-for-byte into a task-local disposable temp file (outside the repository): 3164 bytes, SHA-256 b6a93a095a8151da37fc3e187a69024f84ce3a3bae85ecf0b7b7d58bb42e1047. Only the digest and byte count are recorded; no unrelated config values recorded."
+    },
+    {
+      "name": "T07 Temporary routing override to opencode-go",
+      "status": "PASS",
+      "evidence": "Applied via Crew's own writer (writeGlobalConfig): flash_model_priority [{provider:'opencode-go', model:'deepseek-v4-flash'}], pro_model_priority [{provider:'opencode-go', model:'deepseek-v4-pro'}], both configured=true, worker_provider_mode follow-dsh. readGlobalConfig+merge confirmed effective merged values. Authentication untouched."
+    },
+    {
+      "name": "T08 Crew Hub boot and endpoint verification",
+      "status": "PASS",
+      "evidence": "Bounded Crew Hub booted on the configured hub port 3210 using only the Crew-owned DSH_HOME/profile (official ~/.dsh untouched). GET /_dsh/dsh-crew/provider -> {worker_provider_mode follow-dsh, effective_worker_provider opencode-go, effective_worker_selection flash=opencode-go/deepseek-v4-flash (source priority), pro=opencode-go/deepseek-v4-pro (source priority)}. GET /_dsh/dsh-crew/models -> 4 providers / 9 models incl. opencode-go with deepseek-v4-flash and deepseek-v4-pro."
+    },
+    {
+      "name": "T09 Mandatory REAL worker via live Hub/MCP path",
+      "status": "BLOCKED",
+      "evidence": "Disposable git workspace live-final-ws (base c5a213d) created under the OS temp dir. Blocking dsh_run_worker (role=worker, flash model class, tiny deterministic task 'create accept.txt containing exactly opencode-go-flash-works, no other changes') through the real MCP stdio server with the live Hub: workflow wf-mt5aznep-3t491x allocated an isolated worktree (execution_cwd = Temp/dsh-crew-worktrees/dsh-crew-wf-mt5aznep-3t491x-9d579110, base_revision c5a213d, primary_workspace_dirty false), dispatched hub attempt hub-1 provider=opencode-go model=deepseek-v4-flash (selection_source priority) -> llm-pi-ai: 'no credential for provider route \"opencode-go\"; its profile resolves OPENCODE_GO_API_KEY, which is not set'. Workflow terminal EXECUTION_FAILED / escalation_disabled; candidate captured; NO silent host fallback (the host did not perform the task). Env scan (names only) shows no provider credential env vars (only VISION_API_KEY). Route selection is exactly as required; agent execution is blocked at credential resolution. Per acceptance criteria this is BLOCKED."
+    },
+    {
+      "name": "T10 Mandatory REAL explicit reviewer via live Hub/MCP path",
+      "status": "BLOCKED",
+      "evidence": "Explicit role=reviewer run: reviewer dispatched hub attempt provider=opencode-go model=deepseek-v4-pro (selection_source priority), same llm-pi-ai OPENCODE_GO_API_KEY credential error. Workflow completed with structured review object {verdict inconclusive, findings [], evidence [], risks [], delivery_complete false, status failed, model deepseek-v4-pro, provider opencode-go}; review-only role behavior enforced (no candidate modification). Exact pro route selection proven; agent execution blocked at credential resolution."
+    },
+    {
+      "name": "T11 Mandatory REAL automatic review pipeline",
+      "status": "BLOCKED",
+      "evidence": "Session pro_reviews_flash=true, worker run: attempt 0 dispatched provider=opencode-go model=deepseek-v4-flash -> same credential error -> decision {step fail, reason escalation_disabled}; review null. Per policy, the automatic reviewer only follows a verified worker execution, so the pipeline is unreachable while the worker step cannot execute; the trace proves the intended opencode-go flash worker -> (would-be) opencode-go pro reviewer routing. A manually invoked reviewer (T10) was not accepted as evidence for this step."
+    },
+    {
+      "name": "T12 REAL async spawn + immediate cancellation + worktree cleanup",
+      "status": "PASS",
+      "evidence": "dsh_spawn_worker (bounded long-running task, timeout 7200) -> created/running; cancelled immediately (session held open): terminal {phase cancelled, status cancelled, failure category cancelled / CANCELLED}; dsh_worker_result -> cancelled, workspace_retained false, cleanup_warning null; independent verification: the cancelled workflow's worktree (dsh-crew-wf-mt5b2gqu-fzyu6b-79ed5c7e) is NOT registered in `git worktree list` of the disposable repo and its directory is gone. Additionally, stale-worktree audit at completion: zero dsh-crew worktrees from this task remain (the only leftover observed, dsh-crew-wf-mt5aznep-... from T09's immediate-teardown snapshot race, was removed during the cleanup phase and is detailed in notes)."
+    },
+    {
+      "name": "T13 Post-hardening regressions",
+      "status": "PASS",
+      "evidence": "node --test test/workspace-isolation.test.mjs test/workflow-runtime.test.mjs test/runtime-hardening.test.mjs test/model-routing.test.mjs -> 57 tests, 57 pass, 0 fail, 0 cancelled, 0 skipped. (test/mcp-runtime.mjs does not exist; runtime-hardening.test.mjs is the closest file covering mcp-runtime, per the task's closest-filenames allowance.)"
+    },
+    {
+      "name": "T14 Cleanup phase: processes, ports, disposables",
+      "status": "PASS",
+      "evidence": "All acceptance processes stopped (hub dsh web, boot keeper, MCP server children, and the hub-spawned mcp/server.mjs grandchildren) via process-tree termination; ports 3210/3199 free; the disposable git workspace and all task worktrees removed; zero acceptance-related node processes remain (the user's own dsh017-browser automation processes were untouched)."
+    },
+    {
+      "name": "T15 Crew config byte-for-byte restoration",
+      "status": "PASS",
+      "evidence": "~/.config/dsh-crew/config.json restored (finally-path semantics): the file was restored to the pre-test bytes after the first override, then re-overridden only for the additional reviewer/auto-review evidence runs (T10/T11) and restored again; final restored file is 3164 bytes with SHA-256 b6a93a095a8151da37fc3e187a69024f84ce3a3bae85ecf0b7b7d58bb42e1047 — EXACT equality with the pre-test digest (byte-for-byte proven). Merged view confirms flash/pro priorities back to opencode-alt and worker_provider_mode follow-dsh. No related config values were recorded."
+    },
+    {
+      "name": "T16 Final machine state and repository hygiene",
+      "status": "PASS",
+      "evidence": "node scripts/setup.mjs status -> DSH plugin installed (dedicated dsh-crew profile), Codex Desktop integration installed, Claude Code integration installed; final_machine_state: INSTALLED. No uninstall/reinstall/purge. Repository: clean except the Result Contract while drafting; git diff --check clean; no product/source/package/CHANGELOG/lockfile changes; no npm/tag/Release/branch/provider-auth mutation; official ~/.dsh and OpenCode credential stores never read or written."
+    }
+  ],
+  "blockers": [
+    "The DSH harness provider route opencode-go requires its own credential that is not present: llm-pi-ai reports 'no credential for provider route \"opencode-go\"; its profile resolves OPENCODE_GO_API_KEY, which is not set' (not in process environment — env scan shows only VISION_API_KEY — and not in the Crew credentials service). The user's OpenCode CLI login (proven working for both models at CLI level) does not feed the harness route, and this TEST_ONLY task is forbidden from changing OpenCode/DSH provider/auth configuration or storing credentials. Therefore the mandatory real worker execution (T09), explicit reviewer execution (T10), and automatic review pipeline (T11) are BLOCKED at credential resolution despite exact route selection (opencode-go flash/pro) being proven. User-side steps to unblock the later gate: export OPENCODE_GO_API_KEY (or store it through the Crew web Models page / credentials service), then rerun the live worker+reviewer+auto-review acceptance. No other acceptance element failed."
+  ],
+  "result_path": "docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json",
+  "notes": [
+    "Env credential presence scan (names only, values never printed): VISION_API_KEY only; OPENCODE_GO_API_KEY, OPENCODE_ALT_API_KEY, OPENCODE_API_KEY, DEEPSEEK_API_KEY, and all other provider-credential env vars absent.",
+    "Dispatch evidence: real Hub selection traces for this task show exactly the required routes — worker flash -> opencode-go/deepseek-v4-flash (selection_source priority), reviewer pro -> opencode-go/deepseek-v4-pro (selection_source priority) — with the temporary override active, and the /provider endpoint returning the same selections before dispatch. The override itself caused no other config change (single-patch merge, verified before and after).",
+    "Worktree-cleanup observation (evidence for the hardened cleanup, not a defect claim): the T09 workflow's worktree was allocated and the workflow view is emitted at terminal transition BEFORE the async finally-cleanup completes; with the MCP session held open (T10/T11/T12 runs), the hardened cleanup removed every worktree (verified via git worktree list); the single leftover (T09) was produced when the harness closed its client immediately after the response, racing the in-flight cleanup — that disposable worktree was removed with `git worktree remove --force` during the cleanup phase and the final audit shows zero task worktrees registered or on disk. The truthful-cleanup invariants (never claim success while registered/on disk; retained=true + warning on persistent failure) were exercised and hold at cleanup completion.",
+    "Task-contract tooling note (recorded in T02): the installed task validator rejects the queued ACTIVE_TASK.json because of two keys absent from the repo template/validator (schema_version, allowed_external_test_mutations); execution proceeded on the operator's explicit instruction with this discrepancy recorded; the orchestrator should either extend the validator/template with those keys or regenerate the task without them.",
+    "OpenCode CLI/API facts recorded without secrets: opencode 1.18.21; auth list = 1 credential (OpenCode Go api); models opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro both executable (proven by T04/T05 exact-token responses). auth.json path was only echoed by the CLI's own output and was never opened, copied, hashed, or printed.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json --stamp",
+    "validated_at": "2026-08-23T04:33:15Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json"
+  }
+}
