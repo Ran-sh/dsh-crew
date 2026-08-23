@@ -1,0 +1,71 @@
+{
+  "id": "TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE",
+  "schema_version": 2,
+  "mode": "TEST_ONLY",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Close the final v0.3.2 full-function evidence gap by proving the user's existing OpenCode Go authentication can execute real flash/pro models, then run real DSH Crew worker, reviewer, automatic review-pipeline, cancellation, and post-job worktree cleanup on the Windows machine. Do not change product source. Leave Crew installed and restore the user's Crew configuration exactly after the temporary test routing override.",
+  "context": "TASK-V032-FULL-FUNCTION-ACCEPTANCE already passed the full deterministic suite, Hub/MCP/runtime/config/routing/job-control/integration/package surfaces but was BLOCKED because the configured route opencode-alt lacked OPENCODE_ALT_API_KEY. TASK-V032-RELEASE-SAFETY-HARDENING then fixed the version-agnostic npm install verifier and truthful/bounded Windows worktree cleanup, with 449/449 deterministic tests, and proved that the earlier npm 0.9.0 observation was an unscoped package-name collision, not this repository. The user has now installed official OpenCode CLI 1.18.21 and supplied secret-free evidence: `opencode auth list` reports one OpenCode Go credential, and `opencode models` lists at least opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro. Current stable checkout is D:/Users/48376/Desktop/dsh-crew and the machine is installed. The long-lived Crew config currently prioritizes opencode-alt; for this acceptance only, a temporary Crew-owned config override to opencode-go is permitted if and only if the original Crew config file is captured byte-for-byte before mutation and restored byte-for-byte in a finally/cleanup path. Do not open, copy, hash, print, or inspect OpenCode auth.json or any credential store. Use CLI-level authentication only.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json"
+  ],
+  "allowed_external_test_mutations": [
+    "Temporary modification of ~/.config/dsh-crew/config.json solely to route flash/pro model priority to opencode-go during this acceptance, with mandatory exact byte-for-byte restoration before completion",
+    "Disposable git repositories/worktrees under the OS temp directory created solely for live worker/reviewer/cancellation tests",
+    "Temporary Crew Hub / MCP / OpenCode CLI processes and localhost ports used for bounded acceptance, all shut down before completion"
+  ],
+  "forbidden_changes": [
+    "Any product source/test/package/README/CHANGELOG/lockfile change",
+    "Any permanent change to ~/.config/dsh-crew/config.json or other long-lived Crew settings",
+    "Any read/write of ~/.local/share/opencode/auth.json or other OpenCode credential/token files; no token/API-key/OTP/cookie/auth-header output",
+    "Any change to OpenCode authentication, provider accounts, model subscriptions, or stored credentials",
+    "Any official ~/.dsh/web profile/credential/config access",
+    "npm publish/dist-tag/deprecate/unpublish/owner/token mutation",
+    "Git tag/Release/branch mutation, merge/rebase/cherry-pick/force-push",
+    "install/uninstall/purge of Crew, OpenCode, Codex, Claude, or DSH",
+    "provider fallback to a different paid/credentialed route without explicit evidence and task authorization",
+    "host/main-agent silently doing the delegated worker task when a worker execution fails"
+  ],
+  "validation": [
+    "Checkout main, git pull --ff-only, validate this task contract, record resolved source SHA and clean worktree. Require package/runtime identity 0.3.2 and node scripts/setup.mjs status reporting DSH plugin, Codex Desktop integration, and Claude Code integration installed.",
+    "Run secret-free provider preflight only through CLI: `opencode --version`, `opencode auth list`, and `opencode models`. Record only version, authenticated provider names/count, and relevant model IDs. Never read auth.json or credential contents. Require OpenCode CLI 1.18.21 or newer-compatible, an OpenCode Go credential, and models opencode-go/deepseek-v4-flash plus opencode-go/deepseek-v4-pro.",
+    "Inspect `opencode run --help` if needed, then run one bounded direct CLI inference smoke with opencode-go/deepseek-v4-flash and one with opencode-go/deepseek-v4-pro. Use prompts that request short non-secret deterministic text, set practical timeouts, and record only exit status/model identity/sanitized response. Both must prove real authenticated model execution; a model-list-only result is insufficient.",
+    "Before any Crew config mutation, capture ~/.config/dsh-crew/config.json exact bytes and a SHA-256 digest in memory or a task-local disposable temp file outside the repository. The digest may be recorded; do not record unrelated config values. If the config file does not exist, record absence and restore absence after testing. Ensure restoration occurs in a finally path even after failure/cancellation.",
+    "Temporarily route the Crew worker flash and pro priorities to the supported OpenCode Go provider/model path using Crew's own config writer/API semantics where possible: worker_provider_mode/follow-dsh as appropriate, flash priority resolving to opencode-go/deepseek-v4-flash and pro/reviewer priority resolving to opencode-go/deepseek-v4-pro. Do not change authentication. Start a bounded Crew Hub using only the Crew-owned DSH_HOME/profile and verify provider/model endpoints reflect opencode-go before dispatch.",
+    "Create a disposable git repository under the OS temp directory. Through the real MCP stdio server / live Hub path, run a blocking real worker with role=worker and flash model class on a tiny deterministic coding task (for example create one simple text/source file with exact requested content and, if appropriate, one trivial verification). Require actual agent execution success, verified delivery/candidate evidence, primary workspace safety, provider=opencode-go, model=deepseek-v4-flash (or exact catalog equivalent selected from the requested flash route), and no silent host fallback.",
+    "On that completed candidate, run an explicit real reviewer with role=reviewer. Require actual agent execution success using opencode-go/deepseek-v4-pro (or exact catalog equivalent), review-only behavior, structured findings/evidence/risks/verdict, and no unauthorized candidate modification. A credential-only/pre-dispatch success is insufficient.",
+    "Run a second tiny disposable worker workflow with automatic review enabled (review-pipeline / pro_reviews_flash or the current canonical equivalent) and require both the worker execution and the automatic reviewer execution to occur successfully in the same workflow. Require the child-attempt/selection trace to show OpenCode Go flash worker followed by OpenCode Go pro reviewer, with a terminal verified outcome and structured review. Do not accept a manually invoked reviewer as evidence for this step.",
+    "Exercise one bounded real async spawn + immediate cancellation after the worktree is allocated/attempt begins. Require terminal CANCELLED semantics and then independently verify this task's worktree is not registered in `git worktree list` and its disposable directory is gone. Also verify the successful worker/reviewer workflows from this task leave no stale dsh-crew worktrees. If cleanup cannot complete, require workspace_retained=true plus cleanup_warning and return BLOCKED/FAIL rather than claiming PASS.",
+    "Run the high-signal post-hardening regressions only (do not repeat the whole 449-test suite unless a failure suggests it): node --test test/workspace-isolation.test.mjs test/workflow-runtime.test.mjs test/mcp-runtime.test.mjs test/model-routing.test.mjs, or the closest existing filenames if one named file differs. Require zero failures.",
+    "In a finally/cleanup phase: stop all Hub/MCP/OpenCode test processes; free acceptance ports; remove disposable repositories/worktrees; restore ~/.config/dsh-crew/config.json byte-for-byte to its pre-test bytes (or restore absence); re-hash and require exact match to the pre-test digest. Then run node scripts/setup.mjs status and require DSH plugin + Codex + Claude installed. Do not uninstall/reinstall.",
+    "Verify repository worktree is clean except the Result Contract while drafting. Run git diff --check. Write schema-v2 result to docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json with per-step evidence, exact provider/model identities (no secrets), config restore digest equality, live worker/reviewer/auto-review/cancel evidence, stale-worktree audit, final_machine_state, and blockers. Stamp/validate the Result, delete ACTIVE_TASK, commit/push only Result + ACTIVE deletion, then stop."
+  ],
+  "acceptance_criteria": [
+    "Direct OpenCode CLI authenticated inference succeeds for both opencode-go/deepseek-v4-flash and opencode-go/deepseek-v4-pro without exposing credentials.",
+    "A real DSH Crew worker executes successfully through the live Hub/MCP path using OpenCode Go flash, with verified delivery and isolated workspace evidence.",
+    "A real explicit reviewer executes successfully through the live Hub/MCP path using OpenCode Go pro and remains review-only.",
+    "A real automatic worker-to-reviewer pipeline executes both agents successfully and terminates with verified outcome/review evidence.",
+    "A real cancellation path terminates cleanly and every worktree created by this task is actually removed; cleanup state is truthful.",
+    "The user's pre-existing Crew config is restored byte-for-byte, no OpenCode credential store is inspected or changed, no official DSH state is touched, and final_machine_state is INSTALLED.",
+    "No npm/tag/Release/provider-auth/product-source mutation occurs.",
+    "Full success requires Result status PASS and summary to include exactly `FULL_FUNCTION_ACCEPTANCE: PASS` plus `final_machine_state: INSTALLED`. Any inability to execute either real model, worker, reviewer, automatic review, restore exact config, or clean task-created worktrees must return BLOCKED/FAIL with precise evidence."
+  ],
+  "result_contract": "docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V032-LIVE-OPENCODE-GO-FINAL-ACCEPTANCE-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 45,
+    "candidate_version": "0.3.2",
+    "stable_checkout": "D:/Users/48376/Desktop/dsh-crew",
+    "required_provider": "opencode-go",
+    "required_flash_model": "deepseek-v4-flash",
+    "required_pro_model": "deepseek-v4-pro",
+    "final_machine_state_on_pass": "INSTALLED",
+    "no_publish": true,
+    "temporary_config_override_must_restore_exactly": true
+  }
+}
