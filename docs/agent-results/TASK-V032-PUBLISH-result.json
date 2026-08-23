@@ -1,0 +1,97 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V032-PUBLISH",
+  "source_commit": "3a3d4364b4c766cfe2475c5b3d640c0daa2ceca3",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "PUBLISH_0_3_2: BLOCKED — npm=@ran-sh/dsh-crew@0.3.2 was not published because npm authentication was unavailable (npm whoami returned 401 and the publish PUT returned 404). The exact-target pack identity and payload checks passed, but pack size metadata differed from the RELEASE_READY gate and is recorded as an additional fail-closed blocker. No v0.3.2 tag or GitHub Release was created. tag_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21 (not created); release=v0.3.2 (not created); final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T13:21:51+08:00",
+    "completed_at": "2026-08-23T13:28:03+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V032-PUBLISH-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Checkout, source revision, task contract, and clean baseline",
+      "status": "PASS",
+      "evidence": "main was checked out and fast-forwarded with git pull --ff-only to source HEAD 3a3d4364b4c766cfe2475c5b3d640c0daa2ceca3; the task validator returned VALID TASK CONTRACT and the baseline worktree was clean."
+    },
+    {
+      "name": "T02 Release gate provenance",
+      "status": "PASS",
+      "evidence": "TASK-V032-RELEASE-GATE-FINAL-result.json was re-read and reported status PASS, result_validation.status PASS, summary marker release_gate: RELEASE_READY, and immutable_release_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21."
+    },
+    {
+      "name": "T03 Publication preflight",
+      "status": "PASS",
+      "evidence": "Read-only npm preflight reported versions 0.3.0 and 0.3.1 with dist-tags.latest=0.3.1; git ls-remote found no v0.3.2 tag; GitHub Release lookup reported v0.3.2 not found."
+    },
+    {
+      "name": "T04 Exact immutable publish worktree",
+      "status": "PASS",
+      "evidence": "A disposable detached worktree outside the main checkout resolved HEAD exactly to 17d3eb50ef74993e4ed61dba82a1bfef6659dd21. package.json identified @ran-sh/dsh-crew@0.3.2, src/runtime-identity.mjs contained RUNTIME_VERSION='0.3.2', CHANGELOG.md contained 0.3.2, and the worktree was clean."
+    },
+    {
+      "name": "T05 Exact-target package identity and payload audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.2 with 86 files, integrity sha512-WmFxcodzIurqS8EMAk8dDAs6sbv7cK4rXasK+zirs2TYssuSC1JFD8tbBPiHX6G5QfbF6PJWPuKqgJLmGbtwJg==, and no ACTIVE_TASK, agent-results, tests, node_modules, credentials, temp, secrets, or tarball payload paths."
+    },
+    {
+      "name": "T06 Release-gate pack metadata parity",
+      "status": "BLOCKED",
+      "evidence": "The exact target dry-run reported size=887998 and unpackedSize=1608112, while the re-read RELEASE_READY gate recorded size=888180 and unpackedSize=1607531. Identity, 86-file count, integrity, and forbidden-path checks passed, but the task requires fail-closed handling when pack audit evidence differs from the gate."
+    },
+    {
+      "name": "T07 Normal candidate npm install verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install exited 0 with NPM_INSTALL_CONTRACT=PASS candidate=0.3.2 using npm's normal resolver without --legacy-peer-deps, --force, --omit=peer, or equivalent bypass."
+    },
+    {
+      "name": "T08 Official DSH cohort verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official exited 0 with DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.2."
+    },
+    {
+      "name": "T09 Authorized npm publication",
+      "status": "BLOCKED",
+      "evidence": "npm publish --access public prepared exactly @ran-sh/dsh-crew@0.3.2 with the default latest tag, then returned HTTP 404 for the registry PUT. npm whoami independently returned HTTP 401. No token, OTP, cookie, auth header, or npmrc content was inspected or printed."
+    },
+    {
+      "name": "T10 Registry safety after failed publication",
+      "status": "PASS",
+      "evidence": "Post-attempt read-only npm queries still reported only versions 0.3.0 and 0.3.1 with latest=0.3.1; no partial 0.3.2 publication or dist-tag mutation was visible."
+    },
+    {
+      "name": "T11 Dependent tag and Release guards",
+      "status": "BLOCKED",
+      "evidence": "Because npm publication and its required public verification did not succeed, annotated tag v0.3.2 and GitHub Release v0.3.2 were not created. Post-attempt read-only checks found no v0.3.2 tag and no v0.3.2 Release; existing release state was not modified."
+    },
+    {
+      "name": "T12 Temporary worktree cleanup and installed machine state",
+      "status": "PASS",
+      "evidence": "The disposable publish worktree and its task-created node_modules were removed; git worktree list no longer contained it. node scripts/setup.mjs status reported the DSH plugin, Codex Desktop integration, and Claude Code integration installed."
+    }
+  ],
+  "blockers": [
+    "npm publication could not be authorized in the current environment: npm whoami returned HTTP 401 Unauthorized and npm publish returned HTTP 404 for the scoped registry PUT. The task forbids credential mutation or unsafe credential-store access, so no retry or alternate authentication path was attempted.",
+    "The exact-target npm pack dry-run metadata differed from the RELEASE_READY gate (size 887998 vs 888180; unpackedSize 1608112 vs 1607531). The task requires returning FAIL/BLOCKED before publication when exact-target pack audit evidence differs from the gate.",
+    "The required public npm verification did not succeed, so the dependent v0.3.2 annotated tag and final GitHub Release could not be created under the task's ordering rules."
+  ],
+  "result_path": "docs/agent-results/TASK-V032-PUBLISH-result.json",
+  "notes": [
+    "source_branch: main; source_commit=LATEST resolved after pull to 3a3d4364b4c766cfe2475c5b3d640c0daa2ceca3.",
+    "immutable_release_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21; npm publication was attempted only for @ran-sh/dsh-crew@0.3.2 and no alternate package/version/tag was used.",
+    "No product/source/test/package/README/CHANGELOG/lockfile/workflow/validator change, branch mutation, force-push, credential mutation, official ~/.dsh access, install/uninstall/purge, or existing tag/Release modification occurred.",
+    "All task-created temporary publish artifacts were cleaned. The main checkout remained on main; historical unrelated detached worktrees were preserved.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V032-PUBLISH-result.json --stamp",
+    "validated_at": "2026-08-23T05:29:37Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V032-PUBLISH-result.json"
+  }
+}
