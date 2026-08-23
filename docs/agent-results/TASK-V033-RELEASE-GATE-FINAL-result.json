@@ -1,0 +1,128 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V033-RELEASE-GATE-FINAL",
+  "source_commit": "0d69fbec9a6bbb49cc3b34d4b55170add707d445",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "release_gate: RELEASE_READY — the exact candidate immutable_release_target=369b141f7878e057d08c673fe90b62185e67fdeb is an ancestor of source HEAD 0d69fbe (the queue commit adds only docs/agent-tasks/ACTIVE_TASK.json) and is safe to publish without source changes. TASK-V033-NPX-LIFECYCLE re-validated PASS with stamped validator evidence and zero blockers; identity fields agree on 0.3.3 with exactly one bin dsh-crew -> ./bin/dsh-crew.mjs; frozen-lockfile install, focused lifecycle/installer/distribution tests, full deterministic suite 471/471, client build (checkout left clean), both npm install verifiers (candidate=0.3.3, official cohort audit 20 peers/21 manifests/177 cross-cohort checks), 88-file pack audit with zero forbidden entries, and npm publish --dry-run all pass. A fresh real Windows disposable-HOME npx lifecycle proved durable Crew-owned install, read-only status, persistence after deleting the tarball AND the npx cache, same-version idempotent update, repair of a corrupted payload + removed junction with config/.env verified byte-identical, and config-preserving uninstall ending not-installed; source-checkout setup.mjs install/status/uninstall passed in a separate disposable home. Public state unchanged: @ran-sh/dsh-crew@0.3.3 absent from npm with dist-tags.latest=0.3.2, no v0.3.3 tag ref, GitHub Release v0.3.3 absent (API 404), and historical annotated tag targets remain exactly v0.3.0=e20f392a8babdaa4d37ffe3239ab3f8885a4a369, v0.3.1=dd414a352065e983e1be1b845287e99a50ade9c5, v0.3.2=17d3eb50ef74993e4ed61dba82a1bfef6659dd21. No publication, dist-tag mutation, tag/Release creation, credential access, policy weakening, or product/source change occurred. final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T15:45:12+08:00",
+    "completed_at": "2026-08-23T16:05:30+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V033-RELEASE-GATE-FINAL-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Source revision resolution and task contract validation",
+      "status": "PASS",
+      "evidence": "git pull --ff-only fast-forwarded main 369b141..0d69fbe; source_commit=LATEST resolved to HEAD 0d69fbec9a6bbb49cc3b34d4b55170add707d445 on branch main with a clean worktree. Task validator returned VALID TASK CONTRACT for docs/agent-tasks/ACTIVE_TASK.json."
+    },
+    {
+      "name": "T02 Prior implementation result validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json → VALID RESULT CONTRACT; parsed status=PASS, result_validation.status=PASS (stamped), blockers length 0."
+    },
+    {
+      "name": "T03 Candidate identity and single-bin contract",
+      "status": "PASS",
+      "evidence": "package.json version=0.3.3 with exactly one bin entry 'dsh-crew -> ./bin/dsh-crew.mjs'; src/runtime-identity.mjs RUNTIME_VERSION='0.3.3'; CHANGELOG.md contains the '## 0.3.3' section."
+    },
+    {
+      "name": "T04 Frozen-lockfile dependency install",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile: lockfile up to date, Already up to date, Done in 595ms (pnpm v11.7.0). No lockfile change required or made."
+    },
+    {
+      "name": "T05 Focused lifecycle/installer/distribution tests",
+      "status": "PASS",
+      "evidence": "node --test test/npx-lifecycle.test.mjs test/installer.test.mjs test/distribution.test.mjs test/setup-cli.test.mjs test/setup.test.mjs test/dsh-cli-runtime.test.mjs → 67/67 pass, 0 fail."
+    },
+    {
+      "name": "T06 Full deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs → 471/471 pass, 0 fail, 0 skipped."
+    },
+    {
+      "name": "T07 Client build with clean-checkout restoration",
+      "status": "PASS",
+      "evidence": "pnpm run build:client succeeded ('built lib/client.js (107158 bytes)'). This run reproduced lib/client.js byte-stably; git checkout -- lib/client.js applied as a belt-and-braces restore and git status showed no generated drift afterward."
+    },
+    {
+      "name": "T08 Normal npm install verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install exited 0: NPM_INSTALL_CONTRACT=PASS candidate=0.3.3 official_dsh=not-run, npm default resolver without bypass flags."
+    },
+    {
+      "name": "T09 Official DSH cohort verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official exited 0: DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.3 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T10 Pack audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json: @ran-sh/dsh-crew@0.3.3, exactly 88 files, size 897894 B, unpackedSize 1644208 B; single bin bin/dsh-crew.mjs shipped; all required payload entries present (package.json, src/server.mjs, src/hub/entry.mjs, lib/client.js, cordis.patch.yml, scripts/setup.mjs, .claude-plugin/marketplace.json, codex/agents/*, .mcp.json); zero matches for ACTIVE_TASK, agent-results, test/, *.test.*, secret, credential, node_modules, .tgz, .env."
+    },
+    {
+      "name": "T11 Publish dry-run only",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public reported '@ran-sh/dsh-crew@0.3.3', 88 total files, registry.npmjs.org tag latest (dry-run). No real publish attempted or possible through this path."
+    },
+    {
+      "name": "T12 Real disposable npx lifecycle: install and read-only status",
+      "status": "PASS",
+      "evidence": "Fresh disposable USERPROFILE/HOME/APPDATA/LOCALAPPDATA/TEMP at Temp/opencode/v033-gate-20260823-155339/home, invoked from outside the repository via `npx --yes --package <local-tarball> dsh-crew …`: install exit 0 (durable release 20260823T075447Z-10320-1-0.3.3 under <home>/.config/dsh-crew/app/releases, Harness junction registered to it, Codex+Claude integrations rendered against it, reusable Crew DSH runtime @0.1.1-rc.2); status exit 0 reporting installed 0.3.3/plugin/Codex/Claude without mutation."
+    },
+    {
+      "name": "T13 Persistence after transient-input deletion",
+      "status": "PASS",
+      "evidence": "Tarball and the entire disposable npm-cache/_npx directory were deleted (verified absent). The persisted payload then answered `node <release>/bin/dsh-crew.mjs status` exit 0 with all surfaces installed, and every runtime import (@modelcontextprotocol/sdk/server/mcp.js, sdk/server/stdio.js, zod, @deepseek-ai/dsh-sdk-client) resolved from the release directory alone (PERSISTED_DEPS_OK) — no dependence on cache/tarball/extraction paths."
+    },
+    {
+      "name": "T14 Same-version update idempotence",
+      "status": "PASS",
+      "evidence": "`npx --package <tarball> dsh-crew update` against the healthy identical install exited 0 with '- already current (0.3.3); repairing registration/integrations idempotently' and left exactly 1 release directory."
+    },
+    {
+      "name": "T15 Repair behavior with byte-preserved config/.env",
+      "status": "PASS",
+      "evidence": "After planting sentinel config.json and .env under ~/.config/dsh-crew, deleting lib/client.js from the active release, and removing the profile junction subtree, `update` detected staleness, staged+validated a fresh candidate, committed a NEW release (old retained; 2 dirs), retargeted activation to it, exited 0 — and SHA-256 byte comparisons proved config.json and .env remained byte-identical to the planted bytes (40 B and 26 B respectively)."
+    },
+    {
+      "name": "T16 Config-preserving uninstall and closing status",
+      "status": "PASS",
+      "evidence": "`uninstall` exited 0 removing Codex integration, Claude plugin registration, offline Harness registration, and the whole app subtree including current.json while KEEPING config.json, .env, and the isolated harness runtime; final `status` reported not installed across candidate/installed/plugin/Codex/Claude lines."
+    },
+    {
+      "name": "T17 Source-checkout compatibility in a separate disposable home",
+      "status": "PASS",
+      "evidence": "In <e2e>/src-home, `node scripts/setup.mjs install` exited 0 (offline Crew profile link updated, Codex+Claude integrations, client build ok), `status` reported all three surfaces installed, and `uninstall` exited 0 keeping Config/backups with a following status all-clear. Tracked lib/client.js restored after the in-repo build step."
+    },
+    {
+      "name": "T18 Public-state absence checks",
+      "status": "PASS",
+      "evidence": "Read-only npm view: versions [0.3.0, 0.3.1, 0.3.2], dist-tags.latest=0.3.2 (0.3.3 absent). git ls-remote --tags origin contains no v0.3.3 ref; annotated targets unchanged vs prior gates: v0.3.0^{ }=e20f392a8babdaa4d37ffe3239ab3f8885a4a369, v0.3.1^{ }=dd414a352065e983e1be1b845287e99a50ade9c5, v0.3.2^{ }=17d3eb50ef74993e4ed61dba82a1bfef6659dd21. GitHub Release lookup by tag v0.3.3 returned HTTP 404 Not Found."
+    },
+    {
+      "name": "T19 Machine state and cleanliness",
+      "status": "PASS",
+      "evidence": "Real-machine `node scripts/setup.mjs status` reports DSH plugin installed, Codex Desktop integration installed, Claude Code integration installed. git worktree list shows only pre-existing unrelated worktrees (historical v0.3.0/v0.3.1 publish worktrees and one previously recorded wf worktree leftover) — none created by this task; no task processes remain; checkout clean at HEAD."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V033-RELEASE-GATE-FINAL-result.json",
+  "notes": [
+    "immutable_release_target=369b141f7878e057d08c673fe90b62185e67fdeb (ancestor of executed HEAD 0d69fbe whose only delta is the queue commit's ACTIVE_TASK.json addition).",
+    "This was a TEST_ONLY gate: the only writes were this Result Contract plus the mandated ACTIVE_TASK.json deletion; no product/source/test/docs implementation file changed.",
+    "No credentials, tokens, OTPs, auth headers, .npmrc contents, credential stores, normal ~/.dsh state, official web profile, or official DSH credentials were read or modified; package-manager security policies untouched; no global lifecycle-script approvals.",
+    "Disposable E2E artifacts live entirely under Temp/opencode/v033-gate-20260823-155339 outside the workspace; task-created tarballs/npx caches inside them were deleted during the persistence phase.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V033-RELEASE-GATE-FINAL-result.json --stamp",
+    "validated_at": "2026-08-23T08:05:31Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V033-RELEASE-GATE-FINAL-result.json"
+  }
+}
