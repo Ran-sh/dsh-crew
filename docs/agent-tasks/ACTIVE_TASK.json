@@ -1,0 +1,60 @@
+{
+  "id": "TASK-V032-PUBLISH",
+  "mode": "IMPLEMENT",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Publish @ran-sh/dsh-crew@0.3.2 exactly from immutable product commit 17d3eb50ef74993e4ed61dba82a1bfef6659dd21, verify the public npm result, then create annotated tag v0.3.2 and a final GitHub Release pointing to that exact commit. Record a validated Result Contract and leave the installed machine state intact.",
+  "context": "TASK-V032-RELEASE-GATE-FINAL passed with release_gate: RELEASE_READY. The immutable product candidate is 17d3eb50ef74993e4ed61dba82a1bfef6659dd21; later main commits are acceptance/result bookkeeping only. The scoped npm package currently has latest=0.3.1 with versions 0.3.0 and 0.3.1, and v0.3.2/tag/Release were absent at the final gate. The user has explicitly authorized publication of 0.3.2. Publication must be idempotent and exact-target: never republish an existing 0.3.2, never publish from current main bookkeeping commits, and never create a tag/Release until npm publication is verified. Existing v0.3.0 and v0.3.1 tags/releases are immutable and must not be changed.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V032-PUBLISH-result.json"
+  ],
+  "forbidden_changes": [
+    "Any product source/test/package/README/CHANGELOG/lockfile/workflow/validator change",
+    "Any npm publication of a version other than @ran-sh/dsh-crew@0.3.2",
+    "Any npm dist-tag mutation except the normal latest update caused by the authorized successful npm publish of 0.3.2",
+    "Any npm deprecate/unpublish/owner/token/access mutation or republish attempt if 0.3.2 already exists",
+    "Any move/rewrite/delete of v0.3.0 or v0.3.1, or any modification of their GitHub Releases",
+    "Any v0.3.2 tag target other than 17d3eb50ef74993e4ed61dba82a1bfef6659dd21",
+    "Any force-push, branch ref mutation, merge, rebase, cherry-pick, or product commit creation",
+    "Any provider/auth/Crew/DSH/OpenCode credential mutation or credential-value output",
+    "Any install/uninstall/purge of Crew, DSH, Codex, Claude, or OpenCode",
+    "Any official ~/.dsh/web profile access"
+  ],
+  "validation": [
+    "Checkout main, git pull --ff-only, validate this task contract, record the resolved source SHA, and require a clean worktree. Revalidate the final gate Result Contract docs/agent-results/TASK-V032-RELEASE-GATE-FINAL-result.json and require status PASS, result_validation PASS, summary marker release_gate: RELEASE_READY, and immutable_release_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21.",
+    "Before any write, perform read-only preflight: npm view @ran-sh/dsh-crew versions --json and dist-tags --json; git ls-remote --tags origin for v0.3.2; GitHub Release lookup for v0.3.2. If npm 0.3.2 already exists, DO NOT publish again: verify its public metadata/tarball identity as far as safely possible and return BLOCKED unless the task can prove this exact authorized release was already completed and only downstream tag/Release steps remain consistent. If an unexpected v0.3.2 tag or Release exists, return BLOCKED and do not overwrite/move it.",
+    "Create a disposable detached git worktree outside the main checkout at exactly commit 17d3eb50ef74993e4ed61dba82a1bfef6659dd21. Verify HEAD equals that SHA, package name is @ran-sh/dsh-crew, package/runtime version is 0.3.2, CHANGELOG contains 0.3.2, and git status is clean. Do not publish from main or from any later bookkeeping commit.",
+    "From the exact-target detached worktree, run npm pack --dry-run --json and verify package name/version and expected payload with no ACTIVE_TASK, agent-results, tests, node_modules, credentials, temp files, or secrets. Then run the authoritative normal candidate verifier(s) that are available at the immutable target if they can run without mutating product files; preserve/clean generated artifacts. If any exact-target package identity or pack audit differs from the RELEASE_READY gate, return FAIL/BLOCKED before publication.",
+    "Publish exactly @ran-sh/dsh-crew@0.3.2 from the detached worktree using npm publish --access public with the default latest tag. Never use --force, legacy resolver bypasses, alternate tags, or a different version. Do not print tokens, OTPs, cookies, auth headers, or npmrc contents. If npm requires interactive OTP/auth that the executor cannot safely satisfy, return BLOCKED and stop before tag/Release creation.",
+    "After npm reports success, independently poll/read the public scoped registry until @ran-sh/dsh-crew@0.3.2 is visible (bounded retries). Require dist-tags.latest=0.3.2, versions include 0.3.0/0.3.1/0.3.2, and read-only package metadata reports name/version/repository consistently. Run a fresh plain npm install of @ran-sh/dsh-crew@0.3.2 in a disposable directory without --legacy-peer-deps/--force/--omit=peer and verify installed package/runtime identity 0.3.2. If registry verification fails or latest is not 0.3.2, return FAIL/BLOCKED and do not create tag/Release.",
+    "Only after npm registry verification succeeds, create annotated git tag v0.3.2 with message 'v0.3.2' pointing exactly to 17d3eb50ef74993e4ed61dba82a1bfef6659dd21, then push only that tag. Verify both the tag object and peeled v0.3.2^{} target resolve exactly to the immutable release target. Do not move or recreate the tag if it already exists unexpectedly.",
+    "Create a final non-draft, non-prerelease GitHub Release for tag v0.3.2. Use concise release notes based on the existing CHANGELOG 0.3.2 entry and verified highlights: policy-preserving/offline Crew profile installer lifecycle, truthful Windows worktree cleanup, version-agnostic npm install verification, and Harness-native provider-backed full-function acceptance. Do not claim features not present in the immutable target. Verify the Release is published/final and targets v0.3.2.",
+    "Post-release read-only verification: npm @ran-sh/dsh-crew@0.3.2 visible and latest=0.3.2; annotated v0.3.2 peels to 17d3eb50ef74993e4ed61dba82a1bfef6659dd21; GitHub Release v0.3.2 exists, draft=false, prerelease=false; v0.3.0 and v0.3.1 peeled targets remain e20f392a8babdaa4d37ffe3239ab3f8885a4a369 and dd414a352065e983e1be1b845287e99a50ade9c5 respectively.",
+    "Clean up the detached publish worktree and all task-created temp directories. Run node scripts/setup.mjs status from the stable main checkout and require DSH plugin, Codex Desktop integration, and Claude Code integration still installed. Do not reinstall/uninstall. Require final_machine_state: INSTALLED.",
+    "Write schema-v2 Result Contract docs/agent-results/TASK-V032-PUBLISH-result.json with exact immutable target, npm publication/registry evidence, tag object/peeled target evidence, GitHub Release evidence, old-tag invariants, cleanup, final_machine_state, and blockers. Full success requires status PASS and summary markers PUBLISH_0_3_2: PASS, npm=@ran-sh/dsh-crew@0.3.2, tag_target=17d3eb50ef74993e4ed61dba82a1bfef6659dd21, release=v0.3.2, final_machine_state: INSTALLED. Stamp/validate the Result, delete ACTIVE_TASK, commit/push only the Result plus ACTIVE_TASK deletion to main, then stop."
+  ],
+  "acceptance_criteria": [
+    "@ran-sh/dsh-crew@0.3.2 is published exactly once from immutable product commit 17d3eb50ef74993e4ed61dba82a1bfef6659dd21 and public npm latest becomes 0.3.2.",
+    "A fresh normal npm install of @ran-sh/dsh-crew@0.3.2 succeeds and reports package/runtime 0.3.2.",
+    "Annotated tag v0.3.2 exists and peels exactly to 17d3eb50ef74993e4ed61dba82a1bfef6659dd21; v0.3.0 and v0.3.1 remain unchanged.",
+    "GitHub Release v0.3.2 exists as final/non-draft/non-prerelease and corresponds to the exact v0.3.2 tag.",
+    "No product/source/config/credential mutation occurs beyond the explicitly authorized npm publish, v0.3.2 annotated tag creation/push, and GitHub Release creation.",
+    "Result Contract validates PASS with the required publication markers and final_machine_state: INSTALLED."
+  ],
+  "result_contract": "docs/agent-results/TASK-V032-PUBLISH-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V032-PUBLISH-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 47,
+    "candidate_version": "0.3.2",
+    "immutable_release_target": "17d3eb50ef74993e4ed61dba82a1bfef6659dd21",
+    "package": "@ran-sh/dsh-crew",
+    "tag": "v0.3.2",
+    "publish_authorized": true,
+    "final_machine_state_on_pass": "INSTALLED"
+  }
+}
