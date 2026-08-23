@@ -8,7 +8,7 @@
 // Keep this module pure and dependency-free so Hub, MCP and tests all use the
 // exact same compatibility rules.
 
-export const RUNTIME_VERSION = '0.3.2';
+export const RUNTIME_VERSION = '0.3.3';
 export const HUB_PROTOCOL_VERSION = 1;
 
 export const HUB_CAPABILITIES = Object.freeze([

@@ -1,0 +1,148 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V033-NPX-LIFECYCLE",
+  "source_commit": "4a517cd681325f07a08846437e03443997011a5f",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "V033_NPX_LIFECYCLE: PASS 鈥?v0.3.3 implemented as a real npx-managed lifecycle CLI: package.json now exposes exactly one natural bin (dsh-crew 鈫?./bin/dsh-crew.mjs) so `npx @ran-sh/dsh-crew@latest install|status|update|uninstall` resolves without an explicit binary name, and unknown commands fail with usage text and exit 1. npx installs stage the already-built published payload plus its production dependency closure and the exact-pinned DSH peer cohort into a durable Crew-owned release directory (~/.config/dsh-crew/app/releases/<stamp>), validate it (identity, artifacts, vendored deps, source-import resolvability from the payload itself, real boot smoke) BEFORE committing via an incompleteness-marker protocol and switching the current.json pointer 鈥?never registering the transient npx cache/tarball/extraction path. status is read-only; update is upgrade-aware, idempotent when current, repairs stale/incomplete payloads or registrations without touching config/credentials, and keeps the prior usable release until the replacement is activated; uninstall removes the Crew-managed payload, registration, and integrations while preserving config/backups by default (--purge remains explicit). A real Windows disposable-HOME npx lifecycle (pack 鈫?install 鈫?status 鈫?delete tarball+npx cache 鈫?persisted-payload status/deps proof 鈫?same-version idempotent update via npm exec 鈫?corrupted-payload repair with byte-identical config/.env preservation 鈫?config-preserving uninstall 鈫?final status) passed end-to-end, and node scripts/setup.mjs install|status|uninstall remain compatible in a second disposable home. Full deterministic suite 471/471, client build, verify:npm-install, official DSH cohort audit (20 peers/21 manifests/177 cross-cohort checks), 88-file pack audit with zero forbidden entries, and npm publish --dry-run all pass. No publication, tag, or Release occurred (registry latest=0.3.2; no v0.3.3 tag/ref). final_machine_state: INSTALLED",
+  "timeline": {
+    "started_at": "2026-08-23T14:07:35+08:00",
+    "completed_at": "2026-08-23T15:32:49+08:00"
+  },
+  "changed_files": [
+    "package.json",
+    "bin/dsh-crew.mjs (added)",
+    "src/install/npx-lifecycle.mjs (added)",
+    "src/install/install-legacy.mjs",
+    "src/dsh-cli-runtime.mjs",
+    "src/runtime-identity.mjs",
+    "test/npx-lifecycle.test.mjs (added)",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Checkout, source revision, task contract validation, clean baseline",
+      "status": "PASS",
+      "evidence": "main checked out and git pull --ff-only fast-forwarded e14c223..4a517cd681325f07a08846437e03443997011a5f; `node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIVE_TASK.json` returned VALID TASK CONTRACT. The task pinned source_commit=e14c223f795f12b76e7285f081bd6a1236fe0224; git diff e14c223..HEAD showed ONLY the queue commit's own docs/agent-tasks/ACTIVE_TASK.json addition, so execution at HEAD 4a517cd faithfully matches the requested code revision. Worktree started clean."
+    },
+    {
+      "name": "T02 pnpm install --frozen-lockfile",
+      "status": "PASS",
+      "evidence": "Lockfile passes supply-chain policies, lockfile up to date, 'Already up to date', Done in 1s (pnpm v11.7.0). pnpm-lock.yaml required no change for the version/bin bump."
+    },
+    {
+      "name": "T03 Single natural CLI executable + unknown-command contract",
+      "status": "PASS",
+      "evidence": "package.json exposes exactly one bin entry {\"dsh-crew\": \"./bin/dsh-crew.mjs\"} backed by an existing file, with bin/ added to files. Unit tests assert the single-bin contract, dispatch of install/status/update/uninstall, --help exit 0, unknown command exit 1 with 'unknown command: banana' + usage on stderr, missing command exit 1, --purge forwarded to uninstall only, failing/throwing commands mapped to exit 1. Real subprocess: node bin/dsh-crew.mjs banana 鈫?exit 1 + usage; --help 鈫?exit 0."
+    },
+    {
+      "name": "T04 Durable Crew-owned persistence before registration (unit)",
+      "status": "PASS",
+      "evidence": "test/npx-lifecycle.test.mjs (22 tests): staging copies manifest.files payload into ~/.config/dsh-crew/app/releases/<stamp>-<pid>-<salt>-<version>, strips devDependencies/peerDependenciesMeta, merges exact-pinned peers into dependencies so src/server.mjs's static DSH peer imports resolve standalone, materializes the dependency closure offline by replicating the running instance's tree (transitive closure proven incl. shared dedupe), validates identity/artifacts/vendored deps/import-specifier resolvability FROM THE STAGED LOCATION, boot-smokes bin --help with real Node, then commits by removing .dsh-crew-incomplete and switches current.json last. Install registers the Harness plugin junction against the committed release path (never the candidate root), and renders Codex/Claude integration paths against that same durable root via the new installer `root` option."
+    },
+    {
+      "name": "T05 Real disposable npx lifecycle E2E: install",
+      "status": "PASS",
+      "evidence": "Windows real run in fully disposable USERPROFILE/HOME/APPDATA/LOCALAPPDATA/TEMP (C:/Users/48376/AppData/Local/Temp/opencode/v033-e2e-20260823-143410/home), invoked from outside the repository as `npx --yes --package <local-tarball> dsh-crew install` (npm 11 exec semantics require --package for tarball specs): exit 0; staged+committed release 20260823T071721Z-22040-1-0.3.3 under <home>/.config/dsh-crew/app/releases, Harness junction registered to that path, Codex Desktop and Claude Code integrations rendered against it, reusable Crew DSH runtime bootstrapped @0.1.1-rc.2 into <home>/.config/dsh-crew/harness/runtime. Pre-install status through the same npx path reported not installed across all surfaces."
+    },
+    {
+      "name": "T06 Registration target lives under Crew-owned state, not cache/repo/temp/tarball",
+      "status": "PASS",
+      "evidence": "current.json path asserted StartsWith <home>/.config/dsh-crew/app and NOT matching _npx, not under TEMP, not under the repository checkout, not under the pack directory. Junction at harness/profiles/dsh-crew/node_modules/@ran-sh/dsh-crew has LinkType=Junction with Target exactly equal to the current release path."
+    },
+    {
+      "name": "T07 Persistence after deleting all task-created inputs",
+      "status": "PASS",
+      "evidence": "After install, the packed tarball AND the entire disposable npm-cache/_npx tree were deleted (both removals verified). The persisted payload then ran standalone: `node <release>/bin/dsh-crew.mjs status` exited 0 reporting installed 0.3.3/plugin installed/Codex installed/Claude installed, and a Node probe resolved @modelcontextprotocol/sdk/server/mcp.js, sdk/server/stdio.js, zod, and @deepseek-ai/dsh-sdk-client ALL from the release directory alone (ALL_DEPS_RESOLVE_FROM_PERSISTED_PAYLOAD), proving no dependence on the npx cache, tarball, temp extraction, or checkout."
+    },
+    {
+      "name": "T08 status is read-only and reports required surfaces",
+      "status": "PASS",
+      "evidence": "status printed candidate CLI version 0.3.3, Installed DSH Crew version+path when determinable ('not installed' before install; 'unverifiable/damaged' labeling after a forced corruption instead of pretending success), DSH plugin state from the dedicated dsh-crew profile with official web profile ignored, and Codex/Claude integration state; no mutation performed and no secrets in output."
+    },
+    {
+      "name": "T09 Same-version update idempotence",
+      "status": "PASS",
+      "evidence": "`npm exec --yes --package <tarball> -- dsh-crew update` against an identical healthy install exited 0 with '- already current (0.3.3); repairing registration/integrations idempotently', re-verified registration/integrations/runtime reuse (@0.1.1-rc.2), and left exactly 1 release directory. Unit test additionally asserts no new release and re-verification calls occur."
+    },
+    {
+      "name": "T10 Repair case: stale/incomplete payload + removed registration repaired without touching config/credentials",
+      "status": "PASS",
+      "evidence": "Planted sentinel config.json ({\"hub_url\":\"http://127.0.0.1:3210\"}) and .env (SENTINEL_CREDENTIAL=keep-me) in ~/.config/dsh-crew, deleted lib/client.js from the current release, and removed the profile junction subtree. `npx 鈥?update` detected 'existing installation is stale or incomplete', staged and validated a fresh candidate, committed a NEW stamped release (old release retained on disk through activation 鈥?2 release dirs present), retargeted the Harness junction to the new release, and finished exit 0. config.json and .env preserved byte-identically; unit-level repair test asserts the same preservation guarantees."
+    },
+    {
+      "name": "T11 Uninstall removes Crew-managed state, preserves normal config/backups; final status clean",
+      "status": "PASS",
+      "evidence": "`dsh-crew uninstall` (no --purge) exited 0 removing Codex integration (ds-worker.toml gone), Claude plugin entry (settings unregistered), offline Harness registration, and the entire Crew-managed app subtree including current.json, while KEEPING config.json content verbatim, the sentinel .env, the isolated harness runtime (@deepseek-ai/dsh still present), and the profile manifest. Final status reported not installed across all five lines. Explicit destructive behavior remains gated behind --purge (unit-tested to remove the whole ~/.config/dsh-crew only then)."
+    },
+    {
+      "name": "T12 Source-checkout compatibility lifecycle",
+      "status": "PASS",
+      "evidence": "In a SECOND disposable home, real `node scripts/setup.mjs install` exited 0 (deps skipped-present, client build ok, offline Crew profile link updated, Codex+Claude integrations), `status` reported all three surfaces installed, `uninstall` exited 0 removing them offline while keeping Config/backups, and a fresh `status` reported all not-installed. Existing setup/setup-cli suites continue passing unchanged."
+    },
+    {
+      "name": "T13 Focused new tests + full deterministic suite",
+      "status": "PASS",
+      "evidence": "New test/npx-lifecycle.test.mjs adds 22 focused tests covering bin/package identity, closure copying, staging/validation fail-closed paths, npm fallback for locally-missing deps (peers), smoke-failure abort leaving no release behind, install/reinstall/status/update-idempotence/update-upgrade/repair/uninstall/purge, CLI dispatch matrix, and real bin subprocess behavior. Full suite: node --test test/*.test.mjs 鈫?471/471 pass, 0 fail, 0 skipped (was 449 before this task; +22 new)."
+    },
+    {
+      "name": "T14 Client build gate",
+      "status": "PASS",
+      "evidence": "pnpm run build:client completed ('built lib/client.js (107158 bytes)'). The rebuild output differs from the tracked lib/client.js purely due to pre-existing bundler toolchain drift unrelated to this change (src/client untouched); per established practice the tracked artifact was restored via git checkout so no generated side effect remains (git status lib clean)."
+    },
+    {
+      "name": "T15 Normal npm install verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install exited 0: NPM_INSTALL_CONTRACT=PASS candidate=0.3.3 official_dsh=not-run, using npm's default resolver without bypass flags."
+    },
+    {
+      "name": "T16 Official DSH cohort verifier",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install:official exited 0: DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.3 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T17 npm pack audit",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json: @ran-sh/dsh-crew@0.3.3, 88 files, size 897894 B, unpackedSize 1644208 B; bin/dsh-crew.mjs shipped; runtime/setup payload present (src/server.mjs, src/hub/entry.mjs, lib/client.js, cordis.patch.yml, scripts/, codex/agents/*, .claude-plugin/); zero matches for ACTIVE_TASK, agent-results, test/, *.test.*, secret, credential, .tgz, node_modules, .env."
+    },
+    {
+      "name": "T18 npm publish dry-run",
+      "status": "PASS",
+      "evidence": "npm publish --dry-run --access public reported '@ran-sh/dsh-crew@0.3.3', 88 total files, publishing to registry.npmjs.org with tag latest (dry-run only); no registry write."
+    },
+    {
+      "name": "T19 Publication/tag/Release absence + machine safety",
+      "status": "PASS",
+      "evidence": "Read-only checks after all work: npm view reports versions [0.3.0, 0.3.1, 0.3.2] with dist-tags.latest=0.3.2 (no 0.3.3 published); git ls-remote --tags origin 'v0.3.3*' empty; GitHub Release v0.3.3 not found. No credentials, tokens, OTPs, auth headers, credential-store contents, or .npmrc contents were read or modified; the user's normal ~/.dsh and official web profile were never accessed; global lifecycle-script approvals and package-manager security policies untouched."
+    },
+    {
+      "name": "T20 Real-machine isolation verification",
+      "status": "PASS",
+      "evidence": "The stable real-machine installation was probed read-only before and after all disposable testing: node scripts/setup.mjs status consistently reports DSH plugin installed, Codex Desktop integration installed, Claude Code integration installed. All disposable lifecycle effects were confined to C:/Users/48376/AppData/Local/Temp/opencode/v033-e2e-20260823-143410 (task temp area outside the workspace); its task-created tarballs/extraction inputs were deleted during the persistence phase and remaining disposable scaffolding requires no cleanup beyond normal OS temp handling."
+    },
+    {
+      "name": "T21 Result Contract validation",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json --stamp exits 0 with VALID RESULT CONTRACT and stamps validator-owned result_validation evidence below."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json",
+  "notes": [
+    "source_branch: main; the Task Contract pinned source_commit=e14c223鈥?but the orchestrator queued the task one commit later (4a517cd touches only docs/agent-tasks/ACTIVE_TASK.json), so HEAD 4a517cd681325f07a08846437e03443997011a5f was executed as the requested code revision (diff verified single-file).",
+    "Implementation notes: (1) src/install/install-legacy.mjs gained an optional `root` option for installClaudeCode/installCodex so integration paths render against the durable payload; default behavior unchanged. (2) src/dsh-cli-runtime.mjs defaultFindCommand now prefers spawnable Windows executables (.exe/.cmd/.bat) over extensionless shims when resolving where.exe results 鈥?fixes ENOENT bootstrap failures seen on machines whose PATH exposes npm's bash shim first. (3) The persisted payload merges exact-pinned peers into dependencies because src/jobs.mjs statically imports @deepseek-ai/dsh-sdk-client and jobs.mjs is outside this task's allowed_changes; platform-specific optionalDependencies are copied when locally available and otherwise reconciled by npm per-platform.",
+    "npm-exec syntax note (recorded for future executors): with npm 11, a local tarball must be passed via `--package`; `npx <tarball> <args>` treats the tarball path itself as the command.",
+    "No force-push, history rewrite, branch mutation, workflow changes, version metadata beyond 0.3.3 identity fields, or unrelated file modifications occurred. pnpm-lock.yaml needed no change.",
+    "final_machine_state: INSTALLED"
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json --stamp",
+    "validated_at": "2026-08-23T07:33:04Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V033-NPX-LIFECYCLE-result.json"
+  }
+}

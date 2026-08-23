@@ -38,9 +38,25 @@ Codex Desktop / Claude Code
 
 ## 安装
 
-需要：**Node.js、Git、pnpm**。
+需要：**Node.js**（编码 worker 隔离需要 **Git**）。
 
-推荐从源码安装：
+推荐直接通过 npm/npx 管理，无需克隆仓库：
+
+```bash
+npx @ran-sh/dsh-crew@latest install
+```
+
+后续管理使用同一 CLI：
+
+```bash
+npx @ran-sh/dsh-crew@latest status
+npx @ran-sh/dsh-crew@latest update
+npx @ran-sh/dsh-crew@latest uninstall        # 加 --purge 才会同时删除配置/备份
+```
+
+npx 安装会把已构建好的包持久化到 Crew 自有状态（`~/.config/dsh-crew/app`）后再注册，安装不依赖临时的 npx 缓存，也不需要 pnpm、lockfile 或任何构建步骤。
+
+开发者 / 源码安装（备选路径）：
 
 ```bash
 git clone https://github.com/Ran-sh/dsh-crew.git
@@ -48,7 +64,7 @@ cd dsh-crew
 node scripts/setup.mjs install
 ```
 
-Windows 也可以直接运行：
+Windows 源码检出也可以直接运行：
 
 ```bat
 install.cmd
@@ -97,14 +113,26 @@ Use ds-reviewer to review the implementation.
 
 ## 更新 / 卸载
 
-更新源码安装：
+npx 安装使用 update 原地升级（配置、凭据和备份保留；候选包先暂存校验再切换）：
+
+```bash
+npx @ran-sh/dsh-crew@latest update
+```
+
+卸载 npx 安装：
+
+```bash
+npx @ran-sh/dsh-crew@latest uninstall
+```
+
+源码安装的更新方式：
 
 ```bash
 git pull --ff-only
 node scripts/setup.mjs install
 ```
 
-卸载 Crew 与集成：
+卸载源码安装：
 
 ```bash
 node scripts/setup.mjs uninstall

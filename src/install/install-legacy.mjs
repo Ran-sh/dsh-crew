@@ -229,14 +229,16 @@ export function uninstallCodex({ home = homedir() } = {}) {
   return { ok: true, actions: actions.length ? actions : ['nothing to remove'] };
 }
 
-export async function installClaudeCode({ home = homedir(), statusline = false } = {}) {
+export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
   const actions = [];
 
   // The repository carries its own marketplace manifest (.claude-plugin/
   // marketplace.json with source "."), so the marketplace root IS the plugin
   // checkout itself — no parent-directory layout assumption. This keeps the
   // installer working when the repo is cloned anywhere (e.g. Desktop\dsh-crew).
-  const mpDir = ROOT;
+  // `root` lets an npx-managed install point every rendered path at the
+  // durable Crew-owned payload instead of a transient package extraction dir.
+  const mpDir = root;
   actions.push(`marketplace: ${mpDir} (self-marketplace, source .)`);
 
   // 2. settings.json: marketplace + enabledPlugins + permissions allowlist.
@@ -286,7 +288,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false }
   settings.permissions.allow = allow;
 
   if (statusline && !settings.statusLine) {
-    settings.statusLine = { type: 'command', command: `bash ${join(ROOT, 'statusline', 'statusline.sh')}` };
+    settings.statusLine = { type: 'command', command: `bash ${join(root, 'statusline', 'statusline.sh')}` };
     actions.push('statusline: installed');
   } else if (statusline) {
     actions.push('statusline: skipped (one already configured)');
@@ -327,17 +329,17 @@ export async function installClaudeCode({ home = homedir(), statusline = false }
   return { ok: true, actions };
 }
 
-export function installCodex({ home = homedir(), scope } = {}) {
+export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
   const actions = [];
   const agentsDir = scope === 'project' ? join(process.cwd(), '.codex', 'agents') : join(home, '.codex', 'agents');
   mkdirSync(agentsDir, { recursive: true });
-  const srcDir = join(ROOT, 'codex', 'agents');
+  const srcDir = join(root, 'codex', 'agents');
   // Windows drive paths must render with forward slashes: backslashes in a
   // TOML basic string are escape sequences (\\U\\u... are invalid), which made
   // the role files unparseable for Codex Desktop. node accepts forward slashes
   // on Windows, so the absolute path rendered as D:/... is both valid TOML and
-  // runnable.
-  const renderedPath = join(ROOT, 'src', 'server.mjs').replace(/\\/g, '/');
+  // runnable. `root` targets the durable installed payload for npx installs.
+  const renderedPath = join(root, 'src', 'server.mjs').replace(/\\/g, '/');
   for (const f of readdirSync(srcDir).filter((f) => f.endsWith('.toml'))) {
     const dest = join(agentsDir, f);
     const bak = backup(dest);
@@ -349,7 +351,7 @@ export function installCodex({ home = homedir(), scope } = {}) {
   }
   const promptsDir = scope === 'project' ? join(process.cwd(), '.codex', 'prompts') : join(home, '.codex', 'prompts');
   mkdirSync(promptsDir, { recursive: true });
-  const promptsSrc = join(ROOT, 'codex', 'prompts');
+  const promptsSrc = join(root, 'codex', 'prompts');
   for (const f of readdirSync(promptsSrc).filter((f) => f.endsWith('.md'))) {
     writeFileSync(join(promptsDir, f), readFileSync(join(promptsSrc, f), 'utf8'));
     actions.push(`prompt: ${join(promptsDir, f)}`);

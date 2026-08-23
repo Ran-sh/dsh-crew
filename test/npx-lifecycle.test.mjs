@@ -1,0 +1,572 @@
+// v0.3.3 npx-managed lifecycle tests: durable Crew-owned payload persistence,
+// bin dispatch semantics, read-only status, upgrade-aware/idempotent update,
+// repair cases, and config-preserving uninstall. All filesystem effects stay
+// inside disposable temp homes; Codex/Claude integrations are faked, while the
+// Harness profile registration itself runs for real against the temp home.
+// Run with: node --test test/npx-lifecycle.test.mjs
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { RUNTIME_VERSION } from '../src/runtime-identity.mjs';
+import {
+  CREW_APP_DIRNAME,
+  crewAppRoot,
+  crewReleasesDir,
+  currentPointerFile,
+  readCurrentPointer,
+  runningPackageRoot,
+  stageCandidatePayload,
+  validateInstalledPayload,
+  copyProductionDependencyTree,
+  npxInstall,
+  npxStatus,
+  npxUpdate,
+  npxUninstall,
+  runNpxCli,
+  USAGE,
+} from '../src/install/npx-lifecycle.mjs';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const PKG_NAME = '@ran-sh/dsh-crew';
+
+function tempHome() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-npx-lifecycle-'));
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** Build a realistic candidate "running instance" (packaged layout). */
+function makeCandidate(home) {
+  const root = join(home, 'candidate');
+  mkdirSync(join(root, 'src', 'hub'), { recursive: true });
+  mkdirSync(join(root, 'lib'), { recursive: true });
+  mkdirSync(join(root, 'bin'), { recursive: true });
+  mkdirSync(join(root, 'codex', 'agents'), { recursive: true });
+  mkdirSync(join(root, 'codex', 'prompts'), { recursive: true });
+  mkdirSync(join(root, 'agents'), { recursive: true });
+  mkdirSync(join(root, 'commands'), { recursive: true });
+  mkdirSync(join(root, 'statusline'), { recursive: true });
+  mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: PKG_NAME,
+    version: '0.3.3',
+    type: 'module',
+    main: './src/hub/entry.mjs',
+    bin: { 'dsh-crew': './bin/dsh-crew.mjs' },
+    exports: { '.': './src/hub/entry.mjs' },
+    dsh: { bundle: { patch: './cordis.patch.yml' }, client: {} },
+    dependencies: { '@ran-fake/sdk': '^1.0.0', 'fake-zod': '^3.0.0' },
+    peerDependencies: { '@ran-fake/host-peer': '^9.0.0' },
+    devDependencies: { 'build-tool': '^1.0.0' },
+    files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline',
+      '.claude-plugin', '.mcp.json', 'cordis.patch.yml', 'worker.cordis.yml',
+      'README.md', 'README.*.md', 'LICENSE'],
+  }, null, 2));
+  writeFileSync(join(root, 'cordis.patch.yml'), '[]\n');
+  writeFileSync(join(root, 'worker.cordis.yml'), '[]\n');
+  writeFileSync(join(root, '.mcp.json'), '{}\n');
+  writeFileSync(join(root, 'src', 'server.mjs'), "import '@ran-fake/sdk';\nimport '@ran-fake/host-peer';\n");
+  writeFileSync(join(root, 'src', 'hub', 'entry.mjs'), 'export const name = \'crew\';\n');
+  writeFileSync(join(root, 'lib', 'client.js'), '// client\n');
+  writeFileSync(join(root, 'bin', 'dsh-crew.mjs'), "import '../lib/client.js';\n");
+  writeFileSync(join(root, 'codex', 'agents', 'ds-worker.toml'), '[agent]\n');
+  writeFileSync(join(root, 'codex', 'prompts', 'dsh-config.md'), '# config\n');
+  writeFileSync(join(root, '.claude-plugin', 'marketplace.json'), '{}\n');
+  writeFileSync(join(root, 'README.md'), '# candidate\n');
+  writeFileSync(join(root, 'LICENSE'), 'MIT\n');
+
+  // Dependency tree: sdk -> zod (transitive) to prove closure copying, plus
+  // the host-provided peer package vendored like the real cohort would be.
+  const nm = join(root, 'node_modules');
+  mkdirSync(join(nm, '@ran-fake', 'sdk'), { recursive: true });
+  writeFileSync(join(nm, '@ran-fake', 'sdk', 'package.json'), JSON.stringify({
+    name: '@ran-fake/sdk', version: '1.0.0', main: 'index.js', dependencies: { 'fake-zod': '^3.0.0' },
+  }));
+  writeFileSync(join(nm, '@ran-fake', 'sdk', 'index.js'), 'module.exports = 1;\n');
+  mkdirSync(join(nm, 'fake-zod'), { recursive: true });
+  writeFileSync(join(nm, 'fake-zod', 'package.json'), JSON.stringify({ name: 'fake-zod', version: '3.0.0', main: 'index.js' }));
+  writeFileSync(join(nm, 'fake-zod', 'index.js'), 'module.exports = 2;\n');
+  mkdirSync(join(nm, '@ran-fake', 'host-peer'), { recursive: true });
+  writeFileSync(join(nm, '@ran-fake', 'host-peer', 'package.json'), JSON.stringify({ name: '@ran-fake/host-peer', version: '9.0.0', main: 'index.js' }));
+  writeFileSync(join(nm, '@ran-fake', 'host-peer', 'index.js'), 'module.exports = 3;\n');
+  return root;
+}
+
+function recordingInstaller() {
+  const calls = [];
+  return {
+    calls,
+    installer: {
+      installCodex: (o = {}) => { calls.push(['installCodex', o]); return { ok: true, actions: [] }; },
+      uninstallCodex: (o = {}) => { calls.push(['uninstallCodex', o]); return { ok: true, actions: [] }; },
+      installClaudeCode: async (o = {}) => { calls.push(['installClaudeCode', o]); return { ok: true, actions: [] }; },
+      uninstallClaudeCode: async (o = {}) => { calls.push(['uninstallClaudeCode', o]); return { ok: true, actions: [] }; },
+      installStatus: () => ({ claude: { installed: false }, codex: { installed: false } }),
+    },
+  };
+}
+
+const okRuntime = () => async ({ home }) => ({ ok: true, version: '9.9.9-fake', home });
+const releaseCount = (home) => readdirSync(crewReleasesDir({ home })).filter((n) => !n.startsWith('.staging')).length;
+
+// ---------- package identity ----------
+
+test('package exposes exactly one natural CLI executable backed by an existing script', () => {
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+  const bins = Object.entries(manifest.bin ?? {});
+  assert.equal(bins.length, 1);
+  const [name, script] = bins[0];
+  assert.equal(name, 'dsh-crew');
+  assert.equal(existsSync(join(REPO_ROOT, script)), true, `${script} must exist`);
+  assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
+});
+
+test('package, runtime identity, and changelog identify candidate 0.3.3', () => {
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+  assert.equal(manifest.version, '0.3.3');
+  assert.equal(RUNTIME_VERSION, '0.3.3');
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.3\.3/m);
+});
+
+// ---------- dependency closure ----------
+
+test('copyProductionDependencyTree replicates the transitive production closure', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const toRoot = join(t.dir, 'stage');
+    mkdirSync(toRoot, { recursive: true });
+    const { copied, missing } = copyProductionDependencyTree({
+      fromRoot: sourceRoot, toRoot, names: ['@ran-fake/sdk', 'fake-zod'],
+    });
+    assert.deepEqual(missing, []);
+    assert.deepEqual([...copied.keys()].sort(), ['@ran-fake/sdk', 'fake-zod']);
+    assert.equal(existsSync(join(toRoot, 'node_modules', '@ran-fake', 'sdk', 'index.js')), true);
+    assert.equal(existsSync(join(toRoot, 'node_modules', 'fake-zod', 'index.js')), true);
+  } finally { t.cleanup(); }
+});
+
+test('copyProductionDependencyTree reports unresolved roots as missing', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const toRoot = join(t.dir, 'stage');
+    mkdirSync(toRoot, { recursive: true });
+    rmSync(join(sourceRoot, 'node_modules', 'fake-zod'), { recursive: true, force: true });
+    const { missing } = copyProductionDependencyTree({ fromRoot: sourceRoot, toRoot, names: ['fake-zod'] });
+    assert.deepEqual(missing, ['fake-zod']);
+  } finally { t.cleanup(); }
+});
+
+// ---------- staging / validation ----------
+
+test('staged payload strips peer/dev declarations, ships files, and validates from its own location', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const staged = stageCandidatePayload({ sourceRoot, home: t.dir });
+    assert.equal(staged.ok, true, `staging failed: ${JSON.stringify(staged)}`);
+    const stageManifest = JSON.parse(readFileSync(join(staged.stageDir, 'package.json'), 'utf8'));
+    assert.equal(stageManifest.name, PKG_NAME);
+    assert.equal(stageManifest.version, '0.3.3');
+    assert.equal(stageManifest.peerDependencies, undefined);
+    assert.equal(stageManifest.devDependencies, undefined);
+    assert.deepEqual(Object.keys(stageManifest.dependencies ?? {}).sort(), ['@ran-fake/host-peer', '@ran-fake/sdk', 'fake-zod']);
+    for (const rel of ['cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'codex/agents/ds-worker.toml', '.claude-plugin/marketplace.json']) {
+      assert.equal(existsSync(join(staged.stageDir, rel)), true, `${rel} must be staged`);
+    }
+    assert.ok(!existsSync(join(staged.stageDir, 'package.json.bak')));
+    // Staging happens under Crew-owned state, never under the candidate root.
+    assert.ok(staged.stageDir.startsWith(crewReleasesDir({ home: t.dir })));
+    assert.ok(!staged.stageDir.startsWith(sourceRoot));
+    // Pre-commit staging still carries the incompleteness marker; validating
+    // it in pre-commit mode proves the payload is complete and self-contained.
+    const validated = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3', allowIncomplete: true });
+    assert.deepEqual(validated.errors, []);
+    // The same validation without the pre-commit flag fails closed.
+    const strict = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3' });
+    assert.ok(strict.errors.some((e) => e.includes('incomplete')));
+    rmSync(staged.stageDir, { recursive: true, force: true });
+  } finally { t.cleanup(); }
+});
+
+test('staging falls back to npm for locally missing dependencies and validates the result', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    // The host-peer cohort is absent from the running instance (as under npx).
+    rmSync(join(sourceRoot, 'node_modules', '@ran-fake', 'host-peer'), { recursive: true, force: true });
+    const npmCalls = [];
+    const npmInstaller = (stageRoot) => {
+      npmCalls.push(stageRoot);
+      mkdirSync(join(stageRoot, 'node_modules', '@ran-fake', 'host-peer'), { recursive: true });
+      writeFileSync(join(stageRoot, 'node_modules', '@ran-fake', 'host-peer', 'package.json'),
+        JSON.stringify({ name: '@ran-fake/host-peer', version: '9.0.0', main: 'index.js' }));
+      writeFileSync(join(stageRoot, 'node_modules', '@ran-fake', 'host-peer', 'index.js'), 'module.exports=3;\n');
+      return true;
+    };
+    const staged = stageCandidatePayload({ sourceRoot, home: t.dir, npmInstaller });
+    assert.equal(staged.ok, true, `staging failed: ${JSON.stringify(staged)}`);
+    assert.equal(npmCalls.length, 1);
+    assert.equal(npmCalls[0], staged.stageDir);
+    rmSync(staged.stageDir, { recursive: true, force: true });
+  } finally { t.cleanup(); }
+});
+
+test('a failed boot smoke aborts staging without leaving a release behind', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const staged = stageCandidatePayload({
+      sourceRoot, home: t.dir,
+      smoke: () => ({ ok: false, detail: 'simulated boot failure' }),
+    });
+    assert.equal(staged.ok, false);
+    assert.equal(staged.code, 'STAGE_SMOKE_FAILED');
+    assert.equal(releaseCount(t.dir), 0);
+  } finally { t.cleanup(); }
+});
+
+test('validateInstalledPayload fails closed on identity, artifact, or dependency gaps', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const staged = stageCandidatePayload({ sourceRoot, home: t.dir });
+    assert.equal(staged.ok, true);
+    assert.match(validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '9.9.9' }).errors.join(), /version mismatch/);
+
+    rmSync(join(staged.stageDir, 'lib', 'client.js'));
+    let errors = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3' }).errors;
+    assert.ok(errors.some((e) => e.includes('lib/client.js')));
+
+    cpSync(staged.stageDir, join(t.dir, 'copy'), { recursive: true });
+    rmSync(join(t.dir, 'copy', 'node_modules'), { recursive: true, force: true });
+    errors = validateInstalledPayload(join(t.dir, 'copy'), { expectedName: PKG_NAME, expectedVersion: '0.3.3', allowIncomplete: true }).errors;
+    assert.ok(errors.some((e) => e.includes('vendored dependency missing')), JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('import target not resolvable')), JSON.stringify(errors));
+
+    assert.equal(validateInstalledPayload(join(t.dir, 'missing-dir')).ok, false);
+    rmSync(staged.stageDir, { recursive: true, force: true });
+  } finally { t.cleanup(); }
+});
+
+// ---------- install ----------
+
+test('install persists the payload under Crew-owned state and registers that path', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const { installer, calls } = recordingInstaller();
+    const logs = [];
+    const r = await npxInstall({
+      home: t.dir, sourceRoot, installer, log: (m) => logs.push(m),
+      ensureRuntime: okRuntime(),
+    });
+    assert.equal(r.ok, true, `install failed: ${logs.join('\n')}`);
+
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(pointer.version, '0.3.3');
+    assert.equal(pointer.path, r.path);
+    assert.ok(pointer.path.startsWith(crewAppRoot({ home: t.dir })), 'installed payload must live under Crew-owned state');
+    assert.ok(!pointer.path.startsWith(sourceRoot), 'must not register the transient candidate location');
+
+    // Real Harness registration ran: profile metadata + junction point at the release.
+    const profilePkg = JSON.parse(readFileSync(join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'package.json'), 'utf8'));
+    assert.equal(profilePkg.dependencies?.[PKG_NAME], `link:${pointer.path.replace(/\\/g, '/')}`);
+    assert.ok(profilePkg.dsh.profile.bundles.includes(PKG_NAME));
+    assert.ok(existsSync(join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh', 'dsh-crew', 'package.json')));
+
+    // Integrations rendered against the persisted release, not the candidate.
+    const codexCall = calls.find(([name]) => name === 'installCodex');
+    assert.equal(codexCall[1].root, pointer.path);
+    const claudeCall = calls.find(([name]) => name === 'installClaudeCode');
+    assert.equal(claudeCall[1].root, pointer.path);
+
+    // The release is runnable standalone: its own bin exists and deps resolve locally.
+    assert.equal(existsSync(join(pointer.path, 'bin', 'dsh-crew.mjs')), true);
+    assert.equal(releaseCount(t.dir), 1);
+  } finally { t.cleanup(); }
+});
+
+test('same-version reinstall is a repairing no-op that does not add releases', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const { installer } = recordingInstaller();
+    const first = await npxInstall({ home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(first.ok, true);
+    const second = await npxInstall({ home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(second.ok, true);
+    assert.equal(second.repaired, true);
+    assert.equal(second.path, first.path);
+    assert.equal(releaseCount(t.dir), 1);
+  } finally { t.cleanup(); }
+});
+
+test('install fails closed without mutating anything when the candidate cannot be staged', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    rmSync(join(sourceRoot, 'node_modules'), { recursive: true, force: true });
+    const rec = recordingInstaller();
+    const r = await npxInstall({
+      home: t.dir, sourceRoot, installer: rec.installer, log: () => {},
+      ensureRuntime: okRuntime(),
+      npmInstaller: () => false, // fallback disabled: replication gap becomes fatal
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /staging failed/);
+    assert.equal(existsSync(currentPointerFile({ home: t.dir })), false);
+    assert.equal(releaseCount(t.dir), 0, 'failed staging must leave no release behind');
+    assert.deepEqual(rec.calls.filter(([n]) => n === 'installCodex'), []);
+  } finally { t.cleanup(); }
+});
+
+// ---------- status ----------
+
+test('status is read-only and reports candidate/installed versions plus integration state', async () => {
+  const t = tempHome();
+  try {
+    const logsBefore = [];
+    const before = await npxStatus({ home: t.dir, sourceRoot: makeCandidate(t.dir), log: (m) => logsBefore.push(m) });
+    assert.equal(before.ok, true);
+    assert.equal(before.installedVersion, null);
+    assert.match(logsBefore.join('\n'), /DSH plugin: not installed/);
+    assert.match(logsBefore.join('\n'), /official web profile ignored/);
+
+    const { installer } = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer, log: () => {}, ensureRuntime: okRuntime() });
+
+    // installStatus now reports integrations installed (as the real module would).
+    const st = recordingInstaller();
+    st.installer.installStatus = () => ({ claude: { installed: true }, codex: { installed: true } });
+    const logsAfter = [];
+    const after = await npxStatus({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: st.installer, log: (m) => logsAfter.push(m) });
+    assert.equal(after.candidateVersion, '0.3.3');
+    assert.equal(after.installedVersion, '0.3.3');
+    assert.equal(after.dshPlugin, 'installed');
+    assert.equal(after.codex, 'installed');
+    assert.equal(after.claude, 'installed');
+    const joined = logsAfter.join('\n');
+    assert.match(joined, /Installed DSH Crew: 0\.3\.3 \(/);
+    assert.ok(!/key|token|secret/i.test(joined), 'status must not leak secrets');
+  } finally { t.cleanup(); }
+});
+
+test('status reports unverifiable payloads instead of pretending success', async () => {
+  const t = tempHome();
+  try {
+    const { installer } = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer, log: () => {}, ensureRuntime: okRuntime() });
+    const pointer = readCurrentPointer({ home: t.dir });
+    rmSync(join(pointer.path, 'lib', 'client.js'));
+    const logs = [];
+    const st = await npxStatus({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer, log: (m) => logs.push(m) });
+    assert.equal(st.installedVersion, '0.3.3');
+    assert.match(logs.join('\n'), /unverifiable\/damaged/);
+  } finally { t.cleanup(); }
+});
+
+// ---------- update ----------
+
+test('update is idempotent when already current and healthy', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const before = readCurrentPointer({ home: t.dir });
+    const callsBefore = rec.calls.length;
+    const r = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(r.ok, true);
+    assert.equal(r.idempotent, true);
+    assert.equal(r.path, before.path);
+    assert.equal(releaseCount(t.dir), 1);
+    assert.ok(rec.calls.length > callsBefore, 'idempotent update still re-verifies integrations');
+  } finally { t.cleanup(); }
+});
+
+test('update upgrades an older installation through staged validation before switching', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const { installer } = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() });
+
+    // Candidate moves to 0.4.0 (upgrade).
+    const manifestFile = join(sourceRoot, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    manifest.version = '0.4.0';
+    writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
+    const nm = join(sourceRoot, 'node_modules');
+    writeFileSync(join(nm, '@ran-fake', 'sdk', 'package.json'), JSON.parse(readFileSync(join(nm, '@ran-fake', 'sdk', 'package.json'), 'utf8')) && readFileSync(join(nm, '@ran-fake', 'sdk', 'package.json'), 'utf8'));
+
+    const r = await npxUpdate({ home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(r.ok, true);
+    assert.equal(r.updated, true);
+    assert.equal(r.version, '0.4.0');
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(pointer.version, '0.4.0');
+    assert.notEqual(pointer.path, undefined);
+    assert.equal(JSON.parse(readFileSync(join(pointer.path, 'package.json'), 'utf8')).version, '0.4.0');
+    // Old usable release retained (keep policy), current switched safely.
+    assert.equal(releaseCount(t.dir), 2);
+  } finally { t.cleanup(); }
+});
+
+test('update repairs stale/incomplete payloads and registrations while preserving config and credentials', async () => {
+  const t = tempHome();
+  try {
+    const configDir = join(t.dir, '.config', 'dsh-crew');
+    mkdirSync(configDir, { recursive: true });
+    const configFile = join(configDir, 'config.json');
+    const envFile = join(configDir, '.env');
+    writeFileSync(configFile, '{"hub_url":"http://127.0.0.1:3210"}');
+    writeFileSync(envFile, 'TEST_ONLY=1');
+
+    const { installer } = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer, log: () => {}, ensureRuntime: okRuntime() });
+    const original = readCurrentPointer({ home: t.dir });
+
+    // Corrupt the installed payload AND remove the Harness registration link.
+    rmSync(join(original.path, 'src', 'server.mjs'));
+    rmSync(join(configDir, 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh'), { recursive: true, force: true });
+    rmSync(join(original.path, 'node_modules', '@ran-fake'), { recursive: true, force: true });
+
+    const logs = [];
+    const r = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer, log: (m) => logs.push(m), ensureRuntime: okRuntime() });
+    assert.match(logs.join('\n'), /stale or incomplete/);
+    assert.equal(r.ok, true, `repair failed: ${logs.join('\n')}`);
+    assert.equal(r.updated, true);
+
+    const repaired = readCurrentPointer({ home: t.dir });
+    assert.notEqual(repaired.path, original.path, 'repair must switch to a fresh validated release');
+    assert.equal(validateInstalledPayload(repaired.path, { expectedName: PKG_NAME, expectedVersion: '0.3.3' }).ok, true);
+    const profilePkg = JSON.parse(readFileSync(join(configDir, 'harness', 'profiles', 'dsh-crew', 'package.json'), 'utf8'));
+    assert.equal(profilePkg.dependencies?.[PKG_NAME], `link:${repaired.path.replace(/\\/g, '/')}`);
+
+    // Config/credentials byte-identical; nothing outside app/ + registration was touched.
+    assert.equal(readFileSync(configFile, 'utf8'), '{"hub_url":"http://127.0.0.1:3210"}');
+    assert.equal(readFileSync(envFile, 'utf8'), 'TEST_ONLY=1');
+  } finally { t.cleanup(); }
+});
+
+// ---------- uninstall ----------
+
+test('uninstall removes payload, registration, and integrations but preserves config/backups', async () => {
+  const t = tempHome();
+  try {
+    const configDir = join(t.dir, '.config', 'dsh-crew');
+    mkdirSync(join(configDir, 'harness'), { recursive: true });
+    const configFile = join(configDir, 'config.json');
+    writeFileSync(configFile, '{}');
+    writeFileSync(join(configDir, '.env'), 'KEEP=1');
+
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+
+    const logs = [];
+    const r = await npxUninstall({ home: t.dir, installer: rec.installer, log: (m) => logs.push(m) });
+    assert.equal(r.ok, true, `uninstall failed: ${logs.join('\n')}`);
+    assert.equal(existsSync(crewAppRoot({ home: t.dir })), false, 'Crew-managed payload removed');
+    assert.equal(existsSync(currentPointerFile({ home: t.dir })), false);
+    assert.equal(existsSync(configFile), true, 'config preserved by default');
+    assert.equal(readFileSync(join(configDir, '.env'), 'utf8'), 'KEEP=1');
+    const profilePkg = JSON.parse(readFileSync(join(configDir, 'harness', 'profiles', 'dsh-crew', 'package.json'), 'utf8'));
+    assert.equal(profilePkg.dependencies?.[PKG_NAME], undefined);
+    assert.ok(!profilePkg.dsh.profile.bundles.includes(PKG_NAME));
+    assert.ok(rec.calls.some(([n]) => n === 'uninstallCodex'));
+    assert.ok(rec.calls.some(([n]) => n === 'uninstallClaudeCode'));
+
+    // Idempotent repeat.
+    const again = await npxUninstall({ home: t.dir, installer: rec.installer, log: () => {} });
+    assert.equal(again.ok, true);
+    assert.equal(existsSync(configFile), true);
+  } finally { t.cleanup(); }
+});
+
+test('uninstall --purge explicitly removes the whole Crew directory', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const r = await npxUninstall({ home: t.dir, purge: true, installer: rec.installer, log: () => {} });
+    assert.equal(r.ok, true);
+    assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew')), false);
+  } finally { t.cleanup(); }
+});
+
+// ---------- CLI dispatch ----------
+
+async function cli(argv, streams = {}) {
+  const out = [];
+  const err = [];
+  const code = await runNpxCli({
+    argv,
+    log: (m) => out.push(m),
+    error: (m) => err.push(m),
+    commands: streams.commands,
+  });
+  return { code, out: out.join('\n'), err: err.join('\n') };
+}
+
+await test('CLI dispatch: help, unknown command, and no command follow the contract', async () => {
+  assert.equal((await cli(['--help'])).code, 0);
+  assert.match((await cli(['--help'])).out, /usage: dsh-crew/);
+  const unknown = await cli(['banana']);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.err, /unknown command: banana/);
+  assert.match(unknown.err, /usage: dsh-crew/);
+  const none = await cli([]);
+  assert.equal(none.code, 1);
+  assert.match(none.err, /usage: dsh-crew/);
+});
+
+await test('CLI dispatch routes commands and forwards flags', async () => {
+  const routed = [];
+  const commands = {
+    install: async ({ log }) => { routed.push(['install']); log('installed'); return { ok: true }; },
+    status: async ({ log }) => { routed.push(['status']); log('status'); return { ok: true }; },
+    update: async ({ log }) => { routed.push(['update']); log('updated'); return { ok: true }; },
+    uninstall: async ({ purge, log }) => { routed.push(['uninstall', purge]); log('removed'); return { ok: true }; },
+  };
+  assert.equal((await cli(['status'], { commands })).out, 'status');
+  assert.equal((await cli(['update'], { commands })).out, 'updated');
+  assert.equal((await cli(['install'], { commands })).out, 'installed');
+  const purged = await cli(['uninstall', '--purge'], { commands });
+  assert.equal(purged.code, 0);
+  assert.deepEqual(routed.at(-1), ['uninstall', true]);
+  const failing = await cli(['install'], { commands: { install: async () => ({ ok: false }) } });
+  assert.equal(failing.code, 1);
+  const throwing = await cli(['status'], { commands: { status: async () => { throw new Error('boom'); } } });
+  assert.equal(throwing.code, 1);
+  assert.match(throwing.err, /boom/);
+});
+
+test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
+  const bin = join(REPO_ROOT, 'bin', 'dsh-crew.mjs');
+  const bad = spawnSync(process.execPath, [bin, 'banana'], { encoding: 'utf8', timeout: 60_000 });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /unknown command: banana/);
+  const help = spawnSync(process.execPath, [bin, '--help'], { encoding: 'utf8', timeout: 60_000 });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /usage: dsh-crew/);
+});
+
+test('runningPackageRoot points at the repository checkout during tests', () => {
+  assert.equal(runningPackageRoot(), REPO_ROOT);
+  assert.equal(CREW_APP_DIRNAME, 'app');
+});

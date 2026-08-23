@@ -38,9 +38,25 @@ Codex Desktop / Claude Code
 
 ## Install
 
-Prerequisites: **Node.js**, **Git**, and **pnpm**.
+Prerequisites: **Node.js** (Git is needed only for coding-worker isolation).
 
-Recommended source setup:
+Recommended: manage DSH Crew directly through npm/npx — no clone required:
+
+```bash
+npx @ran-sh/dsh-crew@latest install
+```
+
+Manage the installation later with the same CLI:
+
+```bash
+npx @ran-sh/dsh-crew@latest status
+npx @ran-sh/dsh-crew@latest update
+npx @ran-sh/dsh-crew@latest uninstall        # add --purge to also remove config/backups
+```
+
+An npx install persists the already-built package under Crew-owned state (`~/.config/dsh-crew/app`) before registering it, so the installation never depends on a transient npx cache and does not require pnpm, a lockfile, or rebuilding anything.
+
+Developer / source setup (alternative path):
 
 ```bash
 git clone https://github.com/Ran-sh/dsh-crew.git
@@ -48,7 +64,7 @@ cd dsh-crew
 node scripts/setup.mjs install
 ```
 
-Windows can use:
+Windows source checkouts can use:
 
 ```bat
 install.cmd
@@ -97,14 +113,26 @@ A coding worker receives a temporary git worktree at the requested revision, so 
 
 ## Update / uninstall
 
-Update a source install:
+npx-managed installs update in place (config, credentials, and backups are preserved; the candidate is staged and validated before switching):
+
+```bash
+npx @ran-sh/dsh-crew@latest update
+```
+
+Uninstall an npx-managed install:
+
+```bash
+npx @ran-sh/dsh-crew@latest uninstall
+```
+
+Update a source install instead with:
 
 ```bash
 git pull --ff-only
 node scripts/setup.mjs install
 ```
 
-Uninstall Crew and its integrations:
+Uninstall Crew from a source checkout:
 
 ```bash
 node scripts/setup.mjs uninstall

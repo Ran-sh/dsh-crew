@@ -31,7 +31,13 @@ function defaultFindCommand(name) {
   const probe = process.platform === 'win32' ? 'where.exe' : 'which';
   const result = spawnSync(probe, [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (result.status !== 0) return null;
-  return String(result.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
+  const lines = String(result.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  if (process.platform !== 'win32') return lines[0];
+  // where.exe may list extensionless npm/sh shims first; those are not
+  // directly spawnable by Node on Windows, so prefer a real executable.
+  const executable = lines.find((line) => /\.(?:exe|cmd|bat)$/iu.test(line));
+  return executable ?? lines[0];
 }
 
 function defaultExists(path) {
@@ -219,7 +225,13 @@ export function ensureCrewDshRuntime({
   });
   const cli = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false });
   if (result.status !== 0 || !cli || cli.kind !== 'crew-runtime') {
-    return { ok: false, code: 'DSH_RUNTIME_INSTALL_FAILED', error: 'Crew-owned DSH runtime install failed', status: result.status ?? -1 };
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_FAILED',
+      error: 'Crew-owned DSH runtime install failed',
+      status: result.status ?? -1,
+      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
   }
   return { ok: true, cli, reused: false, version: cli.version, runtimeRoot };
 }

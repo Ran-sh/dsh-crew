@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.3 — 2026-08-23
+
+### Added
+
+- First-class npx-managed lifecycle CLI: a single natural `dsh-crew` executable so `npx @ran-sh/dsh-crew@latest install|status|update|uninstall` works without naming a binary; unknown commands fail with usage text and a nonzero exit.
+- Durable Crew-owned package persistence for npx installs: the already-built published payload (plus its production dependency closure) is staged, validated, and committed under `~/.config/dsh-crew/app/releases/<stamp>` before Harness registration, so installations never depend on a transient npx cache, tarball, or extraction path.
+- `status` is read-only and reports the candidate CLI version, installed Crew version/path when determinable, DSH plugin state in the dedicated `dsh-crew` profile, and Codex/Claude integration state.
+- `update` is upgrade-aware and safe: it stages and validates the candidate before switching, preserves Crew config/credentials, repairs registration/integrations, stays idempotent when already current, keeps the previous usable release until the replacement is activated, and can repair stale/incomplete payload or registration state.
+- `uninstall` removes the Crew-managed installed payload plus plugin registration and host integrations while preserving normal Crew config/backups by default; existing `--purge` semantics remain explicit.
+
+### Changed
+
+- README (English and Chinese) now presents `npx @ran-sh/dsh-crew@latest` as the primary install/manage UX; source-checkout setup remains documented as the developer path.
+- The Claude Code and Codex Desktop installers accept an explicit payload root so npx-managed installs render integration paths against the durable installed package instead of a transient execution directory.
+
 ## 0.3.2 — 2026-08-23
 
 ### Fixed
