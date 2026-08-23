@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 — 2026-08-23
+
+### Fixed
+
+- Recovers the public distribution path around the npm/cli #9870 npx regression: the primary supported lifecycle is now a stable package-manager-installed launcher (`npm install -g @ran-sh/dsh-crew` then `dsh-crew install|status|update|uninstall`), which does not depend on transient npx cache PATH behavior; the broken `npx` flow is documented as a known compatibility issue instead of the primary path.
+
+### Changed
+
+- `dsh-crew update` is a real registry-aware update operation: it resolves the newest permitted Crew package from the configured npm registry (never downgrading) or from an explicit safe `--candidate`/`DSH_CREW_CANDIDATE` override, packs and stages it into durable Crew-owned state with full validation before activation, preserves config/credentials and the prior usable release until the switch succeeds, repairs stale registrations, and stays idempotent when already current. The globally installed launcher intentionally does not self-replace; after a payload update the CLI prints the exact one-line command to refresh it.
+- `dsh-crew status` additionally distinguishes the launcher/candidate version from the installed Crew payload version/state so divergence between the global launcher and the managed payload is visible at a glance.
+
 ## 0.3.3 — 2026-08-23
 
 ### Added

@@ -565,57 +565,235 @@ export async function npxInstall({
   return { ok: true, version: manifest.version, path: releaseDir };
 }
 
+export const UPDATE_PACKAGE_NAME = '@ran-sh/dsh-crew';
+export const UPDATE_DEFAULT_SPEC = `${UPDATE_PACKAGE_NAME}@latest`;
+
+/**
+ * Extract a packed npm tarball with the platform `tar` binary (bsdtar ships
+ * with Windows 10+, macOS, and Linux) into destDir; npm tarballs always root
+ * at `package/`.
+ */
+export function extractPackageTarball(tgzPath, destDir, { runner = spawnSync } = {}) {
+  mkdirSync(destDir, { recursive: true });
+  const result = runner('tar', ['-xzf', String(tgzPath), '-C', destDir], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  const root = join(destDir, 'package');
+  if (result.status !== 0 || !existsSync(join(root, 'package.json'))) {
+    return { ok: false, detail: `tar extract failed (${result.status}): ${(result.stderr || result.stdout || '').trim().slice(-200)}` };
+  }
+  return { ok: true, sourceRoot: root };
+}
+
+/**
+ * The globally installed launcher intentionally does not self-replace. When
+ * it diverges from the freshly activated managed payload, say so explicitly
+ * and give the exact refresh command instead of pretending both updated.
+ */
+function noteLauncherDivergence({ log, home = homedir() }) {
+  const launcherVersion = readManifest(runningPackageRoot())?.version ?? null;
+  let installedVersion = null;
+  try { installedVersion = readCurrentPointer({ home }).version ?? null; } catch { installedVersion = null; }
+  if (launcherVersion && installedVersion && launcherVersion !== installedVersion) {
+    log('');
+    log(`- note: the global launcher is still ${launcherVersion}; the managed Crew payload is now ${installedVersion}.`);
+    log(`  Refresh the launcher when convenient: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
+  }
+}
+
+/**
+ * Resolve an update candidate WITHOUT a source checkout:
+ *  - explicit candidate path: a payload directory or a packed .tgz file;
+ *  - otherwise npm registry mode: `npm pack <spec>` using the user's own
+ *    configured registry/auth (no policy or config mutation), extracted to a
+ *    disposable directory the caller cleans up via returned cleanup().
+ */
+export function resolveUpdateCandidate({
+  candidate,
+  spec = UPDATE_DEFAULT_SPEC,
+  home = homedir(),
+  log = () => {},
+  runner = spawnSync,
+} = {}) {
+  const candidateValue = candidate ?? process.env.DSH_CREW_CANDIDATE ?? undefined;
+  if (candidateValue !== undefined && typeof candidateValue !== 'string') {
+    return { ok: false, code: 'INVALID_CANDIDATE', detail: 'candidate must be a directory or .tgz path' };
+  }
+  if (typeof candidateValue === 'string' && candidateValue.trim()) {
+    const value = resolve(candidateValue.trim());
+    if (!existsSync(value)) return { ok: false, code: 'CANDIDATE_NOT_FOUND', detail: value };
+    if (existsSync(join(value, 'package.json'))) {
+      const manifest = readManifest(value);
+      if (!manifest?.name || !manifest?.version) return { ok: false, code: 'CANDIDATE_MANIFEST_INVALID', detail: value };
+      return { ok: true, sourceRoot: value, version: manifest.version, cleanup: null };
+    }
+    if (/\.tgz$/i.test(value)) {
+      const tmpRoot = join(crewReleasesDir({ home }), `.candidate-${timestampStamp()}-${process.pid}`);
+      const extracted = extractPackageTarball(value, tmpRoot, { runner });
+      if (!extracted.ok) {
+        rmSync(tmpRoot, { recursive: true, force: true });
+        return { ok: false, code: 'CANDIDATE_EXTRACT_FAILED', detail: extracted.detail };
+      }
+      const manifest = readManifest(extracted.sourceRoot);
+      if (!manifest?.name || !manifest?.version) {
+        rmSync(tmpRoot, { recursive: true, force: true });
+        return { ok: false, code: 'CANDIDATE_MANIFEST_INVALID', detail: value };
+      }
+      return {
+        ok: true,
+        sourceRoot: extracted.sourceRoot,
+        version: manifest.version,
+        cleanup: () => rmSync(tmpRoot, { recursive: true, force: true }),
+      };
+    }
+    return { ok: false, code: 'UNSUPPORTED_CANDIDATE', detail: value };
+  }
+
+  // Registry mode.
+  const tmpDir = join(crewReleasesDir({ home }), `.candidate-${timestampStamp()}-${process.pid}`);
+  mkdirSync(tmpDir, { recursive: true });
+  try {
+    const effectiveSpec = process.env.DSH_CREW_UPDATE_SPEC ?? spec;
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const packArgs = ['pack', effectiveSpec, '--pack-destination', tmpDir, '--json', '--loglevel=error'];
+    log(`- resolving update candidate from the configured npm registry (${effectiveSpec})`);
+    const packed = runner(npm, packArgs, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32',
+      timeout: 600_000, windowsHide: true, env: sanitizedPackageManagerEnv(),
+    });
+    if (packed.status !== 0) {
+      return { ok: false, code: 'REGISTRY_PACK_FAILED', detail: `${effectiveSpec}: ${(packed.stderr || packed.stdout || '').trim().slice(-300)}` };
+    }
+    let info;
+    try { info = JSON.parse(packed.stdout)[0]; } catch {
+      return { ok: false, code: 'REGISTRY_PACK_UNPARSEABLE', detail: String(packed.stdout).slice(-200) };
+    }
+    if (!info?.filename) return { ok: false, code: 'REGISTRY_PACK_UNPARSEABLE', detail: 'pack output missing filename' };
+    const tgzPath = join(tmpDir, info.filename);
+    const extracted = extractPackageTarball(tgzPath, join(tmpDir, 'x'), { runner });
+    if (!extracted.ok) {
+      return { ok: false, code: 'CANDIDATE_EXTRACT_FAILED', detail: extracted.detail };
+    }
+    const manifest = readManifest(extracted.sourceRoot);
+    if (!manifest?.name || !manifest?.version) {
+      return { ok: false, code: 'CANDIDATE_MANIFEST_INVALID', detail: info.filename };
+    }
+    if (info.name !== manifest.name || info.version !== manifest.version) {
+      return { ok: false, code: 'CANDIDATE_IDENTITY_MISMATCH', detail: `pack ${info.name}@${info.version} vs manifest ${manifest.name}@${manifest.version}` };
+    }
+    return {
+      ok: true,
+      sourceRoot: extracted.sourceRoot,
+      version: manifest.version,
+      cleanup: () => rmSync(tmpDir, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    rmSync(tmpDir, { recursive: true, force: true });
+    return { ok: false, code: 'REGISTRY_PACK_FAILED', detail: String(error?.message ?? error).slice(-300) };
+  }
+}
+
 export async function npxUpdate({
   home = homedir(),
   log = console.log,
   sourceRoot,
+  candidate,
+  spec,
   installer = realInstaller,
   ensureRuntime,
   npmInstaller,
+  runner = spawnSync,
 } = {}) {
-  log('DSH Crew updater (npx-managed)');
-  const candidateRoot = sourceRoot ?? runningPackageRoot();
-  const manifest = readManifest(candidateRoot);
-  if (!manifest?.name || !manifest?.version) return { ok: false, error: 'candidate package manifest invalid' };
+  log('DSH Crew updater');
+  // Candidate resolution: explicit path/dir override > legacy sourceRoot >
+  // configured npm registry (@latest). Registry mode is a real update
+  // operation and never downgrades an already-newer managed payload.
+  const resolved = resolveUpdateCandidate({ candidate: candidate ?? sourceRoot, spec, home, log, runner });
+  if (!resolved.ok) {
+    log(`✗ candidate resolution failed (${resolved.code})${resolved.detail ? `: ${resolved.detail}` : ''}`);
+    return { ok: false, error: `candidate resolution failed (${resolved.code})` };
+  }
+  try {
+    const manifest = readManifest(resolved.sourceRoot);
+    if (!manifest?.name || !manifest?.version) return { ok: false, error: 'candidate package manifest invalid' };
 
-  const health = currentInstallationHealth({ home });
+    const health = currentInstallationHealth({ home });
 
-  if (health.installed && health.healthy && health.pointer.version === manifest.version) {
-    log(`- already current (${manifest.version}); repairing registration/integrations idempotently`);
-    const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest, log, installer });
+    if (health.installed && health.healthy && health.pointer.version === manifest.version) {
+      log(`- already current (${manifest.version}); repairing registration/integrations idempotently`);
+      const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest, log, installer });
+      if (!activated) return { ok: false, error: 'activation failed' };
+      if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+      log('');
+      log('Done.');
+      return { ok: true, idempotent: true, version: manifest.version, path: health.pointer.path };
+    }
+
+    if (health.installed && health.healthy && compareVersions(manifest.version, health.pointer.version) < 0 && (candidate ?? sourceRoot) === undefined) {
+      log(`- registry latest (${manifest.version}) is not newer than the installed payload (${health.pointer.version}); nothing to update`);
+      const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest: readManifest(health.pointer.path), log, installer });
+      if (!activated) return { ok: false, error: 'activation failed' };
+      return { ok: true, idempotent: true, version: health.pointer.version, path: health.pointer.path };
+    }
+
+    // Stale, unhealthy, older, or missing installation: stage the candidate
+    // fully and validate it before switching. The previous usable release is
+    // left in place until the replacement has been committed and activated.
+    if (health.installed && !health.healthy) {
+      log('- existing installation is stale or incomplete; repairing via fresh candidate staging');
+    } else if (health.installed) {
+      log(`- updating managed payload ${health.pointer.version} -> ${manifest.version}`);
+    }
+
+    const staged = stageCandidatePayload({ sourceRoot: resolved.sourceRoot, home, log, npmInstaller });
+    if (!staged.ok) {
+      log(`✗ staging failed (${staged.code})${staged.detail ? `: ${staged.detail.join('; ')}` : ''}`);
+      return { ok: false, error: `staging failed (${staged.code})` };
+    }
+    log(`✓ candidate payload staged and validated (${manifest.version})`);
+
+    const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
+    log('✓ durable release committed under Crew-owned state');
+
+    const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
     if (!activated) return { ok: false, error: 'activation failed' };
+
     if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+
+    noteLauncherDivergence({ log, home });
     log('');
     log('Done.');
-    return { ok: true, idempotent: true, version: manifest.version, path: health.pointer.path };
+    log('Restart DeepSeek Harness and Codex Desktop.');
+    return { ok: true, updated: true, version: manifest.version, path: releaseDir };
+  } finally {
+    resolved.cleanup?.();
   }
+}
 
-  // Stale, unhealthy, or missing installation: stage the candidate fully and
-  // validate it before switching. The previous usable release is left in place
-  // until the replacement has been committed and activated successfully.
-  if (health.installed && !health.healthy) {
-    log('- existing installation is stale or incomplete; repairing via fresh candidate staging');
+/**
+ * Compare dotted numeric versions; returns -1/0/1. Non-numeric segments fall
+ * back to string comparison so prerelease identifiers stay deterministic.
+ */
+export function compareVersions(left, right) {
+  const asParts = (value) => String(value ?? '').split('.');
+  const a = asParts(left);
+  const b = asParts(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const x = a[index] ?? '0';
+    const y = b[index] ?? '0';
+    const xn = /^\d+$/.test(x);
+    const yn = /^\d+$/.test(y);
+    if (xn && yn) {
+      const diff = Number(x) - Number(y);
+      if (diff !== 0) return diff < 0 ? -1 : 1;
+    } else if (xn !== yn) {
+      // npm semantics: a numeric release segment outranks a prerelease segment.
+      return xn ? 1 : -1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
   }
-
-  const staged = stageCandidatePayload({ sourceRoot: candidateRoot, home, log, npmInstaller });
-  if (!staged.ok) {
-    log(`✗ staging failed (${staged.code})${staged.detail ? `: ${staged.detail.join('; ')}` : ''}`);
-    return { ok: false, error: `staging failed (${staged.code})` };
-  }
-  log(`✓ candidate payload staged and validated (${manifest.version})`);
-
-  const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
-  log('✓ durable release committed under Crew-owned state');
-
-  const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
-  if (!activated) return { ok: false, error: 'activation failed' };
-
-  if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
-
-  log('');
-  log('Done.');
-  log('Restart DeepSeek Harness and Codex Desktop.');
-  return { ok: true, updated: true, version: manifest.version, path: releaseDir };
+  return 0;
 }
 
 export function npxStatus({
@@ -664,8 +842,12 @@ export function npxStatus({
   const codex = st?.codex?.installed ? 'installed' : 'not installed';
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
 
-  log(`DSH Crew CLI (npx candidate): ${candidateVersion ?? 'unknown'}`);
-  log(`Installed DSH Crew: ${installedLine}`);
+  log(`DSH Crew launcher/candidate: ${candidateVersion ?? 'unknown'}`);
+  log(`Installed DSH Crew payload: ${installedLine}`);
+  if (candidateVersion && installedVersion && candidateVersion !== installedVersion) {
+    log(`- launcher and managed payload differ; the payload is authoritative for runtime behavior.`);
+    log(`  Refresh the launcher with: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
+  }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile; official web profile ignored)`);
   log(`Codex Desktop integration: ${codex}`);
   log(`Claude Code integration: ${claude}`);
@@ -736,25 +918,40 @@ export async function npxUninstall({
 
 // ---- CLI dispatch --------------------------------------------------------------
 
-export const USAGE = `usage: dsh-crew <command> [--purge]
+export const USAGE = `usage: dsh-crew <command> [--purge] [--candidate <path>]
 
 Commands:
   install     persist the candidate package into Crew-owned state and register it
-  status      read-only report of candidate/installed versions and integrations
-  update      upgrade-aware update: stages/validates first, repairs, idempotent when current
+  status      read-only report of launcher/installed versions and integrations
+  update      resolve the newest permitted package from the configured npm registry (or
+              --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
 
 Options:
-  --purge     with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
-  --help      show this help
+  --candidate <path>  update from a local payload directory or packed .tgz instead of the registry
+  --purge             with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
+  --help              show this help
 
+Primary install: npm install -g @ran-sh/dsh-crew   (then run: dsh-crew install)
 Source checkouts use scripts/setup.mjs instead.`;
 
 function normalizeCommand(argv) {
   const flags = argv.slice(1);
+  let candidate;
+  for (let index = 0; index < flags.length; index += 1) {
+    if (flags[index] === '--candidate') {
+      candidate = flags[index + 1];
+      flags.splice(index, 2);
+      index -= 1;
+    } else if (flags[index]?.startsWith('--candidate=')) {
+      candidate = flags[index].slice('--candidate='.length);
+      flags.splice(index, 1);
+      index -= 1;
+    }
+  }
   const knownFlags = new Set(['--purge']);
   const unknown = flags.filter((f) => f.startsWith('--') && !knownFlags.has(f));
-  return { command: argv[0], purge: flags.includes('--purge'), unknown };
+  return { command: argv[0], purge: flags.includes('--purge'), candidate, unknown };
 }
 
 /**
@@ -766,7 +963,7 @@ export async function runNpxCli({
   error = console.error,
   commands = {},
 } = {}) {
-  const { command, purge, unknown } = normalizeCommand(argv);
+  const { command, purge, candidate, unknown } = normalizeCommand(argv);
   if (command === '--help' || command === '-h' || command === 'help') {
     log(USAGE);
     return 0;
@@ -786,9 +983,10 @@ export async function runNpxCli({
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
     };
-    const result = command === 'uninstall'
-      ? await actions.uninstall({ purge, log })
-      : await actions[command]({ log });
+    let result;
+    if (command === 'uninstall') result = await actions.uninstall({ purge, log });
+    else if (command === 'update') result = await actions.update({ candidate, log });
+    else result = await actions[command]({ log });
     return result?.ok === false ? 1 : 0;
   } catch (err) {
     error(`dsh-crew ${command} failed: ${err?.message ?? err}`);

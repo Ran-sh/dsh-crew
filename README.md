@@ -40,21 +40,26 @@ Codex Desktop / Claude Code
 
 Prerequisites: **Node.js** (Git is needed only for coding-worker isolation).
 
-Recommended: manage DSH Crew directly through npm/npx — no clone required:
+Recommended: install a stable, package-manager-installed launcher and manage DSH Crew with it:
 
 ```bash
-npx @ran-sh/dsh-crew@latest install
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew install
 ```
 
 Manage the installation later with the same CLI:
 
 ```bash
-npx @ran-sh/dsh-crew@latest status
-npx @ran-sh/dsh-crew@latest update
-npx @ran-sh/dsh-crew@latest uninstall        # add --purge to also remove config/backups
+dsh-crew status
+dsh-crew update
+dsh-crew uninstall        # add --purge to also remove config/backups
 ```
 
-An npx install persists the already-built package under Crew-owned state (`~/.config/dsh-crew/app`) before registering it, so the installation never depends on a transient npx cache and does not require pnpm, a lockfile, or rebuilding anything.
+The globally installed package is only the launcher/manager. The actual Crew runtime/plugin payload is persisted under Crew-owned state (`~/.config/dsh-crew/app`) before Harness registration, so runtime behavior never depends on npm cache paths.
+
+> Known compatibility issue: transient `npx @ran-sh/dsh-crew …` execution is currently unreliable on some npm versions (npm/cli#9870: the npx cache bin is not put on the spawned command PATH). Until that upstream fix reaches your npm, use the global-launcher flow above instead.
+
+An update of the managed payload does not require a clone or rebuild; `dsh-crew update` resolves the newest permitted package from your configured npm registry (or an explicit `--candidate <path>` override), validates it under Crew-owned state, and switches only after validation succeeds. The global launcher intentionally does not self-replace; after an update the CLI prints the exact one-line command to refresh it.
 
 Developer / source setup (alternative path):
 
@@ -113,16 +118,16 @@ A coding worker receives a temporary git worktree at the requested revision, so 
 
 ## Update / uninstall
 
-npx-managed installs update in place (config, credentials, and backups are preserved; the candidate is staged and validated before switching):
+The managed Crew payload updates in place (config, credentials, and backups are preserved; the candidate is staged and validated before switching):
 
 ```bash
-npx @ran-sh/dsh-crew@latest update
+dsh-crew update
 ```
 
-Uninstall an npx-managed install:
+Uninstall the managed payload and integrations:
 
 ```bash
-npx @ran-sh/dsh-crew@latest uninstall
+dsh-crew uninstall
 ```
 
 Update a source install instead with:

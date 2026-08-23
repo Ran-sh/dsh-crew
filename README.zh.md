@@ -40,21 +40,26 @@ Codex Desktop / Claude Code
 
 需要：**Node.js**（编码 worker 隔离需要 **Git**）。
 
-推荐直接通过 npm/npx 管理，无需克隆仓库：
+推荐安装稳定的包管理器全局启动器，并用它管理 DSH Crew：
 
 ```bash
-npx @ran-sh/dsh-crew@latest install
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew install
 ```
 
 后续管理使用同一 CLI：
 
 ```bash
-npx @ran-sh/dsh-crew@latest status
-npx @ran-sh/dsh-crew@latest update
-npx @ran-sh/dsh-crew@latest uninstall        # 加 --purge 才会同时删除配置/备份
+dsh-crew status
+dsh-crew update
+dsh-crew uninstall        # 加 --purge 才会同时删除配置/备份
 ```
 
-npx 安装会把已构建好的包持久化到 Crew 自有状态（`~/.config/dsh-crew/app`）后再注册，安装不依赖临时的 npx 缓存，也不需要 pnpm、lockfile 或任何构建步骤。
+全局安装的包只是启动器/管理器；真正的 Crew 运行时/插件载荷会先持久化到 Crew 自有状态（`~/.config/dsh-crew/app`）再注册，运行时行为不依赖 npm 缓存路径。
+
+> 已知兼容性问题：部分 npm 版本下，临时 `npx @ran-sh/dsh-crew …` 执行不可靠（npm/cli#9870：npx 缓存中的 bin 未加入子进程 PATH）。在该上游修复可用之前，请使用上面的全局启动器方式。
+
+托管载荷的更新无需克隆或构建：`dsh-crew update` 会从你配置的 npm registry 解析最新允许版本（或用 `--candidate <path>` 显式指定），在 Crew 自有状态下校验后再切换。全局启动器不会自我替换；更新完成后 CLI 会打印刷新启动器的准确命令。
 
 开发者 / 源码安装（备选路径）：
 
@@ -113,16 +118,16 @@ Use ds-reviewer to review the implementation.
 
 ## 更新 / 卸载
 
-npx 安装使用 update 原地升级（配置、凭据和备份保留；候选包先暂存校验再切换）：
+托管 Crew 载荷使用 update 原地升级（配置、凭据和备份保留；候选包先暂存校验再切换）：
 
 ```bash
-npx @ran-sh/dsh-crew@latest update
+dsh-crew update
 ```
 
-卸载 npx 安装：
+卸载托管载荷与集成：
 
 ```bash
-npx @ran-sh/dsh-crew@latest uninstall
+dsh-crew uninstall
 ```
 
 源码安装的更新方式：

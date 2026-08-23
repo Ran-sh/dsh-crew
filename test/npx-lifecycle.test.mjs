@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -38,6 +38,8 @@ import {
   npxUninstall,
   runNpxCli,
   USAGE,
+  compareVersions,
+  resolveUpdateCandidate,
 } from '../src/install/npx-lifecycle.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,7 +51,7 @@ function tempHome() {
 }
 
 /** Build a realistic candidate "running instance" (packaged layout). */
-function makeCandidate(home) {
+function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   const root = join(home, 'candidate');
   mkdirSync(join(root, 'src', 'hub'), { recursive: true });
   mkdirSync(join(root, 'lib'), { recursive: true });
@@ -62,8 +64,8 @@ function makeCandidate(home) {
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
 
   writeFileSync(join(root, 'package.json'), JSON.stringify({
-    name: PKG_NAME,
-    version: '0.3.3',
+    name,
+    version,
     type: 'module',
     main: './src/hub/entry.mjs',
     bin: { 'dsh-crew': './bin/dsh-crew.mjs' },
@@ -135,11 +137,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 0.3.3', () => {
+test('package, runtime identity, and changelog identify candidate 0.3.4', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '0.3.3');
-  assert.equal(RUNTIME_VERSION, '0.3.3');
-  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.3\.3/m);
+  assert.equal(manifest.version, '0.3.4');
+  assert.equal(RUNTIME_VERSION, '0.3.4');
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.3\.4/m);
 });
 
 // ---------- dependency closure ----------
@@ -362,7 +364,7 @@ test('status is read-only and reports candidate/installed versions plus integrat
     assert.equal(after.codex, 'installed');
     assert.equal(after.claude, 'installed');
     const joined = logsAfter.join('\n');
-    assert.match(joined, /Installed DSH Crew: 0\.3\.3 \(/);
+    assert.match(joined, /Installed DSH Crew payload: 0\.3\.3 \(/);
     assert.ok(!/key|token|secret/i.test(joined), 'status must not leak secrets');
   } finally { t.cleanup(); }
 });
@@ -569,4 +571,162 @@ test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', 
 test('runningPackageRoot points at the repository checkout during tests', () => {
   assert.equal(runningPackageRoot(), REPO_ROOT);
   assert.equal(CREW_APP_DIRNAME, 'app');
+});
+
+// ---------- v0.3.4 update candidate resolution ----------
+
+test('compareVersions orders dotted numeric versions deterministically', () => {
+  assert.equal(compareVersions('0.3.10', '0.3.9'), 1);
+  assert.equal(compareVersions('0.3.3', '0.3.3'), 0);
+  assert.equal(compareVersions('0.10.0', '0.9.0'), 1);
+  assert.equal(compareVersions('0.3.4', '0.3.4-rc.1') > 0, true);
+});
+
+function makeCandidateDir(home, version) {
+  return makeCandidate(home, { version });
+}
+
+test('resolveUpdateCandidate accepts a payload directory override', () => {
+  const t = tempHome();
+  try {
+    const dir = makeCandidateDir(t.dir, '9.8.7');
+    const r = resolveUpdateCandidate({ candidate: dir, home: t.dir });
+    assert.equal(r.ok, true);
+    assert.equal(r.version, '9.8.7');
+    assert.equal(r.sourceRoot, dir);
+    assert.equal(r.cleanup, null);
+  } finally { t.cleanup(); }
+});
+
+test('resolveUpdateCandidate extracts and validates a packed .tgz override', () => {
+  const t = tempHome();
+  try {
+    const stage = join(t.dir, 'packsrc', 'package');
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '7.7.7' }));
+    writeFileSync(join(stage, 'index.js'), 'module.exports=1;\n');
+    const tgz = join(t.dir, 'candidate.tgz');
+    execFileSync('tar', ['-czf', tgz, '-C', join(t.dir, 'packsrc'), 'package']);
+    const r = resolveUpdateCandidate({ candidate: tgz, home: t.dir });
+    assert.equal(r.ok, true, `unexpected failure: ${JSON.stringify(r)}`);
+    assert.equal(r.version, '7.7.7');
+    assert.match(r.sourceRoot, /package$/);
+    r.cleanup();
+    assert.ok(!existsSync(r.sourceRoot), 'cleanup removes the extracted temp tree');
+  } finally { t.cleanup(); }
+});
+
+test('resolveUpdateCandidate registry mode packs via npm and verifies identity', () => {
+  const t = tempHome();
+  try {
+    const runner = (command, args) => {
+      if (command.endsWith('npm.cmd') || command === 'npm') {
+        const dest = args[args.indexOf('--pack-destination') + 1];
+        const pkg = join(dest, 'x', 'package');
+        mkdirSync(pkg, { recursive: true });
+        writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '5.5.5' }));
+        writeFileSync(join(dest, 'ran-sh-dsh-crew-5.5.5.tgz'), 'fake');
+        return { status: 0, stdout: JSON.stringify([{ filename: 'ran-sh-dsh-crew-5.5.5.tgz', name: PKG_NAME, version: '5.5.5' }]), stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' }; // tar extract succeeds against the pre-created root
+    };
+    const logs = [];
+    const r = resolveUpdateCandidate({ home: t.dir, log: (m) => logs.push(m), runner });
+    assert.equal(r.ok, true, `unexpected failure: ${JSON.stringify(r)}`);
+    assert.equal(r.version, '5.5.5');
+    assert.match(logs.join('\n'), /configured npm registry/);
+    r.cleanup();
+  } finally { t.cleanup(); }
+});
+
+test('resolveUpdateCandidate fails closed on registry pack failure and identity mismatch', () => {
+  const t = tempHome();
+  try {
+    const failRunner = () => ({ status: 1, stdout: '', stderr: 'E404 nope' });
+    const failed = resolveUpdateCandidate({ home: t.dir, runner: failRunner });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.code, 'REGISTRY_PACK_FAILED');
+    assert.match(failed.detail, /E404/);
+
+    const mismatchRunner = (command, args) => {
+      if (command.endsWith('npm.cmd') || command === 'npm') {
+        const dest = args[args.indexOf('--pack-destination') + 1];
+        return { status: 0, stdout: JSON.stringify([{ filename: 'x.tgz', name: PKG_NAME, version: '1.0.0' }]), stderr: '' };
+      }
+      // tar "extracts" a manifest whose version disagrees with the pack output
+      const destIdx = args.indexOf('-C');
+      const root = join(args[destIdx + 1], 'package');
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '2.0.0' }));
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const mismatch = resolveUpdateCandidate({ home: t.dir, runner: mismatchRunner });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.code, 'CANDIDATE_IDENTITY_MISMATCH');
+
+    const missing = resolveUpdateCandidate({ candidate: join(t.dir, 'nope'), home: t.dir });
+    assert.equal(missing.code, 'CANDIDATE_NOT_FOUND');
+  } finally { t.cleanup(); }
+});
+
+test('update applies an explicit newer candidate directory without a source checkout', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidateDir(t.dir, '0.3.4-base'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const before = readCurrentPointer({ home: t.dir });
+
+    const newer = makeCandidateDir(join(t.dir, 'override'), '9.9.0');
+    const logs = [];
+    const r = await npxUpdate({
+      home: t.dir, candidate: newer, installer: rec.installer, log: (m) => logs.push(m), ensureRuntime: okRuntime(),
+    });
+    assert.equal(r.ok, true, `update failed: ${logs.join('\n')}`);
+    const after = readCurrentPointer({ home: t.dir });
+    assert.equal(after.version, '9.9.0');
+    assert.notEqual(after.path, before.path);
+    assert.equal(JSON.parse(readFileSync(join(after.path, 'package.json'), 'utf8')).version, '9.9.0');
+    assert.equal(releaseCount(t.dir), 2, 'prior usable release retained through activation');
+    assert.match(logs.join('\n'), /updating managed payload 0\.3\.4-base -> 9\.9\.0/);
+    // The running repo launcher (0.3.4) diverges from the fixture payload → explicit limitation notice.
+    assert.match(logs.join('\n'), /global launcher is still .*; the managed Crew payload is now 9\.9\.0/);
+    assert.match(logs.join('\n'), /npm install -g @ran-sh\/dsh-crew@9\.9\.0/);
+  } finally { t.cleanup(); }
+});
+
+test('registry mode never downgrades a newer managed payload', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidateDir(t.dir, '2.0.0'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const before = readCurrentPointer({ home: t.dir });
+    const callsBefore = rec.calls.length;
+
+    const runner = (command, args) => {
+      if (command.endsWith('npm.cmd') || command === 'npm') {
+        return { status: 0, stdout: JSON.stringify([{ filename: 'old.tgz', name: PKG_NAME, version: '0.0.1' }]), stderr: '' };
+      }
+      const destIdx = args.indexOf('-C');
+      const root = join(args[destIdx + 1], 'package');
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.0.1' }));
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const logs = [];
+    const r = await npxUpdate({ home: t.dir, installer: rec.installer, log: (m) => logs.push(m), ensureRuntime: okRuntime(), runner });
+    assert.equal(r.ok, true);
+    assert.equal(r.idempotent, true);
+    assert.equal(readCurrentPointer({ home: t.dir }).path, before.path, 'pointer must not move on a non-downgrade');
+    assert.equal(releaseCount(t.dir), 1, 'no new release staged for an older registry candidate');
+    assert.match(logs.join('\n'), /not newer than the installed payload \(2\.0\.0\)/);
+    assert.equal(rec.calls.length > callsBefore, true, 'idempotent path still re-verifies integrations');
+  } finally { t.cleanup(); }
+});
+
+test('CLI forwards --candidate to update in both value forms', async () => {
+  const seen = [];
+  const commands = { update: async ({ candidate }) => { seen.push(candidate); return { ok: true }; } };
+  await runNpxCli({ argv: ['update', '--candidate', 'X:\\dir'], log: () => {}, error: () => {}, commands });
+  await runNpxCli({ argv: ['update', '--candidate=Y:\\tgz.tgz'], log: () => {}, error: () => {}, commands });
+  assert.deepEqual(seen, ['X:\\dir', 'Y:\\tgz.tgz']);
 });
