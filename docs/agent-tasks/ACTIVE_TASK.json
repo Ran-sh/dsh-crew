@@ -1,0 +1,59 @@
+{
+  "id": "TASK-V034-RELEASE-GATE-FINAL",
+  "mode": "TEST_ONLY",
+  "source_branch": "main",
+  "source_commit": "LATEST",
+  "objective": "Run the final non-publishing release gate for DSH Crew v0.3.4 and return RELEASE_READY only if the exact product candidate is safe to publish without source changes.",
+  "context": "Issue #52 tracks the final v0.3.4 release gate. The implementation completion commit is d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05 and TASK-V034-DISTRIBUTION-RECOVERY is PASS. Treat d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05 as the candidate product release target unless this gate finds evidence that requires BLOCKED. @ran-sh/dsh-crew@0.3.3 is already public and MUST NEVER be republished; its v0.3.3 tag/Release remain absent because public npx acceptance was blocked by npm/cli #9870 before Crew code started. This task must not publish npm, mutate dist-tags, create/move/delete tags, create a GitHub Release, modify credentials, weaken package-manager policies, or change product/source files. Preserve the real machine's installed DSH Crew state and use disposable homes/prefixes for lifecycle tests. If this gate passes, actual v0.3.4 publication will later be performed from a completely fresh clone at the frozen target, not from a reused worktree.",
+  "allowed_changes": [
+    "docs/agent-results/TASK-V034-RELEASE-GATE-FINAL-result.json"
+  ],
+  "forbidden_changes": [
+    "package.json or any product/source/test/docs implementation file",
+    "npm publish or dist-tag mutation",
+    "git tag creation, movement, rewrite, or deletion",
+    "GitHub Release creation or mutation",
+    "republish, deprecate, unpublish, owner/access mutation, or other mutation of @ran-sh/dsh-crew@0.3.3",
+    "credentials, tokens, OTPs, auth headers, .npmrc contents, or credential stores",
+    "normal ~/.dsh, official DSH web profile, or official DSH credentials",
+    "user pnpm/npm security policy weakening or lifecycle-script approvals",
+    "unrelated branches, worktrees, or machine state"
+  ],
+  "validation": [
+    "Validate docs/agent-results/TASK-V034-DISTRIBUTION-RECOVERY-result.json and confirm status PASS with no blockers.",
+    "Confirm package.json, src/runtime-identity.mjs, and CHANGELOG.md identify version 0.3.4 and package.json exposes exactly one bin dsh-crew -> ./bin/dsh-crew.mjs.",
+    "pnpm install --frozen-lockfile",
+    "Run focused global-launcher/update/installer/distribution tests and node --test test/*.test.mjs.",
+    "pnpm run build:client and restore any generated-only drift so the source checkout remains clean.",
+    "pnpm run verify:npm-install",
+    "pnpm run verify:npm-install:official",
+    "npm pack --dry-run --json and audit package identity, required launcher/runtime/client/setup payload, single bin, file count, and forbidden entries.",
+    "npm publish --dry-run --access public only; do not perform a real publish.",
+    "Using a locally packed 0.3.4 candidate with a disposable global prefix and disposable HOME on Windows, run npm install -g --prefix <disposable> from the candidate then dsh-crew install -> status -> update -> status -> uninstall -> status through the generated global launcher. Delete transient tarball/pack inputs and any npx cache after install and prove the persisted Crew-owned payload remains runnable.",
+    "Re-prove registry-aware update is fail-closed and never downgrades a newer installed payload; re-prove repair of a corrupted/stale managed payload from an explicit validated candidate while preserving config.json and .env byte-identically.",
+    "Re-check source-checkout node scripts/setup.mjs install -> status -> uninstall compatibility in a separate disposable home.",
+    "Read-only registry/tag/Release checks: @ran-sh/dsh-crew@0.3.4 must be absent, scoped latest must be 0.3.3, v0.3.4 tag absent, GitHub Release v0.3.4 absent; v0.3.3 tag/Release must remain absent; existing v0.3.0/v0.3.1/v0.3.2 annotated tag targets must remain unchanged.",
+    "Confirm final real machine state remains INSTALLED and no task-created disposable worktrees/processes are left behind."
+  ],
+  "acceptance_criteria": [
+    "Result status PASS with summary containing release_gate: RELEASE_READY.",
+    "Result records immutable_release_target=d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05, or BLOCKED if this exact commit cannot safely be released.",
+    "Full deterministic suite, targeted global-launcher/update tests, build, both npm install verifiers, pack audit, and publish dry-run all pass.",
+    "Real disposable global-prefix lifecycle proves callable dsh-crew launcher, durable install, read-only status, idempotent/repair-capable registry-aware update, config-preserving uninstall, and no dependence on transient tarball/npx cache paths.",
+    "Public state remains unchanged: npm 0.3.4 absent/latest 0.3.3, no v0.3.4 tag or GitHub Release; v0.3.3 remains npm-only with no tag/Release and is never republished.",
+    "No credentials or official DSH state are read or modified; final_machine_state: INSTALLED.",
+    "Completion commit changes only the Result Contract and deletes ACTIVE_TASK.json."
+  ],
+  "result_contract": "docs/agent-results/TASK-V034-RELEASE-GATE-FINAL-result.json",
+  "completion_commit_contract": [
+    "docs/agent-results/TASK-V034-RELEASE-GATE-FINAL-result.json",
+    "docs/agent-tasks/ACTIVE_TASK.json"
+  ],
+  "delete_active_task_on_completion": true,
+  "metadata": {
+    "executor": "ANY",
+    "issue": 52,
+    "candidate_release_target": "d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05",
+    "publication_method_after_pass": "fresh_clone_exact_target"
+  }
+}
