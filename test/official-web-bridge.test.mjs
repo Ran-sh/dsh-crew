@@ -77,7 +77,7 @@ test('proxy preserves the Crew path/query/body but strips hop-by-hop request hea
 
 test('proxy rejects non-loopback callers and never leaks backend failure details', async () => {
   const deniedReq = Readable.from([]);
-  Object.assign(deniedReq, { method: 'GET', url: `${CREW_BRIDGE_PREFIX}/ping`, headers: {}, socket: { remoteAddress: '10.1.2.3' } });
+  Object.assign(deniedReq, { method: 'GET', url: `${CREW_BRIDGE_PREFIX}/ping`, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '10.1.2.3' } });
   const deniedRes = responseRecorder();
   let fetched = false;
   await proxyCrewRequest(deniedReq, deniedRes, { fetchImpl: async () => { fetched = true; } });
@@ -85,7 +85,7 @@ test('proxy rejects non-loopback callers and never leaks backend failure details
   assert.equal(fetched, false);
 
   const failedReq = Readable.from([]);
-  Object.assign(failedReq, { method: 'GET', url: `${CREW_BRIDGE_PREFIX}/ping`, headers: {}, socket: { remoteAddress: '::1' } });
+  Object.assign(failedReq, { method: 'GET', url: `${CREW_BRIDGE_PREFIX}/ping`, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '::1' } });
   const failedRes = responseRecorder();
   await proxyCrewRequest(failedReq, failedRes, {
     ensureBackend: async () => { throw new Error('SECRET-INTERNAL-PATH'); },

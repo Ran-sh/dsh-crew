@@ -17,6 +17,29 @@ export function isLoopbackAddress(address) {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
+function isLocalHostname(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
+}
+
+export function isTrustedLocalRequest(req) {
+  if (!isLoopbackAddress(req?.socket?.remoteAddress)) return false;
+  const host = typeof req?.headers?.host === 'string' ? req.headers.host.trim().toLowerCase() : '';
+  if (!host) return false;
+  let authority;
+  try { authority = new URL(`http://${host}`); } catch { return false; }
+  if (!isLocalHostname(authority.hostname.toLowerCase())) return false;
+  const fetchSite = String(req?.headers?.['sec-fetch-site'] ?? '').toLowerCase();
+  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
+  const origin = req?.headers?.origin;
+  if (origin !== undefined) {
+    if (typeof origin !== 'string') return false;
+    let parsedOrigin;
+    try { parsedOrigin = new URL(origin); } catch { return false; }
+    if (!isLocalHostname(parsedOrigin.hostname.toLowerCase()) || parsedOrigin.host.toLowerCase() !== host) return false;
+  }
+  return true;
+}
+
 function safeHeaders(source) {
   const result = {};
   for (const [rawName, rawValue] of Object.entries(source ?? {})) {
@@ -108,8 +131,8 @@ export async function proxyCrewRequest(req, res, {
   fetchImpl = globalThis.fetch,
   ensureBackend = () => processSupervisor.ensure(),
 } = {}) {
-  if (!isLoopbackAddress(req?.socket?.remoteAddress)) {
-    sendJson(res, 403, { ok: false, code: 'LOOPBACK_ONLY' });
+  if (!isTrustedLocalRequest(req)) {
+    sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
     return;
   }
   let pathname;
@@ -147,7 +170,7 @@ export function registerOfficialWebBridge(ctx, options = {}) {
       kind: 'exact',
       path: `${CREW_BRIDGE_PREFIX}/bridge-status`,
       handler: (req, res) => {
-        if (!isLoopbackAddress(req?.socket?.remoteAddress)) return sendJson(res, 403, { ok: false, code: 'LOOPBACK_ONLY' });
+        if (!isTrustedLocalRequest(req)) return sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
         return sendJson(res, 200, { ok: true, mode: 'official-3080-isolated-3210' });
       },
     });
