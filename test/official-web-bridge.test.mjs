@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   CREW_BRIDGE_PREFIX,
   CREW_BRIDGE_TARGET,
+  apply,
   createCrewSidecarSupervisor,
   isLoopbackAddress,
   isTrustedLocalRequest,
@@ -151,4 +152,15 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
     { kind: 'exact', path: '/_dsh/dsh-crew/bridge-status' },
     { kind: 'prefix', path: CREW_BRIDGE_PREFIX },
   ]);
+});
+
+test('Cordis apply registers the bridge without returning an invalid injected effect', async () => {
+  const registrations = [];
+  const ctx = {
+    inject(_deps, setup) {
+      return setup({ webServer: { register(value) { registrations.push(value); return () => {}; } } });
+    },
+  };
+  assert.equal(await apply(ctx), undefined);
+  assert.equal(registrations.length, 2);
 });
