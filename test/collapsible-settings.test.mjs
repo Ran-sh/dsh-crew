@@ -49,6 +49,9 @@ test('settings restore only valid persisted section state', () => {
 test('malformed persisted state falls back without breaking settings', () => {
   const storage = memoryStorage({ 'dsh-crew.settings-sections.v1': '{not-json' });
   assert.deepEqual(readSectionState(storage), createDefaultSectionState());
+  assert.deepEqual(readSectionState(null), createDefaultSectionState());
+  assert.deepEqual(readSectionState(memoryStorage({ 'dsh-crew.settings-sections.v1': '[]' })), createDefaultSectionState());
+  assert.deepEqual(readSectionState({ getItem: () => { throw new Error('storage locked'); } }), createDefaultSectionState());
 });
 
 test('bulk controls and attention events produce complete immutable state', () => {
@@ -69,6 +72,8 @@ test('section state is persisted under the versioned key', () => {
   const state = setEverySection(true);
   writeSectionState(storage, state);
   assert.deepEqual(JSON.parse(storage.value('dsh-crew.settings-sections.v1')), state);
+  assert.doesNotThrow(() => writeSectionState(null, state));
+  assert.doesNotThrow(() => writeSectionState({ setItem: () => { throw new Error('quota exceeded'); } }, state));
 });
 
 test('settings surface exposes accessible module accordions and bulk controls', () => {

@@ -4,6 +4,12 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  openSections,
+  readSectionState,
+  setEverySection,
+  writeSectionState,
+} from './collapsible-sections.mjs';
 
 export const inject = ['slots', 'locale'];
 
@@ -19,6 +25,10 @@ const COPY = {
     install: '安装', update: '更新', restore: '还原',
     confirmRestore: (name: string) => `确定从 ${name} 移除 dsh-crew 集成？（settings 会先备份）`,
     globalConfig: '全局配置',
+    expandAll: '全部展开', collapseAll: '全部折叠',
+    modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
+    jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
+    sectionNames: { integrations: '宿主集成', workflow: '工作流', flash: 'Flash', pro: 'Pro', dispatch: '派发策略', runtime: '运行连接', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: 'Worker 任务' },
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
     orchestration: 'Agent 编排',
     enableSubagents: '启用子 Agent',
@@ -127,6 +137,10 @@ const COPY = {
     install: 'Install', update: 'Update', restore: 'Restore',
     confirmRestore: (name: string) => `Remove the dsh-crew integration from ${name}? (settings are backed up first)`,
     globalConfig: 'Global configuration',
+    expandAll: 'Expand all', collapseAll: 'Collapse all',
+    modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
+    jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
+    sectionNames: { integrations: 'Host integrations', workflow: 'Workflow', flash: 'Flash', pro: 'Pro', dispatch: 'Dispatch policy', runtime: 'Runtime connection', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Worker jobs' },
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
     orchestration: 'Agent orchestration',
     enableSubagents: 'Enable Subagents',
@@ -245,6 +259,9 @@ const S = {
     display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px 14px', alignItems: 'end' as const,
   },
   btn: { padding: '4px 12px', borderRadius: 6, border: '1px solid rgba(128,128,128,0.35)', background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 12.5 },
+  sectionShell: { border: '1px solid rgba(128,128,128,0.24)', borderRadius: 11, overflow: 'hidden', background: 'rgba(128,128,128,0.025)' },
+  sectionButton: { width: '100%', padding: '10px 13px', border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 9, textAlign: 'left' as const, font: 'inherit' },
+  sectionBody: { padding: '2px 11px 12px', display: 'flex', flexDirection: 'column' as const, gap: 8 },
   chip: (on: boolean) => ({ fontSize: 11.5, padding: '1px 8px', borderRadius: 99, border: '1px solid', borderColor: on ? 'rgba(63,185,80,0.5)' : 'rgba(128,128,128,0.35)', color: on ? '#3fb950' : 'inherit', opacity: on ? 1 : 0.55 }),
   field: { display: 'flex', flexDirection: 'column' as const, gap: 3 },
   fieldLabel: { fontSize: 11, opacity: 0.6 },
@@ -315,6 +332,32 @@ function CustomSelect({ value, options, onChange, minWidth }: {
   </>);
 }
 
+function sectionSummary(...parts: Array<string | number | false | null | undefined>) {
+  return parts.filter((part) => part !== false && part !== null && part !== undefined && part !== '').join(' · ');
+}
+
+function sectionStorage() {
+  if (typeof window === 'undefined') return null;
+  try { return window.localStorage; } catch { return null; }
+}
+
+function CollapsibleSection({ sectionId, title, summary, expanded, onToggle, children }: {
+  sectionId: string; title: string; summary: string; expanded: boolean;
+  onToggle: () => void; children: any;
+}) {
+  const bodyId = `dsh-crew-section-${sectionId}`;
+  return (
+    <section style={S.sectionShell} data-section-id={sectionId}>
+      <button type="button" style={S.sectionButton} aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
+        <span aria-hidden="true" style={{ width: 14, opacity: 0.62, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 140ms ease' }}>›</span>
+        <span style={{ fontWeight: 650, fontSize: 13, minWidth: 92 }}>{title}</span>
+        <span title={summary} style={{ flex: 1, minWidth: 0, fontSize: 11.5, opacity: 0.58, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+      </button>
+      <div id={bodyId} hidden={!expanded} style={expanded ? S.sectionBody : undefined}>{children}</div>
+    </section>
+  );
+}
+
 function sourceLabel(source?: string) {
   if (source === 'claude-code') return 'CC';
   if (source === 'codex') return 'Codex';
@@ -356,6 +399,32 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
   const [modelQuery, setModelQuery] = useState('');
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
+
+  const toggleSection = (sectionId: string) => {
+    setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
+  };
+  const toggleAllSections = (expanded: boolean) => setExpandedSections(setEverySection(expanded));
+
+  useEffect(() => {
+    writeSectionState(sectionStorage(), expandedSections);
+  }, [expandedSections]);
+
+  useEffect(() => {
+    if (modelCatalogError) setExpandedSections((current) => openSections(current, ['workflow', 'flash', 'pro']));
+  }, [modelCatalogError]);
+
+  useEffect(() => {
+    if (testResult && !testResult.busy && testResult.ok === false) {
+      setExpandedSections((current) => openSections(current, ['providers']));
+    }
+  }, [testResult]);
+
+  useEffect(() => {
+    if (jobs.some((job) => job.status === 'running')) {
+      setExpandedSections((current) => openSections(current, ['jobs']));
+    }
+  }, [jobs]);
 
   /**
    * The panel is served from disk on every load, but the hub's routes are
@@ -583,15 +652,23 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       <div style={{ fontSize: 19, fontWeight: 600, marginBottom: -2 }}>{copy.title}</div>
       <div style={{ opacity: 0.75 }}>{copy.intro}</div>
 
-      <div style={S.section}>{copy.integrations}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {integrationRow('Claude Code', !!status?.claude?.installed,
-          status?.claude?.installed ? <span style={S.chip(!!status?.claude?.hud)}>{copy.hud}</span> : null,
-          'claude', 'claude-uninstall', (copy as any).tips.claude)}
-        {integrationRow('Codex', !!status?.codex?.installed, null, 'codex', 'codex-uninstall', (copy as any).tips.codex)}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5 }}>
+        <div style={{ ...S.section, margin: 0, flex: 1 }}>{copy.globalConfig}</div>
+        <button type="button" style={{ ...S.btn, padding: '3px 9px' }} onClick={() => toggleAllSections(true)}>{copy.expandAll}</button>
+        <button type="button" style={{ ...S.btn, padding: '3px 9px' }} onClick={() => toggleAllSections(false)}>{copy.collapseAll}</button>
       </div>
 
-      <div style={S.section}>{copy.globalConfig}</div>
+      <CollapsibleSection sectionId="integrations" title={copy.sectionNames.integrations}
+        summary={sectionSummary(status?.claude?.installed ? 'Claude ✓' : 'Claude ○', status?.codex?.installed ? 'Codex ✓' : 'Codex ○')}
+        expanded={!!expandedSections.integrations} onToggle={() => toggleSection('integrations')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {integrationRow('Claude Code', !!status?.claude?.installed,
+            status?.claude?.installed ? <span style={S.chip(!!status?.claude?.hud)}>{copy.hud}</span> : null,
+            'claude', 'claude-uninstall', (copy as any).tips.claude)}
+          {integrationRow('Codex', !!status?.codex?.installed, null, 'codex', 'codex-uninstall', (copy as any).tips.codex)}
+        </div>
+      </CollapsibleSection>
+
       {config && (<>
         {(() => {
           const clampNum = (v: any) => {
@@ -733,82 +810,84 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             </div>
           );
           return (<>
-            <div style={S.group}>{copy.groupWorkflow}</div>
-            {block({ t: copy.roleWorker, d: copy.roleStateHint }, (<>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.workerStateLabel}</span>
-                <CustomSelect value={config.worker_state ?? 'auto'}
-                  onChange={(v) => field('worker_state', v)}
-                  options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.reviewStateLabel}</span>
-                <CustomSelect value={config.review_state ?? 'auto'}
-                  onChange={(v) => field('review_state', v)}
-                  options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
-            </>))}
-            {block({ t: copy.autoReview, d: copy.autoReviewHint }, (<>
-              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={config.auto_review ?? !!config.pro_reviews_flash} onChange={(e) => field('auto_review', e.target.checked)} />
-                <span style={{ fontSize: 12.5 }}>{copy.autoReview}</span></label>
-            </>), false)}
-            {block({ t: copy.isolation, d: copy.isolationHint }, (<>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.isolation}</span>
-                <CustomSelect value={config.isolation ?? 'worktree'}
-                  onChange={(v) => field('isolation', v)}
-                  options={(['worktree', 'shared'] as const).map((s) => ({ value: s, label: copy.isolationDesc[s] }))} /></label>
-            </>))}
-            {block({ t: copy.maxParallel, d: copy.maxParallelHint }, (<>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.maxParallel}</span>
-                <input type="number" min={1} max={16} value={config.max_parallel ?? 3}
-                  onChange={(e) => fieldLocal('max_parallel', clampNum(e.target.value))}
-                  onBlur={() => field('max_parallel', clampNum(config.max_parallel))}
-                  style={S.input} /></label>
-            </>))}
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8, marginBottom: 2 }}>{copy.legacyCompatibility}</div>
-            <div style={S.group}>{copy.orchestration}</div>
-            {block({ t: copy.orchestration, d: copy.enableSubagentsHint }, (<>
-              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }} title={copy.enableSubagentsHint}>
-                <input type="checkbox" checked={!!config.subagents_enabled} onChange={(e) => field('subagents_enabled', e.target.checked)} />
-                <span style={{ fontSize: 12.5 }}>{config.subagents_enabled === false ? copy.subagentsKept : copy.enableSubagents}</span>
-              </label>
-            </>), false)}
-            {block({ t: copy.mainAgentMode, d: copy.mainAgentModeHint }, (<>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.mainAgentMode}</span>
-                <CustomSelect value={config.main_agent_mode ?? 'direct-allowed'}
-                  onChange={(v) => field('main_agent_mode', v)}
-                  options={(['direct-allowed', 'coordinator-first', 'dispatcher-only'] as const).map((m) => ({ value: m, label: copy.mainAgentModeDesc[m] }))} /></label>
-              <label style={S.field}><span style={S.fieldLabel}>{copy.collaborationMode}</span>
-                <CustomSelect value={mode}
-                  onChange={(v) => field('collaboration_mode', v)}
-                  options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
-              <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
-                <CustomSelect value={config.worker_provider_mode ?? 'follow-dsh'}
-                  onChange={(v) => field('worker_provider_mode', v)}
-                  options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
-            </>))}
-            {block({ t: copy.workerModels, d: modelCatalog ? copy.modelPoolSummary(modelCatalog.provider_count ?? 0, modelCatalog.model_count ?? 0) : copy.catalogFailed }, (<>
-              <button type="button" style={S.btn} disabled={modelCatalogBusy} onClick={() => { void refreshHarnessModels(); }}>
-                {modelCatalogBusy ? copy.refreshingModels : copy.refreshHarnessModels}
-              </button>
-              {modelCatalog?.partial && <span style={{ fontSize: 11.5, color: '#c98735' }}>{copy.partialCatalog}</span>}
-              {modelCatalogError && <span style={{ fontSize: 11.5, color: '#c55' }}>{modelCatalogError}</span>}
-            </>), false)}
-            {tierCard('flash', { t: copy.tierCardFlash, d: 'implementation · direct validation · Delivery Report' })}
-            {tierCard('pro', { t: copy.tierCardPro, d: 'manual advanced work · review pipeline' })}
-            <div style={S.group}>{copy.routing}</div>
-            {block({ t: copy.routing, d: '' }, (<>
-              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={copy.escalateHint}>
-                <input type="checkbox" checked={!!config.escalate_on_failure} onChange={(e) => field('escalate_on_failure', e.target.checked)} />
-                <span style={{ fontSize: 12 }}>{copy.escalate}</span></label>
-              <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={mode === 'review-pipeline' ? copy.proReviewsLocked : copy.proReviewsFlashHint}>
-                <input type="checkbox" disabled={mode === 'review-pipeline'}
-                  checked={mode === 'review-pipeline' ? true : !!config.pro_reviews_flash}
-                  onChange={(e) => field('pro_reviews_flash', e.target.checked)} />
-                <span style={{ fontSize: 12 }}>{copy.proReviewsFlash}{mode === 'review-pipeline' ? `（${copy.proReviewsLocked}）` : ''}</span></label>
-            </>))}
+            <CollapsibleSection sectionId="workflow" title={copy.sectionNames.workflow}
+              summary={sectionSummary(config.worker_state ?? 'auto', config.review_state ?? 'auto', mode, config.isolation ?? 'worktree', `×${config.max_parallel ?? 3}`)}
+              expanded={!!expandedSections.workflow} onToggle={() => toggleSection('workflow')}>
+              {block({ t: copy.roleWorker, d: copy.roleStateHint }, (<>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.workerStateLabel}</span>
+                  <CustomSelect value={config.worker_state ?? 'auto'} onChange={(v) => field('worker_state', v)}
+                    options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.reviewStateLabel}</span>
+                  <CustomSelect value={config.review_state ?? 'auto'} onChange={(v) => field('review_state', v)}
+                    options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
+              </>))}
+              {block({ t: copy.autoReview, d: copy.autoReviewHint }, (
+                <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={config.auto_review ?? !!config.pro_reviews_flash} onChange={(e) => field('auto_review', e.target.checked)} />
+                  <span style={{ fontSize: 12.5 }}>{copy.autoReview}</span>
+                </label>
+              ), false)}
+              {block({ t: copy.isolation, d: copy.isolationHint }, (<>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.isolation}</span>
+                  <CustomSelect value={config.isolation ?? 'worktree'} onChange={(v) => field('isolation', v)}
+                    options={(['worktree', 'shared'] as const).map((s) => ({ value: s, label: copy.isolationDesc[s] }))} /></label>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.maxParallel}</span>
+                  <input type="number" min={1} max={16} value={config.max_parallel ?? 3}
+                    onChange={(e) => fieldLocal('max_parallel', clampNum(e.target.value))}
+                    onBlur={() => field('max_parallel', clampNum(config.max_parallel))} style={S.input} /></label>
+              </>))}
+              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 3 }}>{copy.legacyCompatibility}</div>
+              {block({ t: copy.orchestration, d: copy.enableSubagentsHint }, (
+                <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }} title={copy.enableSubagentsHint}>
+                  <input type="checkbox" checked={!!config.subagents_enabled} onChange={(e) => field('subagents_enabled', e.target.checked)} />
+                  <span style={{ fontSize: 12.5 }}>{config.subagents_enabled === false ? copy.subagentsKept : copy.enableSubagents}</span>
+                </label>
+              ), false)}
+              {block({ t: copy.mainAgentMode, d: copy.mainAgentModeHint }, (<>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.mainAgentMode}</span>
+                  <CustomSelect value={config.main_agent_mode ?? 'direct-allowed'} onChange={(v) => field('main_agent_mode', v)}
+                    options={(['direct-allowed', 'coordinator-first', 'dispatcher-only'] as const).map((m) => ({ value: m, label: copy.mainAgentModeDesc[m] }))} /></label>
+                <label style={S.field}><span style={S.fieldLabel}>{copy.collaborationMode}</span>
+                  <CustomSelect value={mode} onChange={(v) => field('collaboration_mode', v)}
+                    options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
+                <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
+                  <CustomSelect value={config.worker_provider_mode ?? 'follow-dsh'} onChange={(v) => field('worker_provider_mode', v)}
+                    options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
+              </>))}
+              {block({ t: copy.workerModels, d: modelCatalog ? copy.modelPoolSummary(modelCatalog.provider_count ?? 0, modelCatalog.model_count ?? 0) : copy.catalogFailed }, (<>
+                <button type="button" style={S.btn} disabled={modelCatalogBusy} onClick={() => { void refreshHarnessModels(); }}>
+                  {modelCatalogBusy ? copy.refreshingModels : copy.refreshHarnessModels}
+                </button>
+                {modelCatalog?.partial && <span style={{ fontSize: 11.5, color: '#c98735' }}>{copy.partialCatalog}</span>}
+                {modelCatalogError && <span style={{ fontSize: 11.5, color: '#c55' }}>{modelCatalogError}</span>}
+              </>), false)}
+              {block({ t: copy.routing, d: '' }, (<>
+                <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={copy.escalateHint}>
+                  <input type="checkbox" checked={!!config.escalate_on_failure} onChange={(e) => field('escalate_on_failure', e.target.checked)} />
+                  <span style={{ fontSize: 12 }}>{copy.escalate}</span></label>
+                <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, paddingBottom: 5 }} title={mode === 'review-pipeline' ? copy.proReviewsLocked : copy.proReviewsFlashHint}>
+                  <input type="checkbox" disabled={mode === 'review-pipeline'} checked={mode === 'review-pipeline' ? true : !!config.pro_reviews_flash}
+                    onChange={(e) => field('pro_reviews_flash', e.target.checked)} />
+                  <span style={{ fontSize: 12 }}>{copy.proReviewsFlash}{mode === 'review-pipeline' ? `（${copy.proReviewsLocked}）` : ''}</span></label>
+              </>))}
+            </CollapsibleSection>
+            <CollapsibleSection sectionId="flash" title={copy.sectionNames.flash}
+              summary={sectionSummary(effState('flash'), copy.modelCount(priorityFor('flash').length), priorityFor('flash')[0]?.model ?? copy.harnessDefault)}
+              expanded={!!expandedSections.flash} onToggle={() => toggleSection('flash')}>
+              {tierCard('flash', { t: copy.tierCardFlash, d: 'implementation · direct validation · Delivery Report' })}
+            </CollapsibleSection>
+            <CollapsibleSection sectionId="pro" title={copy.sectionNames.pro}
+              summary={sectionSummary(effState('pro'), copy.modelCount(priorityFor('pro').length), priorityFor('pro')[0]?.model ?? copy.harnessDefault)}
+              expanded={!!expandedSections.pro} onToggle={() => toggleSection('pro')}>
+              {tierCard('pro', { t: copy.tierCardPro, d: 'manual advanced work · review pipeline' })}
+            </CollapsibleSection>
           </>);
         })()}
 
-        <div style={S.group}>{copy.groupDispatch}</div>
-        {block(copy.cardDispatch, (<>
+        <CollapsibleSection sectionId="dispatch" title={copy.sectionNames.dispatch}
+          summary={sectionSummary(config.default_tier, config.default_effort, config.tier_policy, config.escalate_on_failure && copy.escalate)}
+          expanded={!!expandedSections.dispatch} onToggle={() => toggleSection('dispatch')}>
+          {block(copy.cardDispatch, (<>
           <label style={S.field}><span style={S.fieldLabel}>{copy.tier}</span>
             <CustomSelect value={config.default_tier} onChange={(v) => field('default_tier', v)}
               options={[{ value: 'flash' }, { value: 'pro' }]} /></label>
@@ -825,10 +904,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <CustomSelect value={config.preset_flash ?? 'default'} onChange={(v) => field('preset_flash', v)} options={presetOptions} /></label>
           <label style={S.field}><span style={S.fieldLabel}>{copy.presetPro}</span>
             <CustomSelect value={config.preset_pro ?? 'default'} onChange={(v) => field('preset_pro', v)} options={presetOptions} /></label>
-        </>))}
+          </>))}
+        </CollapsibleSection>
 
-        <div style={S.group}>{copy.groupRuntime}</div>
-        {block(copy.cardRuntime, (<>
+        <CollapsibleSection sectionId="runtime" title={copy.sectionNames.runtime}
+          summary={sectionSummary(config.mode, `${config.default_timeout_seconds}s`, config.hub_url)}
+          expanded={!!expandedSections.runtime} onToggle={() => toggleSection('runtime')}>
+          {block(copy.cardRuntime, (<>
           <label style={S.field}><span style={S.fieldLabel}>{copy.mode}</span>
             <CustomSelect value={config.mode} onChange={(v) => field('mode', v)}
               options={(['auto', 'hub', 'standalone'] as const).map((m) => ({ value: m, label: copy.modeDesc[m] }))} /></label>
@@ -841,10 +923,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               onChange={(e) => fieldLocal('hub_url', e.target.value)}
               onBlur={() => applyPatch({ hub_url: config.hub_url })}
               onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }} /></label>
-        </>))}
+          </>))}
+        </CollapsibleSection>
 
-        <div style={S.group}>{copy.groupMultimodal}</div>
-        {block(copy.cardMM, (<>
+        <CollapsibleSection sectionId="multimodal" title={copy.sectionNames.multimodal}
+          summary={sectionSummary(config.vision_enabled ? `${copy.capVision}: ${config.vision_provider}` : `${copy.capVision}: off`, config.imagegen_enabled ? `${copy.capImagegen}: ${config.imagegen_provider}` : `${copy.capImagegen}: off`)}
+          expanded={!!expandedSections.multimodal} onToggle={() => toggleSection('multimodal')}>
+          {block(copy.cardMM, (<>
           <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, gridColumn: '1 / -1' }} title={copy.capRestartHint}>
             <input type="checkbox" checked={!!config.vision_enabled} onChange={(e) => field('vision_enabled', e.target.checked)} />
             <span style={{ fontSize: 12.5 }}>{copy.enableCrewVision}</span>
@@ -909,9 +994,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           <label style={S.field}><span style={S.fieldLabel}>{copy.imagegenProvider}</span>
             <CustomSelect value={config.imagegen_provider} onChange={(v) => field('imagegen_provider', v)}
               options={imagegenProviderOptions} /></label>
-        </>))}
+          </>))}
+        </CollapsibleSection>
 
-        {block(copy.cardCustomProv, (<>
+        <CollapsibleSection sectionId="providers" title={copy.sectionNames.providers}
+          summary={sectionSummary(copy.providerCount(customProviders.length), testResult?.ok === false && copy.testFail)}
+          expanded={!!expandedSections.providers} onToggle={() => toggleSection('providers')}>
+          {block(copy.cardCustomProv, (<>
           {customProviders.length === 0 && provForm === null && (
             <div style={{ fontSize: 12, opacity: 0.5 }}>{copy.noCustomProviders}</div>
           )}
@@ -1005,17 +1094,20 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               {testReport('form')}
             </div>
           )}
-        </>), false)}
+          </>), false)}
+        </CollapsibleSection>
       </>)}
       <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 2 }}>{copy.globalHint}</div>
 
       {notice !== '' && <div style={{ fontSize: 12, opacity: 0.8, whiteSpace: 'pre-wrap' }}>{notice}</div>}
 
-      <div style={S.section}>{copy.jobs}</div>
-      {jobs.length === 0 ? (
-        <div style={{ opacity: 0.55 }}>{copy.empty}</div>
-      ) : (
-        <div style={{ overflowX: 'auto' }}>
+      <CollapsibleSection sectionId="jobs" title={copy.sectionNames.jobs}
+        summary={sectionSummary(copy.jobCount(jobs.length), jobs.some((job) => job.status === 'running') && copy.runningCount(jobs.filter((job) => job.status === 'running').length))}
+        expanded={!!expandedSections.jobs} onToggle={() => toggleSection('jobs')}>
+        {jobs.length === 0 ? (
+          <div style={{ opacity: 0.55 }}>{copy.empty}</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed', minWidth: 760 }}>
             <colgroup>
               <col style={{ width: 64 }} /><col style={{ width: 58 }} /><col style={{ width: 72 }} />
@@ -1061,8 +1153,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               })}
             </tbody>
           </table>
-        </div>
-      )}
+          </div>
+        )}
+      </CollapsibleSection>
       {hoverTask && createPortal(
         <div style={{
           position: 'fixed', right: hoverTask.right, zIndex: 9999,
