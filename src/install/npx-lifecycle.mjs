@@ -125,13 +125,20 @@ function writeCurrentPointer({ home, name, version, path }) {
 
 function listPackageEdges(manifest) {
   // Returns [{name, optional}] covering dependencies and
-  // optionalDependencies; platform-specific optional bits stay non-fatal.
+  // required peerDependencies. Packages in the DSH cohort use peers for
+  // shared protocol/runtime modules, but a persisted Crew payload has no host
+  // node_modules to supply them, so their transitive peers are runtime edges.
+  // Platform-specific optional bits and optional peers stay non-fatal.
   const edges = [];
   for (const [name] of Object.entries(manifest?.dependencies ?? {})) {
     edges.push({ name, optional: false });
   }
   for (const [name] of Object.entries(manifest?.optionalDependencies ?? {})) {
     if (!edges.some((edge) => edge.name === name)) edges.push({ name, optional: true });
+  }
+  for (const [name] of Object.entries(manifest?.peerDependencies ?? {})) {
+    if (edges.some((edge) => edge.name === name)) continue;
+    edges.push({ name, optional: manifest?.peerDependenciesMeta?.[name]?.optional === true });
   }
   return edges.filter((edge) => typeof edge.name === 'string' && edge.name.trim());
 }
