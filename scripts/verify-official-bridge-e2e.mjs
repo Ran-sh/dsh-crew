@@ -63,15 +63,14 @@ async function waitForPageMarker(url, marker, { timeout = 30_000 } = {}) {
   throw new Error(`timed out waiting for ${marker} in ${url}`);
 }
 
-function stopOwnedSidecar() {
+function stopOwnedProcesses() {
   if (process.platform !== 'win32') return;
   const escaped = sandbox.replace(/'/g, "''");
   const command = [
     `$sandbox = '${escaped}'`,
-    '$connections = Get-NetTCPConnection -State Listen -LocalPort 3210 -ErrorAction SilentlyContinue',
-    'foreach ($connection in $connections) {',
-    '  $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($connection.OwningProcess)"',
-    '  if ($process.CommandLine -and $process.CommandLine.Contains($sandbox)) { Stop-Process -Id $connection.OwningProcess -Force }',
+    "$processes = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\"",
+    'foreach ($process in $processes) {',
+    '  if ($process.CommandLine -and $process.CommandLine.Contains($sandbox)) { Stop-Process -Id $process.ProcessId -Force }',
     '}',
   ].join('; ');
   spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true });
@@ -151,9 +150,10 @@ try {
   process.exitCode = 1;
 } finally {
   if (official && official.exitCode === null) official.kill();
-  stopOwnedSidecar();
-  await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  stopOwnedProcesses();
+  await new Promise((resolveWait) => setTimeout(resolveWait, 1_500));
   const resolvedSandbox = resolve(sandbox);
   assert(resolvedSandbox.startsWith(resolve(tmpdir())), 'refusing to remove non-temp sandbox');
-  rmSync(resolvedSandbox, { recursive: true, force: true });
+  if (process.env.DSH_CREW_E2E_KEEP === '1') console.error(`OFFICIAL_BRIDGE_E2E_SANDBOX=${resolvedSandbox}`);
+  else rmSync(resolvedSandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
 }
