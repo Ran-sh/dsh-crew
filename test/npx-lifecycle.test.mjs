@@ -423,7 +423,7 @@ test('status is read-only and reports candidate/installed versions plus integrat
     assert.equal(before.ok, true);
     assert.equal(before.installedVersion, null);
     assert.match(logsBefore.join('\n'), /DSH plugin: not installed/);
-    assert.match(logsBefore.join('\n'), /official web profile ignored/);
+    assert.match(logsBefore.join('\n'), /Official 3080 UI bridge: disabled/);
 
     const { installer } = recordingInstaller();
     await npxInstall({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer, log: () => {}, ensureRuntime: okRuntime() });

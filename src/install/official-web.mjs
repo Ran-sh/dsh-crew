@@ -107,7 +107,7 @@ export function officialWebIntegrationStatus({ home = homedir(), releaseDir } = 
   return { enabled: true, healthy: Boolean(dependency && bundled && linked), state, linkPath, expectedBridge };
 }
 
-export function removeOfficialWebIntegration({ home = homedir(), remember = true } = {}) {
+export function removeOfficialWebIntegration({ home = homedir(), remember = true, preserveIntent = false } = {}) {
   const profileRoot = officialWebProfileDir({ home });
   const profileManifest = join(profileRoot, 'package.json');
   const profile = validOfficialManifest(profileManifest);
@@ -119,7 +119,11 @@ export function removeOfficialWebIntegration({ home = homedir(), remember = true
     removed = result.removed;
   }
   const previous = readState(home);
-  if (remember) writeState(home, { ...(previous ?? {}), enabled: false, package: OFFICIAL_BRIDGE_PACKAGE });
+  if (remember) writeState(home, {
+    ...(previous ?? {}),
+    enabled: preserveIntent ? previous?.enabled === true : false,
+    package: OFFICIAL_BRIDGE_PACKAGE,
+  });
   else {
     const stateFile = officialWebIntegrationStateFile({ home });
     if (existsSync(stateFile)) unlinkSync(stateFile);

@@ -40,6 +40,11 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration } from '../dsh-cli-runtime.mjs';
+import {
+  ensureOfficialWebIntegration,
+  officialWebIntegrationStatus,
+  removeOfficialWebIntegration,
+} from './official-web.mjs';
 
 export const CREW_APP_DIRNAME = 'app';
 export const RELEASES_DIRNAME = 'releases';
@@ -429,7 +434,11 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
       }
     }
   }
-  for (const rel of ['cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs']) {
+  for (const rel of [
+    'cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs',
+    'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml',
+    'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js',
+  ]) {
     if (!existsSync(join(dir, rel))) errors.push(`payload artifact missing: ${rel}`);
   }
   if (!allowIncomplete && existsSync(join(dir, INCOMPLETE_MARKER))) errors.push('release is still marked incomplete');
@@ -553,7 +562,50 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
     return false;
   }
   log('✓ Claude Code integration');
+
+  const official = officialWebIntegrationStatus({ home });
+  if (official.enabled) {
+    const repaired = ensureOfficialWebIntegration({ home, releaseDir });
+    if (!repaired.ok) {
+      log(`✗ official 3080 bridge repair failed (${repaired.code ?? 'unknown'})`);
+      return false;
+    }
+    log('✓ official 3080 UI bridge → isolated Crew backend on 3210');
+  }
   return true;
+}
+
+export async function npxIntegrate({ home = homedir(), log = console.log } = {}) {
+  const pointer = readCurrentPointer({ home });
+  if (!pointer || !existsSync(pointer.path)) {
+    log('✗ install DSH Crew before enabling the official 3080 integration');
+    return { ok: false, error: 'DSH Crew is not installed' };
+  }
+  const validated = validateInstalledPayload(pointer.path, { expectedName: pointer.name, expectedVersion: pointer.version });
+  if (!validated.ok) {
+    log('✗ installed DSH Crew payload is damaged; run dsh-crew update first');
+    return { ok: false, error: 'installed payload invalid' };
+  }
+  const result = ensureOfficialWebIntegration({ home, releaseDir: pointer.path });
+  if (!result.ok) {
+    log(`✗ official 3080 integration failed (${result.code ?? 'unknown'})`);
+    return { ok: false, error: result.code ?? 'integration failed' };
+  }
+  log(result.changed
+    ? '✓ official 3080 UI connected to the isolated Crew backend on 3210'
+    : '- official 3080 UI integration already healthy');
+  log(`  backup: ${result.backupFile}`);
+  return { ok: true, changed: result.changed, backupFile: result.backupFile };
+}
+
+export async function npxDetach({ home = homedir(), log = console.log } = {}) {
+  const result = removeOfficialWebIntegration({ home });
+  if (!result.ok) {
+    log(`✗ official 3080 integration removal failed (${result.code ?? 'unknown'})`);
+    return { ok: false, error: result.code ?? 'detach failed' };
+  }
+  log(result.removed ? '✓ official 3080 bridge removed; isolated 3210 mode remains available' : '- official 3080 bridge already absent');
+  return { ok: true, removed: result.removed };
 }
 
 export async function npxInstall({
@@ -895,6 +947,8 @@ export function npxStatus({
   const st = installer.installStatus ? installer.installStatus({ home }) : realInstaller.installStatus({ home });
   const codex = st?.codex?.installed ? 'installed' : 'not installed';
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
+  const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
+  const officialWeb = !official.enabled ? 'disabled' : official.healthy ? 'installed' : 'needs repair';
 
   log(`DSH Crew launcher/candidate: ${candidateVersion ?? 'unknown'}`);
   log(`Installed DSH Crew payload: ${installedLine}`);
@@ -908,7 +962,8 @@ export function npxStatus({
       log(`  Refresh the launcher with: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
     }
   }
-  log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile; official web profile ignored)`);
+  log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile on 3210)`);
+  log(`Official 3080 UI bridge: ${officialWeb}`);
   log(`Codex Desktop integration: ${codex}`);
   log(`Claude Code integration: ${claude}`);
 
@@ -918,6 +973,7 @@ export function npxStatus({
     installedVersion,
     installedPath: pointer?.path ?? null,
     dshPlugin,
+    officialWeb,
     codex,
     claude,
   };
@@ -943,6 +999,10 @@ export async function npxUninstall({
   const cl = installer.uninstallClaudeCode ? await installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
   if (cl.ok !== false) log('✓ Claude Code integration removed');
   else fail('Claude Code integration removal failed');
+
+  const official = removeOfficialWebIntegration({ home, preserveIntent: !purge, remember: !purge });
+  if (!official.ok) fail(`official 3080 bridge removal failed (${official.code ?? 'unknown'})`);
+  else log(official.removed ? '✓ official 3080 bridge removed' : '- official 3080 bridge already absent');
 
   if (name) {
     const removed = removeCrewPluginRegistration({ home, name });
@@ -982,6 +1042,8 @@ export const USAGE = `usage: dsh-crew <command> [--purge] [--candidate <path>]
 
 Commands:
   install     persist the candidate package into Crew-owned state and register it
+  integrate   show Crew inside the official 3080 UI; backend stays isolated on 3210
+  detach      remove only the official 3080 bridge; isolated 3210 mode remains available
   status      read-only report of launcher/installed versions and integrations
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
@@ -1032,13 +1094,15 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'status', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
   try {
     const actions = {
       install: commands.install ?? npxInstall,
+      integrate: commands.integrate ?? npxIntegrate,
+      detach: commands.detach ?? npxDetach,
       status: commands.status ?? npxStatus,
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
