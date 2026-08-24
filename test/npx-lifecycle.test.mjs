@@ -96,9 +96,18 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   const nm = join(root, 'node_modules');
   mkdirSync(join(nm, '@ran-fake', 'sdk'), { recursive: true });
   writeFileSync(join(nm, '@ran-fake', 'sdk', 'package.json'), JSON.stringify({
-    name: '@ran-fake/sdk', version: '1.0.0', main: 'index.js', dependencies: { 'fake-zod': '^3.0.0' },
+    name: '@ran-fake/sdk',
+    version: '1.0.0',
+    main: 'index.js',
+    dependencies: { 'fake-zod': '^3.0.0' },
+    peerDependencies: { '@ran-fake/protocol-peer': '^1.0.0' },
   }));
   writeFileSync(join(nm, '@ran-fake', 'sdk', 'index.js'), 'module.exports = 1;\n');
+  mkdirSync(join(nm, '@ran-fake', 'protocol-peer'), { recursive: true });
+  writeFileSync(join(nm, '@ran-fake', 'protocol-peer', 'package.json'), JSON.stringify({
+    name: '@ran-fake/protocol-peer', version: '1.0.0', main: 'index.js',
+  }));
+  writeFileSync(join(nm, '@ran-fake', 'protocol-peer', 'index.js'), 'module.exports = 4;\n');
   mkdirSync(join(nm, 'fake-zod'), { recursive: true });
   writeFileSync(join(nm, 'fake-zod', 'package.json'), JSON.stringify({ name: 'fake-zod', version: '3.0.0', main: 'index.js' }));
   writeFileSync(join(nm, 'fake-zod', 'index.js'), 'module.exports = 2;\n');
@@ -146,7 +155,7 @@ test('package, runtime identity, and changelog identify candidate 0.3.5', () => 
 
 // ---------- dependency closure ----------
 
-test('copyProductionDependencyTree replicates the transitive production closure', () => {
+test('copyProductionDependencyTree replicates transitive dependencies and required peers', () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -156,8 +165,9 @@ test('copyProductionDependencyTree replicates the transitive production closure'
       fromRoot: sourceRoot, toRoot, names: ['@ran-fake/sdk', 'fake-zod'],
     });
     assert.deepEqual(missing, []);
-    assert.deepEqual([...copied.keys()].sort(), ['@ran-fake/sdk', 'fake-zod']);
+    assert.deepEqual([...copied.keys()].sort(), ['@ran-fake/protocol-peer', '@ran-fake/sdk', 'fake-zod']);
     assert.equal(existsSync(join(toRoot, 'node_modules', '@ran-fake', 'sdk', 'index.js')), true);
+    assert.equal(existsSync(join(toRoot, 'node_modules', '@ran-fake', 'protocol-peer', 'index.js')), true);
     assert.equal(existsSync(join(toRoot, 'node_modules', 'fake-zod', 'index.js')), true);
   } finally { t.cleanup(); }
 });
@@ -199,6 +209,8 @@ test('staged payload strips peer/dev declarations, ships files, and validates fr
     // it in pre-commit mode proves the payload is complete and self-contained.
     const validated = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3', allowIncomplete: true });
     assert.deepEqual(validated.errors, []);
+    assert.equal(existsSync(join(staged.stageDir, 'node_modules', '@ran-fake', 'protocol-peer', 'index.js')), true,
+      'transitive runtime peers must be persisted with the installed payload');
     // The same validation without the pre-commit flag fails closed.
     const strict = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3' });
     assert.ok(strict.errors.some((e) => e.includes('incomplete')));
