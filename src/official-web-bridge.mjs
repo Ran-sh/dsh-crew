@@ -78,7 +78,7 @@ export function createCrewSidecarSupervisor({
     if (await healthCheck()) return { ok: true, started: false };
     if (!exists(runtime)) return { ok: false, code: 'CREW_RUNTIME_NOT_INSTALLED' };
     const child = spawnImpl(process.execPath, [
-      runtime, 'web', '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210',
+      runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210',
     ], {
       cwd: dshHome,
       env: { ...process.env, DSH_HOME: dshHome },
