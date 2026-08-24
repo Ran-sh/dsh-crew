@@ -1,0 +1,91 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V034-POST-RELEASE-FULL-ACCEPTANCE",
+  "source_commit": "c744370535899d91fa17289dc043331bf938e18e",
+  "result_commit": null,
+  "status": "BLOCKED",
+  "summary": "FULL_POST_RELEASE_ACCEPTANCE=BLOCKED. Public provenance and the fresh Windows global lifecycle passed, but the required public upgrade path is broken: a public @ran-sh/dsh-crew@0.3.3 global launcher with an installed 0.3.3 managed payload runs `dsh-crew update`, reports `already current (0.3.3)`, exits 0, and leaves the payload at 0.3.3 even though public dist-tags.latest is 0.3.4. Refreshing only the global launcher to 0.3.4 then reports launcher 0.3.4 / payload 0.3.3 and recommends refreshing the launcher back to 0.3.3, so the required 0.3.3 -> managed payload 0.3.4 -> launcher convergence flow cannot complete. Per the TEST_ONLY contract, execution stopped at this released-product defect with no product fix. The real machine also began and ended with DSH Crew not installed, so installed-machine integration health and the real multi-role workload were unavailable. All task-created disposable homes, prefixes, caches, clones, payloads, and processes were removed; no publication, tag, Release, credential, official DSH, or product-source mutation occurred. final_machine_state: NOT_INSTALLED (unchanged from startup).",
+  "timeline": {
+    "started_at": "2026-08-24T10:35:48+08:00",
+    "completed_at": "2026-08-24T10:50:38+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V034-POST-RELEASE-FULL-ACCEPTANCE-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Startup revision, clean checkout, and Task Contract",
+      "status": "PASS",
+      "evidence": "On main, git pull --ff-only origin main reported Already up to date; source_commit=LATEST resolved to c744370535899d91fa17289dc043331bf938e18e; git status was clean; task validator exited 0 with VALID TASK CONTRACT."
+    },
+    {
+      "name": "T02 Public package, Git tag, GitHub Release, and immutable provenance",
+      "status": "PASS",
+      "evidence": "Read-only npm queries returned @ran-sh/dsh-crew@0.3.4 and dist-tags.latest=0.3.4. Public npm pack returned exactly 88 files, shasum 318eaff92b488189cd868619f27729443e68323d, integrity sha512-nnjEjfX8DOF+IsDKk4SOIuAPub7qRek9j7dJuVQ90HeXMyEH8GPqlXSyRFvFfeGbs06oHjYkbkPx0/rydZesBQ==, and computed tarball SHA256 B40294103DB26883B3FAF8286E26FD4646DB65825DA6619FB7601CDAB5A2C80F. A disposable core.autocrlf=false checkout of d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05 produced zero SHA256 mismatches across all 88 packed files. Annotated v0.3.4 peeled to that exact target and GitHub Release v0.3.4 exists (non-draft, non-prerelease). Historical peeled targets remained v0.3.0=e20f392a8babdaa4d37ffe3239ab3f8885a4a369, v0.3.1=dd414a352065e983e1be1b845287e99a50ade9c5, v0.3.2=17d3eb50ef74993e4ed61dba82a1bfef6659dd21; v0.3.3 had no Git tag and its GitHub Release lookup remained HTTP 404."
+    },
+    {
+      "name": "T03 Fresh public Windows global lifecycle",
+      "status": "PASS",
+      "evidence": "Under fully disposable HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/npm cache/global prefix, npm install -g @ran-sh/dsh-crew@0.3.4 installed 190 packages and generated callable dsh-crew.cmd. install/status passed with payload 0.3.4 plus Harness/Codex/Claude installed. A full file-content hash snapshot before/after status was identical. After clearing transient npm cache inputs, status still passed. Reinstall and install were idempotent (one release directory before/after); live-registry same-version update passed and retained one release. Default uninstall kept the Crew config root; subsequent --purge removed it, all inside the disposable home."
+    },
+    {
+      "name": "T04 Public 0.3.3 to 0.3.4 upgrade and convergence",
+      "status": "BLOCKED",
+      "evidence": "Minimal reproduction on Windows in a separate disposable HOME/prefix/cache: (1) npm install -g @ran-sh/dsh-crew@0.3.3; (2) dsh-crew install -> payload 0.3.3 and integrations installed; (3) dsh-crew update while npm latest=0.3.4 -> output `already current (0.3.3); repairing registration/integrations idempotently`, exit 0; (4) dsh-crew status -> launcher/candidate 0.3.3 and installed payload 0.3.3; (5) npm install -g @ran-sh/dsh-crew@0.3.4; (6) dsh-crew status -> launcher/candidate 0.3.4 but installed payload 0.3.3, with refresh instruction `npm install -g @ran-sh/dsh-crew@0.3.3`. The old launcher never resolves live latest and therefore cannot perform the required managed-payload upgrade."
+    },
+    {
+      "name": "T05 Transactional repair",
+      "status": "NOT RUN",
+      "evidence": "Not run because the Task Contract requires stopping BLOCKED when a genuine released-product defect is found; no product fix or further destructive product testing was authorized after T04."
+    },
+    {
+      "name": "T06 Fail-closed safety scenarios",
+      "status": "NOT RUN",
+      "evidence": "Not run because execution stopped at the released-product upgrade defect in T04."
+    },
+    {
+      "name": "T07 Real installed-machine Harness/Codex/Claude health",
+      "status": "BLOCKED",
+      "evidence": "Normal read-only `node scripts/setup.mjs status` at startup and again before result completion reported DSH plugin not installed, Codex Desktop integration not installed, and Claude Code integration not installed. The task required preserving the real machine's installed state, so this executor did not create a persistent installation merely to satisfy the check."
+    },
+    {
+      "name": "T08 Real multi-role Crew workload",
+      "status": "NOT RUN",
+      "evidence": "Not run because the real installed-machine product/integration prerequisite was absent and execution had already stopped at T04. No provider credentials or official DSH stores were inspected."
+    },
+    {
+      "name": "T09 Deterministic regression matrix",
+      "status": "NOT RUN",
+      "evidence": "Not run because the Task Contract directed execution to stop BLOCKED at the released-product defect before the deterministic regression phase. No deterministic result is claimed."
+    },
+    {
+      "name": "T10 Source-checkout compatibility",
+      "status": "NOT RUN",
+      "evidence": "Not run because execution stopped at T04. No cross-platform execution beyond the real Windows checks is claimed."
+    },
+    {
+      "name": "T11 Final safety, cleanup, and machine state",
+      "status": "BLOCKED",
+      "evidence": "All task-created disposable homes, prefixes, caches, clones, payloads, and processes under the dedicated temporary root were removed; no task worktree was created; git status was clean before writing this Result Contract. No npm publication/dist-tag mutation, Git tag/Release mutation, credential access, official ~/.dsh access, package-manager policy configuration change, or product/source change occurred. Real machine state remained NOT_INSTALLED from startup to completion, which does not meet the required final_machine_state: INSTALLED acceptance criterion."
+    }
+  ],
+  "blockers": [
+    "Released public-upgrade defect: @ran-sh/dsh-crew@0.3.3 `dsh-crew update` does not resolve npm latest=0.3.4 and leaves the managed payload at 0.3.3 while exiting 0; refreshing the launcher alone yields 0.3.4/0.3.3 divergence instead of convergence.",
+    "Environment prerequisite absent: normal product status reported the real machine's DSH Crew, Codex, and Claude integrations not installed at both startup and completion, so required installed-machine health and real provider-backed multi-role execution could not run without changing persistent machine state."
+  ],
+  "result_path": "docs/agent-results/TASK-V034-POST-RELEASE-FULL-ACCEPTANCE-result.json",
+  "notes": [
+    "This was TEST_ONLY. No package, source, test, implementation documentation, workflow, release, tag, registry, credential, or official DSH state was modified.",
+    "The first disposable lifecycle command encountered a PowerShell read-only variable-name collision before product installation; it was interrupted, normal product status was checked, and its task-owned temporary files were removed. The successful lifecycle rerun used unambiguous isolated variable names.",
+    "An npm cache-clean operation was scoped to the disposable cache only and did not change npm configuration or package-manager security policy.",
+    "The pre-existing unrelated git worktrees reported by git worktree list were not created, entered, modified, or removed by this task.",
+    "final_machine_state: NOT_INSTALLED (unchanged from startup)."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V034-POST-RELEASE-FULL-ACCEPTANCE-result.json --stamp",
+    "validated_at": "2026-08-24T02:51:46Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V034-POST-RELEASE-FULL-ACCEPTANCE-result.json"
+  }
+}
