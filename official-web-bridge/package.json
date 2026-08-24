@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "main": "./entry.mjs",
+  "exports": {
+    ".": "./entry.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
