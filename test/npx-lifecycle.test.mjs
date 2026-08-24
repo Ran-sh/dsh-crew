@@ -137,11 +137,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 0.3.4', () => {
+test('package, runtime identity, and changelog identify candidate 0.3.5', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '0.3.4');
-  assert.equal(RUNTIME_VERSION, '0.3.4');
-  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.3\.4/m);
+  assert.equal(manifest.version, '0.3.5');
+  assert.equal(RUNTIME_VERSION, '0.3.5');
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.3\.5/m);
 });
 
 // ---------- dependency closure ----------
@@ -692,6 +692,74 @@ test('update applies an explicit newer candidate directory without a source chec
     assert.match(logs.join('\n'), /global launcher is still .*; the managed Crew payload is now 9\.9\.0/);
     assert.match(logs.join('\n'), /npm install -g @ran-sh\/dsh-crew@9\.9\.0/);
   } finally { t.cleanup(); }
+});
+
+test('a newer running launcher converges an older payload before registry resolution', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidateDir(t.dir, '0.3.3'),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+    });
+    const before = readCurrentPointer({ home: t.dir });
+    let registryCalls = 0;
+    const runner = () => {
+      registryCalls += 1;
+      return { status: 1, stdout: '', stderr: 'registry must not be consulted first' };
+    };
+    const logs = [];
+    const result = await npxUpdate({
+      home: t.dir,
+      installer: rec.installer,
+      log: (message) => logs.push(message),
+      ensureRuntime: okRuntime(),
+      runner,
+    });
+
+    assert.equal(result.ok, true, logs.join('\n'));
+    assert.equal(result.version, RUNTIME_VERSION);
+    assert.equal(registryCalls, 0, 'the validated running launcher is the first convergence candidate');
+    const after = readCurrentPointer({ home: t.dir });
+    assert.equal(after.version, RUNTIME_VERSION);
+    assert.notEqual(after.path, before.path);
+    assert.equal(existsSync(before.path), true, 'prior usable release remains through activation');
+    assert.match(logs.join('\n'), /newer launcher .* converging managed payload .* before registry resolution/i);
+  } finally { t.cleanup(); }
+});
+
+test('status guidance is direction-aware and equal versions are quiet', async () => {
+  const older = tempHome();
+  const newer = tempHome();
+  const equal = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: older.dir, sourceRoot: makeCandidateDir(older.dir, '0.3.3'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const olderLogs = [];
+    npxStatus({ home: older.dir, installer: rec.installer, log: (message) => olderLogs.push(message) });
+    assert.match(olderLogs.join('\n'), /launcher .* is newer than the managed payload/i);
+    assert.match(olderLogs.join('\n'), /Run: dsh-crew update/);
+    assert.doesNotMatch(olderLogs.join('\n'), /npm install -g @ran-sh\/dsh-crew@0\.3\.3/);
+
+    await npxInstall({ home: newer.dir, sourceRoot: makeCandidateDir(newer.dir, '9.9.0'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const newerLogs = [];
+    npxStatus({ home: newer.dir, installer: rec.installer, log: (message) => newerLogs.push(message) });
+    assert.match(newerLogs.join('\n'), /managed payload .* is newer than the launcher/i);
+    assert.match(newerLogs.join('\n'), /npm install -g @ran-sh\/dsh-crew@9\.9\.0/);
+    assert.doesNotMatch(newerLogs.join('\n'), /Run: dsh-crew update/);
+
+    await npxInstall({ home: equal.dir, sourceRoot: makeCandidateDir(equal.dir, RUNTIME_VERSION), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const equalLogs = [];
+    npxStatus({ home: equal.dir, sourceRoot: makeCandidateDir(join(equal.dir, 'status'), RUNTIME_VERSION), installer: rec.installer, log: (message) => equalLogs.push(message) });
+    assert.doesNotMatch(equalLogs.join('\n'), /differ|newer than|Refresh the launcher|Run: dsh-crew update/i);
+  } finally {
+    older.cleanup();
+    newer.cleanup();
+    equal.cleanup();
+  }
 });
 
 test('registry mode never downgrades a newer managed payload', async () => {
