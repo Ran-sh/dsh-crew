@@ -6,8 +6,7 @@
   "objective": "Run the final non-publishing release gate for DSH Crew v0.3.5 and declare RELEASE_READY only if the exact implementation candidate 69f54aef73580aea2422a4a6413bc43168824832 passes migration, lifecycle, regression, provenance, package, and safety validation with no blockers.",
   "context": "Issue #56 is the v0.3.5 final gate after TASK-V035-MIGRATION-RECOVERY passed. The product candidate is 69f54aef73580aea2422a4a6413bc43168824832; the later implementation completion commit adds only its Result Contract and deletes the prior ACTIVE_TASK. Public latest must remain 0.3.4 and @ran-sh/dsh-crew@0.3.5/tag/Release must remain absent throughout this TEST_ONLY task. Do not make product/source/test/docs implementation changes. Re-prove the supported legacy migration boundary: immutable <=0.3.3 launchers cannot be retroactively fixed; users refresh the global launcher first, then dsh-crew update converges the managed payload.",
   "allowed_changes": [
-    "docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json",
-    "docs/agent-tasks/ACTIVE_TASK.json"
+    "docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json"
   ],
   "forbidden_changes": [
     "any product/source/test/README/CHANGELOG/package implementation change",
