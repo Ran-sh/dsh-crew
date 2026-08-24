@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V035-PUBLISH",
+  "source_commit": "f6adb75241bce8e3018341b5ef5cfe90bb539cd5",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "V035_PUBLICATION=PASS. Published @ran-sh/dsh-crew@0.3.5 exactly once from the sole verified fresh-clone tarball at immutable product target 69f54aef73580aea2422a4a6413bc43168824832. Public npm converged to 0.3.5/latest with candidate-matching integrity and shasum; fresh public Windows lifecycle and public 0.3.3 legacy migration both passed; annotated v0.3.5 peels exactly to the immutable target; the non-draft/non-prerelease GitHub Release exists; historical immutable release state is unchanged; all task-created temporary state was removed and the real machine remains not installed.",
+  "timeline": {
+    "started_at": "2026-08-24T04:51:51Z",
+    "completed_at": "2026-08-24T05:11:45Z"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V035-PUBLISH-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Source resolution and Task Contract",
+      "status": "PASS",
+      "evidence": "Checked out main, pulled origin/main with --ff-only, resolved executed source f6adb75241bce8e3018341b5ef5cfe90bb539cd5, confirmed a clean checkout, and validated docs/agent-tasks/ACTIVE_TASK.json as a valid TASK-V035-PUBLISH contract."
+    },
+    {
+      "name": "T02 Final release gate",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json exited 0. The result has status PASS, no blockers, and summary release_gate: RELEASE_READY for immutable_release_target=69f54aef73580aea2422a4a6413bc43168824832."
+    },
+    {
+      "name": "T03 Read-only publication preflight",
+      "status": "PASS",
+      "evidence": "Scoped npm lookup for @ran-sh/dsh-crew@0.3.5 returned E404 while scoped dist-tags.latest was 0.3.4. Remote v0.3.5 tag and GitHub Release were absent. Historical peeled targets were v0.3.0=e20f392a8babdaa4d37ffe3239ab3f8885a4a369, v0.3.1=dd414a352065e983e1be1b845287e99a50ade9c5, v0.3.2=17d3eb50ef74993e4ed61dba82a1bfef6659dd21, and v0.3.4=d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05; v0.3.3 remained tagless/release-less."
+    },
+    {
+      "name": "T04 Fresh immutable publication source",
+      "status": "PASS",
+      "evidence": "Created a completely fresh no-checkout clone, set core.autocrlf=false before checkout, detached exactly at 69f54aef73580aea2422a4a6413bc43168824832, and required clean source status. Package identity was @ran-sh/dsh-crew@0.3.5, runtime identity contained 0.3.5, and package.json had exactly one bin: dsh-crew -> ./bin/dsh-crew.mjs."
+    },
+    {
+      "name": "T05 Single npm pack and candidate audit",
+      "status": "PASS",
+      "evidence": "Ran npm pack exactly once. Candidate metadata: id=@ran-sh/dsh-crew@0.3.5; filename=ran-sh-dsh-crew-0.3.5.tgz; size=900875 bytes; unpacked_size=1641131 bytes; integrity=sha512-XdgWrHYRjYsS6DEjNn2KrzY5jWHKZZsni6F+bDqMGtYixjICQ+8C8mwWrdTDcJ18NFl/Jk6UwKuQPe6OMRLetw==; shasum=52d04824a0c48c978b5462ef0b14cce0ec923807; file_count=88; SHA256=c3f6da0dcc300bdd59149b496a50dc1259cf51d7b9a92ae4a43bebbb58346caa. Required launcher/runtime/identity/server/Hub/client/setup/package assets passed and forbidden entries were zero."
+    },
+    {
+      "name": "T06 Exact tarball byte comparison",
+      "status": "PASS",
+      "evidence": "Extracted the sole candidate tarball and compared each of all 88 packed tracked files by Git blob identity against 69f54aef73580aea2422a4a6413bc43168824832. Untracked packed entries=0 and mismatches=0. npm pack was never run again."
+    },
+    {
+      "name": "T07 One-time npm publication",
+      "status": "PASS",
+      "evidence": "Issued one npm publish command for only the verified ran-sh-dsh-crew-0.3.5.tgz with --access public --tag latest --registry https://registry.npmjs.org/. npm completed browser authentication without credential inspection or secret/OTP input and reported + @ran-sh/dsh-crew@0.3.5. No publish retry or other package/version mutation occurred. V035_PUBLICATION=PASS."
+    },
+    {
+      "name": "T08 Public npm convergence",
+      "status": "PASS",
+      "evidence": "First post-publication convergence probe observed version=0.3.5, dist-tags.latest=0.3.5, versions including 0.3.5, integrity=sha512-XdgWrHYRjYsS6DEjNn2KrzY5jWHKZZsni6F+bDqMGtYixjICQ+8C8mwWrdTDcJ18NFl/Jk6UwKuQPe6OMRLetw==, and shasum=52d04824a0c48c978b5462ef0b14cce0ec923807, exactly matching the candidate."
+    },
+    {
+      "name": "T09 Public Windows global lifecycle",
+      "status": "PASS",
+      "evidence": "In a fully disposable HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/npm cache/global prefix, installed public registry @ran-sh/dsh-crew@0.3.5 and required its generated dsh-crew.cmd launcher. install -> status -> update -> status -> uninstall -> status all exited 0 with no source checkout dependency. Installed and updated status showed launcher/payload 0.3.5 and Harness/Codex/Claude installed; final status showed payload and all integrations not installed."
+    },
+    {
+      "name": "T10 Public legacy migration",
+      "status": "PASS",
+      "evidence": "In a second fully disposable environment, installed public @ran-sh/dsh-crew@0.3.3 launcher/payload with Harness/Codex/Claude healthy, then refreshed the global launcher from public @ran-sh/dsh-crew@0.3.5. Status explicitly showed launcher 0.3.5 newer than payload 0.3.3 and Run: dsh-crew update. Update selected the newer launcher before registry resolution, converged payload to 0.3.5, retained healthy Harness/Codex/Claude integrations, emitted no downgrade guidance, and retained exactly the prior 0.3.3 and current 0.3.5 releases. Disposable config.json and .env were absent both before and after; no normal user configuration was accessed or mutated."
+    },
+    {
+      "name": "T11 Annotated immutable tag",
+      "status": "PASS",
+      "evidence": "Only after both public lifecycle checks passed, created and pushed annotated v0.3.5. Remote tag object=2b8cdfe6be3ffc293f3082b41858abe399acd555 and remote peeled target=69f54aef73580aea2422a4a6413bc43168824832 exactly."
+    },
+    {
+      "name": "T12 GitHub Release",
+      "status": "PASS",
+      "evidence": "Only after exact remote tag verification, created GitHub Release v0.3.5 with stable global launcher lifecycle and legacy launcher-refresh-then-update notes. Verification returned tagName=v0.3.5, name=v0.3.5, isDraft=false, isPrerelease=false, URL=https://github.com/Ran-sh/dsh-crew/releases/tag/v0.3.5."
+    },
+    {
+      "name": "T13 Final public and historical invariants",
+      "status": "PASS",
+      "evidence": "Final npm state was versions 0.3.0 through 0.3.5 with latest=0.3.5 and exact candidate integrity/shasum. v0.3.5 still peeled exactly to the immutable target. Historical peeled tag targets remained unchanged; historical v0.3.0/v0.3.1/v0.3.2/v0.3.4 Releases remained non-draft/non-prerelease; v0.3.3 remained npm-only/tagless/release-less."
+    },
+    {
+      "name": "T14 Cleanup and final machine state",
+      "status": "PASS",
+      "evidence": "Uninstalled the legacy disposable payload/integrations and both disposable global packages, then removed the exact verified task-owned Temp root containing the clone, sole tarball, extracted files, homes, prefixes, caches, and runtimes; verified the root absent. Real-machine read-only status remained DSH plugin, Codex Desktop integration, and Claude Code integration not installed. Main remained at f6adb75241bce8e3018341b5ef5cfe90bb539cd5 with a clean worktree before Result Contract creation."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V035-PUBLISH-result.json",
+  "notes": [
+    "immutable_release_target=69f54aef73580aea2422a4a6413bc43168824832; publication_tarball_sha256=c3f6da0dcc300bdd59149b496a50dc1259cf51d7b9a92ae4a43bebbb58346caa.",
+    "The only npm publish command succeeded; @ran-sh/dsh-crew@0.3.5 is now immutable and was never republished.",
+    "No credential/token/OTP/auth-header/.npmrc/auth-store/cookie/provider-secret contents were inspected, printed, copied, or persisted. Browser authentication completed without requiring a user-provided secret.",
+    "No product/source/test/README/CHANGELOG/package change or package-manager security-policy weakening occurred.",
+    "A disposable lifecycle assertion initially used the reserved PowerShell variable name HOME and stopped before installation; the corrected wrapper used task-specific variables. A legacy status assertion initially expected the v0.3.5 label while v0.3.3 used its historical label; execution resumed from the verified disposable 0.3.3 state. Neither wrapper issue changed public immutable state or required a publish retry.",
+    "final_machine_state: NOT_INSTALLED (preserved)."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V035-PUBLISH-result.json --stamp",
+    "validated_at": "2026-08-24T05:12:49Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V035-PUBLISH-result.json"
+  }
+}
