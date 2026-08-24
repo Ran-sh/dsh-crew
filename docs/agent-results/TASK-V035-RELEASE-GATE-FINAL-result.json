@@ -1,0 +1,118 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V035-RELEASE-GATE-FINAL",
+  "source_commit": "620b0b64501cf5aa7ba526ef4ba8f355cceb68bb",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "release_gate: RELEASE_READY. immutable_release_target=69f54aef73580aea2422a4a6413bc43168824832. The exact v0.3.5 implementation candidate is an ancestor of executed HEAD 620b0b64501cf5aa7ba526ef4ba8f355cceb68bb, and every later delta is workflow bookkeeping only (the prior stamped Result Contract and ACTIVE-task queue/correction). Prior TASK-V035-MIGRATION-RECOVERY evidence validates PASS with zero blockers. Identity/single-bin, frozen install, 78 focused tests, 482 full tests with zero skips, client build with restored drift, both npm verifiers including the 20-peer/21-manifest/177-check official cohort audit, exact-candidate 88-file pack audit, and publish dry-run all pass. A real disposable Windows migration from public launcher/payload 0.3.3 through an exact locally packed 0.3.5 launcher refresh converged the managed payload to 0.3.5 without source checkout; direction-aware guidance, Harness/Codex/Claude health, byte-identical config.json/.env, prior-release retention, bounded two-release retention, fail-closed missing-candidate behavior, registry no-downgrade, and idempotence all passed. Fresh global and source-checkout lifecycles passed. Public latest remained 0.3.4; public 0.3.5/tag/Release remained absent; historical immutable tags/releases remained unchanged and 0.3.3 remained npm-only/tagless/release-less. No product change, publication, tag/Release mutation, credential/official-DSH access, policy weakening, or persistent unrelated state mutation occurred; all task artifacts were removed and the real machine remained not installed.",
+  "timeline": {
+    "started_at": "2026-08-24T12:08:51+08:00",
+    "completed_at": "2026-08-24T12:22:59+08:00"
+  },
+  "changed_files": [
+    "docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Source resolution, clean checkout, and Task Contract",
+      "status": "PASS",
+      "evidence": "git checkout main and git pull --ff-only origin main fast-forwarded to 620b0b64501cf5aa7ba526ef4ba8f355cceb68bb; branch main and clean status confirmed; task validator returned VALID TASK CONTRACT."
+    },
+    {
+      "name": "T02 Prior migration Result Contract",
+      "status": "PASS",
+      "evidence": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json exited 0; parsed result status=PASS, blockers=0, result_validation.status=PASS."
+    },
+    {
+      "name": "T03 Immutable implementation ancestry and bookkeeping-only completion delta",
+      "status": "PASS",
+      "evidence": "git merge-base --is-ancestor 69f54aef73580aea2422a4a6413bc43168824832 HEAD exited 0. Diff candidate..executed HEAD contains only docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json addition and docs/agent-tasks/ACTIVE_TASK.json workflow updates; no product/source/test/README/CHANGELOG/package delta exists after the immutable target."
+    },
+    {
+      "name": "T04 Candidate identity and single-bin contract",
+      "status": "PASS",
+      "evidence": "package.json version=0.3.5 with exactly one bin dsh-crew -> ./bin/dsh-crew.mjs and existing target script; src/runtime-identity.mjs RUNTIME_VERSION=0.3.5; CHANGELOG contains the 0.3.5 section."
+    },
+    {
+      "name": "T05 Frozen dependency install",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile reported Already up to date and completed with pnpm 11.7.0; no lockfile or workspace drift."
+    },
+    {
+      "name": "T06 Focused migration/global-launcher/update/distribution/setup/runtime matrix",
+      "status": "PASS",
+      "evidence": "node --test over npx-lifecycle, installer, distribution, setup-cli, setup, and dsh-cli-runtime passed 78/78, 0 failures/skips, covering directional divergence, legacy migration boundary, launcher-first convergence, candidate failure, no-downgrade, idempotence, config preservation, and bounded retention."
+    },
+    {
+      "name": "T07 Full deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs passed 482/482, 0 failures, 0 skipped."
+    },
+    {
+      "name": "T08 Client build and clean restoration",
+      "status": "PASS",
+      "evidence": "pnpm run build:client completed successfully and built lib/client.js (107158 bytes). Generated-only lib/client.js drift was restored immediately; final checkout had no generated drift."
+    },
+    {
+      "name": "T09 npm installation verifiers",
+      "status": "PASS",
+      "evidence": "Normal verifier: NPM_INSTALL_CONTRACT=PASS candidate=0.3.5 official_dsh=not-run. Official verifier: DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.5 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T10 Exact-candidate pack audit and publication dry-run",
+      "status": "PASS",
+      "evidence": "A disposable core.autocrlf=false detached clone checked out exactly 69f54aef73580aea2422a4a6413bc43168824832. npm pack --dry-run --json reported @ran-sh/dsh-crew@0.3.5 and exactly 88 files; required bin/runtime/identity/server/Hub/client/setup/package assets were all present and forbidden ACTIVE task, agent results, tests, node_modules, tarballs, temp, credential/secret, and .env entries were zero. Exact candidate tarball SHA256=96540B54D545C8767713BCFE1999CC368D5109AB7265D8198111C481958CF40E. npm publish --dry-run --access public exited 0 and reported + @ran-sh/dsh-crew@0.3.5; no real publication occurred."
+    },
+    {
+      "name": "T11 Real disposable Windows public-0.3.3 to exact-local-0.3.5 migration",
+      "status": "PASS",
+      "evidence": "Under fully disposable HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/npm cache/global prefix, public npm install -g @ran-sh/dsh-crew@0.3.3 passed and dsh-crew install/status established payload 0.3.3 with Harness/Codex/Claude installed. Installing the exact candidate tgz refreshed the launcher; status showed launcher 0.3.5 > payload 0.3.3 and `Run: dsh-crew update` with no downgrade guidance. Update selected the newer launcher before registry resolution, staged/validated/activated payload 0.3.5, and final status showed launcher/payload 0.3.5 with all three integrations healthy. Migration commands used no source checkout."
+    },
+    {
+      "name": "T12 Migration sentinels and release retention",
+      "status": "PASS",
+      "evidence": "SHA256 comparisons proved config.json and .env byte-identical across migration. Pointer moved 0.3.3 -> 0.3.5, the prior usable 0.3.3 release remained through successful activation, and retained release count was exactly 2."
+    },
+    {
+      "name": "T13 Fail-closed, no-downgrade, and idempotence",
+      "status": "PASS",
+      "evidence": "update --candidate <missing path> exited 1 with CANDIDATE_NOT_FOUND while pointer SHA and release count remained unchanged; status still showed healthy payload/integrations. Equal launcher/payload 0.3.5 normal update resolved public latest=0.3.4, refused downgrade, exited 0, kept the identical pointer and two releases, and left integrations healthy."
+    },
+    {
+      "name": "T14 Fresh exact-local-0.3.5 Windows global lifecycle",
+      "status": "PASS",
+      "evidence": "In a separate disposable Windows home/prefix/cache, npm install -g <exact candidate tgz> generated the launcher; install -> status -> update -> status -> uninstall -> status all exited 0. Update refused downgrade to public 0.3.4; final disposable status reported payload and integrations absent."
+    },
+    {
+      "name": "T15 Source-checkout compatibility",
+      "status": "PASS",
+      "evidence": "In another disposable Windows home, node scripts/setup.mjs install -> status -> uninstall all exited 0; status showed Harness/Codex/Claude installed between install/uninstall. Generated client drift was restored."
+    },
+    {
+      "name": "T16 Public state and historical immutable release checks",
+      "status": "PASS",
+      "evidence": "Before and after real lifecycle work, read-only npm returned latest=0.3.4 and versions [0.3.0..0.3.4], with @0.3.5 lookup 404. Remote annotated peeled targets remained v0.3.0=e20f392a8babdaa4d37ffe3239ab3f8885a4a369, v0.3.1=dd414a352065e983e1be1b845287e99a50ade9c5, v0.3.2=17d3eb50ef74993e4ed61dba82a1bfef6659dd21, v0.3.4=d5a4fac00bcd90767e7d6d4ca0a23d48877e2b05; their GitHub Releases remained non-draft/non-prerelease. v0.3.3 tag/Release remained absent and v0.3.5 tag/Release remained absent (Release API 404)."
+    },
+    {
+      "name": "T17 Final safety, cleanup, and machine state",
+      "status": "PASS",
+      "evidence": "Both disposable global installations were purged, their global packages removed, and the exact task-owned temporary root (including frozen clone, tarball, homes, prefixes, caches, runtimes) verified absent. No task worktree was created; pre-existing unrelated worktrees were untouched. Normal real-machine status reported DSH Crew/Harness integration, Codex integration, and Claude integration not installed, consistent with preserved pre-existing state. Checkout was clean before Result Contract creation. No credentials, official ~/.dsh/web state, publication, dist-tag, Git tag/Release, package-manager policy, or product/source state was read or mutated outside authorized operations."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json",
+  "notes": [
+    "immutable_release_target=69f54aef73580aea2422a4a6413bc43168824832; actual publication, tag, and GitHub Release creation remain separate future work and were not performed.",
+    "The supported legacy boundary is unchanged: immutable <=0.3.3 launchers cannot be fixed retroactively; users refresh the global launcher first, then run dsh-crew update.",
+    "This was TEST_ONLY. The only repository writes are this Result Contract and mandated ACTIVE_TASK.json deletion.",
+    "No credentials, tokens, auth headers, .npmrc contents, provider secrets, credential stores, official ~/.dsh, official web profile, or package-manager security settings were inspected or modified.",
+    "final_machine_state: NOT_INSTALLED (preserved)."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json --stamp",
+    "validated_at": "2026-08-24T04:24:09Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V035-RELEASE-GATE-FINAL-result.json"
+  }
+}
