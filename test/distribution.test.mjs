@@ -17,6 +17,7 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.equal(manifest.homepage, 'https://github.com/Ran-sh/dsh-crew');
   assert.equal(manifest.bugs?.url, 'https://github.com/Ran-sh/dsh-crew/issues');
   assert.equal(manifest.license, 'MIT');
+  assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], '^1.25.4');
   assert.equal('publishConfig' in manifest, false);
   for (const lifecycle of ['prepare', 'preinstall', 'postinstall', 'preuninstall', 'postuninstall']) {
     assert.equal(lifecycle in (manifest.scripts ?? {}), false, `${lifecycle} must not mutate host state`);
