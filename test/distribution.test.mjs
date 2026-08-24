@@ -44,6 +44,22 @@ test('primary documentation uses the supported isolated source workflow', () => 
   }
 });
 
+test('package ships a lightweight official-web bridge instead of loading the full Hub into 3080', () => {
+  const manifest = JSON.parse(read('package.json'));
+  const bridge = JSON.parse(read('official-web-bridge/package.json'));
+  const bridgePatch = read('official-web-bridge/cordis.patch.yml');
+  const bridgeClient = read('official-web-bridge/lib/client.js');
+  const bridgeEntry = read('official-web-bridge/entry.mjs');
+
+  assert.ok(manifest.files.includes('official-web-bridge'));
+  assert.equal(bridge.name, '@ran-sh/dsh-crew-web-bridge');
+  assert.equal(bridge.main, './entry.mjs');
+  assert.notEqual(bridge.main, '../src/hub/entry.mjs');
+  assert.match(bridgePatch, /@ran-sh\/dsh-crew-web-bridge/);
+  assert.match(bridgeClient, /ModuleLoader__\.load\(\{ id: ["']@ran-sh\/dsh-crew-web-bridge["']/);
+  assert.match(bridgeEntry, /official-web-bridge\.mjs/);
+});
+
 test('primary documentation states the legacy launcher migration boundary', () => {
   for (const file of ['README.md', 'README.zh.md']) {
     const doc = read(file);
