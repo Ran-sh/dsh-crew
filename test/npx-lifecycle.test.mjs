@@ -34,6 +34,8 @@ import {
   validateInstalledPayload,
   copyProductionDependencyTree,
   npxInstall,
+  npxIntegrate,
+  npxDetach,
   npxStatus,
   npxUpdate,
   npxUninstall,
@@ -42,6 +44,11 @@ import {
   compareVersions,
   resolveUpdateCandidate,
 } from '../src/install/npx-lifecycle.mjs';
+import {
+  OFFICIAL_BRIDGE_PACKAGE,
+  officialWebIntegrationStateFile,
+  officialWebIntegrationStatus,
+} from '../src/install/official-web.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PKG_NAME = '@ran-sh/dsh-crew';
@@ -63,6 +70,7 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   mkdirSync(join(root, 'commands'), { recursive: true });
   mkdirSync(join(root, 'statusline'), { recursive: true });
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(root, 'official-web-bridge', 'lib'), { recursive: true });
 
   writeFileSync(join(root, 'package.json'), JSON.stringify({
     name,
@@ -75,7 +83,7 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
     dependencies: { '@ran-fake/sdk': '^1.0.0', 'fake-zod': '^3.0.0' },
     peerDependencies: { '@ran-fake/host-peer': '^9.0.0' },
     devDependencies: { 'build-tool': '^1.0.0' },
-    files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline',
+    files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline', 'official-web-bridge',
       '.claude-plugin', '.mcp.json', 'cordis.patch.yml', 'worker.cordis.yml',
       'README.md', 'README.*.md', 'LICENSE'],
   }, null, 2));
@@ -100,6 +108,16 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   writeFileSync(join(root, 'codex', 'agents', 'ds-worker.toml'), '[agent]\n');
   writeFileSync(join(root, 'codex', 'prompts', 'dsh-config.md'), '# config\n');
   writeFileSync(join(root, '.claude-plugin', 'marketplace.json'), '{}\n');
+  writeFileSync(join(root, 'official-web-bridge', 'entry.mjs'), 'export async function apply() {}\n');
+  writeFileSync(join(root, 'official-web-bridge', 'cordis.patch.yml'), `- insert:\n    - id: bridge\n      name: '${OFFICIAL_BRIDGE_PACKAGE}'\n`);
+  writeFileSync(join(root, 'official-web-bridge', 'lib', 'client.js'), '// bridge client\n');
+  writeFileSync(join(root, 'official-web-bridge', 'package.json'), JSON.stringify({
+    name: OFFICIAL_BRIDGE_PACKAGE,
+    version,
+    type: 'module',
+    main: './entry.mjs',
+    dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } },
+  }, null, 2));
   writeFileSync(join(root, 'README.md'), '# candidate\n');
   writeFileSync(join(root, 'LICENSE'), 'MIT\n');
 
@@ -145,6 +163,18 @@ function recordingInstaller() {
 
 const okRuntime = () => async ({ home }) => ({ ok: true, version: '9.9.9-fake', home });
 const releaseCount = (home) => readdirSync(crewReleasesDir({ home })).filter((n) => !n.startsWith('.staging')).length;
+
+function makeOfficialWebProfile(home) {
+  const root = join(home, '.dsh', 'profiles', 'web');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dependencies: { '@deepseek-ai/dsh-web-app': '0.1.1', 'keep-me': '1.0.0' },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'keep-me'] } },
+  }, null, 2));
+  return root;
+}
 
 // ---------- package identity ----------
 
@@ -446,6 +476,41 @@ test('update is idempotent when already current and healthy', async () => {
   } finally { t.cleanup(); }
 });
 
+test('integrate opts into official 3080 and idempotent update repairs its bridge to the active release', async () => {
+  const t = tempHome();
+  try {
+    makeOfficialWebProfile(t.dir);
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const integrated = await npxIntegrate({ home: t.dir, log: () => {} });
+    assert.equal(integrated.ok, true, JSON.stringify(integrated));
+    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
+
+    const statusBefore = officialWebIntegrationStatus({ home: t.dir });
+    rmSync(statusBefore.linkPath, { recursive: true, force: true });
+    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, false);
+
+    const updated = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(updated.ok, true);
+    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
+  } finally { t.cleanup(); }
+});
+
+test('detach is idempotent and prevents later updates from re-registering the bridge', async () => {
+  const t = tempHome();
+  try {
+    makeOfficialWebProfile(t.dir);
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    await npxIntegrate({ home: t.dir, log: () => {} });
+    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).ok, true);
+    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).ok, true);
+    assert.equal(JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.dir }), 'utf8')).enabled, false);
+    await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(officialWebIntegrationStatus({ home: t.dir }).enabled, false);
+  } finally { t.cleanup(); }
+});
+
 test('update upgrades an older installation through staged validation before switching', async () => {
   const t = tempHome();
   try {
@@ -545,6 +610,24 @@ test('uninstall removes payload, registration, and integrations but preserves co
   } finally { t.cleanup(); }
 });
 
+test('uninstall removes the official bridge but preserves enabled intent for reinstall repair', async () => {
+  const t = tempHome();
+  try {
+    const profileRoot = makeOfficialWebProfile(t.dir);
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    await npxIntegrate({ home: t.dir, log: () => {} });
+    await npxUninstall({ home: t.dir, installer: rec.installer, log: () => {} });
+    const official = JSON.parse(readFileSync(join(profileRoot, 'package.json'), 'utf8'));
+    assert.equal(official.dependencies[OFFICIAL_BRIDGE_PACKAGE], undefined);
+    assert.equal(official.dependencies['keep-me'], '1.0.0');
+    assert.equal(JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.dir }), 'utf8')).enabled, true);
+
+    await npxInstall({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
+  } finally { t.cleanup(); }
+});
+
 test('uninstall --purge explicitly removes the whole Crew directory', async () => {
   const t = tempHome();
   try {
@@ -589,10 +672,14 @@ await test('CLI dispatch routes commands and forwards flags', async () => {
     status: async ({ log }) => { routed.push(['status']); log('status'); return { ok: true }; },
     update: async ({ log }) => { routed.push(['update']); log('updated'); return { ok: true }; },
     uninstall: async ({ purge, log }) => { routed.push(['uninstall', purge]); log('removed'); return { ok: true }; },
+    integrate: async ({ log }) => { routed.push(['integrate']); log('integrated'); return { ok: true }; },
+    detach: async ({ log }) => { routed.push(['detach']); log('detached'); return { ok: true }; },
   };
   assert.equal((await cli(['status'], { commands })).out, 'status');
   assert.equal((await cli(['update'], { commands })).out, 'updated');
   assert.equal((await cli(['install'], { commands })).out, 'installed');
+  assert.equal((await cli(['integrate'], { commands })).out, 'integrated');
+  assert.equal((await cli(['detach'], { commands })).out, 'detached');
   const purged = await cli(['uninstall', '--purge'], { commands });
   assert.equal(purged.code, 0);
   assert.deepEqual(routed.at(-1), ['uninstall', true]);
