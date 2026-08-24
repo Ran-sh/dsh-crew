@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.8 — 2026-08-24
+
+- Adds an opt-in official Harness integration: the standard UI remains on `127.0.0.1:3080`, while the full Crew Hub and model workloads stay isolated in the Crew-owned `dsh-crew` profile on `127.0.0.1:3210`.
+- Ships a lightweight, loopback-only official-web bridge that proxies only `/_dsh/dsh-crew/*`, strips hop-by-hop headers, bounds request bodies, hides internal failures, and coalesces background sidecar startup.
+- Adds `dsh-crew integrate` and `dsh-crew detach`. Install/update automatically repair an enabled bridge; detach remains opted out; uninstall removes the bridge without losing the reinstall intent unless `--purge` is used.
+- Preserves unrelated official `web` profile bundles/dependencies and creates a Crew-owned backup before the first bridge registration. Invalid or missing official profiles fail closed.
+- Simplifies the English and Chinese README around the supported 3080 UI + isolated 3210 backend workflow, single/multiple model behavior, Codex/Claude usage, and recovery commands.
+
 ## 0.3.7 — 2026-08-24
 
 ### Added

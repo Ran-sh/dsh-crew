@@ -1,124 +1,93 @@
-<p align="center">
-  <img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" />
-</p>
+<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" /></p>
 
 <h1 align="center">DSH Crew</h1>
 
-<p align="center"><strong>让 Codex Desktop 或 Claude Code 统一调度隔离运行的 DeepSeek Harness Worker 与 Reviewer。</strong></p>
+<p align="center"><strong>让 Codex Desktop 和 Claude Code 使用 Worker / Reviewer，并统一显示在官方 DeepSeek Harness 界面中。</strong></p>
 
 <p align="center"><a href="./README.md">English</a> · <a href="./README.zh.md"><b>简体中文</b></a></p>
 
-## 能做什么
+## 快速开始
 
-- `worker`：实现、修复、测试和仓库检查。
-- `reviewer`：使用独立模型顺序进行只读审查。
-- 为两个角色分别设置 Provider / Model 优先级。
-- 默认使用临时 Git worktree，不直接修改主工作区。
-- 在 DeepSeek Harness 中查看设置、进度和结果。
-
-## 安装
-
-需要 Node.js；worktree 隔离还需要 Git。
+需要 Node.js；使用 worktree 隔离还需要 Git。
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
+dsh-crew integrate
 ```
 
-请使用全局启动器。对于受 npm/cli#9870 影响的 npm 版本，临时 `npx` 不是受支持的安装方式。
-
-## 启动 Harness
-
-Windows PowerShell：
-
-```powershell
-$env:DSH_HOME = "$HOME\.config\dsh-crew\harness"
-& "$env:DSH_HOME\runtime\node_modules\.bin\dsh.cmd" --profile dsh-crew --port 3210
-```
-
-macOS / Linux：
+照常在 3080 端口启动官方 Harness：
 
 ```bash
-DSH_HOME="$HOME/.config/dsh-crew/harness" \
-  "$HOME/.config/dsh-crew/harness/runtime/node_modules/.bin/dsh" \
-  --profile dsh-crew --port 3210
+npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
 ```
 
-打开 <http://127.0.0.1:3210>，进入 **Settings → DSH Crew**。
+打开 <http://127.0.0.1:3080>，进入 **设置 → DSH Crew**。3080 只显示官方界面；Crew 的任务与模型执行继续隔离在 `127.0.0.1:3210`，需要时由桥接在后台自动启动。
 
 ## 配置
 
-1. 安装 Codex 和/或 Claude Code 集成。
-2. 点击“刷新 Harness 模型”。
-3. 分别排列 Flash 与 Pro 的模型调用顺序。
-4. Worker 保持 Auto 即可自动委派；Reviewer 建议默认 Manual，需要自动复审时再开启。
-5. 编码任务建议使用 `worktree` 隔离。
+1. 点击“刷新 Harness 模型”。
+2. 分别设置 Worker 和 Reviewer 的模型顺序。
+3. Worker 保持 **Auto**，即可自动委派。
+4. Reviewer 默认 **Manual**；确实需要自动复审时再开启。
+5. 编码任务建议保持 **worktree** 隔离。
 
-设置页已按模块折叠；关闭后仍会显示当前状态和第一优先模型。
+只配置一个模型时，两个角色直接使用它。配置多个模型时，每个角色按自己的排序调用，失败后依次回退。设置模块可以展开/收起，收起后仍显示当前状态。
 
-## 使用
-
-直接告诉编码宿主：
+## 在 Codex 或 Claude 中使用
 
 ```text
 使用 ds-worker 实现这个改动并运行测试。
 使用 ds-reviewer 审查结果。
 ```
 
-旧的 `ds-flash`、`ds-pro` 别名仍兼容，但新工作流建议使用 `ds-worker`、`ds-reviewer`。
+旧的 `ds-flash`、`ds-pro` 别名仍可使用。
 
-## 检查、更新、卸载
-
-```bash
-dsh-crew status
-dsh-crew update
-dsh-crew uninstall
-```
-
-普通卸载会保留配置和备份；只有确实要一起删除时才加 `--purge`。
-
-对于 `<= 0.3.3` 的旧启动器，旧 updater 无法发现更新版本，也无法被追溯修复。先刷新启动器，再更新托管载荷：
+## 常用命令
 
 ```bash
-npm install -g @ran-sh/dsh-crew@latest
-dsh-crew update
+dsh-crew status       # 查看安装与集成状态
+dsh-crew update       # 更新并自动修复已启用的集成
+dsh-crew integrate    # 将官方 3080 界面连接到隔离的 3210 Crew
+dsh-crew detach       # 只移除 3080 桥接
+dsh-crew uninstall    # 卸载 Crew，保留配置和备份
 ```
 
-## 隔离与源码安装
+`dsh-crew uninstall --purge` 才会同时删除 Crew 配置和备份。
 
-Crew 使用独立的 Harness home 和 profile：
+如果想继续使用完全独立的界面，先运行 `dsh-crew detach`，再直接启动隔离 profile：
+
+```powershell
+$env:DSH_HOME = "$HOME\.config\dsh-crew\harness"
+& "$env:DSH_HOME\runtime\node_modules\.bin\dsh.cmd" --profile dsh-crew --host 127.0.0.1 --port 3210
+```
+
+桥接首次修改前会备份官方 `web` profile，并且只注册轻量代理/客户端包。完整 Crew Hub、模型执行、配置和凭据仍位于：
 
 ```text
 ~/.config/dsh-crew/harness
 profile: dsh-crew
 ```
 
-正常操作不会修改 `~/.dsh`、官方 `web` profile 或官方 Harness 凭据存储。
+对于 `<= 0.3.3` 的旧启动器，请先刷新启动器；旧 updater 无法发现新版本，也无法被追溯修复：
 
-开发者安装：
+```bash
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew update
+```
+
+## 源码开发
 
 ```bash
 git clone https://github.com/Ran-sh/dsh-crew.git
 cd dsh-crew
 node scripts/setup.mjs install
-```
-
-开发者卸载：
-
-```bash
+node --test test/*.test.mjs
+pnpm run build:client
 node scripts/setup.mjs uninstall
 ```
 
-## 开发
-
-```bash
-pnpm install --frozen-lockfile
-node --test test/*.test.mjs
-pnpm run build:client
-pnpm run verify:npm-install
-```
-
-详细资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [架构](./docs/v0.3-architecture-roadmap.md)
+更多资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md)
 
 ## License
 
