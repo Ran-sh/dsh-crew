@@ -24,5 +24,9 @@ const wrapped = [
 ].join('\n');
 await mkdir(join(root, 'lib'), { recursive: true });
 await writeFile(join(root, 'lib', 'client.js'), wrapped);
+const bridgeManifest = JSON.parse(await readFile(join(root, 'official-web-bridge', 'package.json'), 'utf8'));
+const bridgeWrapped = wrapped.replace(JSON.stringify(pluginId), JSON.stringify(bridgeManifest.name));
+await mkdir(join(root, 'official-web-bridge', 'lib'), { recursive: true });
+await writeFile(join(root, 'official-web-bridge', 'lib', 'client.js'), bridgeWrapped);
 await rm(buildDir, { recursive: true, force: true });
-console.log(`built lib/client.js (${wrapped.length} bytes) as module "${pluginId}" from ${compiledEntries[0]}`);
+console.log(`built lib/client.js and official-web-bridge/lib/client.js (${wrapped.length} bytes) from ${compiledEntries[0]}`);

@@ -116,6 +116,7 @@
     "commands",
     "codex",
     "statusline",
+    "official-web-bridge",
     "cordis.patch.yml",
     "worker.cordis.yml",
     ".claude-plugin",

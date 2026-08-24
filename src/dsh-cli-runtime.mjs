@@ -282,16 +282,17 @@ function readPluginRoot(root, expectedName) {
   return { ok: true, targetRoot, packageFile, packageName: pkg.name, packageVersion: pkg.version ?? null, patchPath, pkg };
 }
 
-function readProfileManifestForRegistration(profileRoot) {
+function readProfileManifestForRegistration(profileRoot, { create = true, defaultBundles = CREW_PROFILE_DEFAULT_BUNDLES } = {}) {
   const profileManifest = join(profileRoot, 'package.json');
   if (!existsSync(profileManifest)) {
+    if (!create) return { ok: false, code: 'PROFILE_NOT_FOUND', profileManifest };
     return {
       profileManifest,
       manifest: {
         name: `dsh-profile-${profileRoot.split(/[\\/]/u).at(-1)}`,
         private: true,
         dependencies: {},
-        dsh: { profile: { bundles: [...CREW_PROFILE_DEFAULT_BUNDLES] } },
+        dsh: { profile: { bundles: [...defaultBundles] } },
       },
       created: true,
     };
@@ -342,13 +343,19 @@ function ensureDirectoryLink(linkPath, targetRoot) {
  * command. The profile manifest and one loader-visible directory link are the
  * only state changed; no dependency resolution or policy bypass is attempted.
  */
-export function ensureCrewPluginRegistration({ home = homedir(), root, name } = {}) {
+export function ensurePluginRegistration({
+  profileRoot,
+  root,
+  name,
+  createProfile = true,
+  defaultBundles = CREW_PROFILE_DEFAULT_BUNDLES,
+} = {}) {
   const plugin = readPluginRoot(root, name);
   if (!plugin.ok) return plugin;
-  const profileRoot = crewProfileDir({ home });
-  const profile = readProfileManifestForRegistration(profileRoot);
+  if (typeof profileRoot !== 'string' || !isAbsolute(profileRoot)) return { ok: false, code: 'INVALID_PROFILE_ROOT' };
+  const profile = readProfileManifestForRegistration(profileRoot, { create: createProfile, defaultBundles });
   if (profile.ok === false) return profile;
-  const scaffoldChanged = ensureProfileScaffold(profileRoot);
+  const scaffoldChanged = createProfile ? ensureProfileScaffold(profileRoot) : false;
   const current = profile.manifest;
   const dependencies = { ...(current.dependencies ?? {}) };
   const currentBundles = current.dsh?.profile?.bundles ?? [...CREW_PROFILE_DEFAULT_BUNDLES];
@@ -399,6 +406,10 @@ export function ensureCrewPluginRegistration({ home = homedir(), root, name } = 
       resolvedEntry,
     };
   } catch { return { ok: false, code: 'CREW_PLUGIN_NOT_LOADABLE' }; }
+}
+
+export function ensureCrewPluginRegistration({ home = homedir(), root, name } = {}) {
+  return ensurePluginRegistration({ profileRoot: crewProfileDir({ home }), root, name });
 }
 
 /**

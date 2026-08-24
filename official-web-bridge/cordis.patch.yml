@@ -1,0 +1,4 @@
+# Lightweight official-web bridge. The full Crew Hub remains isolated on 3210.
+- insert:
+    - id: dsh-crew-official-web-bridge
+      name: '@ran-sh/dsh-crew-web-bridge'
