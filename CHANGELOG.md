@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.6 — 2026-08-24
+
+- Persist required transitive peer dependencies inside Crew-managed payloads, fixing Codex Desktop and Claude Code MCP startup after global installation.
+- Validate every staged payload with a real MCP `initialize` handshake before activation, so missing runtime dependencies fail closed during install/update.
+
 ## 0.3.5 — 2026-08-24
 
 ### Fixed
