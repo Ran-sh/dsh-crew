@@ -92,27 +92,35 @@ export function createCrewSidecarSupervisor({
   healthCheck = () => defaultHealthCheck(),
   spawnImpl = spawn,
   wait = delay,
+  maxAttempts = 120,
+  pollInterval = 250,
 } = {}) {
   let starting = null;
+  let runningChild = null;
   const runtime = crewDshRuntimeModule({ home });
   const dshHome = crewDshHome({ home });
 
   async function start() {
     if (await healthCheck()) return { ok: true, started: false };
     if (!exists(runtime)) return { ok: false, code: 'CREW_RUNTIME_NOT_INSTALLED' };
-    const child = spawnImpl(process.execPath, [
-      runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210',
-    ], {
-      cwd: dshHome,
-      env: { ...process.env, DSH_HOME: dshHome },
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref?.();
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    const childAlive = runningChild && runningChild.killed !== true && runningChild.exitCode == null;
+    if (!childAlive) {
+      runningChild = spawnImpl(process.execPath, [
+        runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210',
+      ], {
+        cwd: dshHome,
+        env: { ...process.env, DSH_HOME: dshHome },
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      const ownedChild = runningChild;
+      ownedChild.once?.('exit', () => { if (runningChild === ownedChild) runningChild = null; });
+      ownedChild.unref?.();
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (await healthCheck()) return { ok: true, started: true };
-      await wait(250);
+      await wait(pollInterval);
     }
     return { ok: false, code: 'CREW_BACKEND_START_TIMEOUT' };
   }
