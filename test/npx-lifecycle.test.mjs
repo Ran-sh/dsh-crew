@@ -30,6 +30,7 @@ import {
   readCurrentPointer,
   runningPackageRoot,
   stageCandidatePayload,
+  defaultPayloadSmoke,
   validateInstalledPayload,
   copyProductionDependencyTree,
   npxInstall,
@@ -253,6 +254,27 @@ test('a failed boot smoke aborts staging without leaving a release behind', () =
     assert.equal(staged.code, 'STAGE_SMOKE_FAILED');
     assert.equal(releaseCount(t.dir), 0);
   } finally { t.cleanup(); }
+});
+
+test('payload smoke performs a real MCP initialize handshake after launcher help', () => {
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    if (args.at(-1) === '--help') return { status: 0, stdout: 'Usage: dsh-crew\n', stderr: '' };
+    return {
+      status: 0,
+      stdout: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { serverInfo: { name: 'dsh-crew' } } }) + '\n',
+      stderr: '',
+    };
+  };
+
+  const result = defaultPayloadSmoke(join('C:', 'staged-payload'), { nodePath: 'node', runner });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.length, 2, 'smoke must verify both launcher and MCP server startup');
+  assert.equal(calls[1].args.at(-1), join('C:', 'staged-payload', 'src', 'server.mjs'));
+  const initialize = JSON.parse(calls[1].options.input.trim());
+  assert.equal(initialize.method, 'initialize');
+  assert.equal(initialize.params.clientInfo.name, 'dsh-crew-payload-smoke');
 });
 
 test('validateInstalledPayload fails closed on identity, artifact, or dependency gaps', () => {
