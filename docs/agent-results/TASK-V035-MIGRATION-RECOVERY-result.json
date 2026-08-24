@@ -1,0 +1,120 @@
+{
+  "schema_version": 2,
+  "task_id": "TASK-V035-MIGRATION-RECOVERY",
+  "source_commit": "1b55cf38efd77254838dc60c7644aefb28d07808",
+  "result_commit": null,
+  "status": "PASS",
+  "summary": "V035_MIGRATION_RECOVERY=PASS. Candidate identity is 0.3.5 with the single dsh-crew bin preserved. Launcher/payload divergence is direction-aware: launcher-newer directs `dsh-crew update`, payload-newer remains authoritative and prints the exact launcher refresh command, and equal versions are quiet. Update precedence is explicit candidate > newer validated running launcher > configured registry, so the supported legacy bootstrap (`npm install -g @ran-sh/dsh-crew@latest`, then `dsh-crew update`) converges an older managed payload without a source checkout or registry dependency after launcher refresh. A real fully disposable Windows migration installed public launcher/payload 0.3.3, refreshed the launcher from a locally packed 0.3.5 candidate, then converged payload 0.3.3 -> 0.3.5 while Harness/Codex/Claude stayed healthy, config.json/.env remained byte-identical, the prior release remained through activation, and retention stayed bounded at two releases. Missing-candidate failure was fail-closed; equal-version update against public latest=0.3.4 did not downgrade. Fresh 0.3.5 global lifecycle, source lifecycle, frozen install, 78 focused tests, 482 full tests, client build, both npm verifiers, 88-file pack audit, and publish dry-run all passed. Public latest remained 0.3.4 and public 0.3.5/tag/Release remained absent. No publication, tag/Release, credential, official DSH, policy, or unrelated machine-state mutation occurred; all disposable artifacts were removed.",
+  "timeline": {
+    "started_at": "2026-08-24T11:09:53+08:00",
+    "completed_at": "2026-08-24T11:32:12+08:00"
+  },
+  "changed_files": [
+    "package.json",
+    "src/runtime-identity.mjs",
+    "src/install/npx-lifecycle.mjs",
+    "test/npx-lifecycle.test.mjs",
+    "test/distribution.test.mjs",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json (added)",
+    "docs/agent-tasks/ACTIVE_TASK.json (deleted)"
+  ],
+  "tests": [
+    {
+      "name": "T01 Source resolution, Task Contract, and clean startup",
+      "status": "PASS",
+      "evidence": "git checkout main and git pull --ff-only origin main fast-forwarded to 1b55cf38efd77254838dc60c7644aefb28d07808; branch main and clean status confirmed; task validator returned VALID TASK CONTRACT."
+    },
+    {
+      "name": "T02 TDD RED and GREEN checkpoints",
+      "status": "PASS",
+      "evidence": "RED: focused lifecycle target ran 32 tests with 29 pass/3 intended failures (0.3.5 identity absent, registry consulted before newer launcher, wrong downgrade guidance), committed as 558ae7f. GREEN: same target passed 32/32 after the minimal fix, committed as a0a99b7. Documentation RED/GREEN was committed as c491d73/e0252b1; final comment-only refactor 69f54ae re-ran lifecycle+distribution 36/36. All checkpoints are reachable from completion HEAD."
+    },
+    {
+      "name": "T03 Candidate identity and single-bin contract",
+      "status": "PASS",
+      "evidence": "package.json version=0.3.5; src/runtime-identity.mjs RUNTIME_VERSION=0.3.5; CHANGELOG contains 0.3.5; package exposes exactly one bin dsh-crew -> ./bin/dsh-crew.mjs and its script exists."
+    },
+    {
+      "name": "T04 Direction-aware divergence and convergence unit coverage",
+      "status": "PASS",
+      "evidence": "Focused tests prove launcher>payload prints `Run: dsh-crew update` without a launcher-downgrade command; payload>launcher keeps payload and prints npm install -g @ran-sh/dsh-crew@<payload>; equal versions print no divergence warning; newer running launcher converges before registry with zero registry-runner calls and retains the prior release."
+    },
+    {
+      "name": "T05 Legacy migration boundary documentation",
+      "status": "PASS",
+      "evidence": "README.md, README.zh.md, and CHANGELOG accurately state immutable <=0.3.3 launchers cannot be retroactively fixed/discover later registry versions and document the supported launcher-refresh then dsh-crew update bootstrap. Distribution regression enforces both primary READMEs."
+    },
+    {
+      "name": "T06 Frozen-lockfile install and focused deterministic matrix",
+      "status": "PASS",
+      "evidence": "pnpm install --frozen-lockfile reported lockfile up to date. Focused npx-lifecycle/installer/distribution/setup-cli/setup/dsh-cli-runtime sweep passed 78/78, 0 failures."
+    },
+    {
+      "name": "T07 Full deterministic suite",
+      "status": "PASS",
+      "evidence": "node --test test/*.test.mjs passed 482/482, 0 fail, 0 skipped."
+    },
+    {
+      "name": "T08 Client build and generated drift restoration",
+      "status": "PASS",
+      "evidence": "pnpm run build:client completed successfully and built lib/client.js (107158 bytes). Generated-only lib/client.js drift was restored; it is absent from the completion diff."
+    },
+    {
+      "name": "T09 npm installation verifiers",
+      "status": "PASS",
+      "evidence": "pnpm run verify:npm-install: NPM_INSTALL_CONTRACT=PASS candidate=0.3.5. Official verifier: DSH_COHORT_AUDIT=PASS official_dsh=0.1.1-rc.2 direct_peers=20 manifests=21 cross_cohort_checks=177 and NPM_INSTALL_CONTRACT=PASS candidate=0.3.5 official_dsh=0.1.1-rc.2:manifest-audit."
+    },
+    {
+      "name": "T10 Pack audit and publication dry-run only",
+      "status": "PASS",
+      "evidence": "npm pack --dry-run --json returned @ran-sh/dsh-crew@0.3.5 with exactly 88 files, zero missing required launcher/runtime/client/setup assets, and zero forbidden task/result/test/node_modules/secret/env/tarball entries. npm publish --dry-run --access public exited 0 and reported + @ran-sh/dsh-crew@0.3.5; no real publication occurred."
+    },
+    {
+      "name": "T11 Real public 0.3.3 to local 0.3.5 Windows migration",
+      "status": "PASS",
+      "evidence": "In fully disposable HOME/USERPROFILE/APPDATA/LOCALAPPDATA/TEMP/npm cache/global prefix: public npm install -g @ran-sh/dsh-crew@0.3.3 passed; dsh-crew install/status established payload 0.3.3 with Harness/Codex/Claude installed. Installing the locally packed 0.3.5 tgz refreshed only the launcher; status reported launcher 0.3.5 > payload 0.3.3 and `Run: dsh-crew update`. Update logged convergence before registry resolution, staged/validated 0.3.5, activated it, and final status showed launcher/payload 0.3.5 with all integrations installed. No source checkout was used by the migration commands."
+    },
+    {
+      "name": "T12 Migration preservation and bounded retention",
+      "status": "PASS",
+      "evidence": "SHA256 of planted config.json and .env sentinels remained identical across migration. Pointer moved from the 0.3.3 release to a new 0.3.5 release, the prior usable 0.3.3 release remained after activation, and total release directories were bounded at 2."
+    },
+    {
+      "name": "T13 Fail-closed and same-version/no-downgrade behavior",
+      "status": "PASS",
+      "evidence": "update --candidate <missing path> exited 1 with CANDIDATE_NOT_FOUND; current-pointer SHA and release count were unchanged, and status still reported payload/integrations healthy. With launcher=payload=0.3.5, normal update resolved public latest=0.3.4, refused downgrade, exited 0, retained the identical pointer and two releases, and kept all integrations healthy."
+    },
+    {
+      "name": "T14 Fresh local 0.3.5 Windows global lifecycle",
+      "status": "PASS",
+      "evidence": "In a separate disposable home/prefix/cache, npm install -g <local 0.3.5 tgz> generated dsh-crew.cmd; install -> status -> update -> status -> uninstall -> status all exited 0. Update did not downgrade to public 0.3.4; final disposable status reported payload and integrations removed."
+    },
+    {
+      "name": "T15 Source-checkout compatibility",
+      "status": "PASS",
+      "evidence": "In a third disposable Windows home, node scripts/setup.mjs install -> status -> uninstall all exited 0; status showed Harness/Codex/Claude installed between install and uninstall. Generated client drift was restored afterward."
+    },
+    {
+      "name": "T16 Public state and final safety cleanup",
+      "status": "PASS",
+      "evidence": "Read-only npm state remained dist-tags.latest=0.3.4 with versions only 0.3.0..0.3.4; @0.3.5 lookup remained 404. Historical tag refs/peeled targets remained unchanged, v0.3.3 remained tagless, and v0.3.5 tag/Release remained absent (Release API 404). Both disposable installations were purged/uninstalled, package prefixes removed, and the exact task temporary root verified absent. Normal real-machine status remained not installed, matching startup. Git diff check passed and completion scope contains only authorized paths."
+    }
+  ],
+  "blockers": [],
+  "result_path": "docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json",
+  "notes": [
+    "The implementation does not claim immutable public 0.3.3 itself is fixed. It establishes the supported boundary: refresh the launcher first, then update the managed payload.",
+    "No npm publish/dist-tag mutation, Git tag creation/movement/deletion, GitHub Release mutation, credential or provider-secret access, official ~/.dsh/web-profile access, package-manager policy change, or unrelated machine-state mutation occurred.",
+    "All real lifecycle operations used task-owned disposable Windows homes, prefixes, caches, and temp directories; cleanup verified the dedicated root absent.",
+    "The real machine began and ended with DSH Crew not installed; this implementation task preserved that pre-existing state."
+  ],
+  "result_validation": {
+    "status": "PASS",
+    "validator": "node .agent-workflow/validator/validate-contract.mjs result docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json --stamp",
+    "validated_at": "2026-08-24T03:33:26Z",
+    "evidence": "Exit 0: VALID RESULT CONTRACT: docs/agent-results/TASK-V035-MIGRATION-RECOVERY-result.json"
+  }
+}
