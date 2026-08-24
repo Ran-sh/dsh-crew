@@ -587,16 +587,16 @@ export function extractPackageTarball(tgzPath, destDir, { runner = spawnSync } =
 
 /**
  * The globally installed launcher intentionally does not self-replace. When
- * it diverges from the freshly activated managed payload, say so explicitly
- * and give the exact refresh command instead of pretending both updated.
+ * the payload is newer, keep it authoritative and give the exact launcher
+ * refresh command. A newer launcher is handled by npxUpdate before this point.
  */
 function noteLauncherDivergence({ log, home = homedir() }) {
   const launcherVersion = readManifest(runningPackageRoot())?.version ?? null;
   let installedVersion = null;
   try { installedVersion = readCurrentPointer({ home }).version ?? null; } catch { installedVersion = null; }
-  if (launcherVersion && installedVersion && launcherVersion !== installedVersion) {
+  if (launcherVersion && installedVersion && compareVersions(installedVersion, launcherVersion) > 0) {
     log('');
-    log(`- note: the global launcher is still ${launcherVersion}; the managed Crew payload is now ${installedVersion}.`);
+    log(`- note: managed payload ${installedVersion} is newer than the global launcher ${launcherVersion}; the payload remains authoritative.`);
     log(`  Refresh the launcher when convenient: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
   }
 }
@@ -705,10 +705,26 @@ export async function npxUpdate({
   runner = spawnSync,
 } = {}) {
   log('DSH Crew updater');
-  // Candidate resolution: explicit path/dir override > legacy sourceRoot >
-  // configured npm registry (@latest). Registry mode is a real update
-  // operation and never downgrades an already-newer managed payload.
-  const resolved = resolveUpdateCandidate({ candidate: candidate ?? sourceRoot, spec, home, log, runner });
+  // Candidate resolution: explicit path/dir override > a newer validated
+  // running launcher > configured npm registry (@latest). This makes the
+  // supported legacy bootstrap (`npm install -g ...@latest`, then `update`)
+  // independent of registry propagation after the launcher refresh.
+  const explicitCandidate = candidate ?? sourceRoot;
+  const initialHealth = currentInstallationHealth({ home });
+  const launcherRoot = runningPackageRoot();
+  const launcherManifest = readManifest(launcherRoot);
+  const launcherCanConverge = explicitCandidate === undefined
+    && initialHealth.pointer?.version
+    && launcherManifest?.name === UPDATE_PACKAGE_NAME
+    && launcherManifest?.version
+    && compareVersions(launcherManifest.version, initialHealth.pointer.version) > 0;
+  let resolved;
+  if (launcherCanConverge) {
+    log(`- newer launcher ${launcherManifest.version}; converging managed payload ${initialHealth.pointer.version} before registry resolution`);
+    resolved = { ok: true, sourceRoot: launcherRoot, version: launcherManifest.version, cleanup: null };
+  } else {
+    resolved = resolveUpdateCandidate({ candidate: explicitCandidate, spec, home, log, runner });
+  }
   if (!resolved.ok) {
     log(`✗ candidate resolution failed (${resolved.code})${resolved.detail ? `: ${resolved.detail}` : ''}`);
     return { ok: false, error: `candidate resolution failed (${resolved.code})` };
@@ -729,8 +745,9 @@ export async function npxUpdate({
       return { ok: true, idempotent: true, version: manifest.version, path: health.pointer.path };
     }
 
-    if (health.installed && health.healthy && compareVersions(manifest.version, health.pointer.version) < 0 && (candidate ?? sourceRoot) === undefined) {
-      log(`- registry latest (${manifest.version}) is not newer than the installed payload (${health.pointer.version}); nothing to update`);
+    if (health.installed && health.healthy && compareVersions(manifest.version, health.pointer.version) < 0) {
+      const source = explicitCandidate === undefined && !launcherCanConverge ? 'registry latest' : 'candidate';
+      log(`- ${source} (${manifest.version}) is not newer than the installed payload (${health.pointer.version}); nothing to update`);
       const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest: readManifest(health.pointer.path), log, installer });
       if (!activated) return { ok: false, error: 'activation failed' };
       return { ok: true, idempotent: true, version: health.pointer.version, path: health.pointer.path };
@@ -845,8 +862,14 @@ export function npxStatus({
   log(`DSH Crew launcher/candidate: ${candidateVersion ?? 'unknown'}`);
   log(`Installed DSH Crew payload: ${installedLine}`);
   if (candidateVersion && installedVersion && candidateVersion !== installedVersion) {
-    log(`- launcher and managed payload differ; the payload is authoritative for runtime behavior.`);
-    log(`  Refresh the launcher with: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
+    const direction = compareVersions(candidateVersion, installedVersion);
+    if (direction > 0) {
+      log(`- launcher ${candidateVersion} is newer than the managed payload ${installedVersion}.`);
+      log('  Run: dsh-crew update');
+    } else {
+      log(`- managed payload ${installedVersion} is newer than the launcher ${candidateVersion}; the payload remains authoritative.`);
+      log(`  Refresh the launcher with: npm install -g ${UPDATE_PACKAGE_NAME}@${installedVersion}`);
+    }
   }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile; official web profile ignored)`);
   log(`Codex Desktop integration: ${codex}`);

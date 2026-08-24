@@ -688,8 +688,8 @@ test('update applies an explicit newer candidate directory without a source chec
     assert.equal(JSON.parse(readFileSync(join(after.path, 'package.json'), 'utf8')).version, '9.9.0');
     assert.equal(releaseCount(t.dir), 2, 'prior usable release retained through activation');
     assert.match(logs.join('\n'), /updating managed payload 0\.3\.4-base -> 9\.9\.0/);
-    // The running repo launcher (0.3.4) diverges from the fixture payload → explicit limitation notice.
-    assert.match(logs.join('\n'), /global launcher is still .*; the managed Crew payload is now 9\.9\.0/);
+    // The running repo launcher diverges from the fixture payload → direction-aware refresh notice.
+    assert.match(logs.join('\n'), /managed payload 9\.9\.0 is newer than the global launcher .*; the payload remains authoritative/);
     assert.match(logs.join('\n'), /npm install -g @ran-sh\/dsh-crew@9\.9\.0/);
   } finally { t.cleanup(); }
 });

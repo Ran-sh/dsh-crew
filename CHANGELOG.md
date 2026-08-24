@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.5 — 2026-08-24
+
+### Fixed
+
+- Adds the supported migration recovery for legacy `<=0.3.3` installations: refresh the global launcher first, then run `dsh-crew update`. When the running launcher is newer than the managed payload, its already-installed and validated package becomes the convergence candidate before registry resolution, while preserving staged validation, prior-release retention, config preservation, integration repair, and fail-closed/no-downgrade behavior.
+- Makes launcher/payload divergence guidance direction-aware: a newer launcher directs the user to update the managed payload, a newer payload remains authoritative and prints the exact launcher-refresh command, and equal versions emit no warning.
+
+### Compatibility
+
+- Immutable public `0.3.3` cannot discover later registry versions with its old update implementation. The supported bootstrap boundary is therefore explicit: `npm install -g @ran-sh/dsh-crew@latest`, followed by `dsh-crew update`.
+
 ## 0.3.4 — 2026-08-23
 
 ### Fixed
