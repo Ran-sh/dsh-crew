@@ -105,7 +105,7 @@ test('sidecar supervisor coalesces concurrent starts and launches only the isola
   assert.equal(second.ok, true);
   assert.equal(spawns.length, 1);
   assert.equal(spawns[0].command, process.execPath);
-  assert.deepEqual(spawns[0].args, [runtime, 'web', '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210']);
+  assert.deepEqual(spawns[0].args, [runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210']);
   assert.equal(spawns[0].options.env.DSH_HOME, join(home, '.config', 'dsh-crew', 'harness'));
   assert.equal(spawns[0].options.windowsHide, true);
   assert.equal(spawns[0].options.detached, true);
