@@ -44,6 +44,15 @@ test('primary documentation uses the supported isolated source workflow', () => 
   }
 });
 
+test('primary documentation states the legacy launcher migration boundary', () => {
+  for (const file of ['README.md', 'README.zh.md']) {
+    const doc = read(file);
+    assert.match(doc, /(?:<=|≤)\s*0\.3\.3/);
+    assert.match(doc, /npm install -g @ran-sh\/dsh-crew@latest[\s\S]*dsh-crew update/);
+    assert.match(doc, /cannot (?:be retroactively fixed|discover newer)|无法(?:被追溯修复|发现更新)/i);
+  }
+});
+
 test('translated READMEs do not advertise the upstream npm package as this fork', () => {
   const start = 'npx -y @deepseek-ai/dsh web';
   const translated = readdirSync(ROOT).filter((file) => /^README\..+\.md$/.test(file) && file !== 'README.zh.md');
