@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.7 — 2026-08-24
+
+### Added
+
+- Split the DSH Crew settings surface into nine accessible collapsible modules with compact live summaries, expand/collapse-all controls, persisted disclosure state, and automatic attention for model/provider errors and running jobs.
+
+### Changed
+
+- Rewrote the English and Simplified Chinese READMEs around the shortest supported install, start, configure, use, update, and uninstall path while retaining isolation and legacy-migration safety boundaries.
+
 ## 0.3.6 — 2026-08-24
 
 - Persist required transitive peer dependencies inside Crew-managed payloads, fixing Codex Desktop and Claude Code MCP startup after global installation.

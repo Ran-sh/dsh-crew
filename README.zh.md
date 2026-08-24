@@ -4,71 +4,98 @@
 
 <h1 align="center">DSH Crew</h1>
 
-<p align="center">
-  <strong>让 Codex Desktop 或 Claude Code 做总控，把编码任务分发给隔离运行的 DeepSeek Harness worker 与 reviewer。</strong>
-</p>
+<p align="center"><strong>让 Codex Desktop 或 Claude Code 统一调度隔离运行的 DeepSeek Harness Worker 与 Reviewer。</strong></p>
 
-<p align="center">
-  <a href="./README.md">English</a> · <a href="./README.zh.md"><b>简体中文</b></a>
-</p>
+<p align="center"><a href="./README.md">English</a> · <a href="./README.zh.md"><b>简体中文</b></a></p>
 
-## 它做什么
+## 能做什么
 
-DSH Crew 在你的编码宿主和 DeepSeek Harness 之间增加一层轻量编排：
-
-- **worker** — 实现、修复、测试、搜索、分析；
-- **reviewer** — 独立审查 worker 的结果并给出结论；
-- **模型策略** — 每个角色独立解析 provider / model 优先级，并可按证据升级；
-- **隔离执行** — 编码 worker 默认运行在临时 git worktree；
-- **实时任务** — Hub 可查看进度、结果、取消、路由轨迹和 readiness 信息。
-
-```text
-Codex Desktop / Claude Code
-            │
-            ▼
-         DSH Crew
-       ┌────┴────┐
-       │         │
-    worker    reviewer
-       │         │
-       └────┬────┘
-            ▼
-     DeepSeek Harness
-```
+- `worker`：实现、修复、测试和仓库检查。
+- `reviewer`：使用独立模型顺序进行只读审查。
+- 为两个角色分别设置 Provider / Model 优先级。
+- 默认使用临时 Git worktree，不直接修改主工作区。
+- 在 DeepSeek Harness 中查看设置、进度和结果。
 
 ## 安装
 
-需要：**Node.js**（编码 worker 隔离需要 **Git**）。
-
-推荐安装稳定的包管理器全局启动器，并用它管理 DSH Crew：
+需要 Node.js；worktree 隔离还需要 Git。
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
 ```
 
-后续管理使用同一 CLI：
+请使用全局启动器。对于受 npm/cli#9870 影响的 npm 版本，临时 `npx` 不是受支持的安装方式。
+
+## 启动 Harness
+
+Windows PowerShell：
+
+```powershell
+$env:DSH_HOME = "$HOME\.config\dsh-crew\harness"
+& "$env:DSH_HOME\runtime\node_modules\.bin\dsh.cmd" --profile dsh-crew --port 3210
+```
+
+macOS / Linux：
+
+```bash
+DSH_HOME="$HOME/.config/dsh-crew/harness" \
+  "$HOME/.config/dsh-crew/harness/runtime/node_modules/.bin/dsh" \
+  --profile dsh-crew --port 3210
+```
+
+打开 <http://127.0.0.1:3210>，进入 **Settings → DSH Crew**。
+
+## 配置
+
+1. 安装 Codex 和/或 Claude Code 集成。
+2. 点击“刷新 Harness 模型”。
+3. 分别排列 Flash 与 Pro 的模型调用顺序。
+4. Worker 保持 Auto 即可自动委派；Reviewer 建议默认 Manual，需要自动复审时再开启。
+5. 编码任务建议使用 `worktree` 隔离。
+
+设置页已按模块折叠；关闭后仍会显示当前状态和第一优先模型。
+
+## 使用
+
+直接告诉编码宿主：
+
+```text
+使用 ds-worker 实现这个改动并运行测试。
+使用 ds-reviewer 审查结果。
+```
+
+旧的 `ds-flash`、`ds-pro` 别名仍兼容，但新工作流建议使用 `ds-worker`、`ds-reviewer`。
+
+## 检查、更新、卸载
 
 ```bash
 dsh-crew status
 dsh-crew update
-dsh-crew uninstall        # 加 --purge 才会同时删除配置/备份
+dsh-crew uninstall
 ```
 
-全局安装的包只是启动器/管理器；真正的 Crew 运行时/插件载荷会先持久化到 Crew 自有状态（`~/.config/dsh-crew/app`）再注册，运行时行为不依赖 npm 缓存路径。
+普通卸载会保留配置和备份；只有确实要一起删除时才加 `--purge`。
 
-> 已知兼容性问题：部分 npm 版本下，临时 `npx @ran-sh/dsh-crew …` 执行不可靠（npm/cli#9870：npx 缓存中的 bin 未加入子进程 PATH）。在该上游修复可用之前，请使用上面的全局启动器方式。
+对于 `<= 0.3.3` 的旧启动器，旧 updater 无法发现更新版本，也无法被追溯修复。先刷新启动器，再更新托管载荷：
 
-托管载荷的更新无需克隆或构建。启动器与载荷版本相同时，`dsh-crew update` 会从你配置的 npm registry 解析最新允许版本（或用 `--candidate <path>` 显式指定）；当前启动器较新时，会优先用这个已校验的启动器包收敛旧载荷。所有路径都会先暂存、校验，再切换。托管载荷较新时绝不降级，CLI 会打印刷新启动器的准确命令。
+```bash
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew update
+```
 
-> 旧版 `<= 0.3.3` 的迁移边界：这些不可变的旧启动器无法发现更新的 registry 版本，其旧 update 行为无法被追溯修复。受支持的迁移方式是先刷新启动器，再收敛托管载荷；无需源码检出：
->
-> ```bash
-> npm install -g @ran-sh/dsh-crew@latest
-> dsh-crew update
-> ```
+## 隔离与源码安装
 
-开发者 / 源码安装（备选路径）：
+Crew 使用独立的 Harness home 和 profile：
+
+```text
+~/.config/dsh-crew/harness
+profile: dsh-crew
+```
+
+正常操作不会修改 `~/.dsh`、官方 `web` profile 或官方 Harness 凭据存储。
+
+开发者安装：
 
 ```bash
 git clone https://github.com/Ran-sh/dsh-crew.git
@@ -76,88 +103,11 @@ cd dsh-crew
 node scripts/setup.mjs install
 ```
 
-Windows 源码检出也可以直接运行：
-
-```bat
-install.cmd
-```
-
-DSH Crew 使用自己独立的 Harness home 和 profile：
-
-```text
-~/.config/dsh-crew/harness
-profile: dsh-crew
-```
-
-受支持的 Crew 工具不会修改正常的 `~/.dsh`、官方 `web` profile 或官方 DSH 凭据存储。
-
-## 30 秒上手
-
-1. 正常启动 DeepSeek Harness。
-2. 打开 **Settings → DSH Crew**。
-3. 安装 Codex 集成；Claude Code 集成为可选项。
-4. 需要时刷新 Harness 模型，并设置各角色优先级。
-5. 集成变更后重启编码宿主。
-
-然后直接说：
-
-```text
-Use ds-worker to implement this change.
-Use ds-reviewer to review the implementation.
-```
-
-## 角色与路由
-
-| 角色 | 用途 |
-|---|---|
-| `worker` | 实现、修复、测试、搜索、分析 |
-| `reviewer` | 独立审查与 verdict |
-
-每个角色都有自己的 provider / model 候选顺序。用户显式配置始终优先；只有工作流拿到明确证据时才会自动升级到更强模型。
-
-旧的 `ds-flash` / `ds-pro` 仍保留兼容，但新提示词建议使用 `ds-worker` / `ds-reviewer`。
-
-## 隔离
-
-`execution.isolation` 默认是 `worktree`。
-
-编码 worker 会在目标 revision 上创建临时 git worktree，因此并行 worker 不会写入同一个工作目录。worker 返回可审计的 change candidate，由总控决定接受、拒绝或继续修改；Crew 不会偷偷把改动合进主工作区。
-
-## 更新 / 卸载
-
-托管 Crew 载荷使用 update 原地升级（配置、凭据和备份保留；候选包先暂存校验再切换）：
-
-```bash
-dsh-crew update
-```
-
-卸载托管载荷与集成：
-
-```bash
-dsh-crew uninstall
-```
-
-源码安装的更新方式：
-
-```bash
-git pull --ff-only
-node scripts/setup.mjs install
-```
-
-卸载源码安装：
+开发者卸载：
 
 ```bash
 node scripts/setup.mjs uninstall
 ```
-
-Windows：
-
-```bat
-install.cmd
-uninstall.cmd
-```
-
-`~/.config/dsh-crew` 下的 Crew 配置和备份默认保留。
 
 ## 开发
 
@@ -168,12 +118,7 @@ pnpm run build:client
 pnpm run verify:npm-install
 ```
 
-更多文档：
-
-- [架构路线图](./docs/v0.3-architecture-roadmap.md)
-- [Readiness Matrix](./docs/readiness-matrix.md)
-- [Agent Workflow](./docs/agent-workflow.md)
-- [Changelog](./CHANGELOG.md)
+详细资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [架构](./docs/v0.3-architecture-roadmap.md)
 
 ## License
 

@@ -1,10 +1,10 @@
 {
   "name": "@ran-sh/dsh-crew",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "main": "./src/hub/entry.mjs",
   "bin": {
-    "dsh-crew": "./bin/dsh-crew.mjs"
+    "dsh-crew": "bin/dsh-crew.mjs"
   },
   "description": "DeepSeek Harness plugin: dispatch work to DSH agents from Claude Code / Codex, as native subagents with live progress",
   "dsh": {
