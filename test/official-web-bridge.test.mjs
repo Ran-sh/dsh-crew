@@ -7,6 +7,7 @@ import {
   CREW_BRIDGE_TARGET,
   createCrewSidecarSupervisor,
   isLoopbackAddress,
+  isTrustedLocalRequest,
   proxyCrewRequest,
   registerOfficialWebBridge,
 } from '../src/official-web-bridge.mjs';
@@ -26,6 +27,16 @@ test('bridge is fixed to the loopback Crew backend and accepts loopback clients 
   assert.equal(CREW_BRIDGE_TARGET, 'http://127.0.0.1:3210');
   for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) assert.equal(isLoopbackAddress(address), true);
   for (const address of ['10.0.0.2', '192.168.1.8', undefined]) assert.equal(isLoopbackAddress(address), false);
+});
+
+test('browser requests must use a local Host and a same-origin Origin', () => {
+  const request = (headers = {}, remoteAddress = '127.0.0.1') => ({ socket: { remoteAddress }, headers });
+  assert.equal(isTrustedLocalRequest(request({ host: '127.0.0.1:3080' })), true);
+  assert.equal(isTrustedLocalRequest(request({ host: 'localhost:3080', origin: 'http://localhost:3080' })), true);
+  assert.equal(isTrustedLocalRequest(request({ host: '[::1]:3080', origin: 'http://[::1]:3080' }, '::1')), true);
+  assert.equal(isTrustedLocalRequest(request({ host: 'evil.example:3080' })), false);
+  assert.equal(isTrustedLocalRequest(request({ host: '127.0.0.1:3080', origin: 'https://evil.example' })), false);
+  assert.equal(isTrustedLocalRequest(request({ host: '127.0.0.1:3080', 'sec-fetch-site': 'cross-site' })), false);
 });
 
 test('proxy preserves the Crew path/query/body but strips hop-by-hop request headers', async () => {
@@ -83,6 +94,22 @@ test('proxy rejects non-loopback callers and never leaks backend failure details
   assert.equal(failedRes.status, 503);
   assert.equal(failedRes.body.toString('utf8').includes('SECRET'), false);
   assert.deepEqual(JSON.parse(failedRes.body), { ok: false, code: 'CREW_BACKEND_UNAVAILABLE' });
+});
+
+test('proxy rejects a cross-site browser request before backend startup', async () => {
+  const req = Readable.from([]);
+  Object.assign(req, {
+    method: 'POST',
+    url: `${CREW_BRIDGE_PREFIX}/spawn`,
+    headers: { host: '127.0.0.1:3080', origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' },
+    socket: { remoteAddress: '127.0.0.1' },
+  });
+  const res = responseRecorder();
+  let started = false;
+  await proxyCrewRequest(req, res, { ensureBackend: async () => { started = true; return { ok: true }; } });
+  assert.equal(res.status, 403);
+  assert.equal(started, false);
+  assert.deepEqual(JSON.parse(res.body), { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
 });
 
 test('sidecar supervisor coalesces concurrent starts and launches only the isolated profile', async () => {
