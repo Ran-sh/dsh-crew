@@ -23,7 +23,7 @@ import { crewDshHome, crewProfileDir } from './install/install.mjs';
 
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
 export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
-const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base'];
+const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 const PROFILE_PATCH_TEMPLATE = '[]\n';
 const PROFILE_PNPM_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n';
 
