@@ -59,7 +59,14 @@ dsh-crew uninstall        # 加 --purge 才会同时删除配置/备份
 
 > 已知兼容性问题：部分 npm 版本下，临时 `npx @ran-sh/dsh-crew …` 执行不可靠（npm/cli#9870：npx 缓存中的 bin 未加入子进程 PATH）。在该上游修复可用之前，请使用上面的全局启动器方式。
 
-托管载荷的更新无需克隆或构建：`dsh-crew update` 会从你配置的 npm registry 解析最新允许版本（或用 `--candidate <path>` 显式指定），在 Crew 自有状态下校验后再切换。全局启动器不会自我替换；更新完成后 CLI 会打印刷新启动器的准确命令。
+托管载荷的更新无需克隆或构建。启动器与载荷版本相同时，`dsh-crew update` 会从你配置的 npm registry 解析最新允许版本（或用 `--candidate <path>` 显式指定）；当前启动器较新时，会优先用这个已校验的启动器包收敛旧载荷。所有路径都会先暂存、校验，再切换。托管载荷较新时绝不降级，CLI 会打印刷新启动器的准确命令。
+
+> 旧版 `<= 0.3.3` 的迁移边界：这些不可变的旧启动器无法发现更新的 registry 版本，其旧 update 行为无法被追溯修复。受支持的迁移方式是先刷新启动器，再收敛托管载荷；无需源码检出：
+>
+> ```bash
+> npm install -g @ran-sh/dsh-crew@latest
+> dsh-crew update
+> ```
 
 开发者 / 源码安装（备选路径）：
 

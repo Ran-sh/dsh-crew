@@ -59,7 +59,14 @@ The globally installed package is only the launcher/manager. The actual Crew run
 
 > Known compatibility issue: transient `npx @ran-sh/dsh-crew …` execution is currently unreliable on some npm versions (npm/cli#9870: the npx cache bin is not put on the spawned command PATH). Until that upstream fix reaches your npm, use the global-launcher flow above instead.
 
-An update of the managed payload does not require a clone or rebuild; `dsh-crew update` resolves the newest permitted package from your configured npm registry (or an explicit `--candidate <path>` override), validates it under Crew-owned state, and switches only after validation succeeds. The global launcher intentionally does not self-replace; after an update the CLI prints the exact one-line command to refresh it.
+An update of the managed payload does not require a clone or rebuild. When the launcher and payload versions match, `dsh-crew update` resolves the newest permitted package from your configured npm registry (or an explicit `--candidate <path>` override). When the running launcher is newer, its validated package payload is used first to converge the older managed payload. Every path stages and validates before switching. If the managed payload is newer than the launcher, it is never downgraded and the CLI prints the exact launcher-refresh command.
+
+> Migration boundary for legacy `<= 0.3.3`: those immutable launchers cannot discover newer registry versions, so their old update behavior cannot be retroactively fixed. Refresh the launcher first, then converge the managed payload—no source checkout is required:
+>
+> ```bash
+> npm install -g @ran-sh/dsh-crew@latest
+> dsh-crew update
+> ```
 
 Developer / source setup (alternative path):
 
