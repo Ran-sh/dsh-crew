@@ -82,7 +82,18 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   writeFileSync(join(root, 'cordis.patch.yml'), '[]\n');
   writeFileSync(join(root, 'worker.cordis.yml'), '[]\n');
   writeFileSync(join(root, '.mcp.json'), '{}\n');
-  writeFileSync(join(root, 'src', 'server.mjs'), "import '@ran-fake/sdk';\nimport '@ran-fake/host-peer';\n");
+  writeFileSync(join(root, 'src', 'server.mjs'), [
+    "import '@ran-fake/sdk';",
+    "import '@ran-fake/host-peer';",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    "  const request = JSON.parse(input.trim());",
+    "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { serverInfo: { name: 'dsh-crew' } } }) + '\\n');",
+    "});",
+    '',
+  ].join('\n'));
   writeFileSync(join(root, 'src', 'hub', 'entry.mjs'), 'export const name = \'crew\';\n');
   writeFileSync(join(root, 'lib', 'client.js'), '// client\n');
   writeFileSync(join(root, 'bin', 'dsh-crew.mjs'), "import '../lib/client.js';\n");

@@ -336,12 +336,41 @@ export function stageCandidatePayload({
  * start and answer --help from inside the staged tree alone.
  */
 export function defaultPayloadSmoke(dir, { nodePath = process.execPath, runner = spawnSync } = {}) {
-  const result = runner(nodePath, [join(dir, 'bin', 'dsh-crew.mjs'), '--help'], {
+  const cli = runner(nodePath, [join(dir, 'bin', 'dsh-crew.mjs'), '--help'], {
     encoding: 'utf8', timeout: 120_000, windowsHide: true,
     env: { ...process.env },
   });
-  if (result.status === 0) return { ok: true };
-  return { ok: false, detail: `bin --help exited ${result.status}: ${(result.stderr || result.stdout || '').trim().slice(-300)}` };
+  if (cli.status !== 0) {
+    return { ok: false, detail: `bin --help exited ${cli.status}: ${(cli.stderr || cli.stdout || '').trim().slice(-300)}` };
+  }
+
+  const initialize = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'dsh-crew-payload-smoke', version: '1.0.0' },
+    },
+  };
+  const mcp = runner(nodePath, [join(dir, 'src', 'server.mjs')], {
+    encoding: 'utf8', timeout: 120_000, windowsHide: true,
+    input: JSON.stringify(initialize) + '\n',
+    env: { ...process.env },
+  });
+  if (mcp.status !== 0) {
+    return { ok: false, detail: `MCP initialize exited ${mcp.status}: ${(mcp.stderr || mcp.stdout || '').trim().slice(-300)}` };
+  }
+  let response;
+  try {
+    response = String(mcp.stdout ?? '').split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line)).find((entry) => entry?.id === initialize.id);
+  } catch { /* handled by the fail-closed response check below */ }
+  if (response?.result?.serverInfo?.name !== 'dsh-crew') {
+    return { ok: false, detail: `MCP initialize returned no valid dsh-crew response: ${String(mcp.stdout ?? '').trim().slice(-300)}` };
+  }
+  return { ok: true };
 }
 
 // Keyword boundaries reject identifiers containing the keywords
