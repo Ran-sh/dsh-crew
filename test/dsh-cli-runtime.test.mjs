@@ -144,6 +144,10 @@ test('offline Crew registration is loader-visible and idempotent', () => {
     assert.equal(realpathSync(first.linkPath), realpathSync(root));
     assert.equal(realpathSync(first.resolvedEntry), realpathSync(join(root, 'index.js')));
     const profile = JSON.parse(readFileSync(first.profileManifest, 'utf8'));
+    assert.deepEqual(profile.dsh.profile.bundles.slice(0, 2), [
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+    ]);
     assert.equal(profile.dependencies['@ran-test/dsh-crew'], `link:${root.replace(/\\/g, '/')}`);
     assert.equal(profile.dsh.profile.bundles.filter((name) => name === '@ran-test/dsh-crew').length, 1);
 
