@@ -184,5 +184,5 @@ export function registerOfficialWebBridge(ctx, options = {}) {
 }
 
 export async function apply(ctx) {
-  return registerOfficialWebBridge(ctx);
+  registerOfficialWebBridge(ctx);
 }
