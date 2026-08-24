@@ -139,6 +139,22 @@ test('sidecar supervisor coalesces concurrent starts and launches only the isola
   assert.equal(spawns[0].options.detached, true);
 });
 
+test('sidecar supervisor never duplicates a still-running cold-start process after a timeout', async () => {
+  const spawns = [];
+  const child = { exitCode: null, unref() {} };
+  const supervisor = createCrewSidecarSupervisor({
+    home: 'C:\\Users\\test',
+    exists: () => true,
+    healthCheck: async () => false,
+    spawnImpl: (...args) => { spawns.push(args); return child; },
+    wait: async () => {},
+    maxAttempts: 1,
+  });
+  assert.equal((await supervisor.ensure()).ok, false);
+  assert.equal((await supervisor.ensure()).ok, false);
+  assert.equal(spawns.length, 1);
+});
+
 test('official bridge registers a status endpoint and the Crew API prefix', () => {
   const registrations = [];
   const ctx = {
