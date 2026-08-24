@@ -54,6 +54,8 @@ test('package ships a lightweight official-web bridge instead of loading the ful
   assert.ok(manifest.files.includes('official-web-bridge'));
   assert.equal(bridge.name, '@ran-sh/dsh-crew-web-bridge');
   assert.equal(bridge.main, './entry.mjs');
+  assert.equal(bridge.exports?.['.'], './entry.mjs');
+  assert.equal(bridge.exports?.['./client'], './lib/client.js');
   assert.notEqual(bridge.main, '../src/hub/entry.mjs');
   assert.match(bridgePatch, /@ran-sh\/dsh-crew-web-bridge/);
   assert.match(bridgeClient, /ModuleLoader__\.load\(\{ id: ["']@ran-sh\/dsh-crew-web-bridge["']/);
