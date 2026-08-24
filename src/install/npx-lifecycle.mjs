@@ -1,10 +1,11 @@
-// v0.3.3 npx-managed lifecycle: install / status / update / uninstall.
+// Packaged global-launcher lifecycle: install / status / update / uninstall.
 //
 // Public UX:
-//   npx @ran-sh/dsh-crew@latest install|status|update|uninstall
+//   npm install -g @ran-sh/dsh-crew@latest
+//   dsh-crew install|status|update|uninstall
 //
-// An npx invocation runs from a transient package-manager extraction/cache
-// path. This module therefore persists the already-built package payload into
+// A package-manager launcher may run from a replaceable global/cache path.
+// This module therefore persists the already-built package payload into
 // Crew-owned state BEFORE registering it with the Harness profile, so the
 // registration never depends on the cache, tarball, or temp extraction dir:
 //

@@ -1,4 +1,4 @@
-// v0.3.3 npx-managed lifecycle tests: durable Crew-owned payload persistence,
+// Packaged global-launcher lifecycle tests: durable Crew-owned payload persistence,
 // bin dispatch semantics, read-only status, upgrade-aware/idempotent update,
 // repair cases, and config-preserving uninstall. All filesystem effects stay
 // inside disposable temp homes; Codex/Claude integrations are faked, while the
@@ -573,7 +573,7 @@ test('runningPackageRoot points at the repository checkout during tests', () => 
   assert.equal(CREW_APP_DIRNAME, 'app');
 });
 
-// ---------- v0.3.4 update candidate resolution ----------
+// ---------- update candidate resolution and v0.3.5 migration recovery ----------
 
 test('compareVersions orders dotted numeric versions deterministically', () => {
   assert.equal(compareVersions('0.3.10', '0.3.9'), 1);
