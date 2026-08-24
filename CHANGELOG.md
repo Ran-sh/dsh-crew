@@ -7,6 +7,7 @@
 - Adds `dsh-crew integrate` and `dsh-crew detach`. Install/update automatically repair an enabled bridge; detach remains opted out; uninstall removes the bridge without losing the reinstall intent unless `--purge` is used.
 - Preserves unrelated official `web` profile bundles/dependencies and creates a Crew-owned backup before the first bridge registration. Invalid or missing official profiles fail closed.
 - Repairs fresh Crew profile scaffolding so both `dsh-base` and `dsh-web-app` are present, allowing a newly installed isolated 3210 backend to bind its web server.
+- Raises the MCP TypeScript SDK floor to `1.25.4`, clearing the current high-severity production dependency advisories.
 - Simplifies the English and Chinese README around the supported 3080 UI + isolated 3210 backend workflow, single/multiple model behavior, Codex/Claude usage, and recovery commands.
 
 ## 0.3.7 — 2026-08-24
