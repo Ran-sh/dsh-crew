@@ -558,6 +558,27 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
     || raw.constraints !== undefined || raw.context_refs !== undefined || raw.job_id !== undefined || raw.objective !== undefined;
   let normalized = { ...raw };
   if (advanced) {
+    if (raw.workspace !== undefined && (!raw.workspace || typeof raw.workspace !== 'object' || Array.isArray(raw.workspace))) {
+      return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'workspace must be an object' };
+    }
+    if (raw.constraints !== undefined && (!raw.constraints || typeof raw.constraints !== 'object' || Array.isArray(raw.constraints))) {
+      return { ok: false, code: 'JOB_CONSTRAINTS_INVALID', error: 'constraints must be an object' };
+    }
+    if (raw.workspace?.repo_root !== undefined && typeof raw.workspace.repo_root !== 'string') {
+      return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'workspace repo_root must be a string' };
+    }
+    if (raw.workspace?.worktree !== undefined && !['auto', 'existing', 'none'].includes(raw.workspace.worktree)) {
+      return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'invalid worktree policy' };
+    }
+    if (raw.workspace?.branch !== undefined && (typeof raw.workspace.branch !== 'string' || raw.workspace.branch.trim() === '' || raw.workspace.branch.length > 256)) {
+      return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'invalid workspace branch' };
+    }
+    if (raw.constraints?.timeout_seconds !== undefined && (!Number.isInteger(raw.constraints.timeout_seconds) || raw.constraints.timeout_seconds < 1 || raw.constraints.timeout_seconds > 7200)) {
+      return { ok: false, code: 'JOB_CONSTRAINTS_INVALID', error: 'invalid timeout_seconds' };
+    }
+    if (raw.constraints?.allow_fallback !== undefined && typeof raw.constraints.allow_fallback !== 'boolean') {
+      return { ok: false, code: 'JOB_CONSTRAINTS_INVALID', error: 'allow_fallback must be boolean' };
+    }
     const profileRegistry = dependencies.profileRegistry ?? loadRoleProfiles();
     const workspaceRegistry = dependencies.workspaceRegistry ?? loadWorkspaceContexts();
     if (!profileRegistry.ok) return { ok: false, code: 'PROFILE_FILE_INVALID', error: 'role profile registry is invalid' };

@@ -95,3 +95,18 @@ test('versioned HTTP request resolves profile, workspace, constraints and caller
   assert.equal(r.payload.workspace_branch, 'main');
   assert.match(r.payload.task, /AGENTS\.md, docs\/guide\.md/);
 });
+
+test('versioned HTTP request rejects malformed workspace and constraints', () => {
+  const profiles = { ok: true, profiles: { 'worker-default': {
+    role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true, timeout_seconds: 1800, review_strictness: 'standard',
+  } } };
+  const dependencies = { profileRegistry: profiles, workspaceRegistry: { ok: true, contexts: {} } };
+  for (const payload of [
+    { objective: 'x', workspace: { repo_root: '/repo', worktree: 'unsafe' } },
+    { objective: 'x', workspace: { repo_root: '/repo', branch: '' } },
+    { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { timeout_seconds: -1 } },
+    { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { allow_fallback: 'yes' } },
+  ]) {
+    assert.equal(resolveHubSpawnPayload(payload, () => cfg(), dependencies).ok, false);
+  }
+});
