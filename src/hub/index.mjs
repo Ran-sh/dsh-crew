@@ -243,7 +243,7 @@ export class WorkerRegistry {  constructor(ctx) {
       result: null, error: null, stopReason: null, handle: null, waiters: [],
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       outcome: null,
-      texts: [],
+      lastAssistantText: null,
     };
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
     // only needs the before-state by the time the worker finishes. Non-repos
@@ -274,7 +274,7 @@ export class WorkerRegistry {  constructor(ctx) {
           }
           const text = (event.data?.message?.content ?? [])
             .filter((c) => c?.type === 'text').map((c) => c.text).join('');
-          if (text) job.texts.push(text);
+          if (text) job.lastAssistantText = text;
           break;
         }
         case 'turn/end':
@@ -316,7 +316,7 @@ export class WorkerRegistry {  constructor(ctx) {
       await handle.agent.whenIdle();
       handle.agent.followup(userMessage(job.prompt));
       await handle.agent.whenIdle();
-      job.result = job.texts.at(-1) ?? '';
+      job.result = job.lastAssistantText ?? '';
       job.status = job.stopReason === 'completed' ? 'done' : 'failed';
       if (job.status === 'failed' && !job.error) job.error = `turn ended: ${job.stopReason ?? 'unknown'}`;
       await this.ctx.sessions.flush(handle.agent.session);
