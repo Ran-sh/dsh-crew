@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { startJob, waitJob, cancelJob, listJobs, getJob, jobView } from './jobs.mjs';
 import { hubStatus, hub } from './hub-client.mjs';
 import { hubCompatibilityMessage, resolveHubExecutionMode } from './hub-compatibility.mjs';
-import { RUNTIME_VERSION } from './runtime-identity.mjs';
+import { RUNTIME_VERSION, getHubRuntimeIdentity } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
@@ -24,6 +24,9 @@ import {
 import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
 import { buildReviewTask } from './information-flow.mjs';
 import { projectWorkflowView } from './job-contracts.mjs';
+import { loadRoleProfiles, resolveRoleProfile } from './role-profiles.mjs';
+import { loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences } from './workspace-context.mjs';
+import { buildExtensionContract } from './extension-contract.mjs';
 
 const server = new McpServer({ name: 'dsh-crew', version: RUNTIME_VERSION });
 
@@ -31,6 +34,9 @@ const tierSchema = z.enum(['flash', 'pro']).optional().describe('Legacy worker t
 const roleSchema = z.enum(['worker', 'reviewer']).optional().describe('Dispatch role: worker executes implementation / fixes / tests / search; reviewer independently reviews a completed implementation. A coding request defaults to worker; reviewer runs on explicit request or via the automatic review workflow.');
 const effortSchema = z.enum(['off', 'high', 'max']).optional().describe('Reasoning effort for the worker. Omit to use the session default.');
 const detailSchema = z.enum(['compact', 'full']).default('compact').describe('compact returns the bounded Result Contract; full explicitly includes raw workflow/candidate details for debugging.');
+const profileSchema = z.string().max(64).optional().describe('Versioned Worker/Reviewer profile id; defaults by role.');
+const workspaceIdSchema = z.string().max(64).optional().describe('Workspace Context id from Crew-owned workspaces.json.');
+const contextRefsSchema = z.array(z.string().max(256)).max(32).optional().describe('Additional workspace-relative instruction references; contents are not copied.');
 
 // Session-level configuration. This MCP server process lives exactly as long
 // as one Claude Code / Codex session, so plain memory IS session scope.
@@ -156,6 +162,63 @@ const workflowRuntime = buildMcpWorkflowRuntime({
   attemptTimeoutMs: () => (sessionConfig.default_timeout_seconds ?? 1800) * 1000,
 });
 
+function dispatchError(code, details = {}) {
+  return { ok: false, response: text({ error: details.error ?? code, code, ...details }) };
+}
+
+function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs }) {
+  const globalConfig = currentGlobalConfig();
+  const profileRegistry = loadRoleProfiles();
+  const profileRole = profile ? profileRegistry.profiles?.[profile]?.role : undefined;
+  const requestedRole = role ?? profileRole;
+  const hint = resolveRoleTierHint(requestedRole, legacy_tier ?? tier);
+  if (!hint.ok) return dispatchError(hint.code, { error: hint.error });
+  const effRole = hint.role;
+  const resolvedProfile = resolveRoleProfile(profileRegistry, profile, effRole);
+  if (!resolvedProfile.ok) return dispatchError(resolvedProfile.code, resolvedProfile);
+
+  let effTier;
+  let decision;
+  if (requestedRole === undefined) {
+    decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
+    if (!decision.ok) return { ok: false, response: policyRejection(decision) };
+    effTier = decision.tier;
+  } else {
+    decision = canDispatchRole(globalConfig, effRole, true, sessionConfig);
+    if (!decision.ok) return { ok: false, response: policyRejection(decision) };
+    if (effRole === 'reviewer') effTier = 'pro';
+    else if (legacy_tier !== undefined) effTier = legacy_tier;
+    else if (tier !== undefined) effTier = tier;
+    else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
+  }
+
+  const workDir = cwd ?? process.cwd();
+  const workspace = resolveWorkspaceContext(loadWorkspaceContexts(), { workspace_id, cwd: workDir });
+  if (!workspace.ok) return dispatchError(workspace.code, workspace);
+  const withRefs = addContextReferences(workspace.context, context_refs, { cwd: workDir });
+  if (!withRefs.ok) return dispatchError(withRefs.code);
+  const profileValue = resolvedProfile.profile;
+  return {
+    ok: true,
+    role: effRole,
+    timeout: timeout_seconds ?? profileValue.timeout_seconds ?? sessionConfig.default_timeout_seconds,
+    spec: {
+      role: effRole,
+      delivery: effRole === 'reviewer' ? 'review' : 'coding',
+      model_class_hint: effTier,
+      task: buildWorkspaceTask(task, withRefs.context),
+      cwd: workDir,
+      effort: effort ?? sessionConfig.default_effort,
+      source: ORCHESTRATOR,
+      profile_id: resolvedProfile.profile_id,
+      requested_isolation: profileValue.isolation,
+      allow_fallback: profileValue.fallback,
+      review_strictness: profileValue.review_strictness,
+      workspace_context: withRefs.context,
+    },
+  };
+}
+
 server.registerTool('dsh_run_worker', {
   title: 'Run DSH worker (blocking)',
   description: 'Delegate a task to a DSH (DeepSeek Harness) coding agent and wait for its final result. The worker is a full DSH agent with its own tools and sandbox. Pass role=worker for implementation and role=reviewer for an independent review pass. Disabled roles are refused by the DSH Crew policy; Manual roles only run when explicitly requested. Blocks until the worker finishes.',
@@ -167,51 +230,25 @@ server.registerTool('dsh_run_worker', {
     effort: effortSchema,
     cwd: z.string().optional().describe('Workspace directory for the worker (defaults to current project)'),
     timeout_seconds: z.number().int().positive().max(7200).optional(),
+    profile: profileSchema,
+    workspace_id: workspaceIdSchema,
+    context_refs: contextRefsSchema,
     detail: detailSchema,
   },
-}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, detail }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs, detail }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  const globalConfig = currentGlobalConfig();
-  const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
-  if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
-  const effRole = hint.role;
-  let effTier;
-  let decision;
-  if (role === undefined) {
-    decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
-    if (!decision.ok) return policyRejection(decision);
-    effTier = decision.tier;
-  } else {
-    decision = canDispatchRole(globalConfig, effRole, true, sessionConfig);
-    if (!decision.ok) return policyRejection(decision);
-    if (effRole === 'reviewer') effTier = 'pro';
-    else if (legacy_tier !== undefined) effTier = legacy_tier;
-    else if (tier !== undefined) effTier = tier;
-    else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
-  }
-  const workDir = cwd ?? process.cwd();
-  const e = effort ?? sessionConfig.default_effort;
-  const timeout = timeout_seconds ?? sessionConfig.default_timeout_seconds;
-
-  const spec = {
-    role: effRole,
-    delivery: effRole === 'reviewer' ? 'review' : 'coding',
-    model_class_hint: effTier,
-    task,
-    cwd: workDir,
-    effort: e,
-    source: ORCHESTRATOR,
-  };
-  const wf = workflowRuntime.start(spec);
-  await workflowRuntime.wait(wf.id, timeout * 1000);
+  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs });
+  if (!prepared.ok) return prepared.response;
+  const wf = workflowRuntime.start(prepared.spec);
+  await workflowRuntime.wait(wf.id, prepared.timeout * 1000);
   const view = workflowRuntime.get(wf.id, { withResult: true });
   if (view.status === 'running') {
-    return text({ ...projectWorkflowView(view, { detail }), note: `still running after ${timeout}s; poll with dsh_worker_result`, status: 'running' });
+    return text({ ...projectWorkflowView(view, { detail }), note: `still running after ${prepared.timeout}s; poll with dsh_worker_result`, status: 'running' });
   }
   if (view.phase === 'failed') {
     return text({ ...projectWorkflowView(view, { detail }), note: 'workflow failed — see error / error_code.', status: 'failed' });
   }
-  return text({ ...projectWorkflowView(view, { detail }), note: effRole === 'reviewer' ? 'review complete' : 'workflow complete' });
+  return text({ ...projectWorkflowView(view, { detail }), note: prepared.role === 'reviewer' ? 'review complete' : 'workflow complete' });
 });
 
 server.registerTool('dsh_worker_config', {
@@ -314,6 +351,20 @@ async function buildConfigReport() {
     providerCatalogChecked,
     providerCatalogBody,
   });
+  const roleProfiles = loadRoleProfiles();
+  const extensionContract = buildExtensionContract({
+    config: {
+      ...globalConfig,
+      subagents_enabled: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false,
+      worker_state: globalConfig.worker_state,
+      review_state: globalConfig.review_state,
+      escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
+    },
+    readinessMatrix,
+    workspace: { ok: true, context: null },
+    profiles: roleProfiles,
+    runtime: getHubRuntimeIdentity(),
+  });
   return {
     enabled: sessionConfig.enabled,
     default_tier: sessionConfig.default_tier ?? legacy.default_tier,
@@ -352,6 +403,8 @@ async function buildConfigReport() {
     runtime_controls: runtimeControls,
     activation_boundaries: activationBoundaries,
     readiness_matrix: readinessMatrix,
+    role_profiles: roleProfiles,
+    extension_contract: extensionContract,
     hub_reachable: hubCompatibility.reachable,
     hub_compatible: hubCompatibility.compatible,
     hub_compatibility: hubCompatibility,
@@ -368,39 +421,15 @@ server.registerTool('dsh_spawn_worker', {
     legacy_tier: tierSchema.describe('Legacy model-class hint (flash | pro) — only influences the model class backing a worker role, never the role gate'),
     effort: effortSchema,
     cwd: z.string().optional(),
+    profile: profileSchema,
+    workspace_id: workspaceIdSchema,
+    context_refs: contextRefsSchema,
   },
-}, async ({ task, role, tier, legacy_tier, effort, cwd }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  const globalConfig = currentGlobalConfig();
-  const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
-  if (!hint.ok) return text({ error: hint.error, code: hint.code, note: 'Resolve the conflict on the caller side: pass only role, or only tier.' });
-  const effRole = hint.role;
-  let effTier;
-  let decision;
-  if (role === undefined) {
-    decision = chooseDefaultTier(globalConfig, legacy_tier ?? tier, sessionConfig);
-    if (!decision.ok) return policyRejection(decision);
-    effTier = decision.tier;
-  } else {
-    decision = canDispatchRole(globalConfig, effRole, true, sessionConfig);
-    if (!decision.ok) return policyRejection(decision);
-    if (effRole === 'reviewer') effTier = 'pro';
-    else if (legacy_tier !== undefined) effTier = legacy_tier;
-    else if (tier !== undefined) effTier = tier;
-    else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
-  }
-  const workDir = cwd ?? process.cwd();
-  const e = effort ?? sessionConfig.default_effort;
-  const spec = {
-    role: effRole,
-    delivery: effRole === 'reviewer' ? 'review' : 'coding',
-    model_class_hint: effTier,
-    task,
-    cwd: workDir,
-    effort: e,
-    source: ORCHESTRATOR,
-  };
-  const wf = workflowRuntime.start(spec);
+  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs });
+  if (!prepared.ok) return prepared.response;
+  const wf = workflowRuntime.start(prepared.spec);
   return text({ ...workflowRuntime.get(wf.id), workflow_id: wf.id, note: 'started in background; poll with dsh_worker_status / dsh_worker_result' });
 });
 
@@ -418,24 +447,25 @@ server.registerTool('dsh_worker_result', {
   inputSchema: {
     job_id: z.string(),
     wait_seconds: z.number().int().min(0).max(7200).default(0).describe('0 = return current state immediately'),
+    after_sequence: z.number().int().min(0).default(0).describe('Return canonical events after this cursor for incremental watch.'),
     detail: detailSchema,
   },
-}, async ({ job_id, wait_seconds, detail }) => {
+}, async ({ job_id, wait_seconds, after_sequence, detail }) => {
   if (job_id.startsWith('wf-')) {
     if (wait_seconds > 0) await workflowRuntime.wait(job_id, wait_seconds * 1000);
     const view = workflowRuntime.get(job_id, { withResult: true });
     if (!view) return text({ error: `no such workflow: ${job_id}` });
-    return text(projectWorkflowView(view, { detail }));
+    return text(projectWorkflowView(view, { detail, afterSequence: after_sequence }));
   }
   if (job_id.startsWith('hub-')) {
     const status = await hubStatus();
     if (!status.compatible) return text({ error: hubCompatibilityMessage(status), code: status.code, hub_compatibility: status });
     const view = await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message }));
-    return text(projectWorkflowView(view, { detail }));
+    return text(projectWorkflowView(view, { detail, afterSequence: after_sequence }));
   }
   if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
   const job = await waitJob(job_id, wait_seconds > 0 ? wait_seconds * 1000 : 1);
-  return text(projectWorkflowView(jobView(job, { withResult: true }), { detail }));
+  return text(projectWorkflowView(jobView(job, { withResult: true }), { detail, afterSequence: after_sequence }));
 });
 
 server.registerTool('dsh_worker_cancel', {

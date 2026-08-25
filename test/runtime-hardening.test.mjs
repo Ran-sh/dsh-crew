@@ -354,6 +354,7 @@ gitTest('binary or truncated candidate is marked non-replayable', async (t) => {
 test('server forwards effective model class to both run and spawn workflows', () => {
   const serverPath = fileURLToPath(new URL('../src/server.mjs', import.meta.url));
   const source = readFileSync(serverPath, 'utf8');
-  const matches = source.match(/model_class_hint:\s*effTier/g) ?? [];
-  assert.equal(matches.length, 2);
+  assert.match(source, /model_class_hint:\s*effTier/);
+  const dispatches = source.match(/const prepared = prepareDispatch\(\{ task, role, tier, legacy_tier, effort, cwd/g) ?? [];
+  assert.equal(dispatches.length, 2);
 });

@@ -7,7 +7,7 @@ const runtime = readFileSync(new URL('../src/workflow-runtime.mjs', import.meta.
 
 test('blocking and async MCP requests expose the same profile and workspace fields', () => {
   assert.match(server, /import \{ loadRoleProfiles, resolveRoleProfile \} from '\.\/role-profiles\.mjs'/);
-  assert.match(server, /import \{ loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask \} from '\.\/workspace-context\.mjs'/);
+  assert.match(server, /import \{ loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences \} from '\.\/workspace-context\.mjs'/);
   assert.ok((server.match(/profile: profileSchema/g) ?? []).length >= 2);
   assert.ok((server.match(/workspace_id: workspaceIdSchema/g) ?? []).length >= 2);
   assert.ok((server.match(/context_refs: contextRefsSchema/g) ?? []).length >= 2);

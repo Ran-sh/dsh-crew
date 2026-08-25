@@ -94,3 +94,22 @@ export function buildWorkspaceTask(objective, context) {
   lines.push('Open referenced files in the workspace when needed; do not expect their contents in this hand-off.', '', '[Delegated objective]', task);
   return lines.join('\n');
 }
+
+export function addContextReferences(context, references, { cwd } = {}) {
+  const refs = boundedStrings(references);
+  if (refs === null || refs.some((entry) => !safeReference(entry))) {
+    return { ok: false, code: 'WORKSPACE_CONTEXT_REFS_INVALID' };
+  }
+  if (refs.length === 0) return { ok: true, context };
+  const base = context ?? {
+    workspace_id: null,
+    repo_root: resolve(cwd ?? process.cwd()),
+    default_branch: null,
+    instruction_files: [],
+    validation_hints: [],
+  };
+  return {
+    ok: true,
+    context: { ...base, instruction_files: [...new Set([...base.instruction_files, ...refs])] },
+  };
+}

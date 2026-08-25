@@ -208,7 +208,9 @@ export function buildMcpWorkflowRuntime(deps) {
     const isolation = config.execution?.isolation ?? 'worktree';
     // Reviewer role / explicit review and shared mode never draft a candidate;
     // they run in the requested workspace.
-    if (job.role === 'reviewer' || job.delivery === 'review' || isolation === 'shared') {
+    if (job.role === 'reviewer' || job.delivery === 'review'
+        || job.requested_isolation === 'readonly' || job.requested_isolation === 'shared'
+        || isolation === 'shared') {
       return { ok: true, execution_cwd: job.requested_cwd, isolation: 'shared', base_revision: null, primary_workspace_dirty: false, handle: null };
     }
     // Coding worker under worktree isolation: fail closed when the workspace

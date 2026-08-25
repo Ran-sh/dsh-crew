@@ -164,10 +164,20 @@ export function buildEvidenceEnvelope(view = {}) {
 }
 
 /** Project a rich internal workflow view onto compact or explicit full detail. */
-export function projectWorkflowView(view, { detail = 'compact' } = {}) {
+export function projectWorkflowView(view, { detail = 'compact', afterSequence = 0 } = {}) {
   if (!view || typeof view !== 'object') return view;
   const evidence = buildEvidenceEnvelope(view);
-  if (detail === 'full') return { ...view, detail: 'full', evidence };
+  const allCanonical = Array.isArray(view.canonical_events) ? view.canonical_events : [];
+  const cursor = allCanonical.at(-1)?.sequence ?? view.event_cursor ?? 0;
+  const canonicalEvents = allCanonical.filter((event) => Number(event?.sequence) > afterSequence);
+  const eventProjection = {
+    canonical_events: canonicalEvents,
+    event_cursor: cursor,
+    events_truncated_before_cursor: afterSequence > 0 && canonicalEvents.length > 0
+      ? canonicalEvents[0].sequence !== afterSequence + 1
+      : false,
+  };
+  if (detail === 'full') return { ...view, ...eventProjection, detail: 'full', evidence };
 
   const {
     candidate: _candidate,
@@ -182,6 +192,7 @@ export function projectWorkflowView(view, { detail = 'compact' } = {}) {
   } = view;
   return {
     ...safe,
+    ...eventProjection,
     error: boundedText(view.error, 1000),
     cleanup_warning: boundedText(view.cleanup_warning, 1000),
     detail: 'compact',

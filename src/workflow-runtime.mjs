@@ -177,6 +177,11 @@ export function createWorkflowRuntime(adapters, {
       original_task: spec.task,
       source: spec.source ?? 'api',
       requested_cwd: spec.cwd,
+      requested_isolation: spec.requested_isolation ?? null,
+      profile_id: spec.profile_id ?? null,
+      allow_fallback: spec.allow_fallback !== false,
+      review_strictness: spec.review_strictness ?? null,
+      workspace_context: spec.workspace_context ? { ...spec.workspace_context } : null,
       effort: spec.effort ?? 'max',
       phase: JOB_PHASES.CREATED,
       status: 'running',
@@ -325,7 +330,10 @@ export function createWorkflowRuntime(adapters, {
       for (;;) {
         if (job.cancelling) { cancelWorkflow(job); return; }
         if (attempt > 0) transition(job, JOB_PHASES.RUNNING, `escalated attempt ${attempt}`);
-        const policy = resolveModelPolicy(config, 'worker', { attempt });
+        const resolvedPolicy = resolveModelPolicy(config, 'worker', { attempt });
+        const policy = job.allow_fallback === false
+          ? { ...resolvedPolicy, escalation: { ...resolvedPolicy.escalation, enabled: false } }
+          : resolvedPolicy;
         const attemptId = attemptIdFor(adapters, job.id, attempt === 0 ? '' : String(attempt));
         job.current_attempt_id = attemptId;
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt, escalation_reason: escalationReason });
@@ -563,6 +571,8 @@ export function createWorkflowRuntime(adapters, {
       current_model: job.attempts[job.attempts.length - 1]?.model ?? null,
       model_class_hint: job.model_class_hint,
       source: job.source,
+      profile_id: job.profile_id,
+      workspace_context: job.workspace_context ? { ...job.workspace_context } : null,
       requested_cwd: job.requested_cwd,
       execution_cwd: job.execution_cwd,
       isolation: job.isolation,
@@ -580,7 +590,7 @@ export function createWorkflowRuntime(adapters, {
       decision: job.decision,
       candidate_available: !!job.candidate,
       review_status: job.review ? job.review.status ?? null : null,
-      event_cursor: job.canonical_events.at(-1)?.event_id ?? null,
+      event_cursor: job.canonical_events.at(-1)?.sequence ?? 0,
     };
     if (withResult) {
       v.child_attempts = job.attempts.map((a) => ({
