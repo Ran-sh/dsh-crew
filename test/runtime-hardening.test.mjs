@@ -8,7 +8,14 @@ import { fileURLToPath } from 'node:url';
 
 import { createWorkflowRuntime, normalizeReview } from '../src/workflow-runtime.mjs';
 import { JOB_PHASES, canTransition } from '../src/workflow.mjs';
-import { buildEffectiveRuntimeConfig, resolveAttemptTier } from '../src/mcp-runtime.mjs';
+import { buildEffectiveRuntimeConfig, resolveAttemptTier, hubPollWaitSeconds } from '../src/mcp-runtime.mjs';
+
+test('Hub polling uses short transport-safe waits for long-running agents', () => {
+  assert.equal(hubPollWaitSeconds(1_800_000), 20);
+  assert.equal(hubPollWaitSeconds(20_001), 20);
+  assert.equal(hubPollWaitSeconds(1_001), 2);
+  assert.equal(hubPollWaitSeconds(1), 1);
+});
 import { captureCandidate, inspectRepository } from '../src/workspace-isolation.mjs';
 
 const GOOD = `Done.
