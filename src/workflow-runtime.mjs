@@ -18,6 +18,7 @@ import { resolveModelPolicy, shouldAutoReview, getRoleState } from './policy.mjs
 import { buildOutcome, decideNextStep, JOB_PHASES, canTransition } from './workflow.mjs';
 import { parseDeliveryReport } from './delivery.mjs';
 import { classifyFailure } from './failure-classification.mjs';
+import { createCanonicalJobEvent } from './job-contracts.mjs';
 
 export const WORKFLOW_ERROR_CODES = {
   ISOLATION_UNAVAILABLE: 'ISOLATION_UNAVAILABLE',
@@ -111,6 +112,19 @@ export function createWorkflowRuntime(adapters, {
   const queue = [];
   let active = 0;
   let maxParallelLimit = normalizeMaxParallel(maxParallel);
+  let nestedIdFactory = null;
+
+  function nextWorkflowId() {
+    if (nestedIdFactory) return nestedIdFactory();
+    const generated = idFactory();
+    // A few embedders provide a factory-builder for deterministic tests.
+    // Normalize that legacy shape once while keeping the public id a string.
+    if (typeof generated === 'function') {
+      nestedIdFactory = generated;
+      return nestedIdFactory();
+    }
+    return generated;
+  }
 
   function log(msg) { logger?.debug?.(`workflow: ${msg}`); }
 
@@ -140,10 +154,23 @@ export function createWorkflowRuntime(adapters, {
     log(`${job.id} ${to}`);
   }
 
+  function recordCanonical(job, type, data = {}, attempt = null, at = clock()) {
+    job.canonical_event_sequence += 1;
+    job.canonical_events.push(createCanonicalJobEvent({
+      jobId: job.id,
+      type,
+      sequence: job.canonical_event_sequence,
+      at,
+      role: job.role,
+      attempt,
+      data,
+    }));
+  }
+
   function createJob(spec) {
     const now = clock();
-    return {
-      id: idFactory(),
+    const job = {
+      id: nextWorkflowId(),
       role: spec.role ?? 'worker',
       delivery: spec.delivery === 'review' ? 'review' : 'coding',
       model_class_hint: spec.model_class_hint === 'pro' ? 'pro' : spec.model_class_hint === 'flash' ? 'flash' : null,
@@ -170,12 +197,16 @@ export function createWorkflowRuntime(adapters, {
       retain_workspace: false,
       workspace_retained: false,
       events: [{ at: now, phase: JOB_PHASES.CREATED, type: 'created' }],
+      canonical_events: [],
+      canonical_event_sequence: 0,
       createdAt: now,
       startedAt: now,
       endedAt: null,
       workspaceHandle: null,
       waiters: [],
     };
+    recordCanonical(job, 'job.created', {}, null, now);
+    return job;
   }
 
   function releaseSlot() {
@@ -227,6 +258,10 @@ export function createWorkflowRuntime(adapters, {
     job.error = err?.message ?? String(err);
     job.error_code = err?.code ?? err?.policyCode ?? job.error_code ?? null;
     job.phase = JOB_PHASES.FAILED;
+    recordCanonical(job, 'job.failed', {
+      error_code: job.error_code,
+      message: String(job.error).slice(0, 1000),
+    });
     setTerminal(job);
   }
 
@@ -259,10 +294,7 @@ export function createWorkflowRuntime(adapters, {
       config = adapters.getConfig?.() ?? {};
       const alloc = await adapters.allocateWorkspace?.(job);
       if (alloc && alloc.ok === false) {
-        job.error = alloc.error ?? alloc.reason;
-        job.phase = JOB_PHASES.FAILED;
-        if (alloc.reason) job.error_code = alloc.reason;
-        setTerminal(job);
+        failJob(job, Object.assign(new Error(alloc.error ?? alloc.reason), { code: alloc.reason }));
         return;
       }
       if (alloc && alloc.ok) {
@@ -272,6 +304,10 @@ export function createWorkflowRuntime(adapters, {
         job.base_revision = alloc.base_revision ?? null;
         job.primary_workspace_dirty = alloc.primary_workspace_dirty === true;
       }
+      recordCanonical(job, 'job.started', {
+        isolation: job.isolation,
+        base_revision: job.base_revision,
+      });
       transition(job, JOB_PHASES.RUNNING, 'start');
 
       if (isReviewJob) {
@@ -294,6 +330,10 @@ export function createWorkflowRuntime(adapters, {
         const attemptId = attemptIdFor(adapters, job.id, attempt === 0 ? '' : String(attempt));
         job.current_attempt_id = attemptId;
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt, escalation_reason: escalationReason });
+        recordCanonical(job, 'worker.started', {
+          attempt_id: attemptId,
+          escalation_reason: escalationReason,
+        }, attempt);
         const ar = await adapters.executeAttempt({
           id: attemptId,
           workflowId: job.id,
@@ -314,6 +354,18 @@ export function createWorkflowRuntime(adapters, {
         if (job.cancelling) { cancelWorkflow(job); return; }
         const attemptView = attemptRecord(ar, attempt);
         job.attempts.push(attemptView);
+        recordCanonical(job, 'model.selected', {
+          provider: attemptView.provider,
+          model: attemptView.model,
+          source: attemptView.selection_source,
+          fallback_reason: attemptView.selection_trace?.fallback_reason ?? null,
+        }, attempt);
+        recordCanonical(job, 'worker.completed', {
+          attempt_id: attemptView.id,
+          status: attemptView.status,
+          stop_reason: attemptView.stopReason,
+          error_code: attemptView.error_code,
+        }, attempt);
         if (ar.infra === true) {
           failJob(job, Object.assign(new Error(ar.error ?? 'infrastructure failure'), { code: WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE }));
           return;
@@ -360,6 +412,11 @@ export function createWorkflowRuntime(adapters, {
           return;
         }
         if (decision.step === 'escalate') {
+          recordCanonical(job, 'model.fallback', {
+            reason: decision.reason,
+            from_attempt: attempt,
+            to_attempt: attempt + 1,
+          }, attempt);
           transition(job, JOB_PHASES.ESCALATING, decision.reason);
           escalationReason = decision.reason;
           attempt += 1;
@@ -401,6 +458,7 @@ export function createWorkflowRuntime(adapters, {
     const attemptId = attemptIdFor(adapters, job.id, 'review');
     job.current_attempt_id = attemptId;
     job.events.push({ at: clock(), phase: job.phase, type: 'review/start' });
+    recordCanonical(job, 'review.started', { attempt_id: attemptId }, 0);
     const ar = await adapters.executeAttempt({
       id: attemptId,
       workflowId: job.id,
@@ -420,13 +478,30 @@ export function createWorkflowRuntime(adapters, {
     job.current_attempt_id = null;
     const attemptView = { ...attemptRecord(ar, 0), phase: 'review' };
     job.attempts.push(attemptView);
+    recordCanonical(job, 'model.selected', {
+      provider: attemptView.provider,
+      model: attemptView.model,
+      source: attemptView.selection_source,
+      fallback_reason: attemptView.selection_trace?.fallback_reason ?? null,
+    }, 0);
     if (ar.status === 'failed' && attemptView.error_code) job.error_code = attemptView.error_code;
     const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
-    return normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
+    const review = normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
+    recordCanonical(job, 'review.completed', {
+      attempt_id: attemptView.id,
+      status: review.status,
+      verdict: review.verdict,
+      error_code: attemptView.error_code,
+    }, 0);
+    return review;
   }
 
   function finalize(job) {
     transition(job, JOB_PHASES.COMPLETED, job.review ? 'reviewed' : 'verified');
+    recordCanonical(job, 'job.completed', {
+      reviewed: !!job.review,
+      task_status: job.outcome?.task_status ?? null,
+    });
     setTerminal(job);
   }
 
@@ -464,6 +539,7 @@ export function createWorkflowRuntime(adapters, {
     if (activeAttempt) adapters.cancelAttempt?.(activeAttempt).catch(() => {});
     job.phase = JOB_PHASES.CANCELLED;
     job.status = 'cancelled';
+    recordCanonical(job, 'job.cancelled', { active_attempt_id: activeAttempt ?? null });
     job.endedAt = clock();
     job.current_attempt_id = null;
     for (const w of job.waiters.splice(0)) w();
@@ -505,6 +581,7 @@ export function createWorkflowRuntime(adapters, {
       decision: job.decision,
       candidate_available: !!job.candidate,
       review_status: job.review ? job.review.status ?? null : null,
+      event_cursor: job.canonical_events.at(-1)?.event_id ?? null,
     };
     if (withResult) {
       v.child_attempts = job.attempts.map((a) => ({
@@ -520,6 +597,7 @@ export function createWorkflowRuntime(adapters, {
       v.candidate = job.candidate;
       v.review = job.review;
       v.events = job.events;
+      v.canonical_events = job.canonical_events.map((event) => ({ ...event, data: { ...event.data } }));
     }
     return v;
   }

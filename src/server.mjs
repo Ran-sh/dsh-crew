@@ -22,12 +22,15 @@ import {
   shouldAutoReview,
 } from './policy.mjs';
 import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
+import { buildReviewTask } from './information-flow.mjs';
+import { projectWorkflowView } from './job-contracts.mjs';
 
 const server = new McpServer({ name: 'dsh-crew', version: RUNTIME_VERSION });
 
 const tierSchema = z.enum(['flash', 'pro']).optional().describe('Legacy worker tier (compatibility only): Flash/Pro now act as a model-class hint, not a role. Prefer role=worker / role=reviewer; the backend resolves the actual provider/model from the Model Policy.');
 const roleSchema = z.enum(['worker', 'reviewer']).optional().describe('Dispatch role: worker executes implementation / fixes / tests / search; reviewer independently reviews a completed implementation. A coding request defaults to worker; reviewer runs on explicit request or via the automatic review workflow.');
 const effortSchema = z.enum(['off', 'high', 'max']).optional().describe('Reasoning effort for the worker. Omit to use the session default.');
+const detailSchema = z.enum(['compact', 'full']).default('compact').describe('compact returns the bounded Result Contract; full explicitly includes raw workflow/candidate details for debugging.');
 
 // Session-level configuration. This MCP server process lives exactly as long
 // as one Claude Code / Codex session, so plain memory IS session scope.
@@ -144,29 +147,6 @@ async function resolveMode() {
   return decision.mode;
 }
 
-/** Reviewer prompt built only from structured outcome + sanitized candidate. */
-function buildReviewTask(task, view) {
-  const parts = [
-    'You are the automatic reviewer of a completed worker implementation. REVIEW ONLY: inspect the candidate and report findings. Do NOT modify any files unless the user explicitly asks for fixes.',
-    '',
-    'Original task:',
-    task,
-  ];
-  const o = view?.outcome;
-  if (o) {
-    parts.push('', 'Worker outcome:');
-    parts.push(`task_status=${o.task_status} tests_status=${o.tests_status ?? 'none'} delivery=${o.delivery?.complete ? 'complete' : 'incomplete'}`);
-  }
-  const c = view?.candidate;
-  if (c) {
-    parts.push('', 'Candidate changed files:', Array.isArray(c.changed_files) && c.changed_files.length ? c.changed_files.join('\n') : '(none)');
-    if (c.base_revision) parts.push(`Base revision: ${c.base_revision}`);
-    if (c.patch) parts.push('', 'Candidate patch (sanitized):', String(c.patch).slice(0, 8000));
-  }
-  parts.push('', 'Report: 1) does the implementation satisfy the task, 2) concrete issues (bugs, style, risks), 3) suggested fixes. End your message with ## Review Findings / ## Evidence / ## Risks / ## Verdict (approved | needs changes | rejected).');
-  return parts.join('\n');
-}
-
 const workflowRuntime = buildMcpWorkflowRuntime({
   getSessionConfig: () => sessionConfig,
   resolveMode,
@@ -187,8 +167,9 @@ server.registerTool('dsh_run_worker', {
     effort: effortSchema,
     cwd: z.string().optional().describe('Workspace directory for the worker (defaults to current project)'),
     timeout_seconds: z.number().int().positive().max(7200).optional(),
+    detail: detailSchema,
   },
-}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, detail }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
   const globalConfig = currentGlobalConfig();
   const hint = resolveRoleTierHint(role, legacy_tier ?? tier);
@@ -225,12 +206,12 @@ server.registerTool('dsh_run_worker', {
   await workflowRuntime.wait(wf.id, timeout * 1000);
   const view = workflowRuntime.get(wf.id, { withResult: true });
   if (view.status === 'running') {
-    return text({ ...view, note: `still running after ${timeout}s; poll with dsh_worker_result`, status: 'running' });
+    return text({ ...projectWorkflowView(view, { detail }), note: `still running after ${timeout}s; poll with dsh_worker_result`, status: 'running' });
   }
   if (view.phase === 'failed') {
-    return text({ ...view, note: 'workflow failed — see error / error_code.', status: 'failed' });
+    return text({ ...projectWorkflowView(view, { detail }), note: 'workflow failed — see error / error_code.', status: 'failed' });
   }
-  return text({ ...view, note: effRole === 'reviewer' ? 'review complete' : 'workflow complete' });
+  return text({ ...projectWorkflowView(view, { detail }), note: effRole === 'reviewer' ? 'review complete' : 'workflow complete' });
 });
 
 server.registerTool('dsh_worker_config', {
@@ -437,22 +418,24 @@ server.registerTool('dsh_worker_result', {
   inputSchema: {
     job_id: z.string(),
     wait_seconds: z.number().int().min(0).max(7200).default(0).describe('0 = return current state immediately'),
+    detail: detailSchema,
   },
-}, async ({ job_id, wait_seconds }) => {
+}, async ({ job_id, wait_seconds, detail }) => {
   if (job_id.startsWith('wf-')) {
     if (wait_seconds > 0) await workflowRuntime.wait(job_id, wait_seconds * 1000);
     const view = workflowRuntime.get(job_id, { withResult: true });
     if (!view) return text({ error: `no such workflow: ${job_id}` });
-    return text(view);
+    return text(projectWorkflowView(view, { detail }));
   }
   if (job_id.startsWith('hub-')) {
     const status = await hubStatus();
     if (!status.compatible) return text({ error: hubCompatibilityMessage(status), code: status.code, hub_compatibility: status });
-    return text(await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message })));
+    const view = await hub.get(job_id, wait_seconds).catch((e) => ({ error: e.message }));
+    return text(projectWorkflowView(view, { detail }));
   }
   if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
   const job = await waitJob(job_id, wait_seconds > 0 ? wait_seconds * 1000 : 1);
-  return text(jobView(job, { withResult: true }));
+  return text(projectWorkflowView(jobView(job, { withResult: true }), { detail }));
 });
 
 server.registerTool('dsh_worker_cancel', {
