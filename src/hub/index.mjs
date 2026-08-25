@@ -297,13 +297,14 @@ export class WorkerRegistry {  constructor(ctx) {
       result: null, error: null, stopReason: null, handle: null, waiters: [],
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       outcome: null,
-      lastAssistantText: null, handle_disposed: false,
+      lastAssistantText: null, handle_dispose_promise: null, disposeHandle: null,
     };
     const disposeJobHandle = async () => {
-      if (!job.handle || job.handle_disposed) return;
-      job.handle_disposed = true;
-      await job.handle.dispose();
+      if (!job.handle) return;
+      job.handle_dispose_promise ??= Promise.resolve().then(() => job.handle.dispose());
+      await job.handle_dispose_promise;
     };
+    job.disposeHandle = disposeJobHandle;
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
     // only needs the before-state by the time the worker finishes. Non-repos
     // degrade to { kind:'no-git' } instead of failing the job.
@@ -391,7 +392,10 @@ export class WorkerRegistry {  constructor(ctx) {
         job.endedAt = new Date().toISOString();
         this.publish();
         for (const waiter of job.waiters.splice(0)) waiter();
-        try { await disposeJobHandle(); } catch {}
+        try { await disposeJobHandle(); } catch (error) {
+          job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+          this.publish();
+        }
       }, timeoutMs);
       job.timeoutHandle.unref?.();
     }
@@ -404,7 +408,7 @@ export class WorkerRegistry {  constructor(ctx) {
         if (job.timeoutHandle) clearTimeout(job.timeoutHandle);
         job.endedAt = new Date().toISOString();
         job.currentTool = null;
-        let handleCleanupWarning = null;
+        let handleCleanupWarning = job.cleanup_warning ?? null;
         try { await disposeJobHandle(); } catch (error) {
           handleCleanupWarning = `agent cleanup failed: ${error?.message ?? String(error)}`;
         }
@@ -486,7 +490,9 @@ export class WorkerRegistry {  constructor(ctx) {
       job.status = 'cancelled';
       job.phase = JOB_PHASES.CANCELLED;
       job.error = 'cancelled by request';
-      try { await job.handle?.dispose(); } catch {}
+      try { await job.disposeHandle?.(); } catch (error) {
+        job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+      }
       this.publish();
     }
     return job;
@@ -494,7 +500,11 @@ export class WorkerRegistry {  constructor(ctx) {
 
   async dispose() {
     for (const job of this.jobs.values()) {
-      if (job.status === 'running') { try { await job.handle?.dispose(); } catch {} }
+      if (job.status === 'running') {
+        try { await job.disposeHandle?.(); } catch (error) {
+          job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+        }
+      }
     }
   }
 }
