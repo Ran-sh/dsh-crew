@@ -64,6 +64,8 @@ test('runtime infrastructure codes remain bounded', () => {
     category: 'runtime',
     reason_code: 'WORKTREE_CREATE_FAILED',
     source_code: 'WORKTREE_CREATE_FAILED',
+    family: 'WORKSPACE',
+    disposition: 'human',
   });
 });
 
@@ -120,7 +122,17 @@ test('clean completed result is none', () => {
     schema_version: 1,
     category: 'none',
     reason_code: 'NONE',
+    family: 'NONE',
+    disposition: 'none',
   });
+});
+
+test('every failure class tells an orchestrator whether to retry, fallback, ask a human, or stop', () => {
+  assert.equal(classifyFailureCode('HUB_UNREACHABLE').disposition, 'retry');
+  assert.equal(classifyFailureCode('MODEL_CATALOG_UNAVAILABLE').disposition, 'fallback');
+  assert.equal(classifyFailureCode('WORKSPACE_CONTEXT_NOT_FOUND').disposition, 'human');
+  assert.equal(classification({ status: 'cancelled' }).disposition, 'terminal');
+  assert.equal(classification({ status: 'failed', outcome: { tests_status: 'FAIL' } }).family, 'JOB');
 });
 
 test('classifier cannot leak arbitrary raw error strings because they are not inputs', () => {
