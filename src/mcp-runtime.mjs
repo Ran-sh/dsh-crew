@@ -25,6 +25,13 @@ const SESSION_CONFIG_KEYS = [
   'flash_state', 'pro_state', 'pro_reviews_flash',
 ];
 
+const HUB_POLL_SLICE_SECONDS = 20;
+
+/** Keep each Hub request below intermediary/MCP transport idle deadlines. */
+export function hubPollWaitSeconds(remainingMs) {
+  return Math.max(1, Math.min(HUB_POLL_SLICE_SECONDS, Math.ceil(remainingMs / 1000)));
+}
+
 /**
  * Merge only defined session overrides onto the live global config before the
  * workflow snapshots its policy. This keeps dsh_worker_config authoritative
@@ -160,7 +167,7 @@ export function buildMcpWorkflowRuntime(deps) {
           try { cancelled = await hub.cancel(spawned.id); } catch {}
           return timedOutAttempt(cancelled, spec, timeoutMs);
         }
-        const waitSeconds = Math.max(1, Math.min(600, Math.ceil(remainingMs / 1000)));
+        const waitSeconds = hubPollWaitSeconds(remainingMs);
         resolved = await hub.get(spawned.id, waitSeconds);
       }
       return attemptFromView(resolved, spec);
