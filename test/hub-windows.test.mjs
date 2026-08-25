@@ -95,3 +95,23 @@ test('Hub timeout publishes terminal state and wakes waiters even when dispose f
   assert.equal(terminal.error_code, 'JOB_TIMEOUT');
   assert.ok(Date.now() - started < 3_000, 'timeout waiter must wake promptly');
 });
+
+test('Hub disposes a completed agent handle before publishing terminal completion', async () => {
+  let disposed = 0;
+  const handle = {
+    agent: {
+      session: {},
+      whenIdle: async () => {},
+      followup() {},
+    },
+    dispose: async () => { disposed += 1; },
+  };
+  const reg = new WorkerRegistry({
+    agents: { create: async () => handle },
+    sessions: { flush: async () => {} },
+    get: (key) => key === 'loader' ? { await: async () => {} } : undefined,
+  });
+  const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/repo' });
+  await reg.wait(job.id, 5_000);
+  assert.equal(disposed, 1, 'completed agents must release cwd handles before worktree cleanup');
+});
