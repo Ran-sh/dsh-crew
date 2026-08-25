@@ -39,6 +39,7 @@ import {
   npxStatus,
   npxUpdate,
   npxUninstall,
+  npxInspect,
   runNpxCli,
   USAGE,
   compareVersions,
@@ -674,12 +675,14 @@ await test('CLI dispatch routes commands and forwards flags', async () => {
     uninstall: async ({ purge, log }) => { routed.push(['uninstall', purge]); log('removed'); return { ok: true }; },
     integrate: async ({ log }) => { routed.push(['integrate']); log('integrated'); return { ok: true }; },
     detach: async ({ log }) => { routed.push(['detach']); log('detached'); return { ok: true }; },
+    inspect: async ({ log }) => { routed.push(['inspect']); log('{"kind":"dsh-crew-extension"}'); return { ok: true }; },
   };
   assert.equal((await cli(['status'], { commands })).out, 'status');
   assert.equal((await cli(['update'], { commands })).out, 'updated');
   assert.equal((await cli(['install'], { commands })).out, 'installed');
   assert.equal((await cli(['integrate'], { commands })).out, 'integrated');
   assert.equal((await cli(['detach'], { commands })).out, 'detached');
+  assert.match((await cli(['inspect'], { commands })).out, /dsh-crew-extension/);
   const purged = await cli(['uninstall', '--purge'], { commands });
   assert.equal(purged.code, 0);
   assert.deepEqual(routed.at(-1), ['uninstall', true]);
@@ -688,6 +691,20 @@ await test('CLI dispatch routes commands and forwards flags', async () => {
   const throwing = await cli(['status'], { commands: { status: async () => { throw new Error('boom'); } } });
   assert.equal(throwing.code, 1);
   assert.match(throwing.err, /boom/);
+});
+
+test('inspect prints the machine-readable extension contract from the isolated Hub', async () => {
+  const lines = [];
+  const result = await npxInspect({
+    log: (line) => lines.push(line),
+    fetchImpl: async (url) => ({
+      ok: true,
+      json: async () => ({ ok: true, extension: { schema_version: 1, kind: 'dsh-crew-extension', source: url } }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.match(lines.join('\n'), /"kind": "dsh-crew-extension"/);
+  assert.match(lines.join('\n'), /127\.0\.0\.1:3210/);
 });
 
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
