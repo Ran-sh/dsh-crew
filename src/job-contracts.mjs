@@ -87,11 +87,16 @@ function compactSelectionTrace(attempts) {
   if (!Array.isArray(attempts)) return [];
   return attempts.slice(0, 16).map((attempt) => {
     const trace = attempt?.selection_trace ?? {};
-    const selected = trace.selected ?? (
+    const rawSelected = trace.selected ?? (
       attempt?.provider || attempt?.model
         ? { provider: attempt?.provider ?? null, model: attempt?.model ?? null, source: attempt?.selection_source ?? null }
         : null
     );
+    const selected = rawSelected ? {
+      provider: rawSelected.provider ?? null,
+      model: rawSelected.model ?? null,
+      source: rawSelected.source ?? null,
+    } : null;
     const candidates = Array.isArray(trace.ordered_candidates)
       ? trace.ordered_candidates.slice(0, 32).map((candidate) => ({
         model: candidate?.model ?? null,
