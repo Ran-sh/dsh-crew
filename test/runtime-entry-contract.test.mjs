@@ -12,7 +12,7 @@ test('package root loads the v0.3 Hub entry wrapper', () => {
 
 test('MCP server uses shared runtime identity rather than a hard-coded generation', () => {
   const source = readFileSync(new URL('../src/server.mjs', import.meta.url), 'utf8');
-  assert.match(source, /import\s+\{\s*RUNTIME_VERSION\s*\}\s+from\s+'\.\/runtime-identity\.mjs'/);
+  assert.match(source, /import\s+\{\s*RUNTIME_VERSION(?:,\s*getHubRuntimeIdentity)?\s*\}\s+from\s+'\.\/runtime-identity\.mjs'/);
   assert.match(source, /new McpServer\(\{\s*name:\s*'dsh-crew',\s*version:\s*RUNTIME_VERSION\s*\}\)/);
   assert.doesNotMatch(source, /version:\s*'0\.2\.0'/);
 });

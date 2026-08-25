@@ -11,7 +11,8 @@ test('MCP dispatch gates read canonical global config per request instead of fre
   assert.match(serverSource, /const currentGlobalConfig = \(\) => normalizeGlobalConfig\(readGlobalConfig\(\)\);/);
   assert.doesNotMatch(serverSource, /const globalConfig = normalizeGlobalConfig\(readGlobalConfig\(\)\);/);
   const liveReads = serverSource.match(/const globalConfig = currentGlobalConfig\(\);/g) ?? [];
-  assert.ok(liveReads.length >= 3, `expected run, config-report and spawn live reads; found ${liveReads.length}`);
+  assert.ok(liveReads.length >= 2, `expected shared per-dispatch preparation and config-report live reads; found ${liveReads.length}`);
+  assert.equal((serverSource.match(/const prepared = prepareDispatch\(/g) ?? []).length, 2, 'run and spawn must both invoke live preparation');
 });
 
 test('dsh_worker_config surfaces activation boundaries and the actual runtime gate state', () => {
