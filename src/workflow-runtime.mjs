@@ -260,7 +260,6 @@ export function createWorkflowRuntime(adapters, {
     job.phase = JOB_PHASES.FAILED;
     recordCanonical(job, 'job.failed', {
       error_code: job.error_code,
-      message: String(job.error).slice(0, 1000),
     });
     setTerminal(job);
   }
