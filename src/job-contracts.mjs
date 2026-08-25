@@ -210,6 +210,8 @@ export function projectWorkflowView(view, { detail = 'compact', afterSequence = 
     review: _review,
     events: _legacyEvents,
     child_attempts: _childAttempts,
+    selection_trace: _rawSelectionTrace,
+    selection_source: _rawSelectionSource,
     result: _rawResult,
     workspace_diff: _workspaceDiff,
     reasonDetail: _reasonDetail,
