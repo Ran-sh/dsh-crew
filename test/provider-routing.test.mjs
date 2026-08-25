@@ -244,3 +244,36 @@ test('caller cannot route around the provider policy (request provider is ignore
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(created[0].agentOptions.provider, 'deepseek-official', 'provider must come from config+DSH, not the caller');
 });
+
+test('Hub keeps only the latest assistant message instead of accumulating agent prose', async () => {
+  const handlers = new Map();
+  const agentCtx = {
+    on: (name, handler) => { handlers.set(name, handler); },
+  };
+  const reg = makeRegistry({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }, 'deepseek-official');
+  reg.ctx.agents = {
+    create: async (opts) => {
+      await opts.setup(agentCtx);
+      return {
+        agent: {
+          whenIdle: async () => {},
+          followup: async () => {
+            const emit = handlers.get('session/event');
+            emit?.({}, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'intermediate prose' }] } } });
+            emit?.({}, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'final delivery report' }] } } });
+            emit?.({}, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+          },
+        },
+        session: {},
+      };
+    },
+  };
+  reg.ctx.sessions = { flush: async () => {} };
+
+  const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await job.promise;
+
+  assert.equal(job.result, 'final delivery report');
+  assert.equal(job.lastAssistantText, 'final delivery report');
+  assert.equal(job.texts, undefined);
+});
