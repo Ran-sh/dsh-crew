@@ -174,6 +174,7 @@ export function projectWorkflowView(view, { detail = 'compact' } = {}) {
     outcome: _outcome,
     review: _review,
     events: _legacyEvents,
+    child_attempts: _childAttempts,
     result: _rawResult,
     workspace_diff: _workspaceDiff,
     reasonDetail: _reasonDetail,
@@ -182,6 +183,7 @@ export function projectWorkflowView(view, { detail = 'compact' } = {}) {
   return {
     ...safe,
     error: boundedText(view.error, 1000),
+    cleanup_warning: boundedText(view.cleanup_warning, 1000),
     detail: 'compact',
     evidence,
   };
