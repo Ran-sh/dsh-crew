@@ -122,13 +122,15 @@ test('direct Hub evidence preserves its top-level model selection trace', () => 
     selection_trace: {
       selected: { provider: 'opencode-muse', model: 'ox-alpha-free', source: 'priority', raw_payload: 'SECRET_PROVIDER_DATA' },
       ordered_candidates: [{ provider: 'opencode-muse', model: 'ox-alpha-free', status: 'selected' }],
+      fallback_reason: { raw_payload: 'SECRET_FALLBACK_DATA' },
+      escalation_reason: { raw_payload: 'SECRET_ESCALATION_DATA' },
     },
     outcome: { execution_status: 'completed', task_status: 'success', delivery: { complete: true } },
   });
   assert.equal(evidence.selection_trace.length, 1);
   assert.equal(evidence.selection_trace[0].selected_model, 'ox-alpha-free');
   assert.equal(evidence.selection_trace[0].decision_reason, 'priority');
-  assert.doesNotMatch(JSON.stringify(evidence), /SECRET_PROVIDER_DATA|raw_payload/);
+  assert.doesNotMatch(JSON.stringify(evidence), /SECRET_(?:PROVIDER|FALLBACK|ESCALATION)_DATA|raw_payload/);
 });
 
 test('compact projection is the safe default while full detail stays available explicitly', () => {
