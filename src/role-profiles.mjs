@@ -2,8 +2,8 @@
 // delegation; they are not general Agent personas and never contain prompts or
 // credentials.
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 export const ROLE_PROFILE_SCHEMA_VERSION = 1;
@@ -54,6 +54,10 @@ export function loadRoleProfiles({ home = homedir(), file = roleProfilesFile({ h
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch {
     return { schema_version: ROLE_PROFILE_SCHEMA_VERSION, ok: true, source: 'defaults', profiles: { ...DEFAULT_ROLE_PROFILES }, errors: [] };
   }
+  return parseRoleProfiles(raw);
+}
+
+function parseRoleProfiles(raw) {
   const errors = [];
   const profiles = { ...DEFAULT_ROLE_PROFILES };
   if (raw?.schema_version !== ROLE_PROFILE_SCHEMA_VERSION || !raw.profiles || typeof raw.profiles !== 'object' || Array.isArray(raw.profiles)) {
@@ -61,7 +65,10 @@ export function loadRoleProfiles({ home = homedir(), file = roleProfilesFile({ h
   }
   for (const [id, value] of Object.entries(raw.profiles)) {
     if (id in DEFAULT_ROLE_PROFILES) {
-      errors.push({ code: 'PROFILE_DEFAULT_RESERVED', profile_id: id });
+      const normalized = normalizeProfile(id, value);
+      if (!normalized || JSON.stringify(normalized) !== JSON.stringify(DEFAULT_ROLE_PROFILES[id])) {
+        errors.push({ code: 'PROFILE_DEFAULT_RESERVED', profile_id: id });
+      }
       continue;
     }
     const profile = normalizeProfile(id, value);
@@ -69,6 +76,23 @@ export function loadRoleProfiles({ home = homedir(), file = roleProfilesFile({ h
     else profiles[id] = profile;
   }
   return { schema_version: ROLE_PROFILE_SCHEMA_VERSION, ok: errors.length === 0, source: 'file', profiles, errors: errors.slice(0, 32) };
+}
+
+export function saveRoleProfiles(document, { home = homedir(), file = roleProfilesFile({ home }) } = {}) {
+  const parsed = parseRoleProfiles(document);
+  if (!parsed.ok) return parsed;
+  const custom = Object.fromEntries(Object.entries(parsed.profiles).filter(([id]) => !(id in DEFAULT_ROLE_PROFILES)));
+  const payload = { schema_version: ROLE_PROFILE_SCHEMA_VERSION, profiles: custom };
+  mkdirSync(dirname(file), { recursive: true });
+  const temp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(temp, file);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    return { ...parsed, ok: false, errors: [{ code: 'PROFILE_FILE_WRITE_FAILED' }], error_code: 'PROFILE_FILE_WRITE_FAILED' };
+  }
+  return { ...parsed, source: 'file' };
 }
 
 export function resolveRoleProfile(registry, profileId, role = 'worker') {

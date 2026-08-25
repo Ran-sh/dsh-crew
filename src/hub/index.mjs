@@ -24,8 +24,8 @@ import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
-import { loadRoleProfiles } from '../role-profiles.mjs';
-import { loadWorkspaceContexts } from '../workspace-context.mjs';
+import { loadRoleProfiles, saveRoleProfiles } from '../role-profiles.mjs';
+import { loadWorkspaceContexts, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
@@ -621,19 +621,27 @@ export async function apply(ctx) {
 
     disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/profiles`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
-        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
-        return sendJson(res, 200, { ok: true, ...loadRoleProfiles() });
+        if (req.method === 'GET') return sendJson(res, 200, { ok: true, ...loadRoleProfiles() });
+        if (req.method === 'POST') {
+          const saved = saveRoleProfiles(await readBody(req));
+          return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+        }
+        return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
       },
     }));
 
     disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/workspaces`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
-        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
-        return sendJson(res, 200, { ok: true, ...loadWorkspaceContexts() });
+        if (req.method === 'GET') return sendJson(res, 200, { ok: true, ...loadWorkspaceContexts() });
+        if (req.method === 'POST') {
+          const saved = saveWorkspaceContexts(await readBody(req));
+          return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+        }
+        return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
       },
     }));
 

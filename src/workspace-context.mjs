@@ -2,9 +2,9 @@
 // file contents and validation output remain in the workspace and are never
 // copied into this registry or across Agent hand-offs.
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export const WORKSPACE_CONTEXT_SCHEMA_VERSION = 1;
 const ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -33,7 +33,7 @@ function normalizeContext(id, raw) {
   const instructionFiles = boundedStrings(raw.instruction_files);
   const validationHints = boundedStrings(raw.validation_hints, { maxItems: 32, maxLength: 512 });
   if (!instructionFiles || !validationHints || instructionFiles.some((entry) => !safeReference(entry))) return null;
-  if (raw.default_branch !== undefined && (typeof raw.default_branch !== 'string' || raw.default_branch.length > 128)) return null;
+  if (raw.default_branch != null && (typeof raw.default_branch !== 'string' || raw.default_branch.length > 128)) return null;
   return {
     workspace_id: id,
     repo_root: resolve(raw.repo_root),
@@ -52,6 +52,10 @@ export function loadWorkspaceContexts({ home = homedir(), file = workspaceContex
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch {
     return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: true, source: 'none', contexts: {}, errors: [] };
   }
+  return parseWorkspaceContexts(raw);
+}
+
+function parseWorkspaceContexts(raw) {
   if (raw?.schema_version !== WORKSPACE_CONTEXT_SCHEMA_VERSION || !raw.workspaces || typeof raw.workspaces !== 'object' || Array.isArray(raw.workspaces)) {
     return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: false, source: 'file', contexts: {}, errors: [{ code: 'WORKSPACE_CONTEXT_FILE_INVALID' }] };
   }
@@ -63,6 +67,22 @@ export function loadWorkspaceContexts({ home = homedir(), file = workspaceContex
     else contexts[id] = context;
   }
   return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: errors.length === 0, source: 'file', contexts, errors: errors.slice(0, 32) };
+}
+
+export function saveWorkspaceContexts(document, { home = homedir(), file = workspaceContextsFile({ home }) } = {}) {
+  const parsed = parseWorkspaceContexts(document);
+  if (!parsed.ok) return parsed;
+  const payload = { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, workspaces: parsed.contexts };
+  mkdirSync(dirname(file), { recursive: true });
+  const temp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    renameSync(temp, file);
+  } catch {
+    rmSync(temp, { force: true });
+    return { ...parsed, ok: false, errors: [{ code: 'WORKSPACE_CONTEXT_FILE_WRITE_FAILED' }], error_code: 'WORKSPACE_CONTEXT_FILE_WRITE_FAILED' };
+  }
+  return parsed;
 }
 
 function contains(root, target) {
