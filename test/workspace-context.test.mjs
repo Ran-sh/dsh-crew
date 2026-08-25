@@ -7,6 +7,7 @@ import {
   loadWorkspaceContexts,
   resolveWorkspaceContext,
   buildWorkspaceTask,
+  saveWorkspaceContexts,
 } from '../src/workspace-context.mjs';
 
 test('workspace registry returns bounded path references without copying file content', () => {
@@ -26,6 +27,21 @@ test('workspace registry returns bounded path references without copying file co
   const task = buildWorkspaceTask('Implement the change.', resolved.context);
   assert.match(task, /Instruction references: AGENTS\.md/);
   assert.doesNotMatch(task, /SECRET-SENTINEL/);
+});
+
+test('workspace context save validates before replacing the registry', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-context-save-'));
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-context-repo-'));
+  assert.equal(saveWorkspaceContexts({
+    schema_version: 1,
+    workspaces: { demo: { repo_root: repo, instruction_files: ['AGENTS.md'], validation_hints: ['node --test'] } },
+  }, { home }).ok, true);
+  assert.equal(loadWorkspaceContexts({ home }).contexts.demo.repo_root, repo);
+  assert.equal(saveWorkspaceContexts({
+    schema_version: 1,
+    workspaces: { bad: { repo_root: 'relative', instruction_files: ['../secret'] } },
+  }, { home }).ok, false);
+  assert.equal(loadWorkspaceContexts({ home }).contexts.demo.repo_root, repo);
 });
 
 test('workspace resolution rejects unknown ids, root mismatches, and escaping references', () => {

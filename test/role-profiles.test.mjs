@@ -7,6 +7,7 @@ import {
   DEFAULT_ROLE_PROFILES,
   loadRoleProfiles,
   resolveRoleProfile,
+  saveRoleProfiles,
 } from '../src/role-profiles.mjs';
 
 test('default Worker and Reviewer profiles preserve current behavior', () => {
@@ -17,6 +18,19 @@ test('default Worker and Reviewer profiles preserve current behavior', () => {
   assert.equal(DEFAULT_ROLE_PROFILES['reviewer-default'].role, 'reviewer');
   assert.equal(DEFAULT_ROLE_PROFILES['reviewer-default'].isolation, 'readonly');
   assert.equal(DEFAULT_ROLE_PROFILES['reviewer-default'].fallback, false);
+});
+
+test('profile save validates before atomically replacing the registry', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-profiles-save-'));
+  const saved = saveRoleProfiles({
+    schema_version: 1,
+    profiles: { 'worker-fast': { role: 'worker', timeout_seconds: 60, fallback: false } },
+  }, { home });
+  assert.equal(saved.ok, true);
+  assert.equal(loadRoleProfiles({ home }).profiles['worker-fast'].timeout_seconds, 60);
+  const rejected = saveRoleProfiles({ schema_version: 1, profiles: { bad: { role: 'root' } } }, { home });
+  assert.equal(rejected.ok, false);
+  assert.equal(loadRoleProfiles({ home }).profiles['worker-fast'].timeout_seconds, 60);
 });
 
 test('profile loader adds valid custom profiles and rejects malformed entries safely', () => {
