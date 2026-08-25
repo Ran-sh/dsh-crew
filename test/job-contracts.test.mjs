@@ -123,3 +123,19 @@ test('compact projection is the safe default while full detail stays available e
   assert.equal(full.candidate.patch, 'SECRET_FULL_PATCH_MUST_NOT_LEAK');
 });
 
+test('legacy Hub results are compacted from workspace_diff without leaking result or patch', () => {
+  const compact = projectWorkflowView({
+    id: 'hub-1', role: 'worker', phase: 'completed', status: 'done',
+    result: 'SECRET_RAW_ASSISTANT_TEXT',
+    outcome: { execution_status: 'completed', task_status: 'success', tests_status: 'PASS', tests: [], delivery: { complete: true } },
+    workspace_diff: {
+      kind: 'git',
+      patch: 'SECRET_LEGACY_PATCH',
+      changes: { modified: ['src/a.mjs'], deleted: ['src/old.mjs'], renamed: [], untracked: ['src/new.mjs'] },
+    },
+  });
+  assert.deepEqual(compact.evidence.changed_files, ['src/a.mjs', 'src/old.mjs', 'src/new.mjs']);
+  assert.equal('result' in compact, false);
+  assert.equal('workspace_diff' in compact, false);
+  assert.doesNotMatch(JSON.stringify(compact), /SECRET_RAW_ASSISTANT_TEXT|SECRET_LEGACY_PATCH/);
+});
