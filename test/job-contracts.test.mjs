@@ -115,6 +115,21 @@ test('evidence envelope is machine-first and excludes raw result and patch text'
   assert.equal('result' in evidence, false);
 });
 
+test('direct Hub evidence preserves its top-level model selection trace', () => {
+  const evidence = buildEvidenceEnvelope({
+    id: 'hub-1', role: 'worker', attempt: 0, status: 'done', phase: 'completed',
+    provider: 'opencode-muse', model: 'ox-alpha-free', selection_source: 'priority',
+    selection_trace: {
+      selected: { provider: 'opencode-muse', model: 'ox-alpha-free', source: 'priority' },
+      ordered_candidates: [{ provider: 'opencode-muse', model: 'ox-alpha-free', status: 'selected' }],
+    },
+    outcome: { execution_status: 'completed', task_status: 'success', delivery: { complete: true } },
+  });
+  assert.equal(evidence.selection_trace.length, 1);
+  assert.equal(evidence.selection_trace[0].selected_model, 'ox-alpha-free');
+  assert.equal(evidence.selection_trace[0].decision_reason, 'priority');
+});
+
 test('compact projection is the safe default while full detail stays available explicitly', () => {
   const compact = projectWorkflowView(fullView);
   assert.equal(compact.detail, 'compact');
