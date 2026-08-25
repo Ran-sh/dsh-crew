@@ -213,6 +213,7 @@ function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_s
       profile_id: resolvedProfile.profile_id,
       requested_isolation: profileValue.isolation,
       allow_fallback: profileValue.fallback,
+      routing: profileValue.routing,
       review_strictness: profileValue.review_strictness,
       workspace_context: withRefs.context,
     },

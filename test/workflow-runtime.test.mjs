@@ -335,6 +335,25 @@ test('automatic reviewer input includes the sanitized candidate', async () => {
   assert.ok(lastView.candidate.changed_files.includes('src/a.mjs'));
 });
 
+test('profile review strictness reaches the reviewer prompt builder', async () => {
+  const a = makeAdapter({ getConfigPatch: { collaboration_mode: 'review-pipeline' } });
+  let options = null;
+  a.buildReviewTask = (task, view, received) => { options = received; return 'review'; };
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', review_strictness: 'strict' });
+  await rt.wait(job.id, 2000);
+  assert.equal(options?.strictness, 'strict');
+});
+
+test('stable profile routing disables adaptive reordering for the attempt', async () => {
+  const a = makeAdapter({ getConfigPatch: { worker: { model_policy: { adaptive: { enabled: true } } } } });
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', routing: 'stable' });
+  await rt.wait(job.id, 2000);
+  assert.equal(a.attempts[0].policy.adaptive.enabled, false);
+  assert.equal(rt.get(job.id).routing, 'stable');
+});
+
 // ---------- cleanup truthfulness ----------
 
 test('failed worktree cleanup reports workspace_retained with a cleanup warning', async () => {

@@ -625,8 +625,12 @@ export async function apply(ctx) {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         if (req.method === 'GET') return sendJson(res, 200, { ok: true, ...loadRoleProfiles() });
         if (req.method === 'POST') {
-          const saved = saveRoleProfiles(await readBody(req));
-          return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+          try {
+            const saved = saveRoleProfiles(await readBody(req));
+            return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+          } catch {
+            return sendJson(res, 400, { ok: false, error: 'invalid JSON', code: 'PROFILE_FILE_INVALID' });
+          }
         }
         return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
       },
@@ -638,8 +642,12 @@ export async function apply(ctx) {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         if (req.method === 'GET') return sendJson(res, 200, { ok: true, ...loadWorkspaceContexts() });
         if (req.method === 'POST') {
-          const saved = saveWorkspaceContexts(await readBody(req));
-          return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+          try {
+            const saved = saveWorkspaceContexts(await readBody(req));
+            return sendJson(res, saved.ok ? 200 : 400, { ...saved });
+          } catch {
+            return sendJson(res, 400, { ok: false, error: 'invalid JSON', code: 'WORKSPACE_CONTEXT_FILE_INVALID' });
+          }
         }
         return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
       },
@@ -666,12 +674,20 @@ export async function apply(ctx) {
           }
         }
         const profiles = loadRoleProfiles();
+        const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
+        const modelExecution = liveJobs.some((job) => job?.role === 'worker' && job?.status === 'done')
+          ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' }
+          : { id: 'model_execution', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' };
+        const reviewerExecution = liveJobs.some((job) => job?.role === 'reviewer' && job?.status === 'done')
+          ? { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED' }
+          : { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' };
         const contract = buildExtensionContract({
           config,
           readinessMatrix: { rows: [
             { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
             catalogStatus,
-            { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' },
+            modelExecution,
+            reviewerExecution,
           ] },
           workspace: { ok: true, context: null },
           profiles,

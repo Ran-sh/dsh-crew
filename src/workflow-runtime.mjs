@@ -180,6 +180,7 @@ export function createWorkflowRuntime(adapters, {
       requested_isolation: spec.requested_isolation ?? null,
       profile_id: spec.profile_id ?? null,
       allow_fallback: spec.allow_fallback !== false,
+      routing: spec.routing ?? 'auto',
       review_strictness: spec.review_strictness ?? null,
       workspace_context: spec.workspace_context ? { ...spec.workspace_context } : null,
       effort: spec.effort ?? 'max',
@@ -317,7 +318,7 @@ export function createWorkflowRuntime(adapters, {
       if (isReviewJob) {
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
         const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
-        const reviewTask = adapters.buildReviewTask(job.original_task, null);
+        const reviewTask = adapters.buildReviewTask(job.original_task, null, { strictness: job.review_strictness ?? 'standard' });
         const review = await runReviewerAttempt(job, reviewTask, config, before);
         job.review = review;
         if (job.review) transition(job, JOB_PHASES.READY, 'review complete');
@@ -331,9 +332,12 @@ export function createWorkflowRuntime(adapters, {
         if (job.cancelling) { cancelWorkflow(job); return; }
         if (attempt > 0) transition(job, JOB_PHASES.RUNNING, `escalated attempt ${attempt}`);
         const resolvedPolicy = resolveModelPolicy(config, 'worker', { attempt });
-        const policy = job.allow_fallback === false
+        const fallbackPolicy = job.allow_fallback === false
           ? { ...resolvedPolicy, escalation: { ...resolvedPolicy.escalation, enabled: false } }
           : resolvedPolicy;
+        const policy = job.routing === 'stable'
+          ? { ...fallbackPolicy, adaptive: { ...fallbackPolicy.adaptive, enabled: false } }
+          : fallbackPolicy;
         const attemptId = attemptIdFor(adapters, job.id, attempt === 0 ? '' : String(attempt));
         job.current_attempt_id = attemptId;
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/start', attempt, escalation_reason: escalationReason });
@@ -432,7 +436,7 @@ export function createWorkflowRuntime(adapters, {
         if (decision.step === 'review') {
           transition(job, JOB_PHASES.REVIEWING, 'automatic review');
           const before = job.candidate;
-          const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null });
+          const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null }, { strictness: job.review_strictness ?? 'standard' });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
           job.review = review;
           transition(job, JOB_PHASES.READY, decision.reason);
@@ -572,6 +576,7 @@ export function createWorkflowRuntime(adapters, {
       model_class_hint: job.model_class_hint,
       source: job.source,
       profile_id: job.profile_id,
+      routing: job.routing,
       workspace_context: job.workspace_context ? { ...job.workspace_context } : null,
       requested_cwd: job.requested_cwd,
       execution_cwd: job.execution_cwd,

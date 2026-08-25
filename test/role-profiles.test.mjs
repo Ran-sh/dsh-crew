@@ -50,6 +50,17 @@ test('profile loader adds valid custom profiles and rejects malformed entries sa
   assert.ok(loaded.errors.every((entry) => !('raw' in entry)));
 });
 
+test('profile loader distinguishes a missing registry from corrupt JSON', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-profiles-corrupt-'));
+  const dir = join(home, '.config', 'dsh-crew');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'profiles.json'), '{not-json');
+  const loaded = loadRoleProfiles({ home });
+  assert.equal(loaded.ok, false);
+  assert.equal(loaded.source, 'file');
+  assert.equal(loaded.errors[0].code, 'PROFILE_FILE_INVALID');
+});
+
 test('profile resolution fails closed on unknown or role-mismatched profiles', () => {
   const loaded = { profiles: { ...DEFAULT_ROLE_PROFILES } };
   assert.equal(resolveRoleProfile(loaded, undefined, 'worker').profile_id, 'worker-default');

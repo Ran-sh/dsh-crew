@@ -22,7 +22,7 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
 export function buildExtensionContract({ config = {}, readinessMatrix = {}, workspace = null, profiles = null, runtime = null } = {}) {
   const workerEnabled = config.subagents_enabled !== false && config.worker_state !== 'disabled';
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
-  const realModelEvidence = ['deepseek_flash', 'deepseek_pro', 'opencode_go_mimo_qwen']
+  const realModelEvidence = ['model_execution', 'deepseek_flash', 'deepseek_pro', 'opencode_go_mimo_qwen']
     .map((id) => row(readinessMatrix, id))
     .find((entry) => entry?.status === 'PASS');
   const catalogEvidence = row(readinessMatrix, 'provider_catalog');
@@ -39,7 +39,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
       : component('UNAVAILABLE', workspace?.code ?? 'WORKSPACE_NOT_CHECKED'),
     reviewer: reviewerEnabled
       ? readinessFromRow(row(readinessMatrix, 'reviewer_pipeline'))
-      : component('UNAVAILABLE', 'REVIEWER_DISABLED'),
+      : component('DEGRADED', 'REVIEWER_DISABLED'),
   };
   const states = Object.values(components).map((entry) => entry.status);
   const readiness = states.includes('UNAVAILABLE') ? 'UNAVAILABLE' : states.includes('DEGRADED') ? 'DEGRADED' : 'READY';
@@ -57,7 +57,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
       'job.resume': false,
       'result.evidence': true,
       'events.canonical': true,
-      'profiles.roles': !!profiles,
+      'profiles.roles': profiles?.ok === true,
       'workspace.context': true,
     },
     readiness: { status: readiness, components },

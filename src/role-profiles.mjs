@@ -2,7 +2,7 @@
 // delegation; they are not general Agent personas and never contain prompts or
 // credentials.
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -50,9 +50,12 @@ export function roleProfilesFile({ home = homedir() } = {}) {
 }
 
 export function loadRoleProfiles({ home = homedir(), file = roleProfilesFile({ home }) } = {}) {
+  if (!existsSync(file)) {
+    return { schema_version: ROLE_PROFILE_SCHEMA_VERSION, ok: true, source: 'defaults', profiles: { ...DEFAULT_ROLE_PROFILES }, errors: [] };
+  }
   let raw;
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch {
-    return { schema_version: ROLE_PROFILE_SCHEMA_VERSION, ok: true, source: 'defaults', profiles: { ...DEFAULT_ROLE_PROFILES }, errors: [] };
+    return { schema_version: ROLE_PROFILE_SCHEMA_VERSION, ok: false, source: 'file', profiles: { ...DEFAULT_ROLE_PROFILES }, errors: [{ code: 'PROFILE_FILE_INVALID' }] };
   }
   return parseRoleProfiles(raw);
 }

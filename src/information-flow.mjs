@@ -27,13 +27,16 @@ function tests(values) {
 }
 
 /** Build the automatic-review context capsule. */
-export function buildReviewTask(task, view = {}) {
+export function buildReviewTask(task, view = {}, { strictness = 'standard' } = {}) {
   const outcome = view?.outcome ?? {};
   const candidate = view?.candidate ?? {};
   const changedFiles = Array.isArray(candidate.changed_files) ? candidate.changed_files : [];
   const parts = [
     'You are the automatic reviewer of a completed worker implementation.',
     'REVIEW ONLY: inspect the candidate and report findings. Do not modify files.',
+    ...(strictness === 'strict' ? [
+      'STRICT REVIEW: fail closed. Approve only when direct code and test evidence supports every material claim; treat missing evidence as needs changes.',
+    ] : []),
     '',
     'Objective:',
     clip(task, 4000),
@@ -62,4 +65,3 @@ export function buildReviewTask(task, view = {}) {
   ];
   return parts.join('\n');
 }
-

@@ -16,6 +16,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'events'/);
   assert.match(hubSource, /saveRoleProfiles\(await readBody\(req\)\)/);
   assert.match(hubSource, /saveWorkspaceContexts\(await readBody\(req\)\)/);
+  assert.match(hubSource, /id: 'model_execution'.*REAL_EXECUTION_PASSED/s);
+  assert.match(hubSource, /id: 'reviewer_pipeline'.*REAL_REVIEW_PASSED/s);
 });
 
 test('direct Hub jobs project deterministic canonical events without raw result text', () => {

@@ -31,3 +31,17 @@ test('missing readiness evidence never becomes READY', () => {
   assert.equal(contract.readiness.components.harness.status, 'UNAVAILABLE');
   assert.equal(contract.readiness.components.model.status, 'UNAVAILABLE');
 });
+
+test('real generic execution evidence proves the selected model and disabled optional review only degrades', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
+    ] },
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'READY');
+  assert.equal(contract.readiness.components.reviewer.status, 'DEGRADED');
+  assert.equal(contract.readiness.status, 'DEGRADED');
+});

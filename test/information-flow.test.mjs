@@ -49,3 +49,8 @@ test('automatic review bounds oversized objectives and evidence lists', () => {
   assert.doesNotMatch(prompt, /src\/file-499\.mjs/);
 });
 
+test('strict review profile fails closed on missing evidence', () => {
+  const prompt = buildReviewTask('Inspect the release', {}, { strictness: 'strict' });
+  assert.match(prompt, /strict review/i);
+  assert.match(prompt, /missing evidence/i);
+});

@@ -55,3 +55,14 @@ test('workspace resolution rejects unknown ids, root mismatches, and escaping re
   writeFileSync(join(dir, 'workspaces.json'), JSON.stringify({ schema_version: 1, workspaces: { bad: { repo_root: repo, instruction_files: ['../secret'] } } }));
   assert.equal(loadWorkspaceContexts({ home: badHome }).contexts.bad, undefined);
 });
+
+test('workspace loader distinguishes a missing registry from corrupt JSON', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-context-corrupt-'));
+  const dir = join(home, '.config', 'dsh-crew');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'workspaces.json'), '{not-json');
+  const loaded = loadWorkspaceContexts({ home });
+  assert.equal(loaded.ok, false);
+  assert.equal(loaded.source, 'file');
+  assert.equal(loaded.errors[0].code, 'WORKSPACE_CONTEXT_FILE_INVALID');
+});

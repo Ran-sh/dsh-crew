@@ -2,7 +2,7 @@
 // file contents and validation output remain in the workspace and are never
 // copied into this registry or across Agent hand-offs.
 
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -48,9 +48,12 @@ export function workspaceContextsFile({ home = homedir() } = {}) {
 }
 
 export function loadWorkspaceContexts({ home = homedir(), file = workspaceContextsFile({ home }) } = {}) {
+  if (!existsSync(file)) {
+    return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: true, source: 'none', contexts: {}, errors: [] };
+  }
   let raw;
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch {
-    return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: true, source: 'none', contexts: {}, errors: [] };
+    return { schema_version: WORKSPACE_CONTEXT_SCHEMA_VERSION, ok: false, source: 'file', contexts: {}, errors: [{ code: 'WORKSPACE_CONTEXT_FILE_INVALID' }] };
   }
   return parseWorkspaceContexts(raw);
 }
