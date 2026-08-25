@@ -297,7 +297,12 @@ export class WorkerRegistry {  constructor(ctx) {
       result: null, error: null, stopReason: null, handle: null, waiters: [],
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       outcome: null,
-      lastAssistantText: null,
+      lastAssistantText: null, handle_disposed: false,
+    };
+    const disposeJobHandle = async () => {
+      if (!job.handle || job.handle_disposed) return;
+      job.handle_disposed = true;
+      await job.handle.dispose();
     };
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
     // only needs the before-state by the time the worker finishes. Non-repos
@@ -386,7 +391,7 @@ export class WorkerRegistry {  constructor(ctx) {
         job.endedAt = new Date().toISOString();
         this.publish();
         for (const waiter of job.waiters.splice(0)) waiter();
-        try { await job.handle?.dispose(); } catch {}
+        try { await disposeJobHandle(); } catch {}
       }, timeoutMs);
       job.timeoutHandle.unref?.();
     }
@@ -399,6 +404,10 @@ export class WorkerRegistry {  constructor(ctx) {
         if (job.timeoutHandle) clearTimeout(job.timeoutHandle);
         job.endedAt = new Date().toISOString();
         job.currentTool = null;
+        let handleCleanupWarning = null;
+        try { await disposeJobHandle(); } catch (error) {
+          handleCleanupWarning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+        }
         // Delivery completeness is separate from execution status: a job can
         // be done yet fail to report Diff/Tests/Risks (or Review sections for
         // an automatic review). Parse whatever final message the worker
@@ -446,7 +455,10 @@ export class WorkerRegistry {  constructor(ctx) {
         if (job.isolatedWorkspace) {
           const cleanup = await cleanupIsolatedWorkspace(job.isolatedWorkspace).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
           job.workspace_retained = cleanup.ok !== true;
-          job.cleanup_warning = cleanup.ok === true ? null : cleanup.error ?? 'worktree cleanup failed';
+          const workspaceCleanupWarning = cleanup.ok === true ? null : cleanup.error ?? 'worktree cleanup failed';
+          job.cleanup_warning = [handleCleanupWarning, workspaceCleanupWarning].filter(Boolean).join('; ') || null;
+        } else {
+          job.cleanup_warning = handleCleanupWarning;
         }
         this.publish();
         for (const w of job.waiters.splice(0)) w();
