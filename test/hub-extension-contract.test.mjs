@@ -36,3 +36,11 @@ test('direct Hub jobs project deterministic canonical events without raw result 
   ]);
   assert.doesNotMatch(JSON.stringify(done), /SECRET RAW RESULT/);
 });
+
+test('direct Reviewer completion carries its normalized verdict in canonical evidence', () => {
+  const events = hubCanonicalEvents({
+    id: 'hub-r', role: 'reviewer', status: 'done', phase: 'completed', startedAt: 1, endedAt: 2,
+    review: { verdict: 'approve' },
+  });
+  assert.equal(events.find((event) => event.type === 'review.completed').data.verdict, 'approve');
+});

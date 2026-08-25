@@ -146,6 +146,10 @@ export class WorkerRegistry {  constructor(ctx) {
       isolation: job.isolation ?? 'shared', workspace_branch: job.workspace_branch ?? null,
       delivery_complete: !!job.delivery_complete,
       workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
+      workspace_retained: job.workspace_retained === true,
+      cleanup_warning: job.cleanup_warning ?? null,
+      profile_id: job.profile_id ?? null,
+      workspace_context: job.workspace_context ?? null,
       event_cursor: hubCanonicalEvents(job).at(-1)?.sequence ?? 0,
     };
     if (withResult) {
@@ -154,6 +158,7 @@ export class WorkerRegistry {  constructor(ctx) {
       v.delivery = job.delivery_metadata ?? null;
       v.delivery_missing = job.delivery_missing ?? [];
       v.outcome = job.outcome ?? null;
+      v.review = job.review ?? null;
       v.workspace_diff = job.workspaceDiff ?? null;
       v.workspace_baseline_dirty = !!job.workspaceDiff?.dirtyBaseline;
       v.canonical_events = hubCanonicalEvents(job);
@@ -173,7 +178,7 @@ export class WorkerRegistry {  constructor(ctx) {
    * `role` (worker | reviewer) records who does the work; `tier` remains the
    * legacy model-class slot. Reviewer-role jobs always use the pro slot.
    */
-  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds }) {
+  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds, profile_id, workspace_context }) {
     // role is only honored when the caller explicitly names it; a legacy
     // tier-only spawn (role === undefined) keeps the exact v0.1 resolution.
     const hasRole = role === 'worker' || role === 'reviewer';
@@ -283,6 +288,7 @@ export class WorkerRegistry {  constructor(ctx) {
       task, source, cwd: executionCwd, requested_cwd: cwd,
       isolation: isolatedWorkspace ? 'worktree' : requested_isolation === 'readonly' ? 'readonly' : 'shared',
       workspace_branch: workspace_branch ?? null, isolatedWorkspace,
+      profile_id: profile_id ?? null, workspace_context: workspace_context ?? null,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
       phase: JOB_PHASES.RUNNING,
       status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
@@ -365,7 +371,7 @@ export class WorkerRegistry {  constructor(ctx) {
       handle.agent.followup(userMessage(job.prompt));
       await handle.agent.whenIdle();
       job.result = job.lastAssistantText ?? '';
-      job.status = job.stopReason === 'completed' ? 'done' : 'failed';
+      if (job.status === 'running') job.status = job.stopReason === 'completed' ? 'done' : 'failed';
       if (job.status === 'failed' && !job.error) job.error = `turn ended: ${job.stopReason ?? 'unknown'}`;
       await this.ctx.sessions.flush(handle.agent.session);
     };
@@ -398,6 +404,20 @@ export class WorkerRegistry {  constructor(ctx) {
         job.delivery_complete = parsed.complete;
         job.delivery_missing = parsed.missing;
         job.delivery_metadata = formatDeliveryMetadata(parsed);
+        if (job.role === 'reviewer') {
+          const verdictText = String(parsed.sections?.Verdict ?? '').trim().toLowerCase();
+          const verdict = /^(approve|approved|pass)\b/.test(verdictText)
+            ? 'approve'
+            : /request.*chang|chang.*request|reject|needs changes/i.test(verdictText)
+              ? 'request_changes'
+              : 'inconclusive';
+          const lines = (value) => String(value ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 40);
+          job.review = {
+            verdict, status: job.status, delivery_complete: parsed.complete === true,
+            findings: lines(parsed.sections?.['Review Findings']),
+            evidence: lines(parsed.sections?.Evidence), risks: lines(parsed.sections?.Risks),
+          };
+        }
         // Canonical structured outcome (shared workflow layer) + terminal phase.
         job.outcome = buildOutcome({
           result: job.result ?? '',
