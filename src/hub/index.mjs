@@ -97,7 +97,7 @@ export function hubCanonicalEvents(job = {}) {
   const atStart = job.startedAt ?? null;
   const atEnd = job.endedAt ?? atStart;
   const definitions = [
-    ['job.created', atStart, {}],
+    ['job.created', atStart, { client_job_id: job.client_job_id ?? null }],
     ['job.started', atStart, {}],
     ['model.selected', atStart, { provider: job.provider ?? null, model: job.model ?? null, source: job.selection_source ?? null }],
     [role === 'reviewer' ? 'review.started' : 'worker.started', atStart, { run_id: job.id }],
@@ -543,9 +543,12 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
     if (raw.job_id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(raw.job_id)) {
       return { ok: false, code: 'JOB_ID_INVALID', error: 'invalid client job id' };
     }
+    const contextTask = buildWorkspaceTask(objective, withRefs.context);
     normalized = {
       ...raw,
-      task: buildWorkspaceTask(objective, withRefs.context),
+      task: profile.review_strictness === 'strict' && requestedRole === 'reviewer'
+        ? `${contextTask}\n\nSTRICT REVIEW: fail closed on missing direct code or test evidence.`
+        : contextTask,
       cwd,
       role: requestedRole,
       client_job_id: raw.job_id ?? null,

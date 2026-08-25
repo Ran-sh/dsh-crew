@@ -60,6 +60,8 @@ MCP callers can request `detail: "full"` on `dsh_run_worker` or
 ```bash
 dsh-crew status       # installation and integration health
 dsh-crew inspect      # machine-readable capabilities and readiness
+dsh-crew jobs list    # machine-readable jobs
+dsh-crew jobs watch <job-id> --after 0
 dsh-crew update       # update and repair enabled integrations
 dsh-crew integrate    # connect official 3080 UI to isolated 3210 Crew
 dsh-crew detach       # remove only the 3080 bridge

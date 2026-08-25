@@ -59,6 +59,8 @@ MCP 调用方如需排障或恢复，可以在 `dsh_run_worker` 或
 ```bash
 dsh-crew status       # 查看安装与集成状态
 dsh-crew inspect      # 输出机器可读的能力与就绪度
+dsh-crew jobs list    # 输出机器可读的任务列表
+dsh-crew jobs watch <job-id> --after 0
 dsh-crew update       # 更新并自动修复已启用的集成
 dsh-crew integrate    # 将官方 3080 界面连接到隔离的 3210 Crew
 dsh-crew detach       # 只移除 3080 桥接

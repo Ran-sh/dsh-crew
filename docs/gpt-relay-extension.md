@@ -28,7 +28,10 @@ not successful authentication or execution.
 Codex and Claude normally call the six MCP tools. `dsh_run_worker` and
 `dsh_spawn_worker` accept the backward-compatible fields plus:
 
+- `job_id`: optional caller id, echoed separately from Crew's internal id.
 - `profile`: a Worker/Reviewer profile id.
+- `workspace`: per-job `repo_root`, `branch`, and `worktree` policy.
+- `constraints`: per-job timeout and fallback override.
 - `workspace_id`: a registered Workspace Context id.
 - `context_refs`: extra workspace-relative instruction references.
 
@@ -36,9 +39,13 @@ Poll `dsh_worker_result` with `after_sequence` to receive only newer canonical
 events. HTTP consumers can use:
 
 ```text
+POST /_dsh/dsh-crew/jobs
 GET /_dsh/dsh-crew/jobs/:id/contract?after=0
 GET /_dsh/dsh-crew/jobs/:id/events?after=0
 ```
+
+CLI consumers use `dsh-crew jobs list|get|watch|cancel|submit`; `submit`
+accepts a versioned JSON Job Request through `--request`.
 
 The compact Contract is the automation surface. Full prose and patches require
 an explicit `detail=full` recovery/debug request.

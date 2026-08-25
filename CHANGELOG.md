@@ -17,6 +17,9 @@
   orchestrators.
 - Classifies failures by stable family and `retry` / `fallback` / `human` /
   `terminal` disposition without parsing provider logs.
+- Aligns MCP and loopback HTTP Job Request fields for caller ids, profiles,
+  workspace branch/worktree policy and request-level constraints; adds real
+  workspace preflight states and `dsh-crew jobs list|get|watch|cancel|submit`.
 
 ## 0.3.8 — 2026-08-24
 

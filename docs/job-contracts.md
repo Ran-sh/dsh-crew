@@ -65,8 +65,10 @@ workflow view and adds the same evidence envelope.
 
 ## Profiles, Workspace Context, and watch
 
-Both blocking and asynchronous MCP dispatch accept optional `profile`,
-`workspace_id`, and `context_refs` fields. Profiles control role-compatible
+Both blocking and asynchronous MCP dispatch accept optional `job_id`, `profile`,
+`workspace`, `constraints`, `workspace_id`, and `context_refs` fields. The
+caller id is echoed as `client_job_id`; it never replaces Crew's internal id.
+Profiles control role-compatible
 routing, isolation, timeout, fallback, and review strictness. Workspace Context
 adds bounded project facts by reference; instruction file contents are opened by
 the Agent in the workspace rather than copied through the hand-off.
@@ -77,6 +79,21 @@ long jobs without replaying the entire event history.
 
 The isolated Hub also exposes `/extension`, `/profiles`, `/workspaces`,
 `/jobs/:id/contract`, and `/jobs/:id/events`. All remain loopback-only.
+
+Per-job precedence is request `constraints` > Profile > session defaults.
+`workspace.branch` pins the isolated base revision; `workspace.worktree` accepts
+`auto`, `existing`, or `none`. Workspace preflight reports `READY`, `CONFLICT`,
+`READ_ONLY`, or `UNAVAILABLE` before dispatch.
+
+The CLI is a JSON projection of the same local HTTP surface:
+
+```text
+dsh-crew jobs list
+dsh-crew jobs get <job-id> --detail compact
+dsh-crew jobs watch <job-id> --after <sequence>
+dsh-crew jobs cancel <job-id>
+dsh-crew jobs submit --request job.json
+```
 
 ## Compatibility boundary
 
