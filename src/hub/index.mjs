@@ -499,7 +499,8 @@ function isLoopbackAddress(address) {
 }
 export function isLoopbackRequest(req) {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return false;
-  const host = (req.headers.host ?? '').split(':')[0].toLowerCase();
+  let host;
+  try { host = new URL(`http://${String(req.headers.host ?? '')}`).hostname.toLowerCase(); } catch { return false; }
   if (!(host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || isIpv4Loopback(host))) return false;
   const fetchSite = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
   if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
@@ -509,7 +510,7 @@ export function isLoopbackRequest(req) {
     let parsed;
     try { parsed = new URL(origin); } catch { return false; }
     const originHost = parsed.hostname.toLowerCase();
-    if (!(originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1' || isIpv4Loopback(originHost))) return false;
+    if (!(originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1' || originHost === '[::1]' || isIpv4Loopback(originHost))) return false;
   }
   return true;
 }

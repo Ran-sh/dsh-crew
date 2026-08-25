@@ -24,6 +24,7 @@ test('Hub mutation surface rejects cross-site browser requests', () => {
   const request = (headers) => ({ socket: { remoteAddress: '127.0.0.1' }, headers });
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210' })), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
+  assert.equal(isLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3210', origin: 'http://[::1]:3080', 'sec-fetch-site': 'same-origin' } }), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
 });
 

@@ -212,11 +212,11 @@ export function buildMcpWorkflowRuntime(deps) {
     if (job.requested_isolation === 'shared' || isolation === 'shared') {
       return { ok: true, execution_cwd: job.requested_cwd, isolation: 'shared', base_revision: null, primary_workspace_dirty: false, handle: null };
     }
-    // Coding worker under worktree isolation: fail closed when the workspace
+    // Isolated roles fail closed when the workspace
     // is not a git repo — never silently fall back to sharing the working tree.
     const repo = await inspectRepository({ cwd: job.requested_cwd });
     if (!repo.ok) {
-      return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `coding worker needs an isolated git worktree: ${repo.error ?? repo.reason}` };
+      return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `${job.role ?? 'worker'} needs an isolated git worktree: ${repo.error ?? repo.reason}` };
     }
     const created = await createIsolatedWorkspace({ cwd: job.requested_cwd, jobId: job.id, baseRevision: job.workspace_branch ?? repo.baseRevision });
     if (!created.ok) {
