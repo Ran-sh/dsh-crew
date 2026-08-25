@@ -136,6 +136,9 @@ test('FAIL tests escalate to a stronger second attempt then succeed', async () =
   assert.equal(v.decision.step, 'accept');
   assert.equal(a.attempts[1].attempt, 1);
   assert.equal(a.attempts[1].model, undefined); // model chosen by adapter, flow passes attempt only
+  const full = rt.get(job.id, { withResult: true });
+  assert.equal(full.canonical_events.filter((event) => event.type === 'model.fallback').length, 1);
+  assert.equal(full.canonical_events.find((event) => event.type === 'model.fallback').data.reason, 'tests_failed');
 });
 
 test('max attempts reached stops escalation without an extra run', async () => {
@@ -179,6 +182,11 @@ test('automatic reviewer runs after a verified worker and parses the verdict', a
   assert.equal(v.review.verdict, 'approve');
   assert.equal(v.review.verdict, 'approve');
   assert.equal(v.review.mutated_candidate, undefined);
+  assert.deepEqual(v.canonical_events.map((event) => event.type), [
+    'job.created', 'job.started', 'worker.started', 'model.selected',
+    'worker.completed', 'review.started', 'model.selected',
+    'review.completed', 'job.completed',
+  ]);
 });
 
 test('reviewer that modifies the candidate is flagged and candidate kept', async () => {
@@ -276,6 +284,8 @@ test('cancelling a running workflow cancels the active attempt and never escalat
   await new Promise((r) => setTimeout(r, 20));
   const after = rt.get(job.id);
   assert.equal(after.phase, JOB_PHASES.CANCELLED);
+  const full = rt.get(job.id, { withResult: true });
+  assert.equal(full.canonical_events.at(-1).type, 'job.cancelled');
 });
 
 test('cancelling a queued workflow removes it without running', async () => {
