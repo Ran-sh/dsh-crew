@@ -1046,12 +1046,16 @@ Commands:
   detach      remove only the official 3080 bridge; isolated 3210 mode remains available
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
+  jobs        machine-first job API: list|get|watch|cancel|submit
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
 
 Options:
   --candidate <path>  update from a local payload directory or packed .tgz instead of the registry
+  --after <sequence>  with jobs watch/get: return canonical events after this cursor
+  --detail <mode>     with jobs get/watch: compact (default) or full
+  --request <path>    with jobs submit: JSON Job Request document
   --purge             with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
   --help              show this help
 
@@ -1074,9 +1078,48 @@ export async function npxInspect({
   return { ok: true, extension: body.extension };
 }
 
+export async function npxJobs({
+  args = [],
+  after = 0,
+  detail = 'compact',
+  request,
+  log = console.log,
+  fetchImpl = globalThis.fetch,
+  readConfig = realInstaller.readGlobalConfig,
+} = {}) {
+  const hubUrl = String(readConfig()?.hub_url ?? 'http://127.0.0.1:3210').replace(/\/$/, '');
+  const base = `${hubUrl}/_dsh/dsh-crew/jobs`;
+  const action = args[0] ?? 'list';
+  const id = args[1];
+  let url = base;
+  let init = { headers: { accept: 'application/json' } };
+  if (action === 'get' || action === 'watch') {
+    if (!id) throw new Error(`jobs ${action} requires a job id`);
+    url = `${base}/${encodeURIComponent(id)}/contract?detail=${detail}&after=${after}`;
+  } else if (action === 'cancel') {
+    if (!id) throw new Error('jobs cancel requires a job id');
+    url = `${base}/${encodeURIComponent(id)}/cancel`;
+    init = { ...init, method: 'POST' };
+  } else if (action === 'submit') {
+    if (!request) throw new Error('jobs submit requires --request <json-file>');
+    const document = JSON.parse(readFileSync(resolve(request), 'utf8'));
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(document) };
+  } else if (action !== 'list') {
+    throw new Error(`unknown jobs action: ${action}`);
+  }
+  const response = await fetchImpl(url, init);
+  const body = await response.json();
+  if (!response.ok || body?.ok === false) throw new Error(body?.error ?? 'Crew jobs API unavailable');
+  log(JSON.stringify(body, null, 2));
+  return { ok: true, body };
+}
+
 function normalizeCommand(argv) {
   const flags = argv.slice(1);
   let candidate;
+  let after = 0;
+  let detail = 'compact';
+  let request;
   for (let index = 0; index < flags.length; index += 1) {
     if (flags[index] === '--candidate') {
       candidate = flags[index + 1];
@@ -1086,11 +1129,28 @@ function normalizeCommand(argv) {
       candidate = flags[index].slice('--candidate='.length);
       flags.splice(index, 1);
       index -= 1;
+    } else if (flags[index] === '--after' || flags[index] === '--detail' || flags[index] === '--request') {
+      const name = flags[index];
+      const value = flags[index + 1];
+      if (name === '--after') after = Number(value);
+      if (name === '--detail') detail = value;
+      if (name === '--request') request = value;
+      flags.splice(index, 2);
+      index -= 1;
+    } else if (flags[index]?.startsWith('--after=')) {
+      after = Number(flags[index].slice('--after='.length)); flags.splice(index, 1); index -= 1;
+    } else if (flags[index]?.startsWith('--detail=')) {
+      detail = flags[index].slice('--detail='.length); flags.splice(index, 1); index -= 1;
+    } else if (flags[index]?.startsWith('--request=')) {
+      request = flags[index].slice('--request='.length); flags.splice(index, 1); index -= 1;
     }
   }
   const knownFlags = new Set(['--purge']);
   const unknown = flags.filter((f) => f.startsWith('--') && !knownFlags.has(f));
-  return { command: argv[0], purge: flags.includes('--purge'), candidate, unknown };
+  const args = flags.filter((f) => !f.startsWith('--'));
+  if (!Number.isInteger(after) || after < 0) unknown.push('--after');
+  if (!['compact', 'full'].includes(detail)) unknown.push('--detail');
+  return { command: argv[0], purge: flags.includes('--purge'), candidate, after, detail, request, args, unknown };
 }
 
 /**
@@ -1102,7 +1162,7 @@ export async function runNpxCli({
   error = console.error,
   commands = {},
 } = {}) {
-  const { command, purge, candidate, unknown } = normalizeCommand(argv);
+  const { command, purge, candidate, after, detail, request, args, unknown } = normalizeCommand(argv);
   if (command === '--help' || command === '-h' || command === 'help') {
     log(USAGE);
     return 0;
@@ -1111,7 +1171,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -1122,12 +1182,14 @@ export async function runNpxCli({
       detach: commands.detach ?? npxDetach,
       status: commands.status ?? npxStatus,
       inspect: commands.inspect ?? npxInspect,
+      jobs: commands.jobs ?? npxJobs,
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
     };
     let result;
     if (command === 'uninstall') result = await actions.uninstall({ purge, log });
     else if (command === 'update') result = await actions.update({ candidate, log });
+    else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
     else result = await actions[command]({ log });
     return result?.ok === false ? 1 : 0;
   } catch (err) {

@@ -40,6 +40,7 @@ import {
   npxUpdate,
   npxUninstall,
   npxInspect,
+  npxJobs,
   runNpxCli,
   USAGE,
   compareVersions,
@@ -706,6 +707,28 @@ test('inspect prints the machine-readable extension contract from the isolated H
   assert.equal(result.ok, true);
   assert.match(lines.join('\n'), /"kind": "dsh-crew-extension"/);
   assert.match(lines.join('\n'), /127\.0\.0\.1:3210/);
+});
+
+test('jobs CLI projects list, contract watch, cancel and JSON request submission', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    return { ok: true, json: async () => ({ ok: true, job: { id: 'hub-1' }, jobs: [] }) };
+  };
+  const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
+  assert.equal((await npxJobs({ ...common, args: ['list'] })).ok, true);
+  await npxJobs({ ...common, args: ['watch', 'hub-1'], after: 7, detail: 'compact' });
+  assert.match(calls.at(-1)[0], /jobs\/hub-1\/contract\?detail=compact&after=7$/);
+  await npxJobs({ ...common, args: ['cancel', 'hub-1'] });
+  assert.equal(calls.at(-1)[1].method, 'POST');
+  const home = tempHome();
+  try {
+    const request = join(home.dir, 'job.json');
+    writeFileSync(request, JSON.stringify({ objective: 'test', workspace: { repo_root: home.dir } }));
+    await npxJobs({ ...common, args: ['submit'], request });
+    assert.equal(calls.at(-1)[1].method, 'POST');
+    assert.match(calls.at(-1)[1].body, /"objective":"test"/);
+  } finally { home.cleanup(); }
 });
 
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
