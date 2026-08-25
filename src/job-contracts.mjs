@@ -98,6 +98,18 @@ function compactSelectionTrace(attempts) {
   }));
 }
 
+function changedFilesFromView(view) {
+  if (Array.isArray(view?.candidate?.changed_files)) return view.candidate.changed_files;
+  const changes = view?.workspace_diff?.changes;
+  if (!changes || typeof changes !== 'object') return [];
+  return [...new Set([
+    ...(Array.isArray(changes.modified) ? changes.modified : []),
+    ...(Array.isArray(changes.deleted) ? changes.deleted : []),
+    ...(Array.isArray(changes.renamed) ? changes.renamed : []),
+    ...(Array.isArray(changes.untracked) ? changes.untracked : []),
+  ])];
+}
+
 /**
  * Build the machine-first Result Contract for a workflow.
  *
@@ -110,7 +122,7 @@ export function buildEvidenceEnvelope(view = {}) {
   const candidate = view.candidate ?? {};
   const review = view.review ?? null;
   const errorMessage = boundedText(view.error, 1000);
-  const changedFiles = boundedStrings(candidate.changed_files, { count: 120, length: 500 });
+  const changedFiles = boundedStrings(changedFilesFromView(view), { count: 120, length: 500 });
   const status = evidenceStatus(view);
   return {
     schema_version: JOB_CONTRACT_SCHEMA_VERSION,
@@ -162,6 +174,9 @@ export function projectWorkflowView(view, { detail = 'compact' } = {}) {
     outcome: _outcome,
     review: _review,
     events: _legacyEvents,
+    result: _rawResult,
+    workspace_diff: _workspaceDiff,
+    reasonDetail: _reasonDetail,
     ...safe
   } = view;
   return {
@@ -171,4 +186,3 @@ export function projectWorkflowView(view, { detail = 'compact' } = {}) {
     evidence,
   };
 }
-
