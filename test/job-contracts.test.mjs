@@ -116,7 +116,7 @@ test('evidence envelope is machine-first and excludes raw result and patch text'
 });
 
 test('direct Hub evidence preserves its top-level model selection trace', () => {
-  const evidence = buildEvidenceEnvelope({
+  const directView = {
     id: 'hub-1', role: 'worker', attempt: 0, status: 'done', phase: 'completed',
     provider: 'opencode-muse', model: 'ox-alpha-free', selection_source: 'priority',
     selection_trace: {
@@ -126,11 +126,15 @@ test('direct Hub evidence preserves its top-level model selection trace', () => 
       escalation_reason: { raw_payload: 'SECRET_ESCALATION_DATA' },
     },
     outcome: { execution_status: 'completed', task_status: 'success', delivery: { complete: true } },
-  });
+  };
+  const evidence = buildEvidenceEnvelope(directView);
+  const compact = projectWorkflowView(directView);
   assert.equal(evidence.selection_trace.length, 1);
   assert.equal(evidence.selection_trace[0].selected_model, 'ox-alpha-free');
   assert.equal(evidence.selection_trace[0].decision_reason, 'priority');
   assert.doesNotMatch(JSON.stringify(evidence), /SECRET_(?:PROVIDER|FALLBACK|ESCALATION)_DATA|raw_payload/);
+  assert.equal('selection_trace' in compact, false, 'compact output must expose only bounded evidence.selection_trace');
+  assert.doesNotMatch(JSON.stringify(compact), /SECRET_(?:PROVIDER|FALLBACK|ESCALATION)_DATA|raw_payload/);
 });
 
 test('compact projection is the safe default while full detail stays available explicitly', () => {
