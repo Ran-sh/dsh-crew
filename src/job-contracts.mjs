@@ -140,6 +140,9 @@ export function buildEvidenceEnvelope(view = {}) {
   const errorMessage = boundedText(view.error, 1000);
   const changedFiles = boundedStrings(changedFilesFromView(view), { count: 120, length: 500 });
   const status = evidenceStatus(view);
+  const selectionAttempts = Array.isArray(view.child_attempts) && view.child_attempts.length > 0
+    ? view.child_attempts
+    : (view.selection_trace || view.provider || view.model ? [view] : []);
   return {
     schema_version: JOB_CONTRACT_SCHEMA_VERSION,
     job_id: view.id ?? null,
@@ -154,7 +157,7 @@ export function buildEvidenceEnvelope(view = {}) {
       delivery_complete: outcome.delivery?.complete === true,
       review_verdict: review?.verdict ?? null,
     },
-    selection_trace: compactSelectionTrace(view.child_attempts),
+    selection_trace: compactSelectionTrace(selectionAttempts),
     changed_files: changedFiles,
     changes: boundedStrings(outcome.changes),
     tests: boundedTests(outcome.tests),
