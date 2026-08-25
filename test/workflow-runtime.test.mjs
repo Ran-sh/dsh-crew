@@ -161,6 +161,10 @@ test('infrastructure failure does not escalate the model', async () => {
   assert.equal(v.status, 'failed');
   assert.equal(v.error_code, WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE);
   assert.equal(v.attempt, 1, 'no escalation attempt');
+  const full = rt.get(job.id, { withResult: true });
+  assert.equal(full.canonical_events.at(-1).type, 'job.failed');
+  assert.equal(full.canonical_events.at(-1).data.error_code, WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE);
+  assert.doesNotMatch(JSON.stringify(full.canonical_events), /DEEPSEEK_API_KEY/);
 });
 
 // ---------- automatic review ----------
