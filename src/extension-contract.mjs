@@ -22,9 +22,18 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
 export function buildExtensionContract({ config = {}, readinessMatrix = {}, workspace = null, profiles = null, runtime = null } = {}) {
   const workerEnabled = config.subagents_enabled !== false && config.worker_state !== 'disabled';
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
+  const realModelEvidence = ['deepseek_flash', 'deepseek_pro', 'opencode_go_mimo_qwen']
+    .map((id) => row(readinessMatrix, id))
+    .find((entry) => entry?.status === 'PASS');
+  const catalogEvidence = row(readinessMatrix, 'provider_catalog');
+  const modelReadiness = realModelEvidence
+    ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
+    : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
+      ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
+      : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
   const components = {
     harness: readinessFromRow(row(readinessMatrix, 'hub_compatibility')),
-    model: readinessFromRow(row(readinessMatrix, 'provider_catalog')),
+    model: modelReadiness,
     workspace: workspace?.ok === true
       ? component('READY', workspace.context ? 'WORKSPACE_CONTEXT_RESOLVED' : 'WORKSPACE_CONTEXT_NOT_REQUESTED')
       : component('UNAVAILABLE', workspace?.code ?? 'WORKSPACE_NOT_CHECKED'),
