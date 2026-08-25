@@ -19,6 +19,8 @@ test('extension contract exposes only Crew capabilities and conservative readine
   assert.equal(contract.capabilities['job.resume'], false);
   assert.equal(contract.capabilities['executor.dispatch'], undefined);
   assert.equal(contract.readiness.components.harness.status, 'READY');
+  assert.equal(contract.readiness.components.model.status, 'DEGRADED');
+  assert.equal(contract.readiness.components.model.reason_code, 'MODEL_CATALOG_ONLY');
   assert.equal(contract.readiness.components.reviewer.status, 'DEGRADED');
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
