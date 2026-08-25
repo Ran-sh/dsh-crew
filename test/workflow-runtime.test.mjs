@@ -123,6 +123,17 @@ test('worker lifecycle exposes ordered canonical events without candidate payloa
   assert.doesNotMatch(JSON.stringify(v.canonical_events), /diff --git/);
 });
 
+test('optional client job id is echoed without replacing the internal workflow id', async () => {
+  const a = makeAdapter();
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'do it', cwd: '/repo', client_job_id: 'client-42' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.notEqual(v.id, 'client-42');
+  assert.equal(v.client_job_id, 'client-42');
+  assert.equal(v.canonical_events[0].data.client_job_id, 'client-42');
+});
+
 // ---------- escalation on FAIL tests ----------
 
 test('FAIL tests escalate to a stronger second attempt then succeed', async () => {

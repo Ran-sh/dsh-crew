@@ -10,6 +10,7 @@ import {
 
 const fullView = {
   id: 'wf-1',
+  client_job_id: 'client-42',
   role: 'worker',
   phase: 'completed',
   status: 'done',
@@ -97,12 +98,17 @@ test('evidence envelope is machine-first and excludes raw result and patch text'
   const evidence = buildEvidenceEnvelope(fullView);
   assert.equal(evidence.schema_version, 1);
   assert.equal(evidence.job_id, 'wf-1');
+  assert.equal(evidence.client_job_id, 'client-42');
   assert.equal(evidence.status, 'PASS');
   assert.equal(evidence.summary.task_status, 'success');
   assert.deepEqual(evidence.changed_files, ['src/a.mjs']);
   assert.equal(evidence.tests[0].status, 'PASS');
   assert.equal(evidence.review.verdict, 'approve');
   assert.equal(evidence.artifacts.candidate_fingerprint, 'fp-1');
+  assert.equal(evidence.selection_trace[0].selected_model, 'deepseek-v4');
+  assert.deepEqual(evidence.selection_trace[0].candidates, [{ model: 'deepseek-v4', provider: 'deepseek', status: 'SELECTED' }]);
+  assert.deepEqual(evidence.selection_trace[0].fallback_chain, []);
+  assert.equal(evidence.selection_trace[0].decision_reason, 'priority');
   const serialized = JSON.stringify(evidence);
   assert.doesNotMatch(serialized, /SECRET_FULL_PATCH_MUST_NOT_LEAK/);
   assert.equal('patch' in evidence, false);

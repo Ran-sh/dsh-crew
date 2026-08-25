@@ -171,6 +171,7 @@ export function createWorkflowRuntime(adapters, {
     const now = clock();
     const job = {
       id: nextWorkflowId(),
+      client_job_id: spec.client_job_id ?? null,
       role: spec.role ?? 'worker',
       delivery: spec.delivery === 'review' ? 'review' : 'coding',
       model_class_hint: spec.model_class_hint === 'pro' ? 'pro' : spec.model_class_hint === 'flash' ? 'flash' : null,
@@ -211,7 +212,7 @@ export function createWorkflowRuntime(adapters, {
       workspaceHandle: null,
       waiters: [],
     };
-    recordCanonical(job, 'job.created', {}, null, now);
+    recordCanonical(job, 'job.created', { client_job_id: job.client_job_id }, null, now);
     return job;
   }
 
@@ -568,6 +569,7 @@ export function createWorkflowRuntime(adapters, {
     });
     const v = {
       id: job.id,
+      client_job_id: job.client_job_id,
       role: job.role,
       phase: job.phase,
       status: job.status,

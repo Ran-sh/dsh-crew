@@ -85,17 +85,33 @@ function evidenceStatus(view) {
 
 function compactSelectionTrace(attempts) {
   if (!Array.isArray(attempts)) return [];
-  return attempts.slice(0, 16).map((attempt) => ({
-    attempt: attempt?.attempt ?? null,
-    role: attempt?.role ?? null,
-    selected: attempt?.selection_trace?.selected ?? (
+  return attempts.slice(0, 16).map((attempt) => {
+    const trace = attempt?.selection_trace ?? {};
+    const selected = trace.selected ?? (
       attempt?.provider || attempt?.model
         ? { provider: attempt?.provider ?? null, model: attempt?.model ?? null, source: attempt?.selection_source ?? null }
         : null
-    ),
-    fallback_reason: attempt?.selection_trace?.fallback_reason ?? null,
-    escalation_reason: attempt?.selection_trace?.escalation_reason ?? null,
-  }));
+    );
+    const candidates = Array.isArray(trace.ordered_candidates)
+      ? trace.ordered_candidates.slice(0, 32).map((candidate) => ({
+        model: candidate?.model ?? null,
+        provider: candidate?.provider ?? null,
+        status: String(candidate?.status ?? 'CANDIDATE').toUpperCase(),
+        ...(candidate?.reason ? { reason: boundedText(candidate.reason, 200) } : {}),
+      }))
+      : selected ? [{ model: selected.model ?? null, provider: selected.provider ?? null, status: 'SELECTED' }] : [];
+    return {
+      attempt: attempt?.attempt ?? null,
+      role: attempt?.role ?? null,
+      selected,
+      selected_model: selected?.model ?? null,
+      candidates,
+      fallback_chain: trace.fallback_reason ? [boundedText(trace.fallback_reason, 200)] : [],
+      decision_reason: selected?.source ?? attempt?.selection_source ?? null,
+      fallback_reason: trace.fallback_reason ?? null,
+      escalation_reason: trace.escalation_reason ?? null,
+    };
+  });
 }
 
 function changedFilesFromView(view) {
@@ -127,6 +143,7 @@ export function buildEvidenceEnvelope(view = {}) {
   return {
     schema_version: JOB_CONTRACT_SCHEMA_VERSION,
     job_id: view.id ?? null,
+    client_job_id: view.client_job_id ?? null,
     role: view.role ?? null,
     status,
     summary: {
