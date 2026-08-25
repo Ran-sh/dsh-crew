@@ -11,6 +11,7 @@ import {
   isTrustedLocalRequest,
   proxyCrewRequest,
   registerOfficialWebBridge,
+  resolveCrewBridgeTarget,
 } from '../src/official-web-bridge.mjs';
 
 function responseRecorder() {
@@ -28,6 +29,13 @@ test('bridge is fixed to the loopback Crew backend and accepts loopback clients 
   assert.equal(CREW_BRIDGE_TARGET, 'http://127.0.0.1:3210');
   for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) assert.equal(isLoopbackAddress(address), true);
   for (const address of ['10.0.0.2', '192.168.1.8', undefined]) assert.equal(isLoopbackAddress(address), false);
+});
+
+test('test-only target override remains strictly loopback HTTP', () => {
+  assert.equal(resolveCrewBridgeTarget({ DSH_CREW_BRIDGE_TARGET: 'http://127.0.0.1:45678' }), 'http://127.0.0.1:45678');
+  for (const target of ['https://127.0.0.1:1', 'http://example.com:3210', 'http://0.0.0.0:3210/path']) {
+    assert.equal(resolveCrewBridgeTarget({ DSH_CREW_BRIDGE_TARGET: target }), CREW_BRIDGE_TARGET);
+  }
 });
 
 test('browser requests must use a local Host and a same-origin Origin', () => {
@@ -137,6 +145,19 @@ test('sidecar supervisor coalesces concurrent starts and launches only the isola
   assert.equal(spawns[0].options.env.DSH_HOME, join(home, '.config', 'dsh-crew', 'harness'));
   assert.equal(spawns[0].options.windowsHide, true);
   assert.equal(spawns[0].options.detached, true);
+});
+
+test('sidecar supervisor uses the validated target port when explicitly injected', async () => {
+  const spawns = [];
+  let checks = 0;
+  const supervisor = createCrewSidecarSupervisor({
+    home: 'C:\\Users\\test', bridgeTarget: 'http://127.0.0.1:45678', exists: () => true,
+    healthCheck: async () => ++checks > 1,
+    spawnImpl: (...args) => { spawns.push(args); return { unref() {} }; }, wait: async () => {},
+  });
+  await supervisor.ensure();
+  assert.equal(spawns.length, 1);
+  assert.deepEqual(spawns[0][1].slice(-2), ['--port', '45678']);
 });
 
 test('sidecar supervisor never duplicates a still-running cold-start process after a timeout', async () => {

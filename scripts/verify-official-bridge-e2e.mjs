@@ -3,7 +3,6 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,11 +13,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { npxInstall, npxIntegrate } from '../src/install/npx-lifecycle.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const candidateVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+if (typeof candidateVersion !== 'string' || candidateVersion === '') throw new Error('candidate package version is unavailable');
 const realHome = homedir();
 const runtimeRoot = join(realHome, '.config', 'dsh-crew', 'harness', 'runtime');
 const runtimeModule = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
@@ -31,6 +33,22 @@ const harnessHome = join(crewRoot, 'harness');
 const profileRoot = join(officialHome, 'profiles', 'web');
 const logs = [];
 let official;
+
+async function reservePort() {
+  const server = createServer();
+  await new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  const port = server.address().port;
+  await new Promise((resolveClose) => server.close(resolveClose));
+  return port;
+}
+
+const officialPort = await reservePort();
+const crewPort = await reservePort();
+const officialUrl = `http://127.0.0.1:${officialPort}`;
+const crewUrl = `http://127.0.0.1:${crewPort}`;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -88,10 +106,13 @@ try {
   writeFileSync(join(profileRoot, 'pnpm-workspace.yaml'), 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n');
 
   const currentConfig = join(realHome, '.config', 'dsh-crew', 'config.json');
+  let sandboxConfig = {};
   if (existsSync(currentConfig)) {
     mkdirSync(crewRoot, { recursive: true });
-    copyFileSync(currentConfig, join(crewRoot, 'config.json'));
+    sandboxConfig = JSON.parse(readFileSync(currentConfig, 'utf8'));
   }
+  mkdirSync(crewRoot, { recursive: true });
+  writeFileSync(join(crewRoot, 'config.json'), JSON.stringify({ ...sandboxConfig, hub_url: crewUrl }, null, 2));
 
   const installer = {
     installCodex: () => ({ ok: true, actions: [] }),
@@ -115,9 +136,9 @@ try {
   assert(integrated.ok, `disposable integrate failed: ${logs.join(' | ')}`);
 
   official = spawn(process.execPath, [
-    runtimeModule, '--profile', 'web', '--host', '127.0.0.1', '--port', '3080', '--no-open',
+    runtimeModule, '--profile', 'web', '--host', '127.0.0.1', '--port', String(officialPort), '--no-open',
   ], {
-    env: { ...process.env, HOME: sandbox, USERPROFILE: sandbox, DSH_HOME: officialHome },
+    env: { ...process.env, HOME: sandbox, USERPROFILE: sandbox, DSH_HOME: officialHome, DSH_CREW_BRIDGE_TARGET: crewUrl },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
@@ -125,20 +146,20 @@ try {
   official.stdout.on('data', capture);
   official.stderr.on('data', capture);
 
-  await waitForPageMarker('http://127.0.0.1:3080/', '@ran-sh/dsh-crew-web-bridge');
-  const bridgeStatus = await (await waitFor('http://127.0.0.1:3080/_dsh/dsh-crew/bridge-status')).json();
+  await waitForPageMarker(`${officialUrl}/`, '@ran-sh/dsh-crew-web-bridge');
+  const bridgeStatus = await (await waitFor(`${officialUrl}/_dsh/dsh-crew/bridge-status`)).json();
   assert(bridgeStatus.mode === 'official-3080-isolated-3210', 'bridge status mode mismatch');
-  const proxiedRuntime = await (await waitFor('http://127.0.0.1:3080/_dsh/dsh-crew/runtime', { timeout: 45_000 })).json();
-  assert(proxiedRuntime.runtime_version === '0.3.8', 'proxied runtime version mismatch');
-  const directRuntime = await (await waitFor('http://127.0.0.1:3210/_dsh/dsh-crew/runtime')).json();
-  assert(directRuntime.runtime_version === '0.3.8', 'direct runtime version mismatch');
-  const models = await (await waitFor('http://127.0.0.1:3080/_dsh/dsh-crew/models')).json();
+  const proxiedRuntime = await (await waitFor(`${officialUrl}/_dsh/dsh-crew/runtime`, { timeout: 45_000 })).json();
+  assert(proxiedRuntime.runtime_version === candidateVersion, `proxied runtime version mismatch (${proxiedRuntime.runtime_version} != ${candidateVersion})`);
+  const directRuntime = await (await waitFor(`${crewUrl}/_dsh/dsh-crew/runtime`)).json();
+  assert(directRuntime.runtime_version === candidateVersion, `direct runtime version mismatch (${directRuntime.runtime_version} != ${candidateVersion})`);
+  const models = await (await waitFor(`${officialUrl}/_dsh/dsh-crew/models`)).json();
   assert(Array.isArray(models.providers), 'proxied model catalog missing providers');
 
   console.log(JSON.stringify({
     ok: true,
-    official_ui: 'http://127.0.0.1:3080',
-    isolated_backend: 'http://127.0.0.1:3210',
+    official_ui: officialUrl,
+    isolated_backend: crewUrl,
     runtime_version: proxiedRuntime.runtime_version,
     provider_count: models.providers.length,
     official_profile: profileRoot,

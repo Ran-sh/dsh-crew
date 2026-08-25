@@ -21,6 +21,18 @@ function isLocalHostname(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
 }
 
+export function resolveCrewBridgeTarget(env = process.env) {
+  const raw = env?.DSH_CREW_BRIDGE_TARGET;
+  if (!raw) return CREW_BRIDGE_TARGET;
+  try {
+    const target = new URL(raw);
+    if (target.protocol !== 'http:' || !isLocalHostname(target.hostname.toLowerCase()) || target.pathname !== '/' || target.search || target.hash) return CREW_BRIDGE_TARGET;
+    const port = Number(target.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return CREW_BRIDGE_TARGET;
+    return target.origin;
+  } catch { return CREW_BRIDGE_TARGET; }
+}
+
 export function isTrustedLocalRequest(req) {
   if (!isLoopbackAddress(req?.socket?.remoteAddress)) return false;
   const host = typeof req?.headers?.host === 'string' ? req.headers.host.trim().toLowerCase() : '';
@@ -74,9 +86,9 @@ async function readBoundedBody(req, limit = MAX_BODY_BYTES) {
   return Buffer.concat(chunks);
 }
 
-async function defaultHealthCheck(fetchImpl = globalThis.fetch) {
+async function defaultHealthCheck(fetchImpl = globalThis.fetch, bridgeTarget = CREW_BRIDGE_TARGET) {
   try {
-    const response = await fetchImpl(`${CREW_BRIDGE_TARGET}${CREW_BRIDGE_PREFIX}/ping`, {
+    const response = await fetchImpl(`${bridgeTarget}${CREW_BRIDGE_PREFIX}/ping`, {
       signal: AbortSignal.timeout(1_500),
       headers: { accept: 'application/json' },
     });
@@ -89,7 +101,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function createCrewSidecarSupervisor({
   home = homedir(),
   exists = existsSync,
-  healthCheck = () => defaultHealthCheck(),
+  bridgeTarget = resolveCrewBridgeTarget(),
+  healthCheck = () => defaultHealthCheck(globalThis.fetch, bridgeTarget),
   spawnImpl = spawn,
   wait = delay,
   maxAttempts = 120,
@@ -99,6 +112,7 @@ export function createCrewSidecarSupervisor({
   let runningChild = null;
   const runtime = crewDshRuntimeModule({ home });
   const dshHome = crewDshHome({ home });
+  const bridgePort = new URL(bridgeTarget).port;
 
   async function start() {
     if (await healthCheck()) return { ok: true, started: false };
@@ -106,7 +120,7 @@ export function createCrewSidecarSupervisor({
     const childAlive = runningChild && runningChild.killed !== true && runningChild.exitCode == null;
     if (!childAlive) {
       runningChild = spawnImpl(process.execPath, [
-        runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', '3210',
+        runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', bridgePort,
       ], {
         cwd: dshHome,
         env: { ...process.env, DSH_HOME: dshHome },
@@ -138,6 +152,7 @@ const processSupervisor = createCrewSidecarSupervisor();
 export async function proxyCrewRequest(req, res, {
   fetchImpl = globalThis.fetch,
   ensureBackend = () => processSupervisor.ensure(),
+  bridgeTarget = resolveCrewBridgeTarget(),
 } = {}) {
   if (!isTrustedLocalRequest(req)) {
     sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
@@ -154,7 +169,7 @@ export async function proxyCrewRequest(req, res, {
     if (backend?.ok === false) throw new Error('backend unavailable');
     const method = String(req.method ?? 'GET').toUpperCase();
     const bodyBuffer = method === 'GET' || method === 'HEAD' ? null : await readBoundedBody(req);
-    const response = await fetchImpl(`${CREW_BRIDGE_TARGET}${req.url}`, {
+    const response = await fetchImpl(`${bridgeTarget}${req.url}`, {
       method,
       headers: safeHeaders(req.headers),
       body: bodyBuffer === null ? undefined : new Blob([bodyBuffer]),
