@@ -697,6 +697,7 @@ test('inspect prints the machine-readable extension contract from the isolated H
   const lines = [];
   const result = await npxInspect({
     log: (line) => lines.push(line),
+    readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }),
     fetchImpl: async (url) => ({
       ok: true,
       json: async () => ({ ok: true, extension: { schema_version: 1, kind: 'dsh-crew-extension', source: url } }),

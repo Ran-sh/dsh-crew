@@ -1045,6 +1045,7 @@ Commands:
   integrate   show Crew inside the official 3080 UI; backend stays isolated on 3210
   detach      remove only the official 3080 bridge; isolated 3210 mode remains available
   status      read-only report of launcher/installed versions and integrations
+  inspect     print the machine-readable extension capability/readiness contract
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
@@ -1056,6 +1057,22 @@ Options:
 
 Primary install: npm install -g @ran-sh/dsh-crew   (then run: dsh-crew install)
 Source checkouts use scripts/setup.mjs instead.`;
+
+export async function npxInspect({
+  log = console.log,
+  fetchImpl = globalThis.fetch,
+  readConfig = realInstaller.readGlobalConfig,
+} = {}) {
+  const hubUrl = readConfig()?.hub_url ?? 'http://127.0.0.1:3210';
+  const url = `${String(hubUrl).replace(/\/$/, '')}/_dsh/dsh-crew/extension`;
+  const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+  const body = await response.json();
+  if (!response.ok || body?.ok !== true || !body.extension) {
+    throw new Error('isolated Crew Hub extension contract is unavailable');
+  }
+  log(JSON.stringify(body.extension, null, 2));
+  return { ok: true, extension: body.extension };
+}
 
 function normalizeCommand(argv) {
   const flags = argv.slice(1);
@@ -1094,7 +1111,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -1104,6 +1121,7 @@ export async function runNpxCli({
       integrate: commands.integrate ?? npxIntegrate,
       detach: commands.detach ?? npxDetach,
       status: commands.status ?? npxStatus,
+      inspect: commands.inspect ?? npxInspect,
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
     };
