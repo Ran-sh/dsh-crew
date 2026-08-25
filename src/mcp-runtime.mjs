@@ -206,11 +206,10 @@ export function buildMcpWorkflowRuntime(deps) {
   const allocateWorkspace = async (job) => {
     const config = getConfig();
     const isolation = config.execution?.isolation ?? 'worktree';
-    // Reviewer role / explicit review and shared mode never draft a candidate;
-    // they run in the requested workspace.
-    if (job.role === 'reviewer' || job.delivery === 'review'
-        || job.requested_isolation === 'readonly' || job.requested_isolation === 'shared'
-        || isolation === 'shared') {
+    // Explicit shared mode uses the requested workspace. Readonly profiles,
+    // including the default Reviewer, use a disposable worktree below so an
+    // accidental edit can be detected and never pollutes the primary tree.
+    if (job.requested_isolation === 'shared' || isolation === 'shared') {
       return { ok: true, execution_cwd: job.requested_cwd, isolation: 'shared', base_revision: null, primary_workspace_dirty: false, handle: null };
     }
     // Coding worker under worktree isolation: fail closed when the workspace

@@ -31,6 +31,13 @@ test('workflow snapshots profile/context metadata and honors profile fallback po
   assert.match(runtime, /job\.allow_fallback === false/);
 });
 
+test('readonly profiles are isolated instead of sharing the primary workspace', () => {
+  const mcpRuntime = readFileSync(new URL('../src/mcp-runtime.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(mcpRuntime, /job\.requested_isolation === 'readonly' \|\| job\.requested_isolation === 'shared'/);
+  assert.match(mcpRuntime, /job\.requested_isolation === 'shared'/);
+  assert.match(mcpRuntime, /createIsolatedWorkspace/);
+});
+
 test('result polling accepts an event cursor for incremental canonical watch', () => {
   assert.match(server, /after_sequence: z\.number\(\)\.int\(\)\.min\(0\)/);
   assert.match(server, /projectWorkflowView\(view, \{ detail, afterSequence: after_sequence \}\)/);

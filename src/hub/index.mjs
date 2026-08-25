@@ -274,7 +274,7 @@ export class WorkerRegistry {  constructor(ctx) {
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
     let executionCwd = cwd;
     let isolatedWorkspace = null;
-    if (requested_isolation === 'worktree' && jobRole === 'worker') {
+    if ((requested_isolation === 'worktree' && jobRole === 'worker') || requested_isolation === 'readonly') {
       const created = await createIsolatedWorkspace({ cwd, jobId: id, baseRevision: workspace_branch });
       if (!created.ok) throw Object.assign(new Error(created.error ?? created.reason), { code: created.reason });
       executionCwd = created.worktreePath;
@@ -286,7 +286,7 @@ export class WorkerRegistry {  constructor(ctx) {
       selection_source: selection.source, selection_trace: selection.selection_trace ?? null,
       effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd: executionCwd, requested_cwd: cwd,
-      isolation: isolatedWorkspace ? 'worktree' : requested_isolation === 'readonly' ? 'readonly' : 'shared',
+      isolation: isolatedWorkspace ? 'worktree' : 'shared',
       workspace_branch: workspace_branch ?? null, isolatedWorkspace,
       profile_id: profile_id ?? null, workspace_context: workspace_context ?? null,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
@@ -431,6 +431,15 @@ export class WorkerRegistry {  constructor(ctx) {
         job.workspaceDiff = job.baseline.kind === 'git'
           ? await captureWorkspaceDiff({ cwd: executionCwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
           : job.baseline;
+        if (job.role === 'reviewer' && job.review && job.workspaceDiff?.kind === 'git') {
+          const changes = job.workspaceDiff.changes ?? {};
+          const mutated = ['modified', 'deleted', 'renamed', 'untracked'].some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
+          if (mutated) {
+            job.review.mutated_candidate = true;
+            job.review.invalidated = true;
+            job.review.verdict = 'request_changes';
+          }
+        }
         if (job.isolatedWorkspace) {
           const cleanup = await cleanupIsolatedWorkspace(job.isolatedWorkspace).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
           job.workspace_retained = cleanup.ok !== true;
