@@ -116,6 +116,7 @@ test('compact projection is the safe default while full detail stays available e
   assert.equal('outcome' in compact, false);
   assert.equal('review' in compact, false);
   assert.equal('events' in compact, false);
+  assert.equal('child_attempts' in compact, false);
   assert.doesNotMatch(JSON.stringify(compact), /SECRET_FULL_PATCH_MUST_NOT_LEAK/);
 
   const full = projectWorkflowView(fullView, { detail: 'full' });
