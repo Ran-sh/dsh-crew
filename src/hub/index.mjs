@@ -22,6 +22,11 @@ import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
+import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
+import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
+import { loadRoleProfiles } from '../role-profiles.mjs';
+import { loadWorkspaceContexts } from '../workspace-context.mjs';
+import { buildExtensionContract } from '../extension-contract.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -84,6 +89,34 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 
+export function hubCanonicalEvents(job = {}) {
+  if (!job.id) return [];
+  const role = job.role === 'reviewer' ? 'reviewer' : 'worker';
+  const atStart = job.startedAt ?? null;
+  const atEnd = job.endedAt ?? atStart;
+  const definitions = [
+    ['job.created', atStart, {}],
+    ['job.started', atStart, {}],
+    ['model.selected', atStart, { provider: job.provider ?? null, model: job.model ?? null, source: job.selection_source ?? null }],
+    [role === 'reviewer' ? 'review.started' : 'worker.started', atStart, { run_id: job.id }],
+  ];
+  if (job.status !== 'running') {
+    definitions.push([
+      role === 'reviewer' ? 'review.completed' : 'worker.completed',
+      atEnd,
+      role === 'reviewer'
+        ? { status: job.status ?? null, verdict: job.review?.verdict ?? null }
+        : { status: job.status ?? null, summary: job.outcome?.task_status ?? null },
+    ]);
+    if (job.status === 'done') definitions.push(['job.completed', atEnd, { result_ref: job.id }]);
+    else if (job.status === 'cancelled') definitions.push(['job.cancelled', atEnd, { reason: 'cancelled' }]);
+    else definitions.push(['job.failed', atEnd, { error_code: job.error_code ?? null }]);
+  }
+  return definitions.map(([type, at, data], index) => createCanonicalJobEvent({
+    jobId: job.id, type, sequence: index + 1, at, role, attempt: job.attempt ?? 0, data,
+  }));
+}
+
 // ---------- job registry ----------
 
 // Exported for the unit tests (test/hub-windows.test.mjs); instantiation
@@ -110,6 +143,7 @@ export class WorkerRegistry {  constructor(ctx) {
       startedAt: job.startedAt, endedAt: job.endedAt,
       delivery_complete: !!job.delivery_complete,
       workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
+      event_cursor: hubCanonicalEvents(job).at(-1)?.sequence ?? 0,
     };
     if (withResult) {
       v.result = job.result; v.error = job.error; v.stopReason = job.stopReason;
@@ -119,6 +153,7 @@ export class WorkerRegistry {  constructor(ctx) {
       v.outcome = job.outcome ?? null;
       v.workspace_diff = job.workspaceDiff ?? null;
       v.workspace_baseline_dirty = !!job.workspaceDiff?.dirtyBaseline;
+      v.canonical_events = hubCanonicalEvents(job);
     }
     return v;
   }
@@ -541,6 +576,23 @@ export async function apply(ctx) {
             if (!job) return sendJson(res, 404, { ok: false, error: 'no such job' });
             return sendJson(res, 200, { ok: true, job: hub.view(job, true) });
           }
+          if (req.method === 'GET' && parts.length === 2 && parts[1] === 'events') {
+            const job = hub.jobs.get(parts[0]);
+            if (!job) return sendJson(res, 404, { ok: false, error: 'no such job' });
+            const after = Math.max(0, Number(url.searchParams.get('after') ?? 0) || 0);
+            const events = hubCanonicalEvents(job).filter((event) => event.sequence > after);
+            return sendJson(res, 200, {
+              ok: true, job_id: job.id, events,
+              event_cursor: hubCanonicalEvents(job).at(-1)?.sequence ?? 0,
+            });
+          }
+          if (req.method === 'GET' && parts.length === 2 && parts[1] === 'contract') {
+            const job = hub.jobs.get(parts[0]);
+            if (!job) return sendJson(res, 404, { ok: false, error: 'no such job' });
+            const detail = url.searchParams.get('detail') === 'full' ? 'full' : 'compact';
+            const afterSequence = Math.max(0, Number(url.searchParams.get('after') ?? 0) || 0);
+            return sendJson(res, 200, { ok: true, job: projectWorkflowView(hub.view(job, true), { detail, afterSequence }) });
+          }
           if (req.method === 'POST' && parts.length === 0) {
             const payload = await readBody(req);
             // Same policy resolver as the MCP server (src/server.mjs), with the
@@ -564,6 +616,60 @@ export async function apply(ctx) {
           if (code) body.code = code;
           return sendJson(res, 400, body);
         }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/profiles`,
+      handler: (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        return sendJson(res, 200, { ok: true, ...loadRoleProfiles() });
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/workspaces`,
+      handler: (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        return sendJson(res, 200, { ok: true, ...loadWorkspaceContexts() });
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/extension`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+        let catalogStatus = { id: 'provider_catalog', status: 'NOT_RUN', reason_code: 'PROVIDER_MODE_UNKNOWN' };
+        if (normalizeWorkerProviderMode(config.worker_provider_mode) === 'deepseek-official') {
+          catalogStatus = { id: 'provider_catalog', status: 'SKIP', reason_code: 'PROVIDER_CATALOG_NOT_REQUIRED' };
+        } else {
+          try {
+            await readHarnessModelCatalog({
+              llm: ctx.llm ?? ctx.get('llm'),
+              getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
+            });
+            catalogStatus = { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' };
+          } catch {
+            catalogStatus = { id: 'provider_catalog', status: 'FAIL', reason_code: 'PROVIDER_CATALOG_UNAVAILABLE' };
+          }
+        }
+        const profiles = loadRoleProfiles();
+        const contract = buildExtensionContract({
+          config,
+          readinessMatrix: { rows: [
+            { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+            catalogStatus,
+            { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' },
+          ] },
+          workspace: { ok: true, context: null },
+          profiles,
+          runtime: getHubRuntimeIdentity(),
+        });
+        return sendJson(res, 200, { ok: true, extension: contract });
       },
     }));
 
