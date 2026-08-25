@@ -145,6 +145,29 @@ test('escalation refreshes candidate after every worker attempt', async () => {
   assert.equal(view.child_attempts[1].candidate_fingerprint, 'fp-1');
 });
 
+test('a profile can disable fallback without changing the global model policy', async () => {
+  let calls = 0;
+  const adapter = makeRuntimeAdapter({
+    getConfig: () => ({ collaboration_mode: 'balanced', escalate_on_failure: true }),
+    executeAttempt: async (spec) => {
+      calls += 1;
+      return { id: `worker-${spec.attempt}`, role: 'worker', attempt: spec.attempt, status: 'done', result: FAILING, stopReason: 'completed' };
+    },
+  });
+  const rt = createWorkflowRuntime(adapter, { maxParallel: 1, idFactory: ids() });
+  const job = rt.start({
+    role: 'worker', task: 'do not retry', cwd: '/repo',
+    profile_id: 'worker-no-fallback', allow_fallback: false,
+    workspace_context: { workspace_id: 'demo', repo_root: '/repo' },
+  });
+  await rt.wait(job.id, 2000);
+  const view = rt.get(job.id, { withResult: true });
+  assert.equal(calls, 1);
+  assert.equal(view.status, 'failed');
+  assert.equal(view.profile_id, 'worker-no-fallback');
+  assert.deepEqual(view.workspace_context, { workspace_id: 'demo', repo_root: '/repo' });
+});
+
 test('latest candidate capture failure never exposes a stale earlier candidate', async () => {
   let lastAttempt = -1;
   let released = 0;

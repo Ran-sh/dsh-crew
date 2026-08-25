@@ -64,6 +64,8 @@ const fullView = {
     attempt: 0,
     data: {},
   }],
+  profile_id: 'worker-default',
+  workspace_context: { workspace_id: 'demo', repo_root: '/repo' },
 };
 
 test('canonical job events use the versioned allow-list and stable envelope', () => {
@@ -122,6 +124,21 @@ test('compact projection is the safe default while full detail stays available e
   const full = projectWorkflowView(fullView, { detail: 'full' });
   assert.equal(full.detail, 'full');
   assert.equal(full.candidate.patch, 'SECRET_FULL_PATCH_MUST_NOT_LEAK');
+});
+
+test('incremental watch projection returns only canonical events after the cursor', () => {
+  const view = {
+    ...fullView,
+    canonical_events: [1, 2, 3].map((sequence) => ({
+      schema_version: 1, event_id: `wf-1:${sequence}`, job_id: 'wf-1', sequence,
+      type: sequence === 1 ? 'job.created' : sequence === 2 ? 'job.started' : 'job.completed',
+      at: sequence, role: 'worker', attempt: 0, data: {},
+    })),
+  };
+  const compact = projectWorkflowView(view, { afterSequence: 1 });
+  assert.deepEqual(compact.canonical_events.map((event) => event.sequence), [2, 3]);
+  assert.equal(compact.event_cursor, 3);
+  assert.equal(compact.events_truncated_before_cursor, false);
 });
 
 test('legacy Hub results are compacted from workspace_diff without leaking result or patch', () => {
