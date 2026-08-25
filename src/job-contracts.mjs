@@ -93,14 +93,14 @@ function compactSelectionTrace(attempts) {
         : null
     );
     const selected = rawSelected ? {
-      provider: rawSelected.provider ?? null,
-      model: rawSelected.model ?? null,
-      source: rawSelected.source ?? null,
+      provider: boundedText(rawSelected.provider, 200),
+      model: boundedText(rawSelected.model, 300),
+      source: boundedText(rawSelected.source, 100),
     } : null;
     const candidates = Array.isArray(trace.ordered_candidates)
       ? trace.ordered_candidates.slice(0, 32).map((candidate) => ({
-        model: candidate?.model ?? null,
-        provider: candidate?.provider ?? null,
+        model: boundedText(candidate?.model, 300),
+        provider: boundedText(candidate?.provider, 200),
         status: String(candidate?.status ?? 'CANDIDATE').toUpperCase(),
         ...(candidate?.reason ? { reason: boundedText(candidate.reason, 200) } : {}),
       }))
@@ -112,9 +112,9 @@ function compactSelectionTrace(attempts) {
       selected_model: selected?.model ?? null,
       candidates,
       fallback_chain: trace.fallback_reason ? [boundedText(trace.fallback_reason, 200)] : [],
-      decision_reason: selected?.source ?? attempt?.selection_source ?? null,
-      fallback_reason: trace.fallback_reason ?? null,
-      escalation_reason: trace.escalation_reason ?? null,
+      decision_reason: boundedText(selected?.source ?? attempt?.selection_source, 200),
+      fallback_reason: boundedText(trace.fallback_reason, 200),
+      escalation_reason: boundedText(trace.escalation_reason, 200),
     };
   });
 }
