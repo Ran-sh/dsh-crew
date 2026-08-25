@@ -11,6 +11,11 @@ test('blocking and async MCP requests expose the same profile and workspace fiel
   assert.ok((server.match(/profile: profileSchema/g) ?? []).length >= 2);
   assert.ok((server.match(/workspace_id: workspaceIdSchema/g) ?? []).length >= 2);
   assert.ok((server.match(/context_refs: contextRefsSchema/g) ?? []).length >= 2);
+  assert.ok((server.match(/job_id: clientJobIdSchema/g) ?? []).length >= 2);
+  assert.ok((server.match(/workspace: workspaceSchema/g) ?? []).length >= 2);
+  assert.ok((server.match(/constraints: constraintsSchema/g) ?? []).length >= 2);
+  assert.match(server, /constraints\?\.timeout_seconds \?\? timeout_seconds \?\? profileValue\.timeout_seconds/);
+  assert.match(server, /constraints\?\.allow_fallback \?\? profileValue\.fallback/);
 });
 
 test('session config exposes profiles and the narrow extension contract', () => {
@@ -21,6 +26,8 @@ test('session config exposes profiles and the narrow extension contract', () => 
 test('workflow snapshots profile/context metadata and honors profile fallback policy', () => {
   assert.match(runtime, /profile_id: spec\.profile_id/);
   assert.match(runtime, /workspace_context: spec\.workspace_context/);
+  assert.match(runtime, /client_job_id: spec\.client_job_id/);
+  assert.match(runtime, /workspace_branch: spec\.workspace_branch/);
   assert.match(runtime, /job\.allow_fallback === false/);
 });
 

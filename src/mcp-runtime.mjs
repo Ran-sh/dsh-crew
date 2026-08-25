@@ -131,7 +131,7 @@ export function buildMcpWorkflowRuntime(deps) {
   const executeAttempt = async (spec) => {
     const session = getSessionConfig?.() ?? {};
     const effort = spec.effort ?? session.default_effort ?? 'max';
-    const timeoutMs = (deps.attemptTimeoutMs?.() ?? (session.default_timeout_seconds ?? 1800) * 1000);
+    const timeoutMs = (spec.timeout_seconds ?? session.default_timeout_seconds ?? 1800) * 1000;
     const tier = resolveAttemptTier({ role: spec.role, attempt: spec.attempt, modelClassHint: spec.model_class_hint });
     const delivery = spec.role === 'reviewer' || spec.delivery === 'review' ? 'review' : 'coding';
     const source = spec.source ?? 'api';
@@ -219,7 +219,7 @@ export function buildMcpWorkflowRuntime(deps) {
     if (!repo.ok) {
       return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `coding worker needs an isolated git worktree: ${repo.error ?? repo.reason}` };
     }
-    const created = await createIsolatedWorkspace({ cwd: job.requested_cwd, jobId: job.id, baseRevision: repo.baseRevision });
+    const created = await createIsolatedWorkspace({ cwd: job.requested_cwd, jobId: job.id, baseRevision: job.workspace_branch ?? repo.baseRevision });
     if (!created.ok) {
       return { ok: false, reason: created.reason ?? 'WORKTREE_CREATE_FAILED', error: `worktree create failed: ${created.error ?? ''}` };
     }

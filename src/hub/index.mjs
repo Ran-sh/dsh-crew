@@ -24,9 +24,11 @@ import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
-import { loadRoleProfiles, saveRoleProfiles } from '../role-profiles.mjs';
-import { loadWorkspaceContexts, saveWorkspaceContexts } from '../workspace-context.mjs';
+import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
+import { addContextReferences, buildWorkspaceTask, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
+import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
+import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -131,7 +133,7 @@ export class WorkerRegistry {  constructor(ctx) {
 
   view(job, withResult = false) {
     const v = {
-      id: job.id, sessionId: job.sessionId, role: job.role ?? 'worker', attempt: job.attempt ?? 0,
+      id: job.id, client_job_id: job.client_job_id ?? null, sessionId: job.sessionId, role: job.role ?? 'worker', attempt: job.attempt ?? 0,
       tier: job.tier, provider: job.provider, model: job.model,
       selection_source: job.selection_source,
       selection_trace: job.selection_trace ?? null,
@@ -141,6 +143,7 @@ export class WorkerRegistry {  constructor(ctx) {
       phase: job.phase ?? null,
       toolCalls: job.toolCalls, tokens: job.tokens, mode: 'hub',
       startedAt: job.startedAt, endedAt: job.endedAt,
+      isolation: job.isolation ?? 'shared', workspace_branch: job.workspace_branch ?? null,
       delivery_complete: !!job.delivery_complete,
       workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
       event_cursor: hubCanonicalEvents(job).at(-1)?.sequence ?? 0,
@@ -170,7 +173,7 @@ export class WorkerRegistry {  constructor(ctx) {
    * `role` (worker | reviewer) records who does the work; `tier` remains the
    * legacy model-class slot. Reviewer-role jobs always use the pro slot.
    */
-  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding' }) {
+  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds }) {
     // role is only honored when the caller explicitly names it; a legacy
     // tier-only spawn (role === undefined) keeps the exact v0.1 resolution.
     const hasRole = role === 'worker' || role === 'reviewer';
@@ -264,12 +267,22 @@ export class WorkerRegistry {  constructor(ctx) {
     const workerPrompt = appendDeliveryInstructions(task, { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
+    let executionCwd = cwd;
+    let isolatedWorkspace = null;
+    if (requested_isolation === 'worktree' && jobRole === 'worker') {
+      const created = await createIsolatedWorkspace({ cwd, jobId: id, baseRevision: workspace_branch });
+      if (!created.ok) throw Object.assign(new Error(created.error ?? created.reason), { code: created.reason });
+      executionCwd = created.worktreePath;
+      isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot };
+    }
     const sessionId = `session-${randomUUID()}`;
     const job = {
-      id, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
+      id, client_job_id: client_job_id ?? null, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
       selection_source: selection.source, selection_trace: selection.selection_trace ?? null,
       effort, reasoning_effort: selection.reasoningEffort,
-      task, source, cwd,
+      task, source, cwd: executionCwd, requested_cwd: cwd,
+      isolation: isolatedWorkspace ? 'worktree' : requested_isolation === 'readonly' ? 'readonly' : 'shared',
+      workspace_branch: workspace_branch ?? null, isolatedWorkspace,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
       phase: JOB_PHASES.RUNNING,
       status: 'running', turn: 0, step: 0, currentTool: null, toolCalls: 0,
@@ -283,7 +296,7 @@ export class WorkerRegistry {  constructor(ctx) {
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
     // only needs the before-state by the time the worker finishes. Non-repos
     // degrade to { kind:'no-git' } instead of failing the job.
-    job.baseline = await captureWorkspaceBaseline({ cwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
+    job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     this.jobs.set(id, job);
 
     const presets = this.ctx.get('agentPresets');
@@ -323,7 +336,7 @@ export class WorkerRegistry {  constructor(ctx) {
     const run = async () => {
       const handle = await this.ctx.agents.create({
         sessionId,
-        meta: { cwd, ...(presetId === undefined ? {} : { agentPreset: presetId }) },
+        meta: { cwd: executionCwd, ...(presetId === undefined ? {} : { agentPreset: presetId }) },
         agentOptions: { provider: selection.provider, model: selection.model },
         setup: async (agentCtx) => {
           installModelSelection(agentCtx, { current: selection, assembled: undefined });
@@ -342,11 +355,11 @@ export class WorkerRegistry {  constructor(ctx) {
         // job cwd never inherits a parent directory's workspace).
         const registry = this.ctx.get('workspaceRegistry');
         if (registry !== undefined) {
-          const ws = (await registry.resolveByPath(cwd)) ?? (await registry.create(cwd));
+          const ws = (await registry.resolveByPath(executionCwd)) ?? (await registry.create(executionCwd));
           await ws.attachSession(sessionId);
         }
       } catch (err) {
-        this.ctx.logger?.warn?.(`dsh-crew: workspace attach failed for ${cwd}: ${err?.message ?? err}`);
+        this.ctx.logger?.warn?.(`dsh-crew: workspace attach failed for ${executionCwd}: ${err?.message ?? err}`);
       }
       await handle.agent.whenIdle();
       handle.agent.followup(userMessage(job.prompt));
@@ -357,12 +370,24 @@ export class WorkerRegistry {  constructor(ctx) {
       await this.ctx.sessions.flush(handle.agent.session);
     };
 
+    const timeoutMs = Number.isInteger(timeout_seconds) && timeout_seconds > 0 ? timeout_seconds * 1000 : null;
+    if (timeoutMs) {
+      job.timeoutHandle = setTimeout(async () => {
+        if (job.status !== 'running') return;
+        job.status = 'failed';
+        job.error = `job timed out after ${timeout_seconds}s`;
+        job.error_code = 'JOB_TIMEOUT';
+        try { await job.handle?.dispose(); } catch {}
+      }, timeoutMs);
+      job.timeoutHandle.unref?.();
+    }
     job.promise = run()
       .catch((err) => {
         if (job.status === 'running') job.status = 'failed';
         job.error = job.error ?? (err?.message ?? String(err));
       })
       .finally(async () => {
+        if (job.timeoutHandle) clearTimeout(job.timeoutHandle);
         job.endedAt = new Date().toISOString();
         job.currentTool = null;
         // Delivery completeness is separate from execution status: a job can
@@ -384,8 +409,13 @@ export class WorkerRegistry {  constructor(ctx) {
         job.phase = job.status === 'done' ? JOB_PHASES.COMPLETED : job.status === 'cancelled' ? JOB_PHASES.CANCELLED : JOB_PHASES.FAILED;
         // Read-only after-snapshot of the workspace: bounded, redacted patch.
         job.workspaceDiff = job.baseline.kind === 'git'
-          ? await captureWorkspaceDiff({ cwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
+          ? await captureWorkspaceDiff({ cwd: executionCwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
           : job.baseline;
+        if (job.isolatedWorkspace) {
+          const cleanup = await cleanupIsolatedWorkspace(job.isolatedWorkspace).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+          job.workspace_retained = cleanup.ok !== true;
+          job.cleanup_warning = cleanup.ok === true ? null : cleanup.error ?? 'worktree cleanup failed';
+        }
         this.publish();
         for (const w of job.waiters.splice(0)) w();
       });
@@ -481,21 +511,67 @@ async function readBody(req, limit = 64 * 1024) {
  * Returns { ok: true, payload } (payload.tier = effective tier) or
  * { ok: false, code, error }.
  */
-export function resolveHubSpawnPayload(payload, getConfig = () => ({})) {
+export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependencies = {}) {
   const config = normalizeGlobalConfig(getConfig());
   const raw = payload ?? {};
+  const advanced = raw.profile !== undefined || raw.workspace_id !== undefined || raw.workspace !== undefined
+    || raw.constraints !== undefined || raw.context_refs !== undefined || raw.job_id !== undefined || raw.objective !== undefined;
+  let normalized = { ...raw };
+  if (advanced) {
+    const profileRegistry = dependencies.profileRegistry ?? loadRoleProfiles();
+    const workspaceRegistry = dependencies.workspaceRegistry ?? loadWorkspaceContexts();
+    if (!profileRegistry.ok) return { ok: false, code: 'PROFILE_FILE_INVALID', error: 'role profile registry is invalid' };
+    if (!workspaceRegistry.ok) return { ok: false, code: 'WORKSPACE_CONTEXT_FILE_INVALID', error: 'workspace registry is invalid' };
+    const profileRole = raw.profile ? profileRegistry.profiles?.[raw.profile]?.role : undefined;
+    const requestedRole = raw.role ?? profileRole ?? 'worker';
+    const resolvedProfile = resolveRoleProfile(profileRegistry, raw.profile, requestedRole);
+    if (!resolvedProfile.ok) return { ok: false, code: resolvedProfile.code, error: resolvedProfile.code };
+    const knownContext = raw.workspace_id ? workspaceRegistry.contexts?.[raw.workspace_id] : null;
+    const cwd = raw.workspace?.repo_root ?? raw.cwd ?? knownContext?.repo_root;
+    if (!cwd) return { ok: false, code: 'WORKSPACE_CONTEXT_NOT_FOUND', error: 'workspace repo_root or cwd is required' };
+    const workspace = resolveWorkspaceContext(workspaceRegistry, { workspace_id: raw.workspace_id, cwd });
+    if (!workspace.ok) return { ok: false, code: workspace.code, error: workspace.code };
+    const withRefs = addContextReferences(workspace.context, raw.context_refs, { cwd });
+    if (!withRefs.ok) return { ok: false, code: withRefs.code, error: withRefs.code };
+    const profile = resolvedProfile.profile;
+    const worktree = raw.workspace?.worktree;
+    const requestedIsolation = worktree === 'auto' ? 'worktree'
+      : worktree === 'existing' || worktree === 'none' ? 'shared'
+        : profile.isolation;
+    const objective = raw.objective ?? raw.task;
+    if (typeof objective !== 'string' || objective.trim() === '') return { ok: false, code: 'JOB_OBJECTIVE_REQUIRED', error: 'task or objective is required' };
+    if (raw.job_id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(raw.job_id)) {
+      return { ok: false, code: 'JOB_ID_INVALID', error: 'invalid client job id' };
+    }
+    normalized = {
+      ...raw,
+      task: buildWorkspaceTask(objective, withRefs.context),
+      cwd,
+      role: requestedRole,
+      client_job_id: raw.job_id ?? null,
+      requested_isolation: requestedIsolation,
+      workspace_branch: raw.workspace?.branch ?? withRefs.context?.default_branch ?? null,
+      timeout_seconds: raw.constraints?.timeout_seconds ?? profile.timeout_seconds,
+      allow_fallback: raw.constraints?.allow_fallback ?? profile.fallback,
+      routing: profile.routing,
+      review_strictness: profile.review_strictness,
+      profile_id: resolvedProfile.profile_id,
+      workspace_context: withRefs.context,
+    };
+    for (const key of ['objective', 'job_id', 'profile', 'workspace_id', 'workspace', 'constraints', 'context_refs']) delete normalized[key];
+  }
   // v0.2 role-based dispatch: reviewer / worker are gated by their role state,
   // and the tier slot is derived from the role (reviewer always → pro).
-  if (raw.role === 'worker' || raw.role === 'reviewer') {
-    const hint = resolveRoleTierHint(raw.role, raw.tier);
+  if (normalized.role === 'worker' || normalized.role === 'reviewer') {
+    const hint = resolveRoleTierHint(normalized.role, normalized.tier);
     if (!hint.ok) return { ok: false, code: hint.code, error: hint.error };
-    const decision = canDispatchRole(config, raw.role, true, {});
+    const decision = canDispatchRole(config, normalized.role, true, {});
     if (!decision.ok) return { ok: false, code: decision.error.policyCode, error: decision.error.message };
-    return { ok: true, payload: { ...raw, role: raw.role, tier: hint.tier } };
+    return { ok: true, payload: { ...normalized, role: normalized.role, tier: hint.tier } };
   }
-  const decision = chooseDefaultTier(config, raw.tier, {});
+  const decision = chooseDefaultTier(config, normalized.tier, {});
   if (!decision.ok) return { ok: false, code: decision.error.policyCode, error: decision.error.message };
-  return { ok: true, payload: { ...raw, tier: decision.tier } };
+  return { ok: true, payload: { ...normalized, tier: decision.tier } };
 }
 
 // ---------- plugin entry ----------
@@ -674,6 +750,13 @@ export async function apply(ctx) {
           }
         }
         const profiles = loadRoleProfiles();
+        const requestUrl = new URL(req.url, 'http://localhost');
+        const requestedWorkspaceId = requestUrl.searchParams.get('workspace_id');
+        const workspaceRegistry = loadWorkspaceContexts();
+        const requestedContext = requestedWorkspaceId ? workspaceRegistry.contexts?.[requestedWorkspaceId] : null;
+        const workspaceReadiness = requestedWorkspaceId && !requestedContext
+          ? { status: 'UNAVAILABLE', reason_code: 'WORKSPACE_CONTEXT_NOT_FOUND' }
+          : await assessWorkspaceReadiness({ cwd: requestedContext?.repo_root ?? null });
         const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
         const modelExecution = liveJobs.some((job) => job?.role === 'worker' && job?.status === 'done')
           ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' }
@@ -689,7 +772,7 @@ export async function apply(ctx) {
             modelExecution,
             reviewerExecution,
           ] },
-          workspace: { ok: true, context: null },
+          workspace: workspaceReadiness,
           profiles,
           runtime: getHubRuntimeIdentity(),
         });

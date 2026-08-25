@@ -45,3 +45,14 @@ test('real generic execution evidence proves the selected model and disabled opt
   assert.equal(contract.readiness.components.reviewer.status, 'DEGRADED');
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
+
+test('workspace conflict and read-only states remain machine-visible', () => {
+  for (const status of ['CONFLICT', 'READ_ONLY']) {
+    const contract = buildExtensionContract({
+      readinessMatrix: { rows: [] },
+      workspace: { status, reason_code: `WORKSPACE_${status}` },
+    });
+    assert.equal(contract.readiness.components.workspace.state, status);
+    assert.equal(contract.readiness.components.workspace.status, 'DEGRADED');
+  }
+});

@@ -73,3 +73,25 @@ test('other payload fields pass through untouched', () => {
   assert.equal(r.ok, true);
   assert.deepEqual(r.payload, { task: 't', effort: 'max', cwd: '/w', preset: 'minimal', tier: 'flash' });
 });
+
+test('versioned HTTP request resolves profile, workspace, constraints and caller id', () => {
+  const registry = { ok: true, profiles: {
+    'worker-default': { role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true, timeout_seconds: 1800, review_strictness: 'standard' },
+    safe: { role: 'worker', routing: 'stable', isolation: 'worktree', fallback: false, timeout_seconds: 900, review_strictness: 'strict' },
+  } };
+  const workspaces = { ok: true, contexts: {
+    demo: { workspace_id: 'demo', repo_root: '/repo', default_branch: 'main', instruction_files: ['AGENTS.md'], validation_hints: ['node --test'] },
+  } };
+  const r = resolveHubSpawnPayload({
+    job_id: 'client-1', objective: 'Implement it', role: 'worker', profile: 'safe', workspace_id: 'demo',
+    constraints: { timeout_seconds: 30, allow_fallback: true }, context_refs: ['docs/guide.md'],
+  }, () => cfg(), { profileRegistry: registry, workspaceRegistry: workspaces });
+  assert.equal(r.ok, true);
+  assert.equal(r.payload.client_job_id, 'client-1');
+  assert.equal(r.payload.cwd, '/repo');
+  assert.equal(r.payload.timeout_seconds, 30);
+  assert.equal(r.payload.allow_fallback, true);
+  assert.equal(r.payload.requested_isolation, 'worktree');
+  assert.equal(r.payload.workspace_branch, 'main');
+  assert.match(r.payload.task, /AGENTS\.md, docs\/guide\.md/);
+});

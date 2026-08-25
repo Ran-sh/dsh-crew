@@ -12,6 +12,21 @@ function component(status, reasonCode, evidence = null) {
   return { status, reason_code: reasonCode, ...(evidence ? { evidence } : {}) };
 }
 
+function workspaceComponent(workspace) {
+  if (workspace?.status === 'CONFLICT' || workspace?.status === 'READ_ONLY') {
+    return { ...component('DEGRADED', workspace.reason_code ?? `WORKSPACE_${workspace.status}`), state: workspace.status };
+  }
+  if (workspace?.status === 'UNAVAILABLE') {
+    return { ...component('UNAVAILABLE', workspace.reason_code ?? 'WORKSPACE_UNAVAILABLE'), state: 'UNAVAILABLE' };
+  }
+  if (workspace?.status === 'READY') {
+    return { ...component('READY', workspace.reason_code ?? 'WORKSPACE_READY'), state: 'READY' };
+  }
+  return workspace?.ok === true
+    ? { ...component('READY', workspace.context ? 'WORKSPACE_CONTEXT_RESOLVED' : 'WORKSPACE_CONTEXT_NOT_REQUESTED'), state: 'READY' }
+    : { ...component('UNAVAILABLE', workspace?.code ?? 'WORKSPACE_NOT_CHECKED'), state: 'UNAVAILABLE' };
+}
+
 function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   if (!entry) return component('UNAVAILABLE', 'NO_EVIDENCE');
   if (entry.status === 'PASS') return component(pass, entry.reason_code ?? 'CHECK_PASSED');
@@ -34,9 +49,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
   const components = {
     harness: readinessFromRow(row(readinessMatrix, 'hub_compatibility')),
     model: modelReadiness,
-    workspace: workspace?.ok === true
-      ? component('READY', workspace.context ? 'WORKSPACE_CONTEXT_RESOLVED' : 'WORKSPACE_CONTEXT_NOT_REQUESTED')
-      : component('UNAVAILABLE', workspace?.code ?? 'WORKSPACE_NOT_CHECKED'),
+    workspace: workspaceComponent(workspace),
     reviewer: reviewerEnabled
       ? readinessFromRow(row(readinessMatrix, 'reviewer_pipeline'))
       : component('DEGRADED', 'REVIEWER_DISABLED'),

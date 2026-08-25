@@ -27,6 +27,7 @@ import { projectWorkflowView } from './job-contracts.mjs';
 import { loadRoleProfiles, resolveRoleProfile } from './role-profiles.mjs';
 import { loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences } from './workspace-context.mjs';
 import { buildExtensionContract } from './extension-contract.mjs';
+import { assessWorkspaceReadiness } from './workspace-readiness.mjs';
 
 const server = new McpServer({ name: 'dsh-crew', version: RUNTIME_VERSION });
 
@@ -37,6 +38,16 @@ const detailSchema = z.enum(['compact', 'full']).default('compact').describe('co
 const profileSchema = z.string().max(64).optional().describe('Versioned Worker/Reviewer profile id; defaults by role.');
 const workspaceIdSchema = z.string().max(64).optional().describe('Workspace Context id from Crew-owned workspaces.json.');
 const contextRefsSchema = z.array(z.string().max(256)).max(32).optional().describe('Additional workspace-relative instruction references; contents are not copied.');
+const clientJobIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/).optional().describe('Optional caller id echoed in events and evidence; Crew still assigns its own workflow id.');
+const workspaceSchema = z.object({
+  repo_root: z.string().optional(),
+  branch: z.string().max(256).optional(),
+  worktree: z.enum(['auto', 'existing', 'none']).optional(),
+}).optional().describe('Per-job workspace overrides. auto isolates coding Workers; existing/none use the supplied workspace.');
+const constraintsSchema = z.object({
+  timeout_seconds: z.number().int().positive().max(7200).optional(),
+  allow_fallback: z.boolean().optional(),
+}).optional().describe('Per-job constraints override profile and session defaults.');
 
 // Session-level configuration. This MCP server process lives exactly as long
 // as one Claude Code / Codex session, so plain memory IS session scope.
@@ -166,9 +177,10 @@ function dispatchError(code, details = {}) {
   return { ok: false, response: text({ error: details.error ?? code, code, ...details }) };
 }
 
-function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs }) {
+function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs, job_id, workspace: workspaceOverride, constraints }) {
   const globalConfig = currentGlobalConfig();
   const profileRegistry = loadRoleProfiles();
+  if (!profileRegistry.ok) return dispatchError('PROFILE_FILE_INVALID', { errors: profileRegistry.errors });
   const profileRole = profile ? profileRegistry.profiles?.[profile]?.role : undefined;
   const requestedRole = role ?? profileRole;
   const hint = resolveRoleTierHint(requestedRole, legacy_tier ?? tier);
@@ -192,17 +204,24 @@ function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_s
     else { const slot = chooseDefaultTier(globalConfig, undefined, sessionConfig); effTier = slot.ok ? slot.tier : 'flash'; }
   }
 
-  const workDir = cwd ?? process.cwd();
+  const workDir = workspaceOverride?.repo_root ?? cwd ?? process.cwd();
   const workspace = resolveWorkspaceContext(loadWorkspaceContexts(), { workspace_id, cwd: workDir });
   if (!workspace.ok) return dispatchError(workspace.code, workspace);
   const withRefs = addContextReferences(workspace.context, context_refs, { cwd: workDir });
   if (!withRefs.ok) return dispatchError(withRefs.code);
   const profileValue = resolvedProfile.profile;
+  const effectiveTimeout = constraints?.timeout_seconds ?? timeout_seconds ?? profileValue.timeout_seconds ?? sessionConfig.default_timeout_seconds;
+  const requestedIsolation = workspaceOverride?.worktree === 'auto'
+    ? 'worktree'
+    : workspaceOverride?.worktree === 'existing' || workspaceOverride?.worktree === 'none'
+      ? 'shared'
+      : profileValue.isolation;
   return {
     ok: true,
     role: effRole,
-    timeout: timeout_seconds ?? profileValue.timeout_seconds ?? sessionConfig.default_timeout_seconds,
+    timeout: effectiveTimeout,
     spec: {
+      client_job_id: job_id ?? null,
       role: effRole,
       delivery: effRole === 'reviewer' ? 'review' : 'coding',
       model_class_hint: effTier,
@@ -211,8 +230,10 @@ function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_s
       effort: effort ?? sessionConfig.default_effort,
       source: ORCHESTRATOR,
       profile_id: resolvedProfile.profile_id,
-      requested_isolation: profileValue.isolation,
-      allow_fallback: profileValue.fallback,
+      requested_isolation: requestedIsolation,
+      workspace_branch: workspaceOverride?.branch ?? withRefs.context?.default_branch ?? null,
+      timeout_seconds: effectiveTimeout,
+      allow_fallback: constraints?.allow_fallback ?? profileValue.fallback,
       routing: profileValue.routing,
       review_strictness: profileValue.review_strictness,
       workspace_context: withRefs.context,
@@ -231,14 +252,17 @@ server.registerTool('dsh_run_worker', {
     effort: effortSchema,
     cwd: z.string().optional().describe('Workspace directory for the worker (defaults to current project)'),
     timeout_seconds: z.number().int().positive().max(7200).optional(),
+    job_id: clientJobIdSchema,
+    workspace: workspaceSchema,
+    constraints: constraintsSchema,
     profile: profileSchema,
     workspace_id: workspaceIdSchema,
     context_refs: contextRefsSchema,
     detail: detailSchema,
   },
-}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs, detail }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs, job_id, workspace, constraints, detail }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs });
+  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_seconds, profile, workspace_id, context_refs, job_id, workspace, constraints });
   if (!prepared.ok) return prepared.response;
   const wf = workflowRuntime.start(prepared.spec);
   await workflowRuntime.wait(wf.id, prepared.timeout * 1000);
@@ -353,6 +377,7 @@ async function buildConfigReport() {
     providerCatalogBody,
   });
   const roleProfiles = loadRoleProfiles();
+  const workspaceReadiness = await assessWorkspaceReadiness({ cwd: process.cwd() });
   const extensionContract = buildExtensionContract({
     config: {
       ...globalConfig,
@@ -362,7 +387,7 @@ async function buildConfigReport() {
       escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
     },
     readinessMatrix,
-    workspace: { ok: true, context: null },
+    workspace: workspaceReadiness,
     profiles: roleProfiles,
     runtime: getHubRuntimeIdentity(),
   });
@@ -422,13 +447,16 @@ server.registerTool('dsh_spawn_worker', {
     legacy_tier: tierSchema.describe('Legacy model-class hint (flash | pro) — only influences the model class backing a worker role, never the role gate'),
     effort: effortSchema,
     cwd: z.string().optional(),
+    job_id: clientJobIdSchema,
+    workspace: workspaceSchema,
+    constraints: constraintsSchema,
     profile: profileSchema,
     workspace_id: workspaceIdSchema,
     context_refs: contextRefsSchema,
   },
-}, async ({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs }) => {
+}, async ({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs, job_id, workspace, constraints }) => {
   if (!sessionConfig.enabled) return dispatchDisabled();
-  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs });
+  const prepared = prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, profile, workspace_id, context_refs, job_id, workspace, constraints });
   if (!prepared.ok) return prepared.response;
   const wf = workflowRuntime.start(prepared.spec);
   return text({ ...workflowRuntime.get(wf.id), workflow_id: wf.id, note: 'started in background; poll with dsh_worker_status / dsh_worker_result' });
