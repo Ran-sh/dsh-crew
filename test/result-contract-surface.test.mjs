@@ -14,7 +14,7 @@ test('blocking and polling MCP results default to compact and allow explicit ful
 test('cancel results use the same compact-by-default boundary on every id path', () => {
   assert.match(serverSource, /dsh_worker_cancel[\s\S]*inputSchema: \{ job_id: z\.string\(\), detail: detailSchema \}/);
   assert.match(serverSource, /projectWorkflowView\(view, \{ detail \}\)[\s\S]*note: 'cancelled'/);
-  assert.match(serverSource, /projectWorkflowView\(await hub\.cancel\(job_id\)[\s\S]*\{ detail \}\)/);
+  assert.match(serverSource, /const view = await hub\.cancel\(job_id\)[\s\S]*projectWorkflowView\(view, \{ detail \}\)/);
   assert.match(serverSource, /projectWorkflowView\(jobView\(await cancelJob\(job_id\), \{ withResult: true \}\), \{ detail \}\)/);
 });
 

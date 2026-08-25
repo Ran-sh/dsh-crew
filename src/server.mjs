@@ -441,20 +441,21 @@ server.registerTool('dsh_worker_result', {
 server.registerTool('dsh_worker_cancel', {
   title: 'Cancel DSH worker',
   description: 'Cancel a worker workflow (stops the active attempt, never starts escalation/review, releases its worktree). Accepts workflow ids (wf-...), Hub attempt ids (hub-...) and legacy standalone ids (job-...).',
-  inputSchema: { job_id: z.string() },
-}, async ({ job_id }) => {
+  inputSchema: { job_id: z.string(), detail: detailSchema },
+}, async ({ job_id, detail }) => {
   if (job_id.startsWith('wf-')) {
     const view = await workflowRuntime.cancel(job_id);
     if (!view) return text({ error: `no such workflow: ${job_id}` });
-    return text({ ...view, note: 'cancelled' });
+    return text({ ...projectWorkflowView(view, { detail }), note: 'cancelled' });
   }
   if (job_id.startsWith('hub-')) {
     const status = await hubStatus();
     if (!status.compatible) return text({ error: hubCompatibilityMessage(status), code: status.code, hub_compatibility: status });
-    return text(await hub.cancel(job_id).catch((e) => ({ error: e.message })));
+    const view = await hub.cancel(job_id).catch((e) => ({ error: e.message }));
+    return text(projectWorkflowView(view, { detail }));
   }
   if (!getJob(job_id)) return text({ error: `no such job: ${job_id} (expected a wf- workflow id)` });
-  return text(jobView(await cancelJob(job_id), { withResult: true }));
+  return text(projectWorkflowView(jobView(await cancelJob(job_id), { withResult: true }), { detail }));
 });
 
 await server.connect(new StdioServerTransport());

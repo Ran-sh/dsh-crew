@@ -32,7 +32,9 @@ Every workflow result can expose a versioned, ordered `canonical_events` list.
 Each event has `schema_version`, `event_id`, `job_id`, `sequence`, `type`, `at`,
 `role`, `attempt`, and bounded structured `data`.
 
-Supported event types:
+Supported event types (the allow-list is versioned; `approval.required` is
+reserved for a future approval broker and is not emitted by the current
+runtime):
 
 - `job.created`, `job.started`
 - `model.selected`, `model.fallback`

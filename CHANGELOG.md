@@ -4,7 +4,7 @@
 
 - Adds a versioned canonical job-event contract and a bounded evidence-first
   Result Contract for Worker/Reviewer workflows.
-- Makes MCP workflow results compact by default, while preserving the previous
+- Makes MCP workflow and cancellation results compact by default, while preserving the previous
   rich candidate/workflow view behind explicit `detail: "full"`.
 - Replaces patch/prose forwarding to automatic Reviewers with a bounded context
   capsule and direct isolated-workspace inspection.
