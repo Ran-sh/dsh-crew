@@ -63,6 +63,21 @@ Raw worker prose and candidate patch text are excluded. For an explicit debug
 or recovery operation, pass `detail: "full"`; this preserves the previous rich
 workflow view and adds the same evidence envelope.
 
+## Profiles, Workspace Context, and watch
+
+Both blocking and asynchronous MCP dispatch accept optional `profile`,
+`workspace_id`, and `context_refs` fields. Profiles control role-compatible
+routing, isolation, timeout, fallback, and review strictness. Workspace Context
+adds bounded project facts by reference; instruction file contents are opened by
+the Agent in the workspace rather than copied through the hand-off.
+
+`dsh_worker_result` accepts `after_sequence`. The response includes only newer
+`canonical_events` plus the current numeric `event_cursor`, so callers can watch
+long jobs without replaying the entire event history.
+
+The isolated Hub also exposes `/extension`, `/profiles`, `/workspaces`,
+`/jobs/:id/contract`, and `/jobs/:id/events`. All remain loopback-only.
+
 ## Compatibility boundary
 
 The internal legacy phase events remain in the explicit full view for current

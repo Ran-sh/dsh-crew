@@ -58,6 +58,7 @@ MCP 调用方如需排障或恢复，可以在 `dsh_run_worker` 或
 
 ```bash
 dsh-crew status       # 查看安装与集成状态
+dsh-crew inspect      # 输出机器可读的能力与就绪度
 dsh-crew update       # 更新并自动修复已启用的集成
 dsh-crew integrate    # 将官方 3080 界面连接到隔离的 3210 Crew
 dsh-crew detach       # 只移除 3080 桥接
@@ -99,6 +100,7 @@ node scripts/setup.mjs uninstall
 ```
 
 更多资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [任务契约](./docs/job-contracts.md)
+· [GPT-first 扩展接入](./docs/gpt-relay-extension.md)
 
 ## License
 

@@ -10,6 +10,13 @@
   capsule and direct isolated-workspace inspection.
 - Bounds Hub hand-off memory by retaining only the latest assistant message
   needed for the final Delivery Report.
+- Adds versioned Worker/Reviewer Profiles and Workspace Context registries with
+  validation-before-write and bounded reference-only Agent hand-offs.
+- Adds a narrow extension capability/readiness contract, incremental canonical
+  event watch, compact HTTP job contracts, and `dsh-crew inspect` for GPT-first
+  orchestrators.
+- Classifies failures by stable family and `retry` / `fallback` / `human` /
+  `terminal` disposition without parsing provider logs.
 
 ## 0.3.8 — 2026-08-24
 
