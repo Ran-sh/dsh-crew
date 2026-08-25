@@ -104,6 +104,25 @@ test('worker success -> completed with one attempt and a candidate', async () =>
   assert.equal(v.outcome.task_status, 'success');
 });
 
+test('worker lifecycle exposes ordered canonical events without candidate payloads', async () => {
+  const a = makeAdapter();
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory, clock: (() => { let now = 100; return () => now++; })() });
+  const job = rt.start({ role: 'worker', task: 'do it', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.deepEqual(v.canonical_events.map((event) => event.type), [
+    'job.created',
+    'job.started',
+    'worker.started',
+    'model.selected',
+    'worker.completed',
+    'job.completed',
+  ]);
+  assert.deepEqual(v.canonical_events.map((event) => event.sequence), [1, 2, 3, 4, 5, 6]);
+  assert.equal(v.canonical_events.at(-1).job_id, job.id);
+  assert.doesNotMatch(JSON.stringify(v.canonical_events), /diff --git/);
+});
+
 // ---------- escalation on FAIL tests ----------
 
 test('FAIL tests escalate to a stronger second attempt then succeed', async () => {
