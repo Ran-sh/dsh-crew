@@ -115,3 +115,29 @@ test('Hub disposes a completed agent handle before publishing terminal completio
   await reg.wait(job.id, 5_000);
   assert.equal(disposed, 1, 'completed agents must release cwd handles before worktree cleanup');
 });
+
+test('Hub cancellation and terminal cleanup share one handle disposal', async () => {
+  let disposed = 0;
+  let idleCalls = 0;
+  let releaseIdle;
+  const secondIdle = new Promise((resolve) => { releaseIdle = resolve; });
+  const handle = {
+    agent: {
+      session: {},
+      whenIdle: async () => (++idleCalls === 1 ? undefined : secondIdle),
+      followup() {},
+    },
+    dispose: async () => { disposed += 1; releaseIdle(); },
+  };
+  const reg = new WorkerRegistry({
+    agents: { create: async () => handle },
+    sessions: { flush: async () => {} },
+    get: (key) => key === 'loader' ? { await: async () => {} } : undefined,
+  });
+  const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/repo' });
+  while (idleCalls < 2) await new Promise((resolve) => setImmediate(resolve));
+  await reg.cancel(job.id);
+  await job.promise;
+  assert.equal(job.status, 'cancelled');
+  assert.equal(disposed, 1, 'cancel and finally must await the same disposal');
+});
