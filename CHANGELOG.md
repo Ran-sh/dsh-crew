@@ -4,8 +4,9 @@
 
 - Disposes completed Hub Agent handles before isolated worktree cleanup so
   Windows does not retain successful Worker/Reviewer worktrees with `EPERM`.
-- Shares the disposal guard with the timeout path to prevent double-dispose
-  races and surfaces Agent cleanup failures in the job cleanup evidence.
+- Shares one disposal promise across completion, cancellation, timeout, and Hub
+  shutdown to prevent double-dispose races, and surfaces Agent cleanup failures
+  in the job cleanup evidence.
 
 ## 0.4.0 — 2026-08-25
 
