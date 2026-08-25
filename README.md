@@ -43,6 +43,18 @@ Use ds-reviewer to review the result.
 
 Legacy `ds-flash` and `ds-pro` aliases remain compatible.
 
+## Results and reviews
+
+Crew returns a compact, machine-readable Result Contract by default: status,
+tests, changed files, review verdict, model-selection trace, artifact references,
+and canonical lifecycle events. Raw agent prose and full patches are not copied
+through every hand-off. An automatic Reviewer receives a bounded evidence
+capsule and inspects the isolated workspace directly.
+
+MCP callers can request `detail: "full"` on `dsh_run_worker` or
+`dsh_worker_result` for explicit debugging and recovery. Contract details are in
+[Job contracts and information flow](./docs/job-contracts.md).
+
 ## Common commands
 
 ```bash
@@ -87,7 +99,7 @@ pnpm run build:client
 node scripts/setup.mjs uninstall
 ```
 
-More detail: [Changelog](./CHANGELOG.md) · [Readiness matrix](./docs/readiness-matrix.md)
+More detail: [Changelog](./CHANGELOG.md) · [Readiness matrix](./docs/readiness-matrix.md) · [Job contracts](./docs/job-contracts.md)
 
 ## License
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Adds a versioned canonical job-event contract and a bounded evidence-first
+  Result Contract for Worker/Reviewer workflows.
+- Makes MCP workflow results compact by default, while preserving the previous
+  rich candidate/workflow view behind explicit `detail: "full"`.
+- Replaces patch/prose forwarding to automatic Reviewers with a bounded context
+  capsule and direct isolated-workspace inspection.
+- Bounds Hub hand-off memory by retaining only the latest assistant message
+  needed for the final Delivery Report.
+
 ## 0.3.8 — 2026-08-24
 
 - Adds an opt-in official Harness integration: the standard UI remains on `127.0.0.1:3080`, while the full Crew Hub and model workloads stay isolated in the Crew-owned `dsh-crew` profile on `127.0.0.1:3210`.

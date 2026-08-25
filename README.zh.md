@@ -43,6 +43,17 @@ npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
 
 旧的 `ds-flash`、`ds-pro` 别名仍可使用。
 
+## 结果与复审信息流
+
+Crew 默认返回紧凑、机器可读的 Result Contract：状态、测试、改动文件、
+Reviewer 结论、模型选择轨迹、候选引用和规范化生命周期事件。Worker 的
+整段原始回答和完整 patch 不会在每次交接时重复传递；自动 Reviewer 只接收
+有大小上限的证据胶囊，并直接检查隔离工作区。
+
+MCP 调用方如需排障或恢复，可以在 `dsh_run_worker` 或
+`dsh_worker_result` 中显式传入 `detail: "full"`。完整契约见
+[任务契约与信息流](./docs/job-contracts.md)。
+
 ## 常用命令
 
 ```bash
@@ -87,7 +98,7 @@ pnpm run build:client
 node scripts/setup.mjs uninstall
 ```
 
-更多资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md)
+更多资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [任务契约](./docs/job-contracts.md)
 
 ## License
 
