@@ -83,13 +83,37 @@ function normalizedCode(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function failureFamily(category, reasonCode, sourceCode) {
+  const code = sourceCode ?? reasonCode ?? '';
+  if (category === 'none') return 'NONE';
+  if (category === 'compatibility' || code.startsWith('HUB_')) return 'HARNESS';
+  if (category === 'provider' || code.startsWith('MODEL_') || code.startsWith('PROVIDER_')) return 'MODEL';
+  if (/^(WORK|GIT_|ISOLATION_|CANDIDATE_|PROFILE_)/.test(code)) return 'WORKSPACE';
+  if (String(reasonCode).startsWith('REVIEW_')) return 'REVIEW';
+  if (category === 'policy') return 'POLICY';
+  return 'JOB';
+}
+
+function failureDisposition(category, family) {
+  if (category === 'none') return 'none';
+  if (category === 'cancelled') return 'terminal';
+  if (category === 'compatibility') return 'retry';
+  if (category === 'provider') return 'fallback';
+  if (category === 'policy' || family === 'WORKSPACE' || family === 'REVIEW') return 'human';
+  if (category === 'runtime') return 'retry';
+  return 'terminal';
+}
+
 function result(category, reasonCode, { sourceCode = null, terminalReason = null } = {}) {
+  const family = failureFamily(category, reasonCode, sourceCode);
   return {
     schema_version: 1,
     category,
     reason_code: reasonCode,
     ...(sourceCode ? { source_code: sourceCode } : {}),
     ...(terminalReason ? { terminal_reason: terminalReason } : {}),
+    family,
+    disposition: failureDisposition(category, family),
   };
 }
 
