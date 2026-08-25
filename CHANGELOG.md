@@ -9,7 +9,8 @@
   in the job cleanup evidence.
 - Preserves direct Hub provider/model selection traces inside the compact Result
   Contract evidence envelope instead of returning an empty trace, while
-  allow-listing selected model fields so raw provider payloads cannot pass through.
+  allow-listing and bounding selected model and routing-reason fields so raw
+  provider payloads cannot pass through.
 
 ## 0.4.0 — 2026-08-25
 
