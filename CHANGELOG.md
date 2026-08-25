@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-08-25
 
 - Adds a versioned canonical job-event contract and a bounded evidence-first
   Result Contract for Worker/Reviewer workflows.
