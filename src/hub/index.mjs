@@ -485,10 +485,21 @@ function isLoopbackAddress(address) {
   if (!n.startsWith('::ffff:')) return false;
   return isIpv4Loopback(n.slice(7));
 }
-function isLoopbackRequest(req) {
+export function isLoopbackRequest(req) {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return false;
   const host = (req.headers.host ?? '').split(':')[0].toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || isIpv4Loopback(host);
+  if (!(host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || isIpv4Loopback(host))) return false;
+  const fetchSite = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
+  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
+  const origin = req.headers?.origin;
+  if (origin !== undefined) {
+    if (typeof origin !== 'string') return false;
+    let parsed;
+    try { parsed = new URL(origin); } catch { return false; }
+    const originHost = parsed.hostname.toLowerCase();
+    if (!(originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1' || isIpv4Loopback(originHost))) return false;
+  }
+  return true;
 }
 function sendJson(res, status, value, headers = {}) {
   const body = JSON.stringify(value);

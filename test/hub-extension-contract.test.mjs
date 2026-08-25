@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hubCanonicalEvents } from '../src/hub/index.mjs';
+import { hubCanonicalEvents, isLoopbackRequest } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
@@ -18,6 +18,13 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /saveWorkspaceContexts\(await readBody\(req\)\)/);
   assert.match(hubSource, /id: 'model_execution'.*REAL_EXECUTION_PASSED/s);
   assert.match(hubSource, /id: 'reviewer_pipeline'.*REAL_REVIEW_PASSED/s);
+});
+
+test('Hub mutation surface rejects cross-site browser requests', () => {
+  const request = (headers) => ({ socket: { remoteAddress: '127.0.0.1' }, headers });
+  assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210' })), true);
+  assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
+  assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
 });
 
 test('direct Hub jobs project deterministic canonical events without raw result text', () => {
