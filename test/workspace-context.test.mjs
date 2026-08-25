@@ -56,6 +56,17 @@ test('workspace resolution rejects unknown ids, root mismatches, and escaping re
   assert.equal(loadWorkspaceContexts({ home: badHome }).contexts.bad, undefined);
 });
 
+test('workspace branch hints reject git option and malformed ref names', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-context-repo-'));
+  for (const branch of ['--lock', 'feature..bad', 'feature@{bad}', 'feature/', '.hidden/main']) {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-context-branch-'));
+    const dir = join(home, '.config', 'dsh-crew');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'workspaces.json'), JSON.stringify({ schema_version: 1, workspaces: { bad: { repo_root: repo, default_branch: branch } } }));
+    assert.equal(loadWorkspaceContexts({ home }).contexts.bad, undefined, branch);
+  }
+});
+
 test('workspace loader distinguishes a missing registry from corrupt JSON', () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-context-corrupt-'));
   const dir = join(home, '.config', 'dsh-crew');

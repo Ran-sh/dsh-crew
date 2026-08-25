@@ -25,7 +25,7 @@ import { buildMcpWorkflowRuntime } from './mcp-runtime.mjs';
 import { buildReviewTask } from './information-flow.mjs';
 import { projectWorkflowView } from './job-contracts.mjs';
 import { loadRoleProfiles, resolveRoleProfile } from './role-profiles.mjs';
-import { loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences } from './workspace-context.mjs';
+import { loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences, isSafeBranchName } from './workspace-context.mjs';
 import { buildExtensionContract } from './extension-contract.mjs';
 import { assessWorkspaceReadiness } from './workspace-readiness.mjs';
 
@@ -41,7 +41,7 @@ const contextRefsSchema = z.array(z.string().max(256)).max(32).optional().descri
 const clientJobIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/).optional().describe('Optional caller id echoed in events and evidence; Crew still assigns its own workflow id.');
 const workspaceSchema = z.object({
   repo_root: z.string().optional(),
-  branch: z.string().max(256).optional(),
+  branch: z.string().refine(isSafeBranchName, 'invalid git branch name').optional(),
   worktree: z.enum(['auto', 'existing', 'none']).optional(),
 }).optional().describe('Per-job workspace overrides. auto isolates coding Workers; existing/none use the supplied workspace.');
 const constraintsSchema = z.object({

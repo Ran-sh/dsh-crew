@@ -71,3 +71,27 @@ test('spawn still rejects a missing cwd', async () => {
     (err) => err.message === GUARD,
   );
 });
+
+test('Hub timeout publishes terminal state and wakes waiters even when dispose fails', async () => {
+  let idleCalls = 0;
+  const never = new Promise(() => {});
+  const handle = {
+    agent: {
+      session: {},
+      whenIdle: async () => (++idleCalls === 1 ? undefined : never),
+      followup() {},
+    },
+    dispose: async () => { throw new Error('dispose failed'); },
+  };
+  const reg = new WorkerRegistry({
+    agents: { create: async () => handle },
+    sessions: { flush: async () => {} },
+    get: (key) => key === 'loader' ? { await: async () => {} } : undefined,
+  });
+  const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: '/repo', timeout_seconds: 1 });
+  const started = Date.now();
+  const terminal = await reg.wait(job.id, 5_000);
+  assert.equal(terminal.status, 'failed');
+  assert.equal(terminal.error_code, 'JOB_TIMEOUT');
+  assert.ok(Date.now() - started < 3_000, 'timeout waiter must wake promptly');
+});

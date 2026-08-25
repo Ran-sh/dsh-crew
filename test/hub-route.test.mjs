@@ -104,6 +104,7 @@ test('versioned HTTP request rejects malformed workspace and constraints', () =>
   for (const payload of [
     { objective: 'x', workspace: { repo_root: '/repo', worktree: 'unsafe' } },
     { objective: 'x', workspace: { repo_root: '/repo', branch: '' } },
+    { objective: 'x', workspace: { repo_root: '/repo', branch: '--lock' } },
     { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { timeout_seconds: -1 } },
     { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { allow_fallback: 'yes' } },
   ]) {

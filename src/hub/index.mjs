@@ -25,7 +25,7 @@ import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
-import { addContextReferences, buildWorkspaceTask, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
+import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
 import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
@@ -383,6 +383,9 @@ export class WorkerRegistry {  constructor(ctx) {
         job.status = 'failed';
         job.error = `job timed out after ${timeout_seconds}s`;
         job.error_code = 'JOB_TIMEOUT';
+        job.endedAt = new Date().toISOString();
+        this.publish();
+        for (const waiter of job.waiters.splice(0)) waiter();
         try { await job.handle?.dispose(); } catch {}
       }, timeoutMs);
       job.timeoutHandle.unref?.();
@@ -570,7 +573,7 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
     if (raw.workspace?.worktree !== undefined && !['auto', 'existing', 'none'].includes(raw.workspace.worktree)) {
       return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'invalid worktree policy' };
     }
-    if (raw.workspace?.branch !== undefined && (typeof raw.workspace.branch !== 'string' || raw.workspace.branch.trim() === '' || raw.workspace.branch.length > 256)) {
+    if (raw.workspace?.branch !== undefined && !isSafeBranchName(raw.workspace.branch)) {
       return { ok: false, code: 'WORKSPACE_REQUEST_INVALID', error: 'invalid workspace branch' };
     }
     if (raw.constraints?.timeout_seconds !== undefined && (!Number.isInteger(raw.constraints.timeout_seconds) || raw.constraints.timeout_seconds < 1 || raw.constraints.timeout_seconds > 7200)) {

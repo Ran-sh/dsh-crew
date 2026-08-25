@@ -9,6 +9,14 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 export const WORKSPACE_CONTEXT_SCHEMA_VERSION = 1;
 const ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
+export function isSafeBranchName(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 256) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value)) return false;
+  if (value.includes('..') || value.includes('@{') || value.includes('//')) return false;
+  if (value.endsWith('/') || value.endsWith('.') || value.endsWith('.lock')) return false;
+  return value.split('/').every((part) => part && !part.startsWith('.'));
+}
+
 function boundedStrings(value, { maxItems = 32, maxLength = 256 } = {}) {
   if (value === undefined) return [];
   if (!Array.isArray(value)) return null;
@@ -33,7 +41,7 @@ function normalizeContext(id, raw) {
   const instructionFiles = boundedStrings(raw.instruction_files);
   const validationHints = boundedStrings(raw.validation_hints, { maxItems: 32, maxLength: 512 });
   if (!instructionFiles || !validationHints || instructionFiles.some((entry) => !safeReference(entry))) return null;
-  if (raw.default_branch != null && (typeof raw.default_branch !== 'string' || raw.default_branch.length > 128)) return null;
+  if (raw.default_branch != null && !isSafeBranchName(raw.default_branch)) return null;
   return {
     workspace_id: id,
     repo_root: resolve(raw.repo_root),
