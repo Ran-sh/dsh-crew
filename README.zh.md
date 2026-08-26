@@ -22,7 +22,9 @@ dsh-crew integrate
 npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
 ```
 
-打开 <http://127.0.0.1:3080>，进入 **设置 → DSH Crew**。3080 只显示官方界面；Crew 的任务与模型执行继续隔离在 `127.0.0.1:3210`，需要时由桥接在后台自动启动。
+打开 <http://127.0.0.1:3080>，进入唯一的 **设置 → DSH Crew**。3080 是日常控制台；Crew 的任务与模型执行继续隔离在 `127.0.0.1:3210`。只有配置底层 Provider 和 Harness Models 时才点击“打开 3210 Crew Harness →”。
+
+共享客户端会识别当前 surface：3080 显示完整 Crew 控制面、宿主就绪度和任务状态；3210 的 DSH Crew 入口只显示最小运行时诊断，Provider、Harness Models、Agent 预设和底层设置仍由 Harness 原生菜单管理。识别依赖结构化 bridge/runtime 接口，不硬编码浏览器端口；证据缺失时会保守隐藏控制面。详见 [UI surface 架构](./docs/ui-surfaces.md)。
 
 ## 配置
 
@@ -32,7 +34,7 @@ npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
 4. Reviewer 默认 **Manual**；确实需要自动复审时再开启。
 5. 编码任务建议保持 **worktree** 隔离。
 
-只配置一个模型时，两个角色直接使用它。配置多个模型时，每个角色按自己的排序调用，失败后依次回退。设置模块可以展开/收起，收起后仍显示当前状态。
+只配置一个模型时，两个角色直接使用它。配置多个模型时，每个角色按自己的排序调用，失败后依次回退。设置模块可以展开/收起，收起后仍显示当前状态。任务区用紧凑表格显示 Worker/Reviewer，并聚合当前进程内的模型调用次数、来源和最近调用时间；不会为此采集提示词、结果或凭据。
 
 ## 在 Codex 或 Claude 中使用
 
@@ -101,7 +103,7 @@ pnpm run build:client
 node scripts/setup.mjs uninstall
 ```
 
-更多资料：[Changelog](./CHANGELOG.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [任务契约](./docs/job-contracts.md)
+更多资料：[Changelog](./CHANGELOG.md) · [UI surfaces](./docs/ui-surfaces.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [任务契约](./docs/job-contracts.md)
 · [GPT-first 扩展接入](./docs/gpt-relay-extension.md)
 
 ## License

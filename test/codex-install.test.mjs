@@ -7,10 +7,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { installCodex, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { MCP_TOOLS, installCodex, installStatus, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 function makeHome() {
   return mkdtempSync(join(tmpdir(), 'dsh-crew-codex-test-'));
@@ -26,7 +26,124 @@ test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spaw
     assert.ok(existsSync(join(home, '.codex', 'agents', 'ds-pro.toml')));
     assert.ok(existsSync(join(home, '.codex', 'prompts', 'dsh-config.md')));
     assert.ok(existsSync(join(home, '.codex', 'prompts', 'dsh-status.md')));
+    const status = installStatus({ home });
+    assert.equal(status.codex.installed, true);
+    assert.equal(status.codex.ready, true);
+    assert.deepEqual(status.codex.missing, []);
+    assert.deepEqual(status.codex.components, {
+      worker_role: true,
+      reviewer_role: true,
+      config_prompt: true,
+      status_prompt: true,
+      mcp: true,
+      target_alignment: true,
+    });
     // installCodex never tries to execute the codex CLI (its body is pure file I/O).
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness distinguishes a partial legacy install from a complete integration', () => {
+  const home = makeHome();
+  try {
+    mkdirSync(join(home, '.codex', 'agents'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'agents', 'ds-flash.toml'), '[agent]\n');
+    const status = installStatus({ home }).codex;
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, false);
+    assert.deepEqual(status.missing, ['worker_role', 'reviewer_role', 'config_prompt', 'status_prompt', 'mcp', 'target_alignment']);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness fails closed when config.toml is unreadable', () => {
+  const home = makeHome();
+  try {
+    mkdirSync(join(home, '.codex', 'config.toml'), { recursive: true });
+    const status = installStatus({ home }).codex;
+    assert.equal(status.ready, false);
+    assert.equal(status.components.mcp, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness rejects an unrelated TOML section and a missing MCP target', () => {
+  const home = makeHome();
+  try {
+    const configDir = join(home, '.codex');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.toml'), '[unrelated]\ndsh-crew = { command = "node", args = ["D:/missing/server.mjs"] }\n');
+    assert.equal(installStatus({ home }).codex.components.mcp, false);
+
+    writeFileSync(join(configDir, 'config.toml'), '[mcp_servers]\ndsh-crew = { command = "node", args = ["D:/missing/server.mjs"] }\n');
+    assert.equal(installStatus({ home }).codex.components.mcp, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness rejects a stale managed role target', () => {
+  const home = makeHome();
+  try {
+    installCodex({ home });
+    writeFileSync(join(home, '.codex', 'agents', 'ds-worker.toml'), '[mcp_servers.dsh-crew]\ncommand = "node"\nargs = ["D:/missing/server.mjs"]\n');
+    const status = installStatus({ home }).codex;
+    assert.equal(status.components.worker_role, false);
+    assert.equal(status.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness requires Worker, Reviewer, and global MCP to use one server target', () => {
+  const home = makeHome();
+  try {
+    installCodex({ home });
+    const alternate = join(home, 'older-release', 'src', 'server.mjs');
+    mkdirSync(join(home, 'older-release', 'src'), { recursive: true });
+    writeFileSync(alternate, 'export {};\n');
+    writeFileSync(join(home, '.codex', 'config.toml'), `[mcp_servers]\ndsh-crew = { command = "node", args = ["${alternate.replace(/\\/g, '/')}"] }\n`);
+    const status = installStatus({ home }).codex;
+    assert.equal(status.components.worker_role, true);
+    assert.equal(status.components.reviewer_role, true);
+    assert.equal(status.components.mcp, true);
+    assert.equal(status.components.target_alignment, false);
+    assert.equal(status.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Claude readiness does not equate an enabled setting with a callable plugin', () => {
+  const home = makeHome();
+  try {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      enabledPlugins: { 'dsh-crew@dsh-crew': true },
+    }));
+    const status = installStatus({ home }).claude;
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, false);
+    assert.deepEqual(status.missing, ['marketplace', 'snapshot', 'permissions']);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Claude readiness validates marketplace, installed snapshot, and tool permissions', () => {
+  const home = makeHome();
+  try {
+    const marketplace = join(home, 'payload');
+    const snapshot = join(home, '.claude', 'plugins', 'cache', 'dsh-crew', 'dsh-crew', '0.1.0');
+    for (const root of [marketplace, snapshot]) {
+      mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+      mkdirSync(join(root, 'src'), { recursive: true });
+      writeFileSync(join(root, '.claude-plugin', 'plugin.json'), '{}\n');
+      writeFileSync(join(root, '.mcp.json'), '{}\n');
+      writeFileSync(join(root, 'src', 'server.mjs'), 'export {};\n');
+    }
+    mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+      plugins: { 'dsh-crew@dsh-crew': { installPath: snapshot } },
+    }));
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      enabledPlugins: { 'dsh-crew@dsh-crew': true },
+      extraKnownMarketplaces: { 'dsh-crew': { source: { source: 'directory', path: marketplace } } },
+      permissions: { allow: MCP_TOOLS.map((tool) => `mcp__plugin_dsh-crew_dsh-crew__${tool}`) },
+    }));
+    const status = installStatus({ home }).claude;
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, true);
+    assert.deepEqual(status.missing, []);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

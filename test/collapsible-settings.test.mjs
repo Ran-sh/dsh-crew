@@ -25,7 +25,7 @@ function memoryStorage(initial = {}) {
 test('settings open only the core workflow by default', () => {
   const state = createDefaultSectionState();
   assert.deepEqual(SETTINGS_SECTION_IDS, [
-    'integrations', 'workflow', 'flash', 'pro', 'dispatch',
+    'integrations', 'workflow', 'flash', 'pro', 'dispatch', 'adaptive',
     'runtime', 'multimodal', 'providers', 'jobs',
   ]);
   assert.equal(state.workflow, true);

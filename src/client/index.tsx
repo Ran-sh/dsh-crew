@@ -10,25 +10,54 @@ import {
   setEverySection,
   writeSectionState,
 } from './collapsible-sections.mjs';
+import { ActivationSummary } from './activation-summary';
+import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
+import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
+import { aggregateModelInvocations } from './task-telemetry.mjs';
 
 export const inject = ['slots', 'locale'];
 
 const API = '/_dsh/dsh-crew';
+const CREW_HARNESS_URL = 'http://127.0.0.1:3210/';
+const CREW_CONTROL_PLANE_URL = 'http://127.0.0.1:3080/';
+
+type AdaptiveConfig = { enabled: boolean; window_size: number; min_samples: number };
+const DEFAULT_ADAPTIVE: AdaptiveConfig = { enabled: false, window_size: 8, min_samples: 2 };
+
+function clampInt(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function normalizeAdaptive(value: any): AdaptiveConfig {
+  const windowSize = clampInt(value?.window_size, DEFAULT_ADAPTIVE.window_size, 1, 32);
+  return {
+    enabled: value?.enabled === true,
+    window_size: windowSize,
+    min_samples: clampInt(value?.min_samples, DEFAULT_ADAPTIVE.min_samples, 1, windowSize),
+  };
+}
 
 const COPY = {
   zh: {
     label: 'DSH Crew',
     title: 'DSH Crew',
-    intro: '把 Claude Code / Codex 的子任务派给本实例的 DSH agent，在宿主里显示为原生子代理、进度可见。配置派发默认值、执行方式，以及接入视觉与生图能力，一键装进宿主。',
+    intro: '日常 Crew 控制台：在一个入口里配置编排、角色、模型路由与宿主集成，并跟踪真实 Worker / Reviewer 任务。',
     integrations: '集成',
-    installed: '已安装', notInstalled: '未安装', hud: 'HUD 段',
+    installed: '已安装', notInstalled: '未安装', ready: '可调用', notReady: '未就绪', hud: 'HUD 段',
     install: '安装', update: '更新', restore: '还原',
     confirmRestore: (name: string) => `确定从 ${name} 移除 dsh-crew 集成？（settings 会先备份）`,
     globalConfig: '全局配置',
     expandAll: '全部展开', collapseAll: '全部折叠',
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
-    sectionNames: { integrations: '宿主集成', workflow: '工作流', flash: 'Flash', pro: 'Pro', dispatch: '派发策略', runtime: '运行连接', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: 'Worker 任务' },
+    sectionNames: { integrations: 'Codex / Claude 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: '任务状态' },
+    openHarness: '打开 3210 Crew Harness →',
+    harnessHint: '底层 Provider、Harness Models 与运行时配置',
+    hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
     orchestration: 'Agent 编排',
     enableSubagents: '启用子 Agent',
@@ -112,8 +141,12 @@ const COPY = {
     cardMM: { t: '视觉与生图', d: '给纯文本的 DSH 模型借来眼睛和画笔：describe_image、会话贴图转写与 generate_image 都用这里的设置。' },
     cardCustomProv: { t: '自定义 Provider', d: '接入自己的 API 或本地命令；保存后会出现在上面的视觉 / 生图 provider 选择里。' },
     modeDesc: { auto: 'auto · 优先 hub', hub: 'hub · 必须 hub', standalone: 'standalone · 独立进程' },
-    save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 worker 任务。',
-    col: { id: '任务', source: '来源', tier: '档位', status: '状态', progress: '进度', tokens: 'tokens ⇅', task: '内容' },
+    save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 Worker / Reviewer 任务。',
+    adaptiveTitle: '自适应模型路由（实验）', adaptiveHint: '默认关闭；只重排系统自动候选，手动模型优先级始终保持原序。健康信号仅来自本进程已观察到的成功、失败、超时与粗粒度延迟，重启后清空。',
+    adaptiveEnabled: '启用自适应路由', adaptiveWindow: '健康窗口', adaptiveSamples: '最少样本', adaptiveBoundary: '下一个工作流生效',
+    modelActivity: '模型调用概览', modelActivityHint: '聚合本 Hub 内存中最近 500 个任务的真实调用证据，最多显示 50 个模型；不保存提示词、结果或凭据。', noModelActivity: '还没有真实模型调用。',
+    calls: '调用次数', invocationSource: '任务来源', routingSource: '路由来源', lastCalled: '最近调用', role: '角色', model: '模型', never: '—',
+    col: { id: '任务', role: '角色', source: '来源', model: '模型', tier: '档位', status: '状态', progress: '进度', tokens: 'tokens ⇅', task: '内容' },
     working: '处理中…',
     tips: {
       claude: {
@@ -131,16 +164,21 @@ const COPY = {
   en: {
     label: 'DSH Crew',
     title: 'DSH Crew',
-    intro: 'Dispatch Claude Code / Codex subtasks to DSH agents within this instance, displayed as native subagents in the host with live progress. Configure dispatch defaults, execution mode, and vision/image generation (via subscription CLI or your own OpenAI API), then one-click install into the host.',
+    intro: 'The daily Crew console: configure orchestration, roles, model routing, and host integrations in one place while tracking real Worker / Reviewer jobs.',
     integrations: 'Integrations',
-    installed: 'installed', notInstalled: 'not installed', hud: 'HUD segment',
+    installed: 'installed', notInstalled: 'not installed', ready: 'ready', notReady: 'not ready', hud: 'HUD segment',
     install: 'Install', update: 'Update', restore: 'Restore',
     confirmRestore: (name: string) => `Remove the dsh-crew integration from ${name}? (settings are backed up first)`,
     globalConfig: 'Global configuration',
     expandAll: 'Expand all', collapseAll: 'Collapse all',
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
-    sectionNames: { integrations: 'Host integrations', workflow: 'Workflow', flash: 'Flash', pro: 'Pro', dispatch: 'Dispatch policy', runtime: 'Runtime connection', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Worker jobs' },
+    sectionNames: { integrations: 'Codex / Claude integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Task status' },
+    openHarness: 'Open 3210 Crew Harness →',
+    harnessHint: 'Low-level providers, Harness Models, and runtime configuration',
+    hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
     orchestration: 'Agent orchestration',
     enableSubagents: 'Enable Subagents',
@@ -224,8 +262,12 @@ const COPY = {
     cardMM: { t: 'Vision & image generation', d: "Lends the harness's text-only models eyes and a brush: describe_image, pasted-image transcription and generate_image all use these settings." },
     cardCustomProv: { t: 'Custom providers', d: 'Bring your own API or local command; saved providers appear in the vision / image-gen selects above.' },
     modeDesc: { auto: 'auto · prefer hub', hub: 'hub · require hub', standalone: 'standalone' },
-    save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No worker jobs yet.',
-    col: { id: 'job', source: 'source', tier: 'tier', status: 'status', progress: 'progress', tokens: 'tokens ⇅', task: 'task' },
+    save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No Worker / Reviewer jobs yet.',
+    adaptiveTitle: 'Adaptive model routing (experimental)', adaptiveHint: 'Off by default. Only system-derived candidates may be reordered; explicit model priorities always keep their order. Health uses only process-local success, failure, timeout, and coarse latency observations and resets on restart.',
+    adaptiveEnabled: 'Enable adaptive routing', adaptiveWindow: 'Health window', adaptiveSamples: 'Minimum samples', adaptiveBoundary: 'Effective for the next workflow',
+    modelActivity: 'Model invocation overview', modelActivityHint: 'Aggregates real invocation evidence from the latest 500 in-memory Hub jobs and shows at most 50 models; prompts, results, and credentials are never stored here.', noModelActivity: 'No real model invocations yet.',
+    calls: 'Calls', invocationSource: 'Task source', routingSource: 'Routing source', lastCalled: 'Last called', role: 'Role', model: 'Model', never: '—',
+    col: { id: 'job', role: 'role', source: 'source', model: 'model', tier: 'tier', status: 'status', progress: 'progress', tokens: 'tokens ⇅', task: 'task' },
     working: 'Working…',
     tips: {
       claude: {
@@ -371,6 +413,60 @@ function elapsed(startedAt: string, endedAt?: string | null) {
 }
 function ktok(n: number) { return n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`; }
 
+function formatTimestamp(value: string | null, locale: string) {
+  if (!value || !Number.isFinite(Date.parse(value))) return '—';
+  return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(new Date(value));
+}
+
+function readinessChip(state: string) {
+  const color = state === READINESS_STATES.READY ? '#3fb950'
+    : state === READINESS_STATES.DEGRADED ? '#c98735'
+      : state === READINESS_STATES.UNAVAILABLE ? '#f85149' : 'inherit';
+  return {
+    fontSize: 10.5, fontWeight: 650, padding: '1px 7px', borderRadius: 99,
+    border: `1px solid ${state === READINESS_STATES.UNKNOWN ? 'rgba(128,128,128,0.35)' : color}`,
+    color, opacity: state === READINESS_STATES.UNKNOWN ? 0.58 : 1,
+  };
+}
+
+function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surface: string; runtime: any }) {
+  const zh = locale === 'zh';
+  const native = surface === CREW_UI_SURFACES.NATIVE;
+  const title = native ? (zh ? 'DSH Crew Runtime' : 'DSH Crew Runtime') : (zh ? 'DSH Crew Surface 未确认' : 'DSH Crew surface not verified');
+  const hint = native
+    ? (zh
+      ? '这里是隔离的 3210 Crew Harness。请使用 Harness 原生菜单管理 Provider、Harness Models、Agent 预设与底层配置；Crew 编排和宿主集成统一在 3080 管理。'
+      : 'This is the isolated 3210 Crew Harness. Use the native Harness menus for Providers, Harness Models, Agent presets, and low-level settings; manage Crew orchestration and host integrations on 3080.')
+    : (zh
+      ? '无法用结构化后端证据确认当前界面，因此已保守隐藏 Crew 编排、任务与宿主集成功能。'
+      : 'Structured backend evidence could not identify this surface, so Crew orchestration, jobs, and host integrations are conservatively hidden.');
+  const runtimeReady = runtime?.ok === true && runtime?.service === 'dsh-crew-hub';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, lineHeight: 1.55 }}>
+      <div style={{ ...S.block, background: 'linear-gradient(135deg, rgba(74,158,255,0.08), rgba(128,128,128,0.02))' }}>
+        <div>
+          <div style={{ fontSize: 19, fontWeight: 680 }}>{title}</div>
+          <div style={{ fontSize: 12, opacity: 0.68, marginTop: 3 }}>{hint}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+          <span style={readinessChip(runtimeReady ? READINESS_STATES.READY : READINESS_STATES.UNKNOWN)}>
+            {runtimeReady ? `Runtime ${runtime.runtime_version ?? 'READY'}` : 'Runtime UNKNOWN'}
+          </span>
+          <span style={readinessChip(native ? READINESS_STATES.READY : READINESS_STATES.UNKNOWN)}>
+            {native ? '3210 · isolated' : 'surface · unknown'}
+          </span>
+        </div>
+        <a href={CREW_CONTROL_PLANE_URL} target="_blank" rel="noopener noreferrer" style={{
+          ...S.btn, alignSelf: 'flex-start', textDecoration: 'none', fontWeight: 650, padding: '7px 12px',
+          borderColor: 'rgba(74,158,255,0.55)', background: 'rgba(74,158,255,0.08)',
+        }}>{zh ? '打开 3080 DSH Crew 控制台 →' : 'Open the 3080 DSH Crew console →'}</a>
+      </div>
+    </div>
+  );
+}
+
 function WorkersPanel({ ctx }: { ctx: any }) {
   const locale = useSyncExternalStore(
     (notify: () => void) => ctx.on('locale/change', notify),
@@ -400,6 +496,8 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [modelQuery, setModelQuery] = useState('');
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
+  const [surface, setSurface] = useState<string>('detecting');
+  const [runtimeInfo, setRuntimeInfo] = useState<any>(undefined);
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
@@ -450,6 +548,25 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     body: JSON.stringify({ ...body, lang: locale === 'zh' ? 'zh' : 'en' }),
   }), path), [readJson, withLang, locale]);
 
+  const detectSurface = useCallback(async () => {
+    const readOptional = async (path: string) => {
+      try {
+        const response = await fetch(`${API}${path}`, { cache: 'no-store' });
+        if (!response.ok) return null;
+        const body = await response.json();
+        return body && typeof body === 'object' ? body : null;
+      } catch { return null; }
+    };
+    const [bridgeStatus, runtime] = await Promise.all([
+      readOptional('/bridge-status'),
+      readOptional('/runtime'),
+    ]);
+    setRuntimeInfo(runtime);
+    setSurface(classifyCrewSurface({ bridgeStatus, runtime }));
+  }, []);
+
+  useEffect(() => { void detectSurface(); }, [detectSurface]);
+
   const refreshAll = useCallback(async () => {
     try {
       const [j, s, c, pr] = await Promise.all([get('/jobs'), get('/install/status'), get('/config'), get('/presets')]);
@@ -464,10 +581,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }, [get]);
 
   useEffect(() => {
+    if (surface !== CREW_UI_SURFACES.OFFICIAL) return undefined;
     void refreshAll();
     const timer = setInterval(() => { void get('/jobs').then((j) => { if (j.ok) setJobs(j.jobs ?? []); }).catch(() => {}); }, 3000);
     return () => clearInterval(timer);
-  }, [refreshAll, get]);
+  }, [surface, refreshAll, get]);
 
   const refreshHarnessModels = useCallback(async () => {
     setModelCatalogBusy(true);
@@ -483,7 +601,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     }
   }, [get, copy]);
 
-  useEffect(() => { void refreshHarnessModels(); }, [refreshHarnessModels]);
+  useEffect(() => {
+    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshHarnessModels();
+  }, [surface, refreshHarnessModels]);
 
   const act = useCallback(async (target: string, confirmName?: string) => {
     if (confirmName && !window.confirm(copy.confirmRestore(confirmName))) return;
@@ -496,15 +616,27 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     } catch (e: any) { setNotice(String(e?.message ?? e)); } finally { setBusy(false); }
   }, [post, get, copy]);
 
-  const applyPatch = useCallback((patch: Record<string, any>) => {
-    void post('/config', patch).then((r) => {
-      if (r.ok) { setConfig(r.config); setNotice(copy.saved); setTimeout(() => setNotice(''), 1500); }
-    }).catch(() => {});
-  }, [post, copy]);
+  const applyPatch = useCallback(async (patch: Record<string, any>) => {
+    try {
+      const result = await post('/config', patch);
+      if (!result.ok) throw new Error(result.error ?? 'Configuration save failed');
+      setConfig(result.config);
+      setNotice(copy.saved);
+      setTimeout(() => setNotice(''), 1500);
+      return true;
+    } catch (error: any) {
+      setNotice(String(error?.message ?? error));
+      try {
+        const authoritative = await get('/config');
+        if (authoritative.ok) setConfig(authoritative.config);
+      } catch { /* keep the error visible while the Hub is unavailable */ }
+      return false;
+    }
+  }, [post, get, copy]);
   /** Selects & checkboxes: apply immediately. */
   const field = (key: string, value: any) => {
     setConfig((c: any) => ({ ...c, [key]: value }));
-    applyPatch({ [key]: value });
+    void applyPatch({ [key]: value });
   };
   /** Text/number inputs: track locally, apply on blur. */
   const fieldLocal = (key: string, value: any) => setConfig((c: any) => ({ ...c, [key]: value }));
@@ -544,7 +676,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const cur = extraModels[p] ?? [];
     const nextExtra = { ...extraModels, [p]: cur.includes(m) ? cur : [...cur, m] };
     setConfig((c: any) => ({ ...c, extra_models: nextExtra, vision_model: m }));
-    applyPatch({ extra_models: nextExtra, vision_model: m });
+    void applyPatch({ extra_models: nextExtra, vision_model: m });
   };
   const removeCurrentModel = () => {
     if (!config) return;
@@ -553,7 +685,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const nextExtra = { ...extraModels, [p]: (extraModels[p] ?? []).filter((x) => x !== m) };
     const fallback = visionModelOptions.find((o) => o.value !== m)?.value ?? 'default';
     setConfig((c: any) => ({ ...c, extra_models: nextExtra, vision_model: fallback }));
-    applyPatch({ extra_models: nextExtra, vision_model: fallback });
+    void applyPatch({ extra_models: nextExtra, vision_model: fallback });
   };
   const saveProviderForm = () => {
     if (!provForm || !config) return;
@@ -621,7 +753,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (config.vision_provider === id) { patch.vision_provider = 'claude-code'; patch.vision_model = 'haiku'; }
     if (config.imagegen_provider === id) patch.imagegen_provider = 'codex';
     setConfig((c: any) => ({ ...c, ...patch }));
-    applyPatch(patch);
+    void applyPatch(patch);
   };
 
   /** Card: title + one-line description header, then its fields. */
@@ -635,10 +767,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     </div>
   );
 
-  const integrationRow = (name: string, installed: boolean, extra: any, installTarget: string, uninstallTarget: string, tips: any) => (
+  const integrationRow = (name: string, installed: boolean, ready: boolean, extra: any, installTarget: string, uninstallTarget: string, tips: any) => (
     <div style={S.card}>
       <span style={{ fontWeight: 600, fontSize: 13, minWidth: 92 }}>{name}</span>
       <span style={S.chip(installed)}>{installed ? `● ${copy.installed}` : `○ ${copy.notInstalled}`}</span>
+      <span style={S.chip(ready)}>{ready ? `● ${copy.ready}` : `○ ${copy.notReady}`}</span>
       {extra}
       <span style={{ flex: 1 }} />
       {!installed && <button style={S.btn} title={tips.install} disabled={busy} onClick={() => { void act(installTarget); }}>{copy.install}</button>}
@@ -647,10 +780,54 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     </div>
   );
 
+  const adaptive = normalizeAdaptive(config?.worker?.model_policy?.adaptive);
+  const setAdaptiveLocal = (candidate: AdaptiveConfig) => {
+    const next = normalizeAdaptive(candidate);
+    setConfig((current: any) => ({
+      ...current,
+      worker: {
+        ...current.worker,
+        model_policy: { ...current.worker?.model_policy, adaptive: next },
+      },
+    }));
+    return next;
+  };
+  const saveAdaptive = (candidate: AdaptiveConfig) => {
+    const next = setAdaptiveLocal(candidate);
+    void applyPatch({ worker: { model_policy: { adaptive: next } } });
+  };
+  const modelActivity = aggregateModelInvocations(jobs);
+  const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
+  const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface });
+
+  if (!currentSurfaceResponsibilities.fullControlPlane) {
+    return <MinimalCrewPanel locale={locale} surface={surface} runtime={runtimeInfo} />;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13, lineHeight: 1.55 }}>
-      <div style={{ fontSize: 19, fontWeight: 600, marginBottom: -2 }}>{copy.title}</div>
-      <div style={{ opacity: 0.75 }}>{copy.intro}</div>
+      <div style={{
+        border: '1px solid rgba(128,128,128,0.24)', borderRadius: 12, padding: '14px 15px',
+        display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
+        background: 'linear-gradient(135deg, rgba(74,158,255,0.10), rgba(128,128,128,0.025) 56%)',
+      }}>
+        <div style={{ minWidth: 240, flex: 1 }}>
+          <div style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.01em' }}>{copy.title}</div>
+          <div style={{ opacity: 0.7, fontSize: 12.5, marginTop: 2 }}>{copy.intro}</div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? 'READY' : 'CHECK'}</span>
+            <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? 'READY' : 'CHECK'}</span>
+            <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{jobs.filter((job) => job.status === 'running').length} running</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <a href={CREW_HARNESS_URL} target="_blank" rel="noopener noreferrer" style={{
+            ...S.btn, textDecoration: 'none', fontWeight: 650, padding: '7px 12px',
+            borderColor: 'rgba(74,158,255,0.55)', background: 'rgba(74,158,255,0.10)',
+          }}>{copy.openHarness}</a>
+          <span style={{ fontSize: 10.5, opacity: 0.52 }}>{copy.harnessHint}</span>
+        </div>
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5 }}>
         <div style={{ ...S.section, margin: 0, flex: 1 }}>{copy.globalConfig}</div>
@@ -659,13 +836,30 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       </div>
 
       <CollapsibleSection sectionId="integrations" title={copy.sectionNames.integrations}
-        summary={sectionSummary(status?.claude?.installed ? 'Claude ✓' : 'Claude ○', status?.codex?.installed ? 'Codex ✓' : 'Codex ○')}
+        summary={sectionSummary(status?.claude?.ready ? 'Claude READY' : 'Claude CHECK', status?.codex?.ready ? 'Codex READY' : 'Codex CHECK')}
         expanded={!!expandedSections.integrations} onToggle={() => toggleSection('integrations')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {integrationRow('Claude Code', !!status?.claude?.installed,
+          <div style={S.block}>
+            <div>
+              <div style={S.settingTitle}>{copy.hostReadiness}</div>
+              <div style={S.settingDesc}>{copy.hostReadinessHint}</div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px 10px' }}>
+              {hostReadiness.map((row) => (
+                <div key={row.id} style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, padding: '4px 7px', border: '1px solid rgba(128,128,128,0.16)', borderRadius: 7 }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 11.5 }}>{(copy as any).readinessLabels[row.id]}</span>
+                  {row.detail && <span style={{ ...S.mono, opacity: 0.55 }}>{row.detail}</span>}
+                  <span style={readinessChip(row.state)}>{(copy as any).readinessStates[row.state]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {integrationRow('Claude Code', !!status?.claude?.installed, !!status?.claude?.ready,
             status?.claude?.installed ? <span style={S.chip(!!status?.claude?.hud)}>{copy.hud}</span> : null,
             'claude', 'claude-uninstall', (copy as any).tips.claude)}
-          {integrationRow('Codex', !!status?.codex?.installed, null, 'codex', 'codex-uninstall', (copy as any).tips.codex)}
+          {integrationRow('Codex', !!status?.codex?.installed, !!status?.codex?.ready,
+            status?.codex?.ready ? null : <span title={(status?.codex?.missing ?? []).join(', ')} style={{ fontSize: 11, opacity: 0.6 }}>{(status?.codex?.missing ?? []).join(' · ')}</span>,
+            'codex', 'codex-uninstall', (copy as any).tips.codex)}
         </div>
       </CollapsibleSection>
 
@@ -693,7 +887,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           const savePriority = (tier: string, list: any[]) => {
             const key = `${tier}_model_priority`;
             setConfig((current: any) => ({ ...current, [key]: list, [`${tier}_model_priority_configured`]: true }));
-            applyPatch({ [key]: list });
+              void applyPatch({ [key]: list });
           };
           const modelMeta = (ref: any) => {
             const provider = catalogProviders.find((item) => item.id === ref.provider);
@@ -907,6 +1101,27 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           </>))}
         </CollapsibleSection>
 
+        <CollapsibleSection sectionId="adaptive" title={copy.sectionNames.adaptive}
+          summary={sectionSummary(adaptive.enabled ? copy.adaptiveEnabled : 'off', `${adaptive.min_samples}/${adaptive.window_size}`, copy.adaptiveBoundary)}
+          expanded={!!expandedSections.adaptive} onToggle={() => toggleSection('adaptive')}>
+          {block({ t: copy.adaptiveTitle, d: copy.adaptiveHint }, (<>
+            <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 7, gridColumn: '1 / -1' }}>
+              <input type="checkbox" checked={adaptive.enabled}
+                onChange={(event) => saveAdaptive({ ...adaptive, enabled: event.target.checked })} />
+              <span style={{ fontSize: 12.5 }}>{copy.adaptiveEnabled}</span>
+              <span style={{ fontSize: 11, opacity: 0.55 }}>· {copy.adaptiveBoundary}</span>
+            </label>
+            <label style={S.field}><span style={S.fieldLabel}>{copy.adaptiveWindow}</span>
+              <input type="number" min={1} max={32} value={adaptive.window_size} style={S.input}
+                onChange={(event) => setAdaptiveLocal({ ...adaptive, window_size: clampInt(event.target.value, adaptive.window_size, 1, 32) })}
+                onBlur={() => saveAdaptive(adaptive)} /></label>
+            <label style={S.field}><span style={S.fieldLabel}>{copy.adaptiveSamples}</span>
+              <input type="number" min={1} max={adaptive.window_size} value={adaptive.min_samples} style={S.input}
+                onChange={(event) => setAdaptiveLocal({ ...adaptive, min_samples: clampInt(event.target.value, adaptive.min_samples, 1, adaptive.window_size) })}
+                onBlur={() => saveAdaptive(adaptive)} /></label>
+          </>))}
+        </CollapsibleSection>
+
         <CollapsibleSection sectionId="runtime" title={copy.sectionNames.runtime}
           summary={sectionSummary(config.mode, `${config.default_timeout_seconds}s`, config.hub_url)}
           expanded={!!expandedSections.runtime} onToggle={() => toggleSection('runtime')}>
@@ -917,13 +1132,14 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           <label style={S.field}><span style={S.fieldLabel}>{copy.timeout}</span>
             <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const }} type="number" min={60} max={7200} value={config.default_timeout_seconds}
               onChange={(e) => fieldLocal('default_timeout_seconds', Number(e.target.value))}
-              onBlur={() => applyPatch({ default_timeout_seconds: config.default_timeout_seconds })} /></label>
+              onBlur={() => { void applyPatch({ default_timeout_seconds: config.default_timeout_seconds }); }} /></label>
           <label style={S.field}><span style={S.fieldLabel}>{copy.hubUrl}</span>
             <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const }} value={config.hub_url}
               onChange={(e) => fieldLocal('hub_url', e.target.value)}
-              onBlur={() => applyPatch({ hub_url: config.hub_url })}
+              onBlur={() => { void applyPatch({ hub_url: config.hub_url }); }}
               onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }} /></label>
           </>))}
+          <ActivationSummary activation={config.config_activation} locale={locale} />
         </CollapsibleSection>
 
         <CollapsibleSection sectionId="multimodal" title={copy.sectionNames.multimodal}
@@ -942,7 +1158,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                 const m = custom ? (custom.models?.[0] ?? 'default') : (VISION_MODELS[p] ?? ['default'])[0];
                 setModelAdd(null);
                 setConfig((c: any) => ({ ...c, vision_provider: p, vision_model: m }));
-                applyPatch({ vision_provider: p, vision_model: m });
+                    void applyPatch({ vision_provider: p, vision_model: m });
                 if ((p === 'grok' || p === 'agy') && !dynModels[p]) {
                   void get(`/vision-models?provider=${p}`).then((r) => {
                     if (r.ok) setDynModels((d) => ({ ...d, [p]: r.models }));
@@ -1107,54 +1323,76 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         {jobs.length === 0 ? (
           <div style={{ opacity: 0.55 }}>{copy.empty}</div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed', minWidth: 760 }}>
-            <colgroup>
-              <col style={{ width: 64 }} /><col style={{ width: 58 }} /><col style={{ width: 72 }} />
-              <col style={{ width: 40 }} /><col style={{ width: 100 }} /><col style={{ width: 84 }} />
-              <col style={{ width: 340 }} />
-            </colgroup>
-            <thead><tr>
-              {[copy.col.id, copy.col.source, copy.col.tier, copy.col.status, copy.col.progress, copy.col.tokens, copy.col.task].map((h) => (
-                <th key={h} style={{ ...S.tight, fontSize: 11, opacity: 0.55, fontWeight: 500 }}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {jobs.map((job) => {
-                const color = job.status === 'running' ? '#4a9eff' : job.status === 'done' ? '#3fb950' : '#f85149';
-                return (
-                  <tr key={job.id}>
-                    <td style={{ ...S.tight, ...S.mono }} title={job.id}>{String(job.id).replace(/-[a-z0-9]+$/, '')}</td>
-                    <td style={S.tight}><span style={S.chip(job.source === 'claude-code' || job.source === 'codex')}>{sourceLabel(job.source)}</span></td>
-                    <td style={S.tight}>{job.tier}/{job.effort}</td>
-                    <td style={{ ...S.tight, textAlign: 'center' as const }} title={`${job.status}${job.currentTool ? ` · ${job.currentTool}` : ''}`}><span style={{ color, cursor: 'default' }}>●</span></td>
-                    <td style={{ ...S.tight, ...S.mono }} title={copy.progressTip(elapsed(job.startedAt, job.endedAt), job.turn, job.step, job.toolCalls ?? '-')}>{elapsed(job.startedAt, job.endedAt)} {job.turn}.{job.step} {job.toolCalls ?? '-'}t</td>
-                    <td style={{ ...S.tight, ...S.mono }}>{job.tokens ? `${ktok(job.tokens.input)}/${ktok(job.tokens.output)}` : '-'}</td>
-                    <td
-                      style={{ ...S.cell, position: 'relative' }}
-                      onMouseEnter={(e: any) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setHoverTask({
-                          id: job.id, text: job.task,
-                          right: Math.max(8, window.innerWidth - rect.right),
-                          top: rect.bottom + 4,
-                          bottom: window.innerHeight - rect.top + 4,
-                          flip: rect.top < 240,
-                        });
-                      }}
-                      onMouseLeave={() => setHoverTask(null)}
-                    >
-                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.45, fontSize: 12.5 }}>
-                        {job.task}
-                      </div>
-                                          </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div style={{ overflowX: 'auto', border: '1px solid rgba(128,128,128,0.20)', borderRadius: 8, padding: '0 9px' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed', minWidth: 1020 }}>
+              <colgroup>
+                <col style={{ width: 68 }} /><col style={{ width: 72 }} /><col style={{ width: 58 }} />
+                <col style={{ width: 190 }} /><col style={{ width: 70 }} /><col style={{ width: 70 }} />
+                <col style={{ width: 105 }} /><col style={{ width: 84 }} /><col style={{ width: 300 }} />
+              </colgroup>
+              <thead><tr>
+                {[copy.col.id, copy.col.role, copy.col.source, copy.col.model, copy.col.tier, copy.col.status, copy.col.progress, copy.col.tokens, copy.col.task].map((heading) => (
+                  <th key={heading} style={{ ...S.tight, fontSize: 10.5, opacity: 0.55, fontWeight: 500 }}>{heading}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {jobs.map((job) => {
+                  const color = job.status === 'running' ? '#4a9eff' : job.status === 'done' ? '#3fb950' : '#f85149';
+                  return (
+                    <tr key={job.id}>
+                      <td style={{ ...S.tight, ...S.mono, fontWeight: 600 }} title={job.id}>{String(job.id).replace(/-[a-z0-9]+$/, '')}</td>
+                      <td style={S.tight}><span style={S.chip(job.role === 'reviewer')}>{job.role === 'reviewer' ? 'Reviewer' : 'Worker'}</span></td>
+                      <td style={S.tight}><span style={S.chip(job.source === 'claude-code' || job.source === 'codex')}>{sourceLabel(job.source)}</span></td>
+                      <td style={{ ...S.tight, ...S.mono }} title={`${job.provider ?? '—'} / ${job.model ?? '—'}`}>{job.provider ?? '—'} / {job.model ?? '—'}</td>
+                      <td style={S.tight}>{job.tier}/{job.effort}</td>
+                      <td style={S.tight} title={`${job.status}${job.currentTool ? ` · ${job.currentTool}` : ''}`}>
+                        <span style={{ color }} aria-hidden="true">●</span> <span style={{ color, fontSize: 10.5 }}>{job.status}</span>
+                      </td>
+                      <td style={{ ...S.tight, ...S.mono }} title={copy.progressTip(elapsed(job.startedAt, job.endedAt), job.turn, job.step, job.toolCalls ?? '-')}>{elapsed(job.startedAt, job.endedAt)} · {job.turn}.{job.step} · {job.toolCalls ?? '-'}t</td>
+                      <td style={{ ...S.tight, ...S.mono }}>{job.tokens ? `${ktok(job.tokens.input)}/${ktok(job.tokens.output)}` : '—'}</td>
+                      <td
+                        style={{ ...S.cell, position: 'relative' }}
+                        onMouseEnter={(event: any) => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setHoverTask({ id: job.id, text: job.task, right: Math.max(8, window.innerWidth - rect.right), top: rect.bottom + 4, bottom: window.innerHeight - rect.top + 4, flip: rect.top < 240 });
+                        }}
+                        onMouseLeave={() => setHoverTask(null)}>
+                        <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.45, fontSize: 12 }}>
+                          {job.task}
+                        </div>
+                        <div style={{ fontSize: 10, opacity: 0.5 }}>{job.selection_source ?? 'unknown'}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
+
+        <div style={{ ...S.block, marginTop: 2 }}>
+          <div>
+            <div style={S.settingTitle}>{copy.modelActivity}</div>
+            <div style={S.settingDesc}>{copy.modelActivityHint}</div>
+          </div>
+          {modelActivity.length === 0 ? <div style={{ opacity: 0.55 }}>{copy.noModelActivity}</div> : (
+            <div style={{ overflowX: 'auto' }}>
+              <div role="table" style={{ minWidth: 620 }}>
+                <div role="row" style={{ display: 'grid', gridTemplateColumns: 'minmax(190px, 1.35fr) 72px minmax(170px, 1fr) 125px', gap: 10, padding: '0 6px 5px', fontSize: 10.5, opacity: 0.55 }}>
+                  <span role="columnheader">{copy.model}</span><span role="columnheader">{copy.calls}</span><span role="columnheader">{copy.invocationSource} / {copy.routingSource}</span><span role="columnheader">{copy.lastCalled}</span>
+                </div>
+                {modelActivity.map((entry) => (
+                  <div role="row" key={`${entry.provider}/${entry.model}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(190px, 1.35fr) 72px minmax(170px, 1fr) 125px', gap: 10, alignItems: 'center', padding: '7px 6px', borderTop: '1px solid rgba(128,128,128,0.16)' }}>
+                    <span role="cell" style={{ minWidth: 0 }}><strong style={{ display: 'block', fontSize: 12 }}>{entry.model}</strong><span style={{ ...S.mono, opacity: 0.55 }}>{entry.provider}</span></span>
+                    <span role="cell" style={{ ...S.mono, fontSize: 15, fontWeight: 650 }}>{entry.count}</span>
+                    <span role="cell" style={{ minWidth: 0, fontSize: 11.5 }}><span style={{ display: 'block' }}>{entry.task_sources.map(sourceLabel).join(' · ')}</span><span style={{ display: 'block', opacity: 0.55 }}>{entry.selection_sources.join(' · ')} · {entry.roles.join(' / ')}</span></span>
+                    <span role="cell" style={{ ...S.mono, fontSize: 10.5 }}>{formatTimestamp(entry.last_called_at, locale)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </CollapsibleSection>
       {hoverTask && createPortal(
         <div style={{
@@ -1175,6 +1413,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
 export function apply(ctx: any): void {
   let runningCount = 0;
+  let officialSurface: boolean | null = null;
   ctx.slots.inject('settings.section', () => {
     let dispose = register();
     function register() {
@@ -1198,6 +1437,12 @@ export function apply(ctx: any): void {
     const poll = async () => {
       if (document.visibilityState !== 'visible') return;
       try {
+        if (officialSurface === null) {
+          const response = await fetch(`${API}/bridge-status`, { cache: 'no-store' });
+          const bridgeStatus = response.ok ? await response.json() : null;
+          officialSurface = classifyCrewSurface({ bridgeStatus }) === CREW_UI_SURFACES.OFFICIAL;
+        }
+        if (!officialSurface) return;
         const r = await (await fetch(`${API}/jobs`, { cache: 'no-store' })).json();
         const n = r.ok ? (r.jobs ?? []).filter((j: any) => j.status === 'running').length : 0;
         if (n !== runningCount) {

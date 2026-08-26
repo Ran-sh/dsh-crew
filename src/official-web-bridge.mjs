@@ -194,7 +194,12 @@ export function registerOfficialWebBridge(ctx, options = {}) {
       path: `${CREW_BRIDGE_PREFIX}/bridge-status`,
       handler: (req, res) => {
         if (!isTrustedLocalRequest(req)) return sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
-        return sendJson(res, 200, { ok: true, mode: 'official-3080-isolated-3210' });
+        return sendJson(res, 200, {
+          ok: true,
+          mode: 'official-3080-isolated-3210',
+          surface: 'official-bridge',
+          ui_role: 'control-plane',
+        });
       },
     });
     const disposeProxy = webCtx.webServer.register({

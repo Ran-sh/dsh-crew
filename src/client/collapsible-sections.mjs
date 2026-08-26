@@ -6,6 +6,7 @@ export const SETTINGS_SECTION_IDS = Object.freeze([
   'flash',
   'pro',
   'dispatch',
+  'adaptive',
   'runtime',
   'multimodal',
   'providers',

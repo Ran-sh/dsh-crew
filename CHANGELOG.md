@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0 — 2026-08-26
+
+- Consolidates the three official 3080 settings entries into one compact DSH
+  Crew operations console with accessible, persisted disclosure sections.
+- Makes the shared client surface-aware through structured bridge/runtime
+  evidence: 3080 renders the full Crew control plane while 3210 renders a
+  diagnostics-only Crew panel and leaves Provider/Model management to native
+  Harness menus. Unknown surfaces fail closed to the minimal view.
+- Adds a direct, safe link from the daily 3080 console to the isolated 3210
+  Crew Harness for low-level Provider and Harness Model configuration.
+- Keeps the compact Worker/Reviewer task table and adds clear role, selected
+  provider/model, routing source, progress, and token columns without expanding
+  the information-flow boundary.
+- Adds an in-memory model invocation overview showing count, task/routing
+  sources, roles, and the latest invocation time; prompts, results, credentials,
+  and new persistent telemetry are explicitly excluded.
+- Reports Codex and Claude integration readiness separately from installation:
+  Codex validates managed roles, prompts, and MCP targets; Claude validates the
+  marketplace payload, installed snapshot, and tool permissions. The console
+  also surfaces existing runtime activation boundaries.
+- Adds a compact structured readiness matrix for Codex MCP, ds-worker,
+  ds-reviewer, Claude plugin, Crew Harness runtime, and the official bridge;
+  missing or partial evidence never becomes READY.
+
 ## 0.4.2 — 2026-08-26
 
 - Restores live extension readiness evidence by projecting completed Hub Worker

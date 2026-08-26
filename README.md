@@ -22,7 +22,9 @@ Start the official Harness on port 3080 as usual:
 npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
 ```
 
-Open <http://127.0.0.1:3080> and go to **Settings → DSH Crew**. The official 3080 process displays the UI; Crew work stays in an isolated backend on `127.0.0.1:3210`, which the bridge starts in the background when needed.
+Open <http://127.0.0.1:3080> and go to the single **Settings → DSH Crew** entry. The official 3080 process is the daily console; Crew work stays in the isolated backend at `127.0.0.1:3210`. Use **Open 3210 Crew Harness →** only for low-level Provider and Harness Model settings.
+
+The shared client is surface-aware: 3080 renders the complete Crew control plane, host readiness, and task status; 3210 renders only a minimal Crew runtime panel while its native Harness menus continue to own Providers, Harness Models, Agent presets, and low-level settings. Detection uses the structured bridge/runtime endpoints, not a hard-coded browser port, and fails closed when evidence is missing. See [UI surface architecture](./docs/ui-surfaces.md).
 
 ## Configure
 
@@ -32,7 +34,7 @@ Open <http://127.0.0.1:3080> and go to **Settings → DSH Crew**. The official 3
 4. Reviewer defaults to **Manual**; enable automatic review only when wanted.
 5. Keep **worktree** isolation for coding tasks.
 
-With one configured model, both roles simply use that model. With several models, each role tries its ordered list and falls back to the next available model. Settings modules are collapsible and show their effective state while closed.
+With one configured model, both roles simply use that model. With several models, each role tries its ordered list and falls back to the next available model. Settings modules are collapsible and show their effective state while closed. The task section shows a compact Worker/Reviewer table plus process-local model call counts, sources, and last-call times; prompts, results, and credentials are not collected for this overview.
 
 ## Use from Codex or Claude
 
@@ -102,7 +104,7 @@ pnpm run build:client
 node scripts/setup.mjs uninstall
 ```
 
-More detail: [Changelog](./CHANGELOG.md) · [Readiness matrix](./docs/readiness-matrix.md) · [Job contracts](./docs/job-contracts.md)
+More detail: [Changelog](./CHANGELOG.md) · [UI surfaces](./docs/ui-surfaces.md) · [Readiness matrix](./docs/readiness-matrix.md) · [Job contracts](./docs/job-contracts.md)
 · [GPT-first extension](./docs/gpt-relay-extension.md)
 
 ## License

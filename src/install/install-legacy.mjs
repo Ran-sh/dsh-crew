@@ -2,7 +2,7 @@
 // render Codex agent roles with real paths. Called from the CLI entry or the
 // DSH settings page. All edits are backed up and idempotent.
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -27,6 +27,73 @@ function backup(file) {
 
 function readJson(file, fallback) {
   try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function readText(file) {
+  try { return readFileSync(file, 'utf8'); } catch { return null; }
+}
+
+function tomlSection(text, name) {
+  if (typeof text !== 'string') return null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const header = new RegExp(`^\\s*\\[${escaped}\\]\\s*(?:#.*)?$`, 'm').exec(text);
+  if (!header) return null;
+  const rest = text.slice(header.index + header[0].length);
+  const nextHeader = rest.search(/^\s*\[[^\]\r\n]+\]\s*(?:#.*)?$/m);
+  return nextHeader === -1 ? rest : rest.slice(0, nextHeader);
+}
+
+function existingServerTarget(block) {
+  if (typeof block !== 'string' || !/^\s*command\s*=\s*"node"\s*$/m.test(block)) return null;
+  const match = /^\s*args\s*=\s*\[\s*"([^"\r\n]*server\.mjs)"\s*\]\s*$/m.exec(block);
+  if (!match) return null;
+  try {
+    if (!statSync(match[1]).isFile()) return null;
+    const target = resolve(match[1]);
+    return process.platform === 'win32' ? target.toLowerCase() : target;
+  } catch { return null; }
+}
+
+function codexRoleTarget(file, expectedName) {
+  const text = readText(file);
+  if (typeof text !== 'string'
+    || !new RegExp(`^\\s*name\\s*=\\s*"${expectedName}"\\s*$`, 'm').test(text)) return null;
+  return existingServerTarget(tomlSection(text, 'mcp_servers.dsh-crew'));
+}
+
+function codexMcpTarget(configText) {
+  const section = tomlSection(configText, 'mcp_servers');
+  if (!section) return null;
+  const entry = /^\s*dsh-crew\s*=\s*\{\s*command\s*=\s*"node"\s*,\s*args\s*=\s*\[\s*"([^"\r\n]*server\.mjs)"\s*\]\s*\}\s*(?:#.*)?$/m.exec(section);
+  if (!entry) return null;
+  try {
+    if (!statSync(entry[1]).isFile()) return null;
+    const target = resolve(entry[1]);
+    return process.platform === 'win32' ? target.toLowerCase() : target;
+  } catch { return null; }
+}
+
+function isFile(file) {
+  try { return statSync(file).isFile(); } catch { return false; }
+}
+
+function claudePluginRootReady(root) {
+  return typeof root === 'string' && root.trim() !== ''
+    && isFile(join(root, '.claude-plugin', 'plugin.json'))
+    && isFile(join(root, '.mcp.json'))
+    && isFile(join(root, 'src', 'server.mjs'));
+}
+
+function claudeSnapshotReady(home) {
+  const installed = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {});
+  const record = installed?.plugins?.[PLUGIN_KEY];
+  const entries = Array.isArray(record) ? record : [record];
+  return entries.some((entry) => claudePluginRootReady(entry?.installPath));
+}
+
+function claudePermissionsReady(settings) {
+  const allowed = Array.isArray(settings?.permissions?.allow) ? settings.permissions.allow : [];
+  return MCP_TOOLS.every((tool) => allowed.includes(`mcp__plugin_dsh-crew_dsh-crew__${tool}`));
 }
 
 // One-time migration from the pre-rename config dir (dsh-workers → dsh-crew).
@@ -195,9 +262,41 @@ export function installStatus({ home = homedir() } = {}) {
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
   const hudWired = typeof settings.statusLine?.command === 'string'
     && settings.statusLine.command.includes('worker-segment.sh');
-  const codexInstalled = existsSync(join(home, '.codex', 'agents', 'ds-flash.toml'))
-    || existsSync(join(home, '.codex', 'agents', 'ds-worker.toml'));
-  return { claude: { installed: claudeInstalled, hud: hudWired }, codex: { installed: codexInstalled } };
+  const claudeComponents = {
+    enabled: claudeInstalled,
+    marketplace: claudePluginRootReady(settings?.extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source?.path),
+    snapshot: claudeSnapshotReady(home),
+    permissions: claudePermissionsReady(settings),
+  };
+  const claudeMissing = Object.entries(claudeComponents).filter(([, present]) => !present).map(([key]) => key);
+  const codexRoot = join(home, '.codex');
+  const configFile = join(codexRoot, 'config.toml');
+  const configText = readText(configFile) ?? '';
+  const workerTarget = codexRoleTarget(join(codexRoot, 'agents', 'ds-worker.toml'), 'ds-worker');
+  const reviewerTarget = codexRoleTarget(join(codexRoot, 'agents', 'ds-reviewer.toml'), 'ds-reviewer');
+  const mcpTarget = codexMcpTarget(configText);
+  const components = {
+    worker_role: !!workerTarget,
+    reviewer_role: !!reviewerTarget,
+    config_prompt: !!readText(join(codexRoot, 'prompts', 'dsh-config.md'))?.trim(),
+    status_prompt: !!readText(join(codexRoot, 'prompts', 'dsh-status.md'))?.trim(),
+    mcp: !!mcpTarget,
+    target_alignment: !!workerTarget && workerTarget === reviewerTarget && workerTarget === mcpTarget,
+  };
+  const codexInstalled = Object.values(components).some(Boolean)
+    || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
+    || existsSync(join(codexRoot, 'agents', 'ds-pro.toml'));
+  const missing = Object.entries(components).filter(([, present]) => !present).map(([key]) => key);
+  return {
+    claude: {
+      installed: claudeInstalled,
+      ready: claudeMissing.length === 0,
+      hud: hudWired,
+      components: claudeComponents,
+      missing: claudeMissing,
+    },
+    codex: { installed: codexInstalled, ready: missing.length === 0, components, missing },
+  };
 }
 
 export function uninstallCodex({ home = homedir() } = {}) {

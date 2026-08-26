@@ -189,6 +189,18 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
     { kind: 'exact', path: '/_dsh/dsh-crew/bridge-status' },
     { kind: 'prefix', path: CREW_BRIDGE_PREFIX },
   ]);
+  const response = responseRecorder();
+  registrations[0].handler({
+    headers: { host: '127.0.0.1:3080' },
+    socket: { remoteAddress: '127.0.0.1' },
+  }, response);
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), {
+    ok: true,
+    mode: 'official-3080-isolated-3210',
+    surface: 'official-bridge',
+    ui_role: 'control-plane',
+  });
 });
 
 test('Cordis apply registers the bridge without returning an invalid injected effect', async () => {

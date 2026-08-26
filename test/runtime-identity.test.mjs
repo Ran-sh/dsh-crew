@@ -13,6 +13,8 @@ import {
 test('Hub identity advertises one shared runtime/protocol contract', () => {
   const identity = getHubRuntimeIdentity();
   assert.equal(identity.service, 'dsh-crew-hub');
+  assert.equal(identity.surface, 'native-crew-harness');
+  assert.equal(identity.ui_role, 'runtime');
   assert.equal(identity.runtime_version, RUNTIME_VERSION);
   assert.equal(identity.protocol_version, HUB_PROTOCOL_VERSION);
   assert.deepEqual(identity.capabilities, [...HUB_CAPABILITIES]);
