@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const buildScript = await readFile(new URL('../scripts/build-client.mjs', import.meta.url), 'utf8');
@@ -9,6 +14,20 @@ const panelSource = await readFile(new URL('../src/client/index.tsx', import.met
 
 test('client build uses the activation wrapper entry', () => {
   assert.match(packageJson.scripts?.['build:client'] ?? '', /tsdown src\/client\/entry\.tsx\b/);
+});
+
+test('client build does not pass invalid options to rolldown', () => {
+  const result = spawnSync('pnpm run build:client', {
+    cwd: root,
+    encoding: 'utf8',
+    shell: true,
+    timeout: 30_000,
+  });
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+
+  assert.equal(result.error, undefined, String(result.error ?? output));
+  assert.equal(result.status, 0, output);
+  assert.doesNotMatch(output, /Invalid input options|Expected never but received "define"/i);
 });
 
 test('client wrapper resolves the emitted cjs artifact instead of hard-coding index.cjs', () => {

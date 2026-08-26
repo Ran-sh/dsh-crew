@@ -15,6 +15,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const verifierSource = readFileSync(join(here, '..', 'scripts', 'verify-npm-install.mjs'), 'utf8');
+const packageManifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
 
 const directPeerNames = [
   '@deepseek-ai/dsh-agent',
@@ -38,6 +39,16 @@ const directPeerNames = [
   '@deepseek-ai/dsh-tool-fs',
   '@deepseek-ai/dsh-tool-todo',
 ];
+
+test('CLI package keeps host-provided peers optional for global npm installs', () => {
+  const peerNames = Object.keys(packageManifest.peerDependencies ?? {});
+  assert.ok(peerNames.length > 0, 'expected host peer dependencies');
+  assert.deepEqual(
+    peerNames.filter((name) => packageManifest.peerDependenciesMeta?.[name]?.optional !== true),
+    [],
+    'global CLI installs must not auto-install the Harness and React host dependency graph',
+  );
+});
 
 function candidateManifest(version = '0.3.2') {
   return {
