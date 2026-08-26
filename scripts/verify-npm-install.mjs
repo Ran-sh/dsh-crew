@@ -9,19 +9,32 @@
 // or fully resolving the very large official DSH dependency graph.
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const registry = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org/';
 export const supportedDshVersion = '0.1.1-rc.2';
 const verifyOfficialDsh = process.argv.includes('--with-official-dsh');
 const DSH_PACKAGE = '@deepseek-ai/dsh';
 const DSH_PREFIX = '@deepseek-ai/dsh-';
 const MAX_DIRECT_PEERS = 64;
+
+export function resolveNpmInvocation({
+  platform = process.platform,
+  nodePath = process.execPath,
+  fileExists = existsSync,
+} = {}) {
+  if (platform !== 'win32') return { command: 'npm', argsPrefix: [] };
+  const npmCli = path.join(path.dirname(nodePath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!fileExists(npmCli)) throw new Error(`npm CLI was not found beside Node.js: ${npmCli}`);
+  return { command: nodePath, argsPrefix: [npmCli] };
+}
+
+const npmInvocation = resolveNpmInvocation();
 
 /**
  * The candidate version is derived from the candidate package manifest at the
@@ -217,10 +230,10 @@ export async function auditOfficialDshCohort({
 }
 
 function run(args, cwd = root) {
-  const result = spawnSync(npmCommand, args, {
+  const result = spawnSync(npmInvocation.command, [...npmInvocation.argsPrefix, ...args], {
     cwd,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: false,
     windowsHide: true,
   });
   if (result.error) throw result.error;
