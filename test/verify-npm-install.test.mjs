@@ -50,6 +50,12 @@ test('CLI package keeps host-provided peers optional for global npm installs', (
   );
 });
 
+test('npm install verifier never passes argument arrays through a shell', () => {
+  assert.doesNotMatch(verifierSource, /shell:\s*process\.platform\s*===\s*['"]win32['"]/);
+  assert.match(verifierSource, /process\.execPath/);
+  assert.match(verifierSource, /npm-cli\.js/);
+});
+
 function candidateManifest(version = '0.3.2') {
   return {
     name: '@ran-sh/dsh-crew',
