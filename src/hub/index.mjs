@@ -166,6 +166,10 @@ export class WorkerRegistry {  constructor(ctx) {
     return v;
   }
 
+  list() {
+    return [...this.jobs.values()].map((job) => this.view(job));
+  }
+
   publish() {
     this.shard.publish([...this.jobs.values()].map((j) => this.view(j)));
   }

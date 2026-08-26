@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hubCanonicalEvents, isLoopbackRequest } from '../src/hub/index.mjs';
+import { hubCanonicalEvents, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
@@ -26,6 +26,24 @@ test('Hub mutation surface rejects cross-site browser requests', () => {
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
   assert.equal(isLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3210', origin: 'http://[::1]:3080', 'sec-fetch-site': 'same-origin' } }), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
+});
+
+test('Hub registry lists completed jobs for live extension readiness evidence', () => {
+  const hub = new WorkerRegistry({});
+  hub.jobs.set('worker-1', {
+    id: 'worker-1', role: 'worker', status: 'done', phase: 'completed', task: 'worker task',
+  });
+  hub.jobs.set('reviewer-1', {
+    id: 'reviewer-1', role: 'reviewer', status: 'done', phase: 'completed', task: 'review task',
+  });
+
+  assert.deepEqual(
+    hub.list().map(({ id, role, status }) => ({ id, role, status })),
+    [
+      { id: 'worker-1', role: 'worker', status: 'done' },
+      { id: 'reviewer-1', role: 'reviewer', status: 'done' },
+    ],
+  );
 });
 
 test('direct Hub jobs project deterministic canonical events without raw result text', () => {
