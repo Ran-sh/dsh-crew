@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 — 2026-08-26
+
+- Restores live extension readiness evidence by projecting completed Hub Worker
+  and Reviewer jobs from the active registry, so real executions can advance
+  model and reviewer components from `DEGRADED` to `READY`.
+- Adds regression coverage for the synchronous, privacy-preserving job view used
+  by the extension contract.
+
 ## 0.4.1 — 2026-08-25
 
 - Disposes completed Hub Agent handles before isolated worktree cleanup so
