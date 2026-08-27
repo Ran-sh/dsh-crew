@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-08-27
+
+- Upgrades and exact-pins the client build toolchain so Rolldown no longer
+  reports the invalid legacy `define` option during production builds.
+- Marks Harness- and React-provided peer dependencies as optional for the
+  globally installed launcher, preventing npm from auto-installing the native
+  Harness dependency graph outside the Crew-managed runtime.
+- Invokes npm's CLI directly through Node on Windows instead of passing an
+  argument array through a shell, removing the Node DEP0190 security warning.
+- Adds regression contracts for warning-free client builds, host-provided peer
+  metadata, and shell-free npm verification.
+
 ## 0.5.0 — 2026-08-26
 
 - Consolidates the three official 3080 settings entries into one compact DSH
