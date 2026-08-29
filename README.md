@@ -2,7 +2,7 @@
 
 # DSH Crew
 
-Workers and independent reviewers for Codex Desktop and Claude Code, with daily controls inside the official DeepSeek Harness UI.
+Workers and independent reviewers for Codex Desktop, Claude Code, and ZCode, with daily controls inside the official DeepSeek Harness UI.
 
 [English](./README.md) · [简体中文](./README.zh.md)
 
@@ -25,7 +25,8 @@ dsh-crew inspect
 
 - **3080**: daily console, Crew settings, Codex/Claude readiness, jobs.
 - **3210**: isolated Crew backend, Providers, Harness Models, low-level Harness settings.
-- **Codex**: installation adds a managed capability-aware policy block to `~/.codex/AGENTS.md`. Existing user instructions remain untouched.
+- **Codex / ZCode**: installation adds managed capability-aware policy blocks and dispatch roles. Existing user instructions remain untouched.
+- **ZCode**: uses `~/.zcode/cli/config.json` when native MCP servers exist, otherwise the compatible `~/.agents/mcp.json` source.
 
 ## Configure and use
 

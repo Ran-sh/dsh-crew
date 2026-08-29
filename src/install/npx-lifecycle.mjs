@@ -556,6 +556,15 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
   }
   log('✓ Codex Desktop integration');
 
+  if (installer.installZCode) {
+    const zcode = installer.installZCode({ home, root: releaseDir });
+    if (zcode.ok === false) {
+      log(`✗ ZCode integration failed (${zcode.code ?? 'unknown'})`);
+      return false;
+    }
+    log('✓ ZCode integration');
+  }
+
   const startup = installer.installWindowsStartup?.({ home, root: releaseDir });
   if (startup?.ok === false) {
     log(`✗ Windows login startup failed (${startup.code ?? 'unknown'})`);
@@ -951,8 +960,11 @@ export function npxStatus({
     } catch { dshPlugin = 'unknown'; }
   }
 
-  const st = installer.installStatus ? installer.installStatus({ home }) : realInstaller.installStatus({ home });
+  const st = installer.installStatus
+    ? installer.installStatus({ home, root: pointer?.path ?? runningPackageRoot() })
+    : realInstaller.installStatus({ home, root: pointer?.path ?? runningPackageRoot() });
   const codex = st?.codex?.installed ? 'installed' : 'not installed';
+  const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
   const officialWeb = !official.enabled ? 'disabled' : official.healthy ? 'installed' : 'needs repair';
@@ -975,6 +987,7 @@ export function npxStatus({
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile on 3210)`);
   log(`Official 3080 UI bridge: ${officialWeb}`);
   log(`Codex Desktop integration: ${codex}`);
+  log(`ZCode integration: ${zcode}`);
   log(`Claude Code integration: ${claude}`);
   log(`Windows login startup: ${windowsStartup}`);
 
@@ -986,6 +999,7 @@ export function npxStatus({
     dshPlugin,
     officialWeb,
     codex,
+    zcode,
     claude,
     windowsStartup,
   };
@@ -1007,6 +1021,12 @@ export async function npxUninstall({
   const cx = installer.uninstallCodex({ home });
   if (cx.ok !== false) log('✓ Codex Desktop integration removed');
   else fail('Codex Desktop integration removal failed');
+
+  if (installer.uninstallZCode) {
+    const zc = installer.uninstallZCode({ home });
+    if (zc.ok !== false) log('✓ ZCode integration removed');
+    else fail('ZCode integration removal failed');
+  }
 
   const cl = installer.uninstallClaudeCode ? await installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
   if (cl.ok !== false) log('✓ Claude Code integration removed');

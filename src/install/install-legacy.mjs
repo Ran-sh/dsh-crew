@@ -7,6 +7,7 @@ import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { normalizeModelPriority } from '../model-routing.mjs';
+import { zcodeStatus } from './zcode.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
@@ -302,7 +303,7 @@ export function writeGlobalConfig(patch) {
 }
 
 /** What is currently installed where — drives the settings-page buttons. */
-export function installStatus({ home = homedir() } = {}) {
+export function installStatus({ home = homedir(), root } = {}) {
   const settings = readJson(join(home, '.claude', 'settings.json'), {});
   const enabled = settings.enabledPlugins;
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
@@ -343,6 +344,7 @@ export function installStatus({ home = homedir() } = {}) {
       missing: claudeMissing,
     },
     codex: { installed: codexInstalled, ready: missing.length === 0, components, missing },
+    zcode: zcodeStatus({ home, ...(root ? { root } : {}) }),
   };
 }
 

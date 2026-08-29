@@ -25,7 +25,9 @@ function makeTemp() {
 function fakeInstaller(calls) {
   return {
     installCodex: (o = {}) => { calls.push(['installCodex', o]); return { ok: true, actions: ['codex'] }; },
+    installZCode: (o = {}) => { calls.push(['installZCode', o]); return { ok: true, actions: ['zcode'] }; },
     uninstallCodex: (o = {}) => { calls.push(['uninstallCodex', o]); return { ok: true, actions: ['codex-removed'] }; },
+    uninstallZCode: (o = {}) => { calls.push(['uninstallZCode', o]); return { ok: true, actions: ['zcode-removed'] }; },
     installClaudeCode: async (o = {}) => { calls.push(['installClaudeCode', o]); return { ok: true, actions: ['claude'] }; },
     uninstallClaudeCode: (o = {}) => { calls.push(['uninstallClaudeCode', o]); return { ok: true, actions: ['claude-removed'] }; },
     installWindowsStartup: (o = {}) => { calls.push(['installWindowsStartup', o]); return { ok: true, supported: true, changed: true }; },
@@ -162,6 +164,7 @@ test('uninstall calls the installer for Codex and Claude, and treats an absent D
     const r = await setupUninstall({ log: (m) => logs.push(m), root: t.dir, home: t.dir, installer: fakeInstaller(calls) });
     // Codex + Claude uninstall were called regardless of the DSH CLI outcome
     assert.ok(calls.some((c) => c[0] === 'uninstallCodex'), 'uninstallCodex must be invoked');
+    assert.ok(calls.some((c) => c[0] === 'uninstallZCode'), 'uninstallZCode must be invoked');
     assert.ok(calls.some((c) => c[0] === 'uninstallClaudeCode'), 'uninstallClaudeCode must be invoked');
     assert.ok(calls.some((c) => c[0] === 'uninstallWindowsStartup'), 'uninstallWindowsStartup must be invoked');
     // With no ~/.dsh profile present under the fake home, the DSH removal is

@@ -2,7 +2,7 @@
 
 # DSH Crew
 
-让 Codex Desktop 和 Claude Code 使用 Worker / Reviewer，并在官方 DeepSeek Harness 界面中完成日常控制。
+让 Codex Desktop、Claude Code 和 ZCode 使用 Worker / Reviewer，并在官方 DeepSeek Harness 界面中完成日常控制。
 
 [English](./README.md) · [简体中文](./README.zh.md)
 
@@ -25,7 +25,8 @@ dsh-crew inspect
 
 - **3080**：日常控制台、Crew 设置、Codex/Claude 就绪状态、任务列表。
 - **3210**：隔离 Crew 后端、Provider、Harness Models 和底层 Harness 设置。
-- **Codex**：安装程序会在 `~/.codex/AGENTS.md` 中加入可卸载的能力感知规则区块，不改动已有个人规则。
+- **Codex / ZCode**：安装程序会加入可卸载的能力感知规则区块和 dispatch 角色，不改动已有个人规则。
+- **ZCode**：已有原生 MCP 服务时使用 `~/.zcode/cli/config.json`，否则兼容使用 `~/.agents/mcp.json`。
 
 ## 配置与使用
 

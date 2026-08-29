@@ -33,13 +33,14 @@ function bridgeState(surface) {
 export function projectHostReadiness({ installStatus, runtime, surface } = {}) {
   const codex = installStatus?.codex;
   const claude = installStatus?.claude;
+  const zcode = installStatus?.zcode;
   return [
     { id: 'codex_mcp', state: componentState(codex, ['mcp'], { aligned: true }) },
     { id: 'ds_worker', state: componentState(codex, ['worker_role'], { aligned: true }) },
     { id: 'ds_reviewer', state: componentState(codex, ['reviewer_role'], { aligned: true }) },
     { id: 'claude_plugin', state: componentState(claude, ['enabled', 'marketplace', 'snapshot', 'permissions']) },
+    { id: 'zcode_mcp', state: componentState(zcode, ['mcp', 'policy', 'worker_agent', 'reviewer_agent', 'config_prompt', 'status_prompt', 'ownership']) },
     { id: 'crew_harness', state: runtimeState(runtime), detail: runtime?.runtime_version ?? null },
     { id: 'official_bridge', state: bridgeState(surface) },
   ];
 }
-

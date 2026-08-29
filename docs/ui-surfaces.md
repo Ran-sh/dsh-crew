@@ -12,7 +12,7 @@ management:
 - Worker and Reviewer policy
 - model priority, fallback, review, and adaptive routing
 - runtime and activation-boundary information
-- Codex and Claude installation actions and structured readiness
+- Codex, Claude, and ZCode installation actions and structured readiness
 - task status and bounded model-invocation summaries
 - the link to the underlying 3210 Crew Harness
 
@@ -44,4 +44,3 @@ the full control plane and never becomes `READY`.
 
 The split changes presentation only. Crew state, credentials, routing policy,
 and model execution remain isolated under the Crew-owned home and profile.
-

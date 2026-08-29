@@ -15,6 +15,11 @@ function completeStatus() {
       ready: true,
       components: { enabled: true, marketplace: true, snapshot: true, permissions: true },
     },
+    zcode: {
+      installed: true,
+      ready: true,
+      components: { mcp: true, policy: true, worker_agent: true, reviewer_agent: true, config_prompt: true, status_prompt: true, ownership: true },
+    },
   };
 }
 
@@ -29,6 +34,7 @@ test('complete structured evidence projects every 3080 integration as READY', ()
     ['ds_worker', READINESS_STATES.READY],
     ['ds_reviewer', READINESS_STATES.READY],
     ['claude_plugin', READINESS_STATES.READY],
+    ['zcode_mcp', READINESS_STATES.READY],
     ['crew_harness', READINESS_STATES.READY],
     ['official_bridge', READINESS_STATES.READY],
   ]);
@@ -51,16 +57,15 @@ test('partial components are DEGRADED and missing evidence is never READY', () =
     runtime: undefined,
     surface: 'official-bridge',
   });
-  assert.ok(unknownRows.filter((row) => ['codex_mcp', 'ds_worker', 'ds_reviewer', 'claude_plugin', 'crew_harness'].includes(row.id))
+  assert.ok(unknownRows.filter((row) => ['codex_mcp', 'ds_worker', 'ds_reviewer', 'claude_plugin', 'zcode_mcp', 'crew_harness'].includes(row.id))
     .every((row) => row.state === READINESS_STATES.UNKNOWN));
 });
 
 test('explicit not-installed evidence projects UNAVAILABLE', () => {
   const rows = projectHostReadiness({
-    installStatus: { codex: { installed: false }, claude: { installed: false } },
+    installStatus: { codex: { installed: false }, claude: { installed: false }, zcode: { installed: false } },
     runtime: null,
     surface: 'native-crew-harness',
   });
-  assert.ok(rows.slice(0, 5).every((row) => row.state === READINESS_STATES.UNAVAILABLE));
+  assert.ok(rows.filter((row) => ['codex_mcp', 'ds_worker', 'ds_reviewer', 'claude_plugin', 'zcode_mcp'].includes(row.id)).every((row) => row.state === READINESS_STATES.UNAVAILABLE));
 });
-

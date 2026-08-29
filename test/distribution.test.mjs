@@ -24,7 +24,9 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   }
   assert.ok(manifest.files.includes('windows'), 'Windows login-start assets must ship');
   assert.ok(manifest.files.includes('codex'), 'global Codex policy template must ship');
+  assert.ok(manifest.files.includes('zcode'), 'ZCode policy/agent templates must ship');
   assert.match(read('codex/AGENTS.md'), /Global capability-aware delegation policy/);
+  assert.match(read('zcode/AGENTS.md'), /Global capability-aware delegation policy for ZCode/);
   assert.match(read('windows/start-dsh-crew.cmd'), /127\.0\.0\.1:3210/);
   assert.match(read('windows/start-dsh-crew.vbs'), /__LAUNCHER__/);
 

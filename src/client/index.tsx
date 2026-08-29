@@ -52,11 +52,11 @@ const COPY = {
     expandAll: '全部展开', collapseAll: '全部折叠',
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
-    sectionNames: { integrations: 'Codex / Claude 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: '任务状态' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: '任务状态' },
     openHarness: '打开 3210 Crew Harness →',
     harnessHint: '底层 Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
-    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
     readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
     orchestration: 'Agent 编排',
@@ -159,6 +159,11 @@ const COPY = {
         update: '重新渲染并覆盖角色文件与命令（插件路径或配置变更后用）；原文件先备份',
         restore: '删除 ~/.codex/ 下的 ds-flash / ds-pro 角色与 dsh 命令文件（角色文件先备份）',
       },
+      zcode: {
+        install: '安装 ZCode 全局规则、ds-worker / ds-reviewer 角色、命令和按来源选择的 MCP 配置到 ~/.zcode/',
+        update: '重新渲染 ZCode 角色、命令和 MCP 条目；保留个人文件与其他 MCP 服务',
+        restore: '仅移除 dsh-crew 管理的 ZCode 文件和 MCP 条目（保留备份）',
+      },
     },
   },
   en: {
@@ -173,11 +178,11 @@ const COPY = {
     expandAll: 'Expand all', collapseAll: 'Collapse all',
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
-    sectionNames: { integrations: 'Codex / Claude integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Task status' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Task status' },
     openHarness: 'Open 3210 Crew Harness →',
     harnessHint: 'Low-level providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
-    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
     readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
     orchestration: 'Agent orchestration',
@@ -279,6 +284,11 @@ const COPY = {
         install: 'Copy ds-flash / ds-pro roles and /dsh-config, /dsh-status prompts into ~/.codex/ (MCP paths rendered for this machine, approve mode + timeout included)',
         update: 'Re-render and overwrite role files and prompts (after path/config changes); originals backed up',
         restore: 'Delete ds-flash / ds-pro roles and dsh prompts from ~/.codex/ (roles backed up first)',
+      },
+      zcode: {
+        install: 'Install the ZCode global policy, ds-worker / ds-reviewer agents, commands and source-aware MCP config under ~/.zcode/',
+        update: 'Re-render ZCode agents, commands and MCP entry; user files and unrelated MCP servers are preserved',
+        restore: 'Remove only dsh-crew-owned ZCode files and MCP entry (backups kept)',
       },
     },
   },
@@ -817,6 +827,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
             <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? 'READY' : 'CHECK'}</span>
             <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? 'READY' : 'CHECK'}</span>
+            <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? 'READY' : 'CHECK'}</span>
             <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{jobs.filter((job) => job.status === 'running').length} running</span>
           </div>
         </div>
@@ -836,7 +847,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       </div>
 
       <CollapsibleSection sectionId="integrations" title={copy.sectionNames.integrations}
-        summary={sectionSummary(status?.claude?.ready ? 'Claude READY' : 'Claude CHECK', status?.codex?.ready ? 'Codex READY' : 'Codex CHECK')}
+        summary={sectionSummary(status?.claude?.ready ? 'Claude READY' : 'Claude CHECK', `${status?.codex?.ready ? 'Codex READY' : 'Codex CHECK'} · ${status?.zcode?.ready ? 'ZCode READY' : 'ZCode CHECK'}`)}
         expanded={!!expandedSections.integrations} onToggle={() => toggleSection('integrations')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={S.block}>
@@ -860,6 +871,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           {integrationRow('Codex', !!status?.codex?.installed, !!status?.codex?.ready,
             status?.codex?.ready ? null : <span title={(status?.codex?.missing ?? []).join(', ')} style={{ fontSize: 11, opacity: 0.6 }}>{(status?.codex?.missing ?? []).join(' · ')}</span>,
             'codex', 'codex-uninstall', (copy as any).tips.codex)}
+          {integrationRow('ZCode', !!status?.zcode?.installed, !!status?.zcode?.ready,
+            status?.zcode?.ready ? null : <span title={(status?.zcode?.missing ?? []).join(', ')} style={{ fontSize: 11, opacity: 0.6 }}>{(status?.zcode?.missing ?? []).join(' · ')}</span>,
+            'zcode', 'zcode-uninstall', (copy as any).tips.zcode)}
         </div>
       </CollapsibleSection>
 

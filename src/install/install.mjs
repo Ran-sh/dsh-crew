@@ -6,6 +6,7 @@
 
 export * from './install-legacy.mjs';
 export * from './windows-startup.mjs';
+export * from './zcode.mjs';
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

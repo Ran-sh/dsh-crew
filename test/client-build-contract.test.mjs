@@ -77,7 +77,7 @@ test('shared client renders a full 3080 control plane and a minimal 3210 diagnos
 });
 
 test('3080 readiness matrix names every required host integration', () => {
-  for (const label of ['Codex MCP', 'ds-worker', 'ds-reviewer', 'Claude plugin', 'Crew Harness', 'Official bridge']) {
+  for (const label of ['Codex MCP', 'ds-worker', 'ds-reviewer', 'Claude plugin', 'ZCode MCP', 'Crew Harness', 'Official bridge']) {
     assert.match(panelSource, new RegExp(label));
   }
 });

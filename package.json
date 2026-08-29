@@ -1,6 +1,6 @@
 {
   "name": "@ran-sh/dsh-crew",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "main": "./src/hub/entry.mjs",
   "bin": {
@@ -126,6 +126,7 @@
     "deepseek",
     "claude-code",
     "codex",
+    "zcode",
     "windows",
     "subagent",
     "worker",
@@ -141,6 +142,7 @@
     "agents",
     "commands",
     "codex",
+    "zcode",
     "statusline",
     "official-web-bridge",
     "windows",

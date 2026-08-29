@@ -174,6 +174,18 @@ export async function setupInstall({
     if (r.ok === false) return { ok: false, error: 'Codex integration failed' };
   }
 
+  if (dryRun) mark(log, true, 'ZCode integration (dry-run)');
+  else {
+    const r = installer.installZCode
+      ? installer.installZCode({ home, root })
+      : realInstaller.installZCode({ home, root });
+    if (r.ok === false) {
+      mark(log, false, `ZCode integration failed (${r.code ?? 'unknown'})`);
+      return { ok: false, error: 'ZCode integration failed' };
+    }
+    mark(log, true, 'ZCode integration');
+  }
+
   if (dryRun) mark(log, true, 'Windows login startup (dry-run)');
   else {
     const r = installer.installWindowsStartup
@@ -216,6 +228,7 @@ export async function setupUninstall({
 
   if (dryRun) {
     mark(log, true, 'Codex Desktop integration would be removed');
+    mark(log, true, 'ZCode integration would be removed');
     mark(log, true, 'Claude Code integration would be removed');
     mark(log, true, 'Windows login startup would be removed');
     mark(log, true, 'DSH crew profile would be removed');
@@ -223,6 +236,12 @@ export async function setupUninstall({
     const cx = installer.uninstallCodex ? installer.uninstallCodex({ home }) : realInstaller.uninstallCodex({ home });
     if (cx.ok !== false) mark(log, true, 'Codex Desktop integration removed');
     else fail('codex', 'Codex Desktop integration removal failed');
+
+    const zc = installer.uninstallZCode
+      ? installer.uninstallZCode({ home, root })
+      : realInstaller.uninstallZCode({ home, root });
+    if (zc.ok !== false) mark(log, true, 'ZCode integration removed');
+    else fail('zcode', 'ZCode integration removal failed');
 
     const cl = installer.uninstallClaudeCode ? installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
     if (cl.ok !== false) mark(log, true, 'Claude Code integration removed');
@@ -262,9 +281,10 @@ export async function setupUninstall({
 }
 
 export async function setupStatus({ log = console.log, root = ROOT, home = homedir(), installer = realInstaller } = {}) {
-  const st = installer.installStatus ? installer.installStatus({ home }) : realInstaller.installStatus({ home });
+  const st = installer.installStatus ? installer.installStatus({ home, root }) : realInstaller.installStatus({ home, root });
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
   const codex = st?.codex?.installed ? 'installed' : 'not installed';
+  const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
   const startupState = installer.windowsStartupStatus
     ? installer.windowsStartupStatus({ home })
     : realInstaller.windowsStartupStatus({ home });
@@ -285,9 +305,10 @@ export async function setupStatus({ log = console.log, root = ROOT, home = homed
   }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile; official web profile ignored)`);
   log(`Codex Desktop integration: ${codex}`);
+  log(`ZCode integration: ${zcode}`);
   log(`Claude Code integration: ${claude}`);
   log(`Windows login startup: ${windowsStartup}`);
-  return { ok: true, dshPlugin, codex, claude, windowsStartup };
+  return { ok: true, dshPlugin, codex, zcode, claude, windowsStartup };
 }
 
 export async function runSetupCli({ argv = process.argv.slice(2), run: actions = {}, log = console.log } = {}) {

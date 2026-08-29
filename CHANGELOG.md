@@ -2,12 +2,19 @@
 
 ## Unreleased
 
+Future changes go here.
+
+## 0.5.2 — 2026-08-29
+
 - Adds a managed, capability-aware global Codex policy with a mandatory operator
   decision gate when selected Crew capabilities become unavailable.
 - Adds an idempotent per-user Windows login launcher for the isolated 3210 Crew
   backend and official 3080 UI, including status and safe uninstall support.
 - Rewrites the primary READMEs around a shorter quick-start flow and documents
   installation ownership, verification, and rollback.
+- Adds source-aware ZCode integration with managed global policy, Worker /
+  Reviewer dispatch agents, status/config commands, MCP collision protection,
+  readiness reporting, and safe uninstall.
 
 ## 0.5.1 — 2026-08-27
 

@@ -1033,7 +1033,7 @@ export async function apply(ctx) {
           // Cache-busted import: the installer must always run the code
           // currently on disk, not whatever this process first loaded —
           // a stale cached copy once re-broke user settings after a fix.
-          const { installClaudeCode, installCodex, installHudSegment, uninstallClaudeCode, uninstallCodex } =
+          const { installClaudeCode, installCodex, installHudSegment, uninstallClaudeCode, uninstallCodex, installZCode, uninstallZCode } =
             await import(`../install/install.mjs?t=${Date.now()}`);
           if (target === 'claude') {
             const base = await installClaudeCode({ statusline: !!statusline });
@@ -1044,9 +1044,11 @@ export async function apply(ctx) {
             });
           }
           if (target === 'codex') return sendJson(res, 200, installCodex({}));
+          if (target === 'zcode') return sendJson(res, 200, installZCode({}));
           if (target === 'claude-uninstall') return sendJson(res, 200, uninstallClaudeCode({}));
           if (target === 'codex-uninstall') return sendJson(res, 200, uninstallCodex({}));
-          return sendJson(res, 400, { ok: false, error: 'target must be claude | codex | claude-uninstall | codex-uninstall' });
+          if (target === 'zcode-uninstall') return sendJson(res, 200, uninstallZCode({}));
+          return sendJson(res, 400, { ok: false, error: 'target must be claude | codex | zcode | claude-uninstall | codex-uninstall | zcode-uninstall' });
         } catch (err) {
           return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
         }
