@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyWorkspaceEvidence,
   JOB_PHASES,
   isTerminalPhase,
   classifyTaskStatus,
@@ -78,6 +79,27 @@ test('the contract no-change sentinel is not treated as a claimed file change', 
   const o = buildOutcome({ result: READ_ONLY_RESULT, stopReason: 'completed' });
   assert.deepEqual(o.changes, []);
   assert.equal(o.tests_status, 'NOT RUN');
+});
+
+test('workspace evidence promotes only an explicitly verified zero-change result', () => {
+  const outcome = buildOutcome({ result: READ_ONLY_RESULT, stopReason: 'completed' });
+  const verified = applyWorkspaceEvidence(outcome, {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+  });
+  assert.equal(verified.workspace_evidence_ok, true);
+  assert.equal(verified.no_change_verified, true);
+  assert.equal(verified.task_status, 'success');
+
+  const mismatch = applyWorkspaceEvidence(outcome, {
+    evidenceAvailable: true,
+    hasChanges: true,
+    allowNoChanges: true,
+  });
+  assert.equal(mismatch.workspace_evidence_ok, false);
+  assert.equal(mismatch.no_change_verified, undefined);
+  assert.equal(mismatch.task_status, 'partial');
 });
 
 test('FAIL tests surface as partial with needs-escalation evidence', () => {

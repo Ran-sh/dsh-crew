@@ -105,7 +105,7 @@ test('unreachable or incompatible Hub blocks follow-dsh catalog regardless of st
   assert.equal(row(incompatible, 'provider_catalog').reason_code, READINESS_REASON_CODES.HUB_INCOMPATIBLE);
 });
 
-test('trusted live Hub jobs promote completed worker and reviewer executions', () => {
+test('trusted live Hub jobs promote only verified worker and approved reviewer executions', () => {
   const matrix = buildConfigReadinessMatrix({
     hubCompatibility: compatibleHub,
     workerProviderMode: 'follow-dsh',
@@ -115,8 +115,8 @@ test('trusted live Hub jobs promote completed worker and reviewer executions', (
     hubJobsBody: {
       ok: true,
       jobs: [
-        { id: 'hub-worker-1', role: 'worker', status: 'done' },
-        { id: 'hub-reviewer-1', role: 'reviewer', status: 'done' },
+        { id: 'hub-worker-1', role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true },
+        { id: 'hub-reviewer-1', role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'approve' },
       ],
     },
   });
@@ -125,6 +125,25 @@ test('trusted live Hub jobs promote completed worker and reviewer executions', (
   assert.equal(row(matrix, 'model_execution').evidence_source, 'hub-jobs');
   assert.equal(row(matrix, 'reviewer_pipeline').status, 'PASS');
   assert.equal(row(matrix, 'reviewer_pipeline').evidence_source, 'hub-jobs');
+});
+
+test('normal process completion never promotes partial work or requested review changes', () => {
+  const matrix = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerCatalogChecked: true,
+    providerCatalogBody: { ok: true, health: { hints: [] } },
+    hubJobsChecked: true,
+    hubJobsBody: {
+      ok: true,
+      jobs: [
+        { role: 'worker', status: 'done', task_status: 'partial', delivery_complete: true, workspace_evidence_ok: true },
+        { role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'request_changes' },
+      ],
+    },
+  });
+  assert.equal(row(matrix, 'model_execution').status, 'NOT_RUN');
+  assert.equal(row(matrix, 'reviewer_pipeline').status, 'NOT_RUN');
 });
 
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {

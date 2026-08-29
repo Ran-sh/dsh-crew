@@ -32,9 +32,11 @@ test('Hub registry lists completed jobs for live extension readiness evidence', 
   const hub = new WorkerRegistry({});
   hub.jobs.set('worker-1', {
     id: 'worker-1', role: 'worker', status: 'done', phase: 'completed', task: 'worker task',
+    delivery_complete: true, outcome: { task_status: 'success', workspace_evidence_ok: true },
   });
   hub.jobs.set('reviewer-1', {
     id: 'reviewer-1', role: 'reviewer', status: 'done', phase: 'completed', task: 'review task',
+    delivery_complete: true, outcome: { task_status: 'success', workspace_evidence_ok: true }, review: { verdict: 'approve' },
   });
 
   assert.deepEqual(
@@ -42,6 +44,13 @@ test('Hub registry lists completed jobs for live extension readiness evidence', 
     [
       { id: 'worker-1', role: 'worker', status: 'done' },
       { id: 'reviewer-1', role: 'reviewer', status: 'done' },
+    ],
+  );
+  assert.deepEqual(
+    hub.list().map(({ task_status, workspace_evidence_ok, review_verdict }) => ({ task_status, workspace_evidence_ok, review_verdict })),
+    [
+      { task_status: 'success', workspace_evidence_ok: true, review_verdict: null },
+      { task_status: 'success', workspace_evidence_ok: true, review_verdict: 'approve' },
     ],
   );
 });

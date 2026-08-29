@@ -48,6 +48,10 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(helper, /DSHCrewServiceSupervisor/);
   assert.match(helper, /Supervisor (?:active|recovery)/);
   assert.match(helper, /while \(\$true\)/);
+  assert.match(helper, /RootPid/);
+  assert.match(helper, /Get-TrackedProcessTree/);
+  assert.match(helper, /owned listener/i);
+  assert.match(helper, /Stop-Process/);
   assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 2);
   assert.doesNotMatch(helper, /(?:while|if) \(\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
   assert.match(startup, /__LAUNCHER__/);

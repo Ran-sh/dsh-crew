@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveHubSpawnPayload } from '../src/hub/index.mjs';
+import { applyHubWorkspaceEvidence, resolveHubSpawnPayload } from '../src/hub/index.mjs';
 
 const raw = (patch = {}) => ({ ...patch });
 const cfg = (patch = {}) => ({
@@ -111,5 +111,32 @@ test('versioned HTTP request rejects malformed workspace and constraints', () =>
     { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { allow_no_changes: 'yes' } },
   ]) {
     assert.equal(resolveHubSpawnPayload(payload, () => cfg(), dependencies).ok, false);
+  }
+});
+
+test('direct Hub jobs enforce verified no-change evidence only in an isolated clean worktree', () => {
+  const partial = {
+    execution_status: 'completed', task_status: 'partial', changes: [],
+    tests: [{ status: 'PASS' }, { status: 'NOT RUN' }],
+    delivery: { complete: true },
+  };
+  const cleanDiff = {
+    kind: 'git', dirtyBaseline: false,
+    changes: { modified: [], deleted: [], renamed: [], untracked: [] },
+  };
+  const verified = applyHubWorkspaceEvidence({
+    outcome: partial, workspaceDiff: cleanDiff, allowNoChanges: true, isolation: 'worktree',
+  });
+  assert.equal(verified.task_status, 'success');
+  assert.equal(verified.no_change_verified, true);
+  assert.equal(verified.workspace_evidence_ok, true);
+
+  for (const options of [
+    { isolation: 'shared', workspaceDiff: cleanDiff },
+    { isolation: 'worktree', workspaceDiff: { ...cleanDiff, dirtyBaseline: true } },
+  ]) {
+    const result = applyHubWorkspaceEvidence({ outcome: partial, allowNoChanges: true, ...options });
+    assert.equal(result.task_status, 'partial');
+    assert.equal(result.no_change_verified, undefined);
   }
 });
