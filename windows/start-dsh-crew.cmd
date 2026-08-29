@@ -2,54 +2,50 @@
 setlocal EnableExtensions
 title DSH Crew Launcher
 
-set "CREW_HOME=%USERPROFILE%\.config\dsh-crew\harness"
-set "OFFICIAL_HOME=%USERPROFILE%\.dsh"
-set "DSH_CLI=%CREW_HOME%\runtime\node_modules\.bin\dsh.cmd"
-set "CREW_URL=http://127.0.0.1:3210"
-set "UI_URL=http://127.0.0.1:3080"
+set "LAUNCH_REQUEST=%*"
+set "LAUNCH_MODE=open"
+set "LAUNCH_DIR=%~dp0"
+
+if "%~1"=="" goto :run
+if /i "%~1"=="--background" (
+  set "LAUNCH_MODE=background"
+  shift
+  goto :validate
+)
+if /i "%~1"=="--open" (
+  set "LAUNCH_MODE=open"
+  shift
+  goto :validate
+)
+if /i "%~1"=="--help" goto :help
+goto :invalid_argument
+
+:validate
+if not "%~1"=="" goto :invalid_argument
+
+:run
+set "LAUNCH_HELPER=%LAUNCH_DIR%start-dsh-crew.ps1"
 set "LAUNCH_LOG=%TEMP%\dsh-crew-launcher.log"
+if not exist "%LAUNCH_HELPER%" (
+  >>"%LAUNCH_LOG%" echo [%date% %time%] ERROR Managed launcher helper is missing: %LAUNCH_HELPER%
+  echo ERROR: DSH Crew launcher helper is missing.
+  echo Repair it with: dsh-crew update
+  if /i "%LAUNCH_MODE%"=="open" pause
+  exit /b 1
+)
 
-if not exist "%DSH_CLI%" goto :not_installed
-if not exist "%CREW_HOME%\profiles\dsh-crew\package.json" goto :not_installed
-if not exist "%OFFICIAL_HOME%\profiles\web\package.json" goto :official_missing
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%LAUNCH_HELPER%" -Mode "%LAUNCH_MODE%"
+set "LAUNCH_EXIT=%ERRORLEVEL%"
+if not "%LAUNCH_EXIT%"=="0" if /i "%LAUNCH_MODE%"=="open" pause
+exit /b %LAUNCH_EXIT%
 
-call :ensure_service 3210 dsh-crew "%CREW_HOME%" "%CREW_URL%"
-if errorlevel 1 goto :failed
-call :ensure_service 3080 web "%OFFICIAL_HOME%" "%UI_URL%"
-if errorlevel 1 goto :failed
+:invalid_argument
+echo ERROR: Unsupported launcher arguments: %LAUNCH_REQUEST%
+echo Use --open or --background.
+exit /b 64
+
+:help
+echo Usage: %~nx0 [--open ^| --background]
+echo   --open        Start both services and open http://127.0.0.1:3080/.
+echo   --background  Start both services silently without opening a browser.
 exit /b 0
-
-:ensure_service
-set "LAUNCH_PORT=%~1"
-set "LAUNCH_PROFILE=%~2"
-set "LAUNCH_HOME=%~3"
-set "LAUNCH_URL=%~4"
-
-call :health_check "%LAUNCH_URL%"
-if not errorlevel 1 exit /b 0
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$listener=Get-NetTCPConnection -State Listen -LocalPort $env:LAUNCH_PORT -ErrorAction SilentlyContinue; if ($listener) { exit 0 } else { exit 1 }" >nul 2>&1
-if not errorlevel 1 exit /b 1
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { $env:DSH_HOME=$env:LAUNCH_HOME; Start-Process -FilePath $env:DSH_CLI -ArgumentList @('--profile',$env:LAUNCH_PROFILE,'--host','127.0.0.1','--port',$env:LAUNCH_PORT,'--no-open') -WindowStyle Hidden -ErrorAction Stop } catch { ('['+(Get-Date -Format s)+'] Failed to start '+$env:LAUNCH_PROFILE+': '+$_.Exception.Message) | Add-Content -LiteralPath $env:LAUNCH_LOG; exit 1 }" >nul 2>&1
-if errorlevel 1 exit /b 1
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$lastError=$null; $deadline=(Get-Date).AddSeconds(90); do { try { $r=Invoke-RestMethod -Uri ($env:LAUNCH_URL+'/_dsh/dsh-crew/extension') -TimeoutSec 2; if ($r.ok -eq $true -and $r.extension.runtime.runtime_version) { exit 0 } } catch { $lastError=$_.Exception.Message }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); if (-not $lastError) { $lastError='No healthy response before the startup deadline.' }; ('['+(Get-Date -Format s)+'] '+$env:LAUNCH_PROFILE+' health check failed: '+$lastError) | Add-Content -LiteralPath $env:LAUNCH_LOG; exit 1" >nul 2>&1
-exit /b %ERRORLEVEL%
-
-:health_check
-set "HEALTH_URL=%~1"
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command "try { $r=Invoke-RestMethod -Uri ($env:HEALTH_URL+'/_dsh/dsh-crew/extension') -TimeoutSec 2; if ($r.ok -eq $true -and $r.extension.runtime.runtime_version) { exit 0 } } catch {}; exit 1" >nul 2>&1
-exit /b %ERRORLEVEL%
-
-:not_installed
-echo [%date% %time%] DSH Crew is not installed completely.>>"%LAUNCH_LOG%"
-exit /b 1
-
-:official_missing
-echo [%date% %time%] Official DeepSeek Harness web profile was not found.>>"%LAUNCH_LOG%"
-exit /b 1
-
-:failed
-echo [%date% %time%] DSH Crew startup failed.>>"%LAUNCH_LOG%"
-exit /b 1
