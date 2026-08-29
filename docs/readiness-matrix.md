@@ -24,7 +24,10 @@ The matrix separates three kinds of evidence:
 2. `ci` — platform validation such as Linux deterministic, Windows regressions, and future macOS smoke.
 3. `real-execution` — provider/model and workflow behavior that requires a genuine DSH execution.
 
-Only live checks are populated automatically by the current runtime. CI and real-execution rows remain `NOT_RUN` until a trusted higher layer supplies explicit evidence.
+Live checks are populated automatically. The config report also consumes the
+compatible Hub's bounded job registry, so a completed Worker or Reviewer can
+promote the corresponding generic real-execution row. Other CI and execution
+rows remain `NOT_RUN` until a trusted higher layer supplies explicit evidence.
 
 ## Target rows
 
@@ -33,6 +36,7 @@ Only live checks are populated automatically by the current runtime. CI and real
 - `macos_smoke`
 - `hub_compatibility`
 - `provider_catalog`
+- `model_execution`
 - `deepseek_flash`
 - `deepseek_pro`
 - `opencode_go_mimo_qwen`

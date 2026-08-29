@@ -18,6 +18,8 @@ export function buildConfigReadinessMatrix({
   workerProviderMode = null,
   providerCatalogChecked = false,
   providerCatalogBody = null,
+  hubJobsChecked = false,
+  hubJobsBody = null,
 } = {}) {
   const warnings = warningCodes(providerCatalogBody);
   const catalogResponseOk = !!providerCatalogBody
@@ -26,6 +28,26 @@ export function buildConfigReadinessMatrix({
   const catalogOk = providerCatalogChecked && catalogResponseOk && warnings.length === 0;
 
   const evidence = {};
+  const hubJobs = hubCompatibility?.compatible === true
+    && hubJobsChecked
+    && hubJobsBody?.ok !== false
+    && Array.isArray(hubJobsBody?.jobs)
+    ? hubJobsBody.jobs
+    : [];
+  if (hubJobs.some((job) => job?.role === 'worker' && job?.status === 'done')) {
+    evidence.model_execution = {
+      status: 'PASS',
+      reason_code: 'REAL_EXECUTION_PASSED',
+      evidence_source: 'hub-jobs',
+    };
+  }
+  if (hubJobs.some((job) => job?.role === 'reviewer' && job?.status === 'done')) {
+    evidence.reviewer_pipeline = {
+      status: 'PASS',
+      reason_code: 'REAL_REVIEW_PASSED',
+      evidence_source: 'hub-jobs',
+    };
+  }
   if (
     workerProviderMode !== 'deepseek-official'
     && hubCompatibility?.compatible === true

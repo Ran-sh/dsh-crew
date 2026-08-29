@@ -28,6 +28,7 @@ const TARGET_ROWS = Object.freeze([
   ['macos_smoke', 'ci'],
   ['hub_compatibility', 'live-runtime'],
   ['provider_catalog', 'live-runtime'],
+  ['model_execution', 'real-execution'],
   ['deepseek_flash', 'real-execution'],
   ['deepseek_pro', 'real-execution'],
   ['opencode_go_mimo_qwen', 'real-execution'],

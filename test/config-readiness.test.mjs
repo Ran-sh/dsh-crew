@@ -105,38 +105,33 @@ test('unreachable or incompatible Hub blocks follow-dsh catalog regardless of st
   assert.equal(row(incompatible, 'provider_catalog').reason_code, READINESS_REASON_CODES.HUB_INCOMPATIBLE);
 });
 
-test('trusted live Hub extension promotes completed worker and reviewer executions', () => {
+test('trusted live Hub jobs promote completed worker and reviewer executions', () => {
   const matrix = buildConfigReadinessMatrix({
     hubCompatibility: compatibleHub,
     workerProviderMode: 'follow-dsh',
     providerCatalogChecked: true,
     providerCatalogBody: { ok: true, health: { hints: [] } },
-    hubExtensionChecked: true,
-    hubExtensionBody: {
+    hubJobsChecked: true,
+    hubJobsBody: {
       ok: true,
-      extension: {
-        kind: 'dsh-crew-extension',
-        readiness: {
-          components: {
-            model: { status: 'READY', reason_code: 'REAL_EXECUTION_PASSED' },
-            reviewer: { status: 'READY', reason_code: 'REAL_REVIEW_PASSED' },
-          },
-        },
-      },
+      jobs: [
+        { id: 'hub-worker-1', role: 'worker', status: 'done' },
+        { id: 'hub-reviewer-1', role: 'reviewer', status: 'done' },
+      ],
     },
   });
 
   assert.equal(row(matrix, 'model_execution').status, 'PASS');
-  assert.equal(row(matrix, 'model_execution').evidence_source, 'hub-extension');
+  assert.equal(row(matrix, 'model_execution').evidence_source, 'hub-jobs');
   assert.equal(row(matrix, 'reviewer_pipeline').status, 'PASS');
-  assert.equal(row(matrix, 'reviewer_pipeline').evidence_source, 'hub-extension');
+  assert.equal(row(matrix, 'reviewer_pipeline').evidence_source, 'hub-jobs');
 });
 
-test('unchecked or malformed Hub extension evidence never promotes execution readiness', () => {
+test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {
   for (const options of [
-    { hubExtensionChecked: false, hubExtensionBody: { extension: { readiness: { components: { model: { status: 'READY' } } } } } },
-    { hubExtensionChecked: true, hubExtensionBody: { ok: true, extension: { kind: 'foreign-extension', readiness: { components: { model: { status: 'READY' } } } } } },
-    { hubExtensionChecked: true, hubExtensionBody: { ok: false, error: 'token=must-not-leak' } },
+    { hubJobsChecked: false, hubJobsBody: { ok: true, jobs: [{ role: 'worker', status: 'done' }] } },
+    { hubJobsChecked: true, hubJobsBody: { ok: true, jobs: 'not-an-array' } },
+    { hubJobsChecked: true, hubJobsBody: { ok: false, error: 'token=must-not-leak' } },
   ]) {
     const matrix = buildConfigReadinessMatrix({
       hubCompatibility: compatibleHub,

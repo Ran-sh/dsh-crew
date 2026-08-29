@@ -336,6 +336,8 @@ async function buildConfigReport() {
   let providerResolutionError;
   let providerCatalogChecked = false;
   let providerCatalogBody = null;
+  let hubJobsChecked = false;
+  let hubJobsBody = null;
   const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
   if (workerProviderMode === 'deepseek-official') {
     effectiveWorkerSelection = {
@@ -369,12 +371,23 @@ async function buildConfigReport() {
   } else if (hubCompatibility.reachable) {
     providerResolutionError = hubCompatibilityMessage(hubCompatibility);
   }
+  if (hubCompatibility.compatible) {
+    try {
+      hubJobsChecked = true;
+      const jobsRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/jobs`, { signal: AbortSignal.timeout(800) });
+      hubJobsBody = await jobsRes.json();
+    } catch {
+      hubJobsChecked = true;
+    }
+  }
   effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
   const readinessMatrix = buildConfigReadinessMatrix({
     hubCompatibility,
     workerProviderMode,
     providerCatalogChecked,
     providerCatalogBody,
+    hubJobsChecked,
+    hubJobsBody,
   });
   const roleProfiles = loadRoleProfiles();
   const workspaceReadiness = await assessWorkspaceReadiness({ cwd: process.cwd() });
