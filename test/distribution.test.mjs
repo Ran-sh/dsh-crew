@@ -32,6 +32,10 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   const startup = read('windows/start-dsh-crew.vbs');
   assert.match(launcher, /start-dsh-crew\.ps1/);
   assert.match(launcher, /%\*/);
+  const directoryCapture = launcher.indexOf('set "LAUNCH_DIR=%~dp0"');
+  const firstShift = launcher.indexOf('shift');
+  assert.ok(directoryCapture >= 0 && directoryCapture < firstShift, 'launcher directory must be captured before shifting arguments');
+  assert.match(launcher, /%LAUNCH_DIR%start-dsh-crew\.ps1/);
   assert.match(helper, /127\.0\.0\.1:3210/);
   assert.match(helper, /127\.0\.0\.1:3080/);
   assert.match(helper, /ValidateSet\(['"]background['"],\s*['"]open['"]\)/);
