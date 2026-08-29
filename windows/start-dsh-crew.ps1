@@ -15,8 +15,8 @@ $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
 $services = @(
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; LastError = $null },
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; LastError = $null }
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; ConsecutiveFailures = 0; LastError = $null },
+  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -82,13 +82,13 @@ function Get-TrackedProcessTree {
 
 function Stop-OwnedListener {
   param([pscustomobject] $Service, [int] $ListenerPid)
-  if ($Mode -ne 'watch' -or -not $Service.Process -or $Service.Process.HasExited -or -not $Service.RootPid -or $ListenerPid -lt 1) {
+  if ($Mode -ne 'watch' -or -not $Service.RootPid -or $ListenerPid -lt 1) {
     return $false
   }
   try {
     $ownedProcessIds = @(Get-TrackedProcessTree -RootPid $Service.RootPid)
     if ($ListenerPid -notin $ownedProcessIds) { return $false }
-    Write-LaunchLog ('Supervisor confirmed owned listener PID={0} under tracked root PID={1}; stopping that process tree after failed health checks.' -f $ListenerPid, $Service.RootPid) 'WARN'
+    Write-LaunchLog ('Supervisor confirmed owned listener PID={0} under tracked root PID={1}; stopping that process tree after {2} consecutive failed health checks.' -f $ListenerPid, $Service.RootPid, $Service.ConsecutiveFailures) 'WARN'
     foreach ($processId in $ownedProcessIds) {
       Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
     }
@@ -117,6 +117,7 @@ function Start-CrewService {
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $Service.Process = $process
     $Service.RootPid = $process.Id
+    $Service.ConsecutiveFailures = 0
     $Service.State = 'starting'
     Write-LaunchLog ('Started {0} on port {1}; PID={2}; stdout={3}; stderr={4}' -f $Service.Profile, $Service.Port, $process.Id, $stdout, $stderr)
   } finally {
@@ -132,6 +133,7 @@ function Wait-CrewServices {
       $service.LastError = $health.Error
       if ($health.Ready) {
         $service.State = 'ready'
+        $service.ConsecutiveFailures = 0
         Write-LaunchLog ('{0} ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       } elseif ($service.Process -and $service.Process.HasExited) {
         throw ('{0} exited before becoming ready; PID={1}; exit={2}; last health error: {3}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode, $health.Error)
@@ -155,6 +157,7 @@ function Ensure-CrewServices {
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
       $service.State = 'ready'
+      $service.ConsecutiveFailures = 0
       $service.LastError = $null
       if (-not $QuietHealthy -or -not $wasReady) {
         Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
@@ -163,6 +166,7 @@ function Ensure-CrewServices {
     }
 
     $service.LastError = $health.Error
+    $service.ConsecutiveFailures += 1
     if ($service.Process -and $service.Process.HasExited) {
       Write-LaunchLog ('{0} process exited after startup; PID={1}; exit={2}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode) 'WARN'
       $service.Process = $null
@@ -171,9 +175,13 @@ function Ensure-CrewServices {
 
     $port = Get-PortState $service.Port
     if ($port.State -eq 'occupied') {
+      if ($service.ConsecutiveFailures -lt 3) {
+        throw ('Health check {0}/3 failed for {1}; owned process remains untouched until failure is confirmed. Health error: {2}' -f $service.ConsecutiveFailures, $service.Name, $health.Error)
+      }
       if (Stop-OwnedListener -Service $service -ListenerPid $port.Pid) {
         $service.Process = $null
         $service.RootPid = $null
+        $service.ConsecutiveFailures = 0
         $port = Get-PortState $service.Port
       }
     }

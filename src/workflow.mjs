@@ -81,14 +81,20 @@ export function applyWorkspaceEvidence(outcome, {
   evidenceAvailable = false,
   hasChanges = false,
   allowNoChanges = false,
+  requireNoChangeAuthorization = true,
 } = {}) {
   const next = { ...outcome };
-  if (!evidenceAvailable || next.execution_status !== 'completed') return next;
-
-  next.workspace_evidence_ok = deliveryClaimsChanges(next) === hasChanges;
+  const claimsChanges = deliveryClaimsChanges(next);
+  if (evidenceAvailable && next.execution_status === 'completed') {
+    next.workspace_evidence_ok = claimsChanges === hasChanges;
+  }
   const tests = Array.isArray(next.tests) ? next.tests : [];
-  const verifiedNoChange = allowNoChanges === true
+  const verifiedNoChange = requireNoChangeAuthorization === true
+    && evidenceAvailable === true
+    && allowNoChanges === true
     && hasChanges === false
+    && claimsChanges === false
+    && next.execution_status === 'completed'
     && next.workspace_evidence_ok === true
     && next.delivery?.complete === true
     && tests.some((test) => test.status === 'PASS')
@@ -96,6 +102,9 @@ export function applyWorkspaceEvidence(outcome, {
   if (verifiedNoChange) {
     next.task_status = 'success';
     next.no_change_verified = true;
+  } else if (requireNoChangeAuthorization === true && claimsChanges === false && next.task_status === 'success') {
+    next.task_status = 'partial';
+    delete next.no_change_verified;
   }
   return next;
 }

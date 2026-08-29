@@ -11,7 +11,23 @@ function verifiedHubJob(job) {
   return job?.status === 'done'
     && job?.task_status === 'success'
     && job?.delivery_complete === true
-    && job?.workspace_evidence_ok !== false;
+    && job?.workspace_evidence_ok === true;
+}
+
+export function buildHubExecutionRows(hubJobs = []) {
+  const jobs = Array.isArray(hubJobs) ? hubJobs : [];
+  const workerPassed = jobs.some((job) => job?.role === 'worker' && verifiedHubJob(job));
+  const reviewerPassed = jobs.some((job) => job?.role === 'reviewer'
+    && verifiedHubJob(job)
+    && job?.review_verdict === 'approve');
+  return [
+    workerPassed
+      ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED', evidence_source: 'hub-jobs' }
+      : { id: 'model_execution', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    reviewerPassed
+      ? { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED', evidence_source: 'hub-jobs' }
+      : { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+  ];
 }
 
 /**
@@ -41,19 +57,14 @@ export function buildConfigReadinessMatrix({
     && Array.isArray(hubJobsBody?.jobs)
     ? hubJobsBody.jobs
     : [];
-  if (hubJobs.some((job) => job?.role === 'worker' && verifiedHubJob(job))) {
-    evidence.model_execution = {
-      status: 'PASS',
-      reason_code: 'REAL_EXECUTION_PASSED',
-      evidence_source: 'hub-jobs',
-    };
-  }
-  if (hubJobs.some((job) => job?.role === 'reviewer' && verifiedHubJob(job) && job?.review_verdict === 'approve')) {
-    evidence.reviewer_pipeline = {
-      status: 'PASS',
-      reason_code: 'REAL_REVIEW_PASSED',
-      evidence_source: 'hub-jobs',
-    };
+  for (const row of buildHubExecutionRows(hubJobs)) {
+    if (row.status === 'PASS') {
+      evidence[row.id] = {
+        status: row.status,
+        reason_code: row.reason_code,
+        evidence_source: row.evidence_source,
+      };
+    }
   }
   if (
     workerProviderMode !== 'deepseek-official'

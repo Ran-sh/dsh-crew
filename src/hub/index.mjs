@@ -29,6 +29,7 @@ import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspa
 import { buildExtensionContract } from '../extension-contract.mjs';
 import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
+import { buildHubExecutionRows } from '../config-readiness.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -121,7 +122,7 @@ export function hubCanonicalEvents(job = {}) {
 
 // ---------- job registry ----------
 
-export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges = false, isolation = 'shared' } = {}) {
+export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges = false, isolation = 'shared', role = 'worker' } = {}) {
   const changes = workspaceDiff?.changes ?? {};
   const hasChanges = ['modified', 'deleted', 'renamed', 'untracked']
     .some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
@@ -130,6 +131,7 @@ export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChang
     evidenceAvailable,
     hasChanges,
     allowNoChanges: allowNoChanges === true && isolation === 'worktree',
+    requireNoChangeAuthorization: role === 'worker',
   });
 }
 
@@ -473,6 +475,7 @@ export class WorkerRegistry {  constructor(ctx) {
           workspaceDiff: job.workspaceDiff,
           allowNoChanges: job.allow_no_changes,
           isolation: job.isolation,
+          role: job.role,
         });
         if (job.role === 'reviewer' && job.review && job.workspaceDiff?.kind === 'git') {
           const changes = job.workspaceDiff.changes ?? {};
@@ -879,12 +882,7 @@ export async function apply(ctx) {
           ? { status: 'UNAVAILABLE', reason_code: 'WORKSPACE_CONTEXT_NOT_FOUND' }
           : await assessWorkspaceReadiness({ cwd: requestedContext?.repo_root ?? null });
         const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
-        const modelExecution = liveJobs.some((job) => job?.role === 'worker' && job?.status === 'done')
-          ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' }
-          : { id: 'model_execution', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' };
-        const reviewerExecution = liveJobs.some((job) => job?.role === 'reviewer' && job?.status === 'done')
-          ? { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED' }
-          : { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' };
+        const [modelExecution, reviewerExecution] = buildHubExecutionRows(liveJobs);
         const contract = buildExtensionContract({
           config,
           readinessMatrix: { rows: [
