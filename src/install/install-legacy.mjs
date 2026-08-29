@@ -11,6 +11,8 @@ import { normalizeModelPriority } from '../model-routing.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
+const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
+const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
 // dsh_worker_config is included so the session commands (/dsh-crew:config,
 // /dsh-config) and any orchestrator policy lookup run without an extra
 // authorization prompt.
@@ -31,6 +33,50 @@ function readJson(file, fallback) {
 
 function readText(file) {
   try { return readFileSync(file, 'utf8'); } catch { return null; }
+}
+
+function managedPolicyBlock(root) {
+  const policy = readText(join(root, 'codex', 'AGENTS.md'))?.trim();
+  if (!policy) return null;
+  return `${POLICY_START}\n${policy}\n${POLICY_END}`;
+}
+
+function installGlobalCodexPolicy({ home, root }) {
+  const file = join(home, '.codex', 'AGENTS.md');
+  const block = managedPolicyBlock(root);
+  if (!block) return { ok: false, action: 'global policy template missing' };
+  mkdirSync(dirname(file), { recursive: true });
+  const current = readText(file) ?? '';
+  const managed = new RegExp(`${POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
+  const template = readText(join(root, 'codex', 'AGENTS.md'))?.trim() ?? '';
+  let next;
+  if (managed.test(current)) next = current.replace(managed, block);
+  else if (current.trim() === template) next = `${block}\n`;
+  else next = `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${block}\n`;
+  if (next !== current) {
+    backup(file);
+    writeFileSync(file, next);
+  }
+  return { ok: true, action: `global policy: ${file}` };
+}
+
+function globalCodexPolicyReady({ home, root = ROOT }) {
+  const block = managedPolicyBlock(root);
+  const text = readText(join(home, '.codex', 'AGENTS.md'));
+  return !!block && typeof text === 'string' && text.includes(block);
+}
+
+function uninstallGlobalCodexPolicy({ home }) {
+  const file = join(home, '.codex', 'AGENTS.md');
+  const current = readText(file);
+  if (typeof current !== 'string') return null;
+  const managed = new RegExp(`(?:\\r?\\n){0,2}${POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\r?\\n)?`, 'm');
+  if (!managed.test(current)) return null;
+  const next = current.replace(managed, '').trimEnd();
+  backup(file);
+  if (next.trim()) writeFileSync(file, `${next}\n`);
+  else rmSync(file);
+  return `codex global policy: removed managed block`;
 }
 
 function tomlSection(text, name) {
@@ -282,6 +328,7 @@ export function installStatus({ home = homedir() } = {}) {
     status_prompt: !!readText(join(codexRoot, 'prompts', 'dsh-status.md'))?.trim(),
     mcp: !!mcpTarget,
     target_alignment: !!workerTarget && workerTarget === reviewerTarget && workerTarget === mcpTarget,
+    global_policy: globalCodexPolicyReady({ home }),
   };
   const codexInstalled = Object.values(components).some(Boolean)
     || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
@@ -312,6 +359,8 @@ export function uninstallCodex({ home = homedir() } = {}) {
     const p = join(home, '.codex', 'prompts', f);
     if (existsSync(p)) { rmSync(p); actions.push(`removed: ${p}`); }
   }
+  const policyAction = uninstallGlobalCodexPolicy({ home });
+  if (policyAction) actions.push(policyAction);
   // Remove only the dsh-crew entry from [mcp_servers], keeping any other
   // MCP servers the user configured.
   const configFile = join(home, '.codex', 'config.toml');
@@ -458,6 +507,9 @@ export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
   if (scope !== 'project') {
     const act = writeGlobalCodexMcpServer(home, renderedPath);
     actions.push(...act);
+    const policy = installGlobalCodexPolicy({ home, root });
+    if (!policy.ok) return { ok: false, actions: [...actions, policy.action] };
+    actions.push(policy.action);
   }
   return { ok: true, actions };
 }

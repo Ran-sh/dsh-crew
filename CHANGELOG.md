@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Adds a managed, capability-aware global Codex policy with a mandatory operator
+  decision gate when selected Crew capabilities become unavailable.
+- Adds an idempotent per-user Windows login launcher for the isolated 3210 Crew
+  backend and official 3080 UI, including status and safe uninstall support.
+- Rewrites the primary READMEs around a shorter quick-start flow and documents
+  installation ownership, verification, and rollback.
+
 ## 0.5.1 — 2026-08-27
 
 - Upgrades and exact-pins the client build toolchain so Rolldown no longer

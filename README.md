@@ -1,14 +1,14 @@
-<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" /></p>
+<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="112" /></p>
 
-<h1 align="center">DSH Crew</h1>
+# DSH Crew
 
-<p align="center"><strong>Workers and reviewers for Codex Desktop and Claude Code, shown inside the official DeepSeek Harness UI.</strong></p>
+Workers and independent reviewers for Codex Desktop and Claude Code, with daily controls inside the official DeepSeek Harness UI.
 
-<p align="center"><a href="./README.md"><b>English</b></a> · <a href="./README.zh.md">简体中文</a></p>
+[English](./README.md) · [简体中文](./README.zh.md)
 
 ## Quick start
 
-Requirements: Node.js; Git is required for worktree isolation.
+Requirements: Node.js; Git is also required for worktree isolation.
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
@@ -16,97 +16,77 @@ dsh-crew install
 dsh-crew integrate
 ```
 
-Start the official Harness on port 3080 as usual:
+On Windows, installation also creates a per-user login-start entry. It starts the isolated Crew backend on 3210 and the official UI on 3080 without opening a browser. Open <http://127.0.0.1:3080> when you need the console.
 
 ```bash
-npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
+dsh-crew status
+dsh-crew inspect
 ```
 
-Open <http://127.0.0.1:3080> and go to the single **Settings → DSH Crew** entry. The official 3080 process is the daily console; Crew work stays in the isolated backend at `127.0.0.1:3210`. Use **Open 3210 Crew Harness →** only for low-level Provider and Harness Model settings.
+- **3080**: daily console, Crew settings, Codex/Claude readiness, jobs.
+- **3210**: isolated Crew backend, Providers, Harness Models, low-level Harness settings.
+- **Codex**: installation adds a managed capability-aware policy block to `~/.codex/AGENTS.md`. Existing user instructions remain untouched.
 
-The shared client is surface-aware: 3080 renders the complete Crew control plane, host readiness, and task status; 3210 renders only a minimal Crew runtime panel while its native Harness menus continue to own Providers, Harness Models, Agent presets, and low-level settings. Detection uses the structured bridge/runtime endpoints, not a hard-coded browser port, and fails closed when evidence is missing. See [UI surface architecture](./docs/ui-surfaces.md).
+## Configure and use
 
-## Configure
+In **Settings → DSH Crew**, refresh Harness Models and order the Worker and Reviewer model lists. One configured model is used directly; several models are tried in your chosen order. Worker can run automatically. Reviewer defaults to manual.
 
-1. Click **Refresh Harness Models**.
-2. Set the model order for Worker and Reviewer.
-3. Keep Worker on **Auto** for automatic delegation.
-4. Reviewer defaults to **Manual**; enable automatic review only when wanted.
-5. Keep **worktree** isolation for coding tasks.
-
-With one configured model, both roles simply use that model. With several models, each role tries its ordered list and falls back to the next available model. Settings modules are collapsible and show their effective state while closed. The task section shows a compact Worker/Reviewer table plus process-local model call counts, sources, and last-call times; prompts, results, and credentials are not collected for this overview.
-
-## Use from Codex or Claude
+Ask Codex or Claude naturally:
 
 ```text
-Use ds-worker to implement this change and run the tests.
+Use ds-worker to implement this change and run its tests.
 Use ds-reviewer to review the result.
 ```
 
-Legacy `ds-flash` and `ds-pro` aliases remain compatible.
+Codex first discovers the live Crew capability/readiness contract. If it selected Crew and Crew becomes unavailable, it pauses and asks whether to repair Crew or continue locally; it does not silently fall back.
 
-## Results and reviews
-
-Crew returns a compact, machine-readable Result Contract by default: status,
-tests, changed files, review verdict, model-selection trace, artifact references,
-and canonical lifecycle events. Raw agent prose and full patches are not copied
-through every hand-off. An automatic Reviewer receives a bounded evidence
-capsule and inspects the isolated workspace directly.
-
-MCP callers can request `detail: "full"` on `dsh_run_worker` or
-`dsh_worker_result` for explicit debugging and recovery. Contract details are in
-[Job contracts and information flow](./docs/job-contracts.md).
-
-## Common commands
+## Commands
 
 ```bash
-dsh-crew status       # installation and integration health
-dsh-crew inspect      # machine-readable capabilities and readiness
-dsh-crew jobs list    # machine-readable jobs
-dsh-crew jobs watch <job-id> --after 0
-dsh-crew update       # update and repair enabled integrations
-dsh-crew integrate    # connect official 3080 UI to isolated 3210 Crew
-dsh-crew detach       # remove only the 3080 bridge
-dsh-crew uninstall    # remove Crew, keep config and backups
+dsh-crew status                    # installation and integration health
+dsh-crew inspect                   # live capabilities and readiness
+dsh-crew jobs list                 # jobs and Result Contracts
+dsh-crew jobs watch <id> --after 0
+dsh-crew update                    # update and repair enabled integrations
+dsh-crew integrate                 # add the official 3080 bridge
+dsh-crew detach                    # remove only the 3080 bridge
+dsh-crew uninstall                 # remove managed files; keep config/backups
+dsh-crew uninstall --purge         # also remove config/backups
 ```
 
-`dsh-crew uninstall --purge` also removes Crew configuration and backups.
-
-If you prefer a completely separate UI, run `dsh-crew detach`, then start the isolated profile directly:
-
-```powershell
-$env:DSH_HOME = "$HOME\.config\dsh-crew\harness"
-& "$env:DSH_HOME\runtime\node_modules\.bin\dsh.cmd" --profile dsh-crew --host 127.0.0.1 --port 3210
-```
-
-The bridge backs up the official `web` profile before its first change and registers only a lightweight proxy/client package. The full Crew Hub, model execution, config, and credentials stay under:
+The official `web` profile receives only a lightweight bridge. The Crew runtime, models, config, and credentials stay isolated under:
 
 ```text
 ~/.config/dsh-crew/harness
 profile: dsh-crew
 ```
 
-For launchers at `<= 0.3.3`, first refresh the launcher because the old updater cannot discover newer releases and cannot be retroactively fixed:
+## Install from source
+
+Use this path to install the current GitHub `main` before it is published to npm:
+
+```bash
+git clone https://github.com/Ran-sh/dsh-crew.git
+cd dsh-crew
+node scripts/setup.mjs install
+node scripts/setup.mjs status
+```
+
+Verify and remove it with:
+
+```bash
+node --test test/*.test.mjs
+pnpm run build:client
+node scripts/setup.mjs uninstall
+```
+
+For launchers at `<= 0.3.3`, refresh the launcher first. The old updater cannot discover newer releases and cannot be retroactively fixed:
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew update
 ```
 
-## Source development
-
-```bash
-git clone https://github.com/Ran-sh/dsh-crew.git
-cd dsh-crew
-node scripts/setup.mjs install
-node --test test/*.test.mjs
-pnpm run build:client
-node scripts/setup.mjs uninstall
-```
-
-More detail: [Changelog](./CHANGELOG.md) · [UI surfaces](./docs/ui-surfaces.md) · [Readiness matrix](./docs/readiness-matrix.md) · [Job contracts](./docs/job-contracts.md)
-· [GPT-first extension](./docs/gpt-relay-extension.md)
-
-## License
+Installation ownership and rollback details: [Installation plan](./docs/installation.md). Architecture contracts: [UI surfaces](./docs/ui-surfaces.md) · [Readiness](./docs/readiness-matrix.md) · [Jobs and information flow](./docs/job-contracts.md).
 
 MIT

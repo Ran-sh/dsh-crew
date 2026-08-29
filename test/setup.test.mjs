@@ -28,6 +28,9 @@ function fakeInstaller(calls) {
     uninstallCodex: (o = {}) => { calls.push(['uninstallCodex', o]); return { ok: true, actions: ['codex-removed'] }; },
     installClaudeCode: async (o = {}) => { calls.push(['installClaudeCode', o]); return { ok: true, actions: ['claude'] }; },
     uninstallClaudeCode: (o = {}) => { calls.push(['uninstallClaudeCode', o]); return { ok: true, actions: ['claude-removed'] }; },
+    installWindowsStartup: (o = {}) => { calls.push(['installWindowsStartup', o]); return { ok: true, supported: true, changed: true }; },
+    uninstallWindowsStartup: (o = {}) => { calls.push(['uninstallWindowsStartup', o]); return { ok: true, supported: true, removed: true }; },
+    windowsStartupStatus: () => ({ supported: true, installed: true, ready: true }),
     installStatus: () => ({ claude: { installed: false }, codex: { installed: false } }),
   };
 }
@@ -104,6 +107,7 @@ test('install with a real checkout + injected dep runner plans all steps and nev
     assert.match(joined, /DSH web profile would be linked \(legacy\)/);
     assert.match(joined, /dedicated dsh-crew profile/);
     assert.match(joined, /Codex Desktop integration \(dry-run\)/);
+    assert.match(joined, /Windows login startup \(dry-run\)/);
     assert.equal(calls.length, 0, 'dry-run must not execute installer calls');
   } finally { t.cleanup(); }
 });
@@ -159,6 +163,7 @@ test('uninstall calls the installer for Codex and Claude, and treats an absent D
     // Codex + Claude uninstall were called regardless of the DSH CLI outcome
     assert.ok(calls.some((c) => c[0] === 'uninstallCodex'), 'uninstallCodex must be invoked');
     assert.ok(calls.some((c) => c[0] === 'uninstallClaudeCode'), 'uninstallClaudeCode must be invoked');
+    assert.ok(calls.some((c) => c[0] === 'uninstallWindowsStartup'), 'uninstallWindowsStartup must be invoked');
     // With no ~/.dsh profile present under the fake home, the DSH removal is
     // idempotent: reported as already removed, not a hard failure.
     assert.match(logs.join('\n'), /already removed/);

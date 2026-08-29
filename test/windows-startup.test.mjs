@@ -29,7 +29,7 @@ test('Windows startup install is durable, idempotent, and reports readiness', ()
     assert.equal(windowsStartupStatus({ home: f.home, startupDir: f.startupDir, platform: 'win32' }).ready, true);
     assert.equal(existsSync(first.launcherFile), true);
     assert.equal(existsSync(first.startupFile), true);
-    assert.match(readFileSync(first.startupFile, 'utf8'), /start-dsh-crew\.cmd/);
+    assert.match(readFileSync(first.startupFile, 'utf16le'), /start-dsh-crew\.cmd/);
   } finally { f.cleanup(); }
 });
 

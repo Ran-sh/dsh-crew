@@ -1,10 +1,10 @@
-<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="120" /></p>
+<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="112" /></p>
 
-<h1 align="center">DSH Crew</h1>
+# DSH Crew
 
-<p align="center"><strong>让 Codex Desktop 和 Claude Code 使用 Worker / Reviewer，并统一显示在官方 DeepSeek Harness 界面中。</strong></p>
+让 Codex Desktop 和 Claude Code 使用 Worker / Reviewer，并在官方 DeepSeek Harness 界面中完成日常控制。
 
-<p align="center"><a href="./README.md">English</a> · <a href="./README.zh.md"><b>简体中文</b></a></p>
+[English](./README.md) · [简体中文](./README.zh.md)
 
 ## 快速开始
 
@@ -16,96 +16,77 @@ dsh-crew install
 dsh-crew integrate
 ```
 
-照常在 3080 端口启动官方 Harness：
+Windows 安装会同时创建当前用户的登录启动项：后台启动隔离的 3210 Crew 和官方 3080 界面服务，但不会自动弹出浏览器。需要时打开 <http://127.0.0.1:3080>。
 
 ```bash
-npx -y @deepseek-ai/dsh web --host 127.0.0.1 --port 3080
+dsh-crew status
+dsh-crew inspect
 ```
 
-打开 <http://127.0.0.1:3080>，进入唯一的 **设置 → DSH Crew**。3080 是日常控制台；Crew 的任务与模型执行继续隔离在 `127.0.0.1:3210`。只有配置底层 Provider 和 Harness Models 时才点击“打开 3210 Crew Harness →”。
+- **3080**：日常控制台、Crew 设置、Codex/Claude 就绪状态、任务列表。
+- **3210**：隔离 Crew 后端、Provider、Harness Models 和底层 Harness 设置。
+- **Codex**：安装程序会在 `~/.codex/AGENTS.md` 中加入可卸载的能力感知规则区块，不改动已有个人规则。
 
-共享客户端会识别当前 surface：3080 显示完整 Crew 控制面、宿主就绪度和任务状态；3210 的 DSH Crew 入口只显示最小运行时诊断，Provider、Harness Models、Agent 预设和底层设置仍由 Harness 原生菜单管理。识别依赖结构化 bridge/runtime 接口，不硬编码浏览器端口；证据缺失时会保守隐藏控制面。详见 [UI surface 架构](./docs/ui-surfaces.md)。
+## 配置与使用
 
-## 配置
+进入 **设置 → DSH Crew**，刷新 Harness Models，然后分别排列 Worker 和 Reviewer 的模型顺序。只配置一个模型时直接使用；配置多个模型时按你的排序依次尝试。Worker 可以自动调用，Reviewer 默认手动。
 
-1. 点击“刷新 Harness 模型”。
-2. 分别设置 Worker 和 Reviewer 的模型顺序。
-3. Worker 保持 **Auto**，即可自动委派。
-4. Reviewer 默认 **Manual**；确实需要自动复审时再开启。
-5. 编码任务建议保持 **worktree** 隔离。
-
-只配置一个模型时，两个角色直接使用它。配置多个模型时，每个角色按自己的排序调用，失败后依次回退。设置模块可以展开/收起，收起后仍显示当前状态。任务区用紧凑表格显示 Worker/Reviewer，并聚合当前进程内的模型调用次数、来源和最近调用时间；不会为此采集提示词、结果或凭据。
-
-## 在 Codex 或 Claude 中使用
+直接告诉 Codex 或 Claude：
 
 ```text
 使用 ds-worker 实现这个改动并运行测试。
 使用 ds-reviewer 审查结果。
 ```
 
-旧的 `ds-flash`、`ds-pro` 别名仍可使用。
-
-## 结果与复审信息流
-
-Crew 默认返回紧凑、机器可读的 Result Contract：状态、测试、改动文件、
-Reviewer 结论、模型选择轨迹、候选引用和规范化生命周期事件。Worker 的
-整段原始回答和完整 patch 不会在每次交接时重复传递；自动 Reviewer 只接收
-有大小上限的证据胶囊，并直接检查隔离工作区。
-
-MCP 调用方如需排障或恢复，可以在 `dsh_run_worker` 或
-`dsh_worker_result` 中显式传入 `detail: "full"`。完整契约见
-[任务契约与信息流](./docs/job-contracts.md)。
+Codex 会先读取 Crew 的实时能力与就绪合同。如果已经选择 Crew、但 Crew 变得不可调用，它会暂停并询问“修复 Crew 后继续”还是“由 Codex 本地继续”，不会静默降级。
 
 ## 常用命令
 
 ```bash
-dsh-crew status       # 查看安装与集成状态
-dsh-crew inspect      # 输出机器可读的能力与就绪度
-dsh-crew jobs list    # 输出机器可读的任务列表
-dsh-crew jobs watch <job-id> --after 0
-dsh-crew update       # 更新并自动修复已启用的集成
-dsh-crew integrate    # 将官方 3080 界面连接到隔离的 3210 Crew
-dsh-crew detach       # 只移除 3080 桥接
-dsh-crew uninstall    # 卸载 Crew，保留配置和备份
+dsh-crew status                    # 安装和集成状态
+dsh-crew inspect                   # 实时能力与就绪度
+dsh-crew jobs list                 # 任务与 Result Contract
+dsh-crew jobs watch <id> --after 0
+dsh-crew update                    # 更新并修复已启用集成
+dsh-crew integrate                 # 接入官方 3080
+dsh-crew detach                    # 只移除 3080 桥接
+dsh-crew uninstall                 # 移除受管文件，保留配置/备份
+dsh-crew uninstall --purge         # 同时移除配置/备份
 ```
 
-`dsh-crew uninstall --purge` 才会同时删除 Crew 配置和备份。
-
-如果想继续使用完全独立的界面，先运行 `dsh-crew detach`，再直接启动隔离 profile：
-
-```powershell
-$env:DSH_HOME = "$HOME\.config\dsh-crew\harness"
-& "$env:DSH_HOME\runtime\node_modules\.bin\dsh.cmd" --profile dsh-crew --host 127.0.0.1 --port 3210
-```
-
-桥接首次修改前会备份官方 `web` profile，并且只注册轻量代理/客户端包。完整 Crew Hub、模型执行、配置和凭据仍位于：
+官方 `web` profile 只安装轻量桥接。Crew 运行时、模型、配置与凭据隔离在：
 
 ```text
 ~/.config/dsh-crew/harness
 profile: dsh-crew
 ```
 
-对于 `<= 0.3.3` 的旧启动器，请先刷新启动器；旧 updater 无法发现新版本，也无法被追溯修复：
+## 从源码安装
+
+如果要在 npm 发布前安装 GitHub `main`：
+
+```bash
+git clone https://github.com/Ran-sh/dsh-crew.git
+cd dsh-crew
+node scripts/setup.mjs install
+node scripts/setup.mjs status
+```
+
+验证与卸载：
+
+```bash
+node --test test/*.test.mjs
+pnpm run build:client
+node scripts/setup.mjs uninstall
+```
+
+对于 `<= 0.3.3` 的旧启动器，请先刷新启动器。旧 updater 无法发现更新，也无法被追溯修复：
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew update
 ```
 
-## 源码开发
-
-```bash
-git clone https://github.com/Ran-sh/dsh-crew.git
-cd dsh-crew
-node scripts/setup.mjs install
-node --test test/*.test.mjs
-pnpm run build:client
-node scripts/setup.mjs uninstall
-```
-
-更多资料：[Changelog](./CHANGELOG.md) · [UI surfaces](./docs/ui-surfaces.md) · [Readiness Matrix](./docs/readiness-matrix.md) · [任务契约](./docs/job-contracts.md)
-· [GPT-first 扩展接入](./docs/gpt-relay-extension.md)
-
-## License
+安装归属与回滚细节见[安装方案](./docs/installation.md)。架构合同：[界面分工](./docs/ui-surfaces.md) · [就绪矩阵](./docs/readiness-matrix.md) · [任务与信息流](./docs/job-contracts.md)。
 
 MIT

@@ -556,6 +556,13 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
   }
   log('✓ Codex Desktop integration');
 
+  const startup = installer.installWindowsStartup?.({ home, root: releaseDir });
+  if (startup?.ok === false) {
+    log(`✗ Windows login startup failed (${startup.code ?? 'unknown'})`);
+    return false;
+  }
+  if (startup?.supported) log('✓ Windows login startup');
+
   const claude = await installer.installClaudeCode({ home, root: releaseDir });
   if (claude.ok === false) {
     log(`✗ Claude Code integration failed`);
@@ -949,6 +956,9 @@ export function npxStatus({
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
   const officialWeb = !official.enabled ? 'disabled' : official.healthy ? 'installed' : 'needs repair';
+  const startupState = installer.windowsStartupStatus?.({ home });
+  const windowsStartup = !startupState?.supported ? 'not supported'
+    : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
 
   log(`DSH Crew launcher/candidate: ${candidateVersion ?? 'unknown'}`);
   log(`Installed DSH Crew payload: ${installedLine}`);
@@ -966,6 +976,7 @@ export function npxStatus({
   log(`Official 3080 UI bridge: ${officialWeb}`);
   log(`Codex Desktop integration: ${codex}`);
   log(`Claude Code integration: ${claude}`);
+  log(`Windows login startup: ${windowsStartup}`);
 
   return {
     ok: true,
@@ -976,6 +987,7 @@ export function npxStatus({
     officialWeb,
     codex,
     claude,
+    windowsStartup,
   };
 }
 
@@ -999,6 +1011,10 @@ export async function npxUninstall({
   const cl = installer.uninstallClaudeCode ? await installer.uninstallClaudeCode({ home }) : realInstaller.uninstallClaudeCode({ home });
   if (cl.ok !== false) log('✓ Claude Code integration removed');
   else fail('Claude Code integration removal failed');
+
+  const startup = installer.uninstallWindowsStartup?.({ home });
+  if (startup?.ok === false) fail('Windows login startup removal failed');
+  else if (startup?.supported) log('✓ Windows login startup removed');
 
   const official = removeOfficialWebIntegration({ home, preserveIntent: !purge, remember: !purge });
   if (!official.ok) fail(`official 3080 bridge removal failed (${official.code ?? 'unknown'})`);

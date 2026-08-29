@@ -158,6 +158,9 @@ function recordingInstaller() {
       uninstallCodex: (o = {}) => { calls.push(['uninstallCodex', o]); return { ok: true, actions: [] }; },
       installClaudeCode: async (o = {}) => { calls.push(['installClaudeCode', o]); return { ok: true, actions: [] }; },
       uninstallClaudeCode: async (o = {}) => { calls.push(['uninstallClaudeCode', o]); return { ok: true, actions: [] }; },
+      installWindowsStartup: (o = {}) => { calls.push(['installWindowsStartup', o]); return { ok: true, supported: true, changed: true }; },
+      uninstallWindowsStartup: (o = {}) => { calls.push(['uninstallWindowsStartup', o]); return { ok: true, supported: true, removed: true }; },
+      windowsStartupStatus: () => ({ supported: true, installed: true, ready: true }),
       installStatus: () => ({ claude: { installed: false }, codex: { installed: false } }),
     },
   };
@@ -374,6 +377,8 @@ test('install persists the payload under Crew-owned state and registers that pat
     assert.equal(codexCall[1].root, pointer.path);
     const claudeCall = calls.find(([name]) => name === 'installClaudeCode');
     assert.equal(claudeCall[1].root, pointer.path);
+    const startupCall = calls.find(([name]) => name === 'installWindowsStartup');
+    assert.equal(startupCall[1].root, pointer.path);
 
     // The release is runnable standalone: its own bin exists and deps resolve locally.
     assert.equal(existsSync(join(pointer.path, 'bin', 'dsh-crew.mjs')), true);
