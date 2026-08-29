@@ -28,6 +28,7 @@ import { loadRoleProfiles, resolveRoleProfile } from './role-profiles.mjs';
 import { loadWorkspaceContexts, resolveWorkspaceContext, buildWorkspaceTask, addContextReferences, isSafeBranchName } from './workspace-context.mjs';
 import { buildExtensionContract } from './extension-contract.mjs';
 import { assessWorkspaceReadiness } from './workspace-readiness.mjs';
+import { detectOrchestrator } from './orchestrator.mjs';
 
 const server = new McpServer({ name: 'dsh-crew', version: RUNTIME_VERSION });
 
@@ -124,18 +125,6 @@ function text(obj) {
   return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }] };
 }
 
-function detectOrchestrator() {
-  if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return 'claude-code';
-  try {
-    const { execSync } = require('node:child_process');
-    const comm = execSync(`ps -o comm= -p ${process.ppid}`, { encoding: 'utf8' }).trim().toLowerCase();
-    if (comm.includes('claude')) return 'claude-code';
-    if (comm.includes('codex')) return 'codex';
-    return comm.split('/').pop() || 'unknown';
-  } catch { return 'unknown'; }
-}
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
 const ORCHESTRATOR = detectOrchestrator();
 
 function policyRejection(decision) {
