@@ -38,16 +38,20 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(launcher, /%LAUNCH_DIR%start-dsh-crew\.ps1/);
   assert.match(helper, /127\.0\.0\.1:3210/);
   assert.match(helper, /127\.0\.0\.1:3080/);
-  assert.match(helper, /ValidateSet\(['"]background['"],\s*['"]open['"]\)/);
+  assert.match(helper, /ValidateSet\(['"]background['"],\s*['"]open['"],\s*['"]watch['"]\)/);
   assert.match(helper, /RedirectStandardOutput/);
   assert.match(helper, /RedirectStandardError/);
   assert.match(helper, /IPGlobalProperties/);
   assert.doesNotMatch(helper, /BeginConnect|TcpClient/);
   assert.match(helper, /dsh-crew-launcher\.log/);
+  assert.match(helper, /System\.Threading\.Mutex/);
+  assert.match(helper, /DSHCrewServiceSupervisor/);
+  assert.match(helper, /Supervisor (?:active|recovery)/);
+  assert.match(helper, /while \(\$true\)/);
   assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 2);
   assert.doesNotMatch(helper, /(?:while|if) \(\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
   assert.match(startup, /__LAUNCHER__/);
-  assert.match(startup, /--background/);
+  assert.match(startup, /--watch/);
 
   assert.match(cordis, new RegExp(`name: ['"]${manifest.name.replace('/', '\\/')}['"]`));
   assert.match(client, new RegExp(`ModuleLoader__\\.load\\(\\{ id: ["']${manifest.name.replace('/', '\\/')}["']`));
