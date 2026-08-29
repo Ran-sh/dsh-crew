@@ -138,7 +138,9 @@ test('normal process completion never promotes partial work or requested review 
       ok: true,
       jobs: [
         { role: 'worker', status: 'done', task_status: 'partial', delivery_complete: true, workspace_evidence_ok: true },
+        { role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: null },
         { role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'request_changes' },
+        { role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, review_verdict: 'approve' },
       ],
     },
   });

@@ -131,11 +131,21 @@ test('direct Hub jobs enforce verified no-change evidence only in an isolated cl
   assert.equal(verified.no_change_verified, true);
   assert.equal(verified.workspace_evidence_ok, true);
 
+  const unauthorizedSuccess = applyHubWorkspaceEvidence({
+    outcome: { ...partial, task_status: 'success', tests: [{ status: 'PASS' }] },
+    workspaceDiff: cleanDiff,
+    allowNoChanges: false,
+    isolation: 'worktree',
+    role: 'worker',
+  });
+  assert.equal(unauthorizedSuccess.task_status, 'partial');
+  assert.equal(unauthorizedSuccess.no_change_verified, undefined);
+
   for (const options of [
     { isolation: 'shared', workspaceDiff: cleanDiff },
     { isolation: 'worktree', workspaceDiff: { ...cleanDiff, dirtyBaseline: true } },
   ]) {
-    const result = applyHubWorkspaceEvidence({ outcome: partial, allowNoChanges: true, ...options });
+    const result = applyHubWorkspaceEvidence({ outcome: partial, allowNoChanges: true, role: 'worker', ...options });
     assert.equal(result.task_status, 'partial');
     assert.equal(result.no_change_verified, undefined);
   }

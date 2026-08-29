@@ -40,6 +40,13 @@ PASS — read package.json — name and version confirmed
 NOT RUN — build — read-only task with no code changes
 ## Risks
 none`;
+const READ_ONLY_PASS_RESULT = `Checked package metadata.
+## Diff
+no files changed
+## Tests
+PASS — read package.json — name and version confirmed
+## Risks
+none`;
 
 // ---------- classifyTaskStatus ----------
 
@@ -100,6 +107,24 @@ test('workspace evidence promotes only an explicitly verified zero-change result
   assert.equal(mismatch.workspace_evidence_ok, false);
   assert.equal(mismatch.no_change_verified, undefined);
   assert.equal(mismatch.task_status, 'partial');
+});
+
+test('zero-change success requires explicit authorization even when its checks pass', () => {
+  const outcome = buildOutcome({ result: READ_ONLY_PASS_RESULT, stopReason: 'completed' });
+  assert.equal(outcome.task_status, 'success');
+
+  const unauthorized = applyWorkspaceEvidence(outcome, {
+    evidenceAvailable: true, hasChanges: false, allowNoChanges: false,
+  });
+  assert.equal(unauthorized.workspace_evidence_ok, true);
+  assert.equal(unauthorized.task_status, 'partial');
+  assert.equal(unauthorized.no_change_verified, undefined);
+
+  const authorized = applyWorkspaceEvidence(outcome, {
+    evidenceAvailable: true, hasChanges: false, allowNoChanges: true,
+  });
+  assert.equal(authorized.task_status, 'success');
+  assert.equal(authorized.no_change_verified, true);
 });
 
 test('FAIL tests surface as partial with needs-escalation evidence', () => {
