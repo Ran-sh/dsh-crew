@@ -37,7 +37,8 @@ test('ZCode install writes managed policy, exact-tool agents, commands and nativ
       assert.match(dispatcher, /dsh_worker_result/);
       assert.match(dispatcher, /wait_seconds[^\n]*1[05]/);
       assert.match(dispatcher, /workflow ID[^\n]*(?:host|structured|result)/i);
-      assert.doesNotMatch(dispatcher, /Pass the .* request verbatim to `dsh_run_worker`/i);
+      assert.match(dispatcher, /do not forward[^\n]*(?:workflow ID|provider|model)/i);
+      assert.doesNotMatch(dispatcher, /pass the .* (?:task|request).*verbatim/i);
     }
     assert.match(policy, /asynchronous.*dsh_spawn_worker/i);
     assert.match(policy, /never start a duplicate/i);
