@@ -108,13 +108,13 @@ export async function setupInstall({
 } = {}) {
   log('DSH Crew installer');
   if (!checkRoot(root)) return { ok: false, error: `not a dsh-crew checkout: ${root}` };
+  const pnpmOk = commandExists('pnpm');
 
   if (depRunner) {
     const r = depRunner(root);
     if (!r.ok) { mark(log, false, r.text); return { ok: false, error: r.text }; }
     mark(log, true, r.text);
   } else if (!dryRun) {
-    const pnpmOk = commandExists('pnpm');
     const cmd = pnpmOk ? 'pnpm' : 'npx';
     const baseArgs = pnpmOk ? [] : ['-y', 'pnpm'];
     const d = run(cmd, [...baseArgs, 'install', '--frozen-lockfile']);
@@ -128,7 +128,9 @@ export async function setupInstall({
   } else mark(log, true, 'dependencies (dry-run)');
 
   if (!dryRun) {
-    const b = run('npx --no-install tsdown src/client/index.tsx --format cjs --platform browser --target es2022 --tsconfig tsconfig.client.json --deps.never-bundle react --deps.never-bundle react/jsx-runtime --deps.never-bundle react-dom --deps.never-bundle react-dom/client --out-dir .client-build --clean --logLevel warn && node scripts/build-client.mjs', [], { shell: true });
+    const b = pnpmOk
+      ? run('pnpm', ['run', 'build:client'])
+      : run('npx', ['-y', 'pnpm', 'run', 'build:client']);
     if (!b.ok) {
       log(`✗ client build failed:\n${(b.stderr || b.stdout || '').slice(0, 600)}`);
       return { ok: false, error: 'client build failed' };
