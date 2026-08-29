@@ -27,8 +27,20 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.ok(manifest.files.includes('zcode'), 'ZCode policy/agent templates must ship');
   assert.match(read('codex/AGENTS.md'), /Global capability-aware delegation policy/);
   assert.match(read('zcode/AGENTS.md'), /Global capability-aware delegation policy for ZCode/);
-  assert.match(read('windows/start-dsh-crew.cmd'), /127\.0\.0\.1:3210/);
-  assert.match(read('windows/start-dsh-crew.vbs'), /__LAUNCHER__/);
+  const launcher = read('windows/start-dsh-crew.cmd');
+  const helper = read('windows/start-dsh-crew.ps1');
+  const startup = read('windows/start-dsh-crew.vbs');
+  assert.match(launcher, /start-dsh-crew\.ps1/);
+  assert.match(launcher, /%\*/);
+  assert.match(helper, /127\.0\.0\.1:3210/);
+  assert.match(helper, /127\.0\.0\.1:3080/);
+  assert.match(helper, /ValidateSet\(['"]background['"],\s*['"]open['"]\)/);
+  assert.match(helper, /RedirectStandardOutput/);
+  assert.match(helper, /RedirectStandardError/);
+  assert.match(helper, /TcpClient/);
+  assert.match(helper, /dsh-crew-launcher\.log/);
+  assert.match(startup, /__LAUNCHER__/);
+  assert.match(startup, /--background/);
 
   assert.match(cordis, new RegExp(`name: ['"]${manifest.name.replace('/', '\\/')}['"]`));
   assert.match(client, new RegExp(`ModuleLoader__\\.load\\(\\{ id: ["']${manifest.name.replace('/', '\\/')}["']`));
