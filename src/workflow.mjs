@@ -63,6 +63,29 @@ function splitSection(value) {
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
+const NO_CHANGE_SENTINELS = new Set([
+  'no files changed',
+  'no file changed',
+  'no changes',
+  'none',
+  '无文件变更',
+  '没有文件变更',
+  '未更改任何文件',
+  '无变更',
+]);
+
+function parseChanges(section) {
+  return splitSection(section).filter((line) => {
+    const normalized = line
+      .replace(/^(?:[-*+]\s+)+/, '')
+      .replace(/[`"'“”‘’]/g, '')
+      .replace(/[.!。！]+$/g, '')
+      .trim()
+      .toLowerCase();
+    return !NO_CHANGE_SENTINELS.has(normalized);
+  });
+}
+
 function parseTests(section) {
   return splitSection(section).map((line) => {
     const m = line.match(/^(?:[-*+]\s+)?(PASS|FAIL|NOT RUN)\s+—\s+(.+?)\s+—\s+(.+)$/);
@@ -106,7 +129,7 @@ export function buildOutcome({ result = '', deliveryMeta, executionStatus, stopR
     }),
     confidence: null,
     needs_escalation: false,
-    changes: splitSection(parsed.sections.Diff),
+    changes: parseChanges(parsed.sections.Diff),
     tests,
     tests_status: testsStatus ?? null,
     risks: splitSection(parsed.sections.Risks),

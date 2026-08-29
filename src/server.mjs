@@ -47,6 +47,7 @@ const workspaceSchema = z.object({
 const constraintsSchema = z.object({
   timeout_seconds: z.number().int().positive().max(7200).optional(),
   allow_fallback: z.boolean().optional(),
+  allow_no_changes: z.boolean().optional().describe('Explicitly allow a verified read-only or analysis job to succeed with zero workspace changes.'),
 }).optional().describe('Per-job constraints override profile and session defaults.');
 
 // Session-level configuration. This MCP server process lives exactly as long
@@ -234,6 +235,7 @@ function prepareDispatch({ task, role, tier, legacy_tier, effort, cwd, timeout_s
       workspace_branch: workspaceOverride?.branch ?? withRefs.context?.default_branch ?? null,
       timeout_seconds: effectiveTimeout,
       allow_fallback: constraints?.allow_fallback ?? profileValue.fallback,
+      allow_no_changes: constraints?.allow_no_changes === true,
       routing: profileValue.routing,
       review_strictness: profileValue.review_strictness,
       workspace_context: withRefs.context,

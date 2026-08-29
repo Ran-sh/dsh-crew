@@ -78,7 +78,17 @@ function workspaceEvidenceOK(outcome, candidate) {
   if (!candidate) return true;
   const hasChanges = Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0;
   if (outcome?.execution_status !== 'completed') return true;
-  return !deliveryClaimsChanges(outcome) || hasChanges;
+  return deliveryClaimsChanges(outcome) === hasChanges;
+}
+
+function canAcceptVerifiedNoChange(job, outcome, candidate) {
+  if (job.allow_no_changes !== true || !candidate) return false;
+  if (!Array.isArray(candidate.changed_files) || candidate.changed_files.length !== 0) return false;
+  if (outcome?.execution_status !== 'completed' || outcome?.delivery?.complete !== true) return false;
+  if (outcome.workspace_evidence_ok !== true || deliveryClaimsChanges(outcome)) return false;
+  const tests = Array.isArray(outcome.tests) ? outcome.tests : [];
+  return tests.some((test) => test.status === 'PASS')
+    && !tests.some((test) => test.status === 'FAIL');
 }
 
 function sumUsage(attempts) {
@@ -183,6 +193,7 @@ export function createWorkflowRuntime(adapters, {
       timeout_seconds: spec.timeout_seconds ?? null,
       profile_id: spec.profile_id ?? null,
       allow_fallback: spec.allow_fallback !== false,
+      allow_no_changes: spec.allow_no_changes === true,
       routing: spec.routing ?? 'auto',
       review_strictness: spec.review_strictness ?? null,
       workspace_context: spec.workspace_context ? { ...spec.workspace_context } : null,
@@ -406,6 +417,10 @@ export function createWorkflowRuntime(adapters, {
             job.candidate = candidate;
             attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
             outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
+            if (canAcceptVerifiedNoChange(job, outcome, candidate)) {
+              outcome.task_status = 'success';
+              outcome.no_change_verified = true;
+            }
             if (candidate.complete === false || candidate.replayable === false) {
               job.retain_workspace = true;
               job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });
@@ -581,6 +596,7 @@ export function createWorkflowRuntime(adapters, {
       model_class_hint: job.model_class_hint,
       source: job.source,
       profile_id: job.profile_id,
+      allow_no_changes: job.allow_no_changes,
       routing: job.routing,
       workspace_context: job.workspace_context ? { ...job.workspace_context } : null,
       workspace_branch: job.workspace_branch,

@@ -19,6 +19,10 @@ for the Worker, preserving the requested implementation and validation scope.
 Keep harness-reporting requirements in this dispatcher, then call
 `dsh_spawn_worker` with role `worker` and the current workspace as `cwd`; omit
 effort unless the task explicitly requests it. Save the returned workflow ID.
+When the operator explicitly requests read-only search or analysis that should
+make zero file changes, pass `constraints: { allow_no_changes: true }`.
+Otherwise omit that constraint so implementation work still fails closed when
+the reported diff and isolated workspace disagree.
 
 Poll that same workflow through `dsh_worker_result` with `wait_seconds: 10`.
 If a bounded result wait expires or returns a nonterminal state, check

@@ -609,6 +609,9 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
     if (raw.constraints?.allow_fallback !== undefined && typeof raw.constraints.allow_fallback !== 'boolean') {
       return { ok: false, code: 'JOB_CONSTRAINTS_INVALID', error: 'allow_fallback must be boolean' };
     }
+    if (raw.constraints?.allow_no_changes !== undefined && typeof raw.constraints.allow_no_changes !== 'boolean') {
+      return { ok: false, code: 'JOB_CONSTRAINTS_INVALID', error: 'allow_no_changes must be boolean' };
+    }
     const profileRegistry = dependencies.profileRegistry ?? loadRoleProfiles();
     const workspaceRegistry = dependencies.workspaceRegistry ?? loadWorkspaceContexts();
     if (!profileRegistry.ok) return { ok: false, code: 'PROFILE_FILE_INVALID', error: 'role profile registry is invalid' };
@@ -647,6 +650,7 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
       workspace_branch: raw.workspace?.branch ?? withRefs.context?.default_branch ?? null,
       timeout_seconds: raw.constraints?.timeout_seconds ?? profile.timeout_seconds,
       allow_fallback: raw.constraints?.allow_fallback ?? profile.fallback,
+      allow_no_changes: raw.constraints?.allow_no_changes === true,
       routing: profile.routing,
       review_strictness: profile.review_strictness,
       profile_id: resolvedProfile.profile_id,

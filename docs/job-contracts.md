@@ -85,6 +85,14 @@ Per-job precedence is request `constraints` > Profile > session defaults.
 `auto`, `existing`, or `none`. Workspace preflight reports `READY`, `CONFLICT`,
 `READ_ONLY`, or `UNAVAILABLE` before dispatch.
 
+`constraints.allow_no_changes: true` is reserved for explicitly read-only
+search, inspection, or analysis work. It does not blindly convert a partial
+Delivery Report into success: Crew requires an isolated candidate with zero
+changed files, a complete Delivery Report, at least one passing evidence check,
+and no failed check. If the Worker reports no changes but the workspace contains
+edits—or reports changes while the workspace is empty—the workflow fails closed
+with workspace-evidence mismatch.
+
 The CLI is a JSON projection of the same local HTTP surface:
 
 ```text
