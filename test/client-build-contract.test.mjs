@@ -9,11 +9,14 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const buildScript = await readFile(new URL('../scripts/build-client.mjs', import.meta.url), 'utf8');
+const setupSource = await readFile(new URL('../scripts/setup.mjs', import.meta.url), 'utf8');
 const entrySource = await readFile(new URL('../src/client/entry.tsx', import.meta.url), 'utf8');
 const panelSource = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8');
 
 test('client build uses the activation wrapper entry', () => {
   assert.match(packageJson.scripts?.['build:client'] ?? '', /tsdown src\/client\/entry\.tsx\b/);
+  assert.match(setupSource, /run\(['"]pnpm['"],\s*\[['"]run['"],\s*['"]build:client['"]\]/);
+  assert.doesNotMatch(setupSource, /tsdown src\/client\/index\.tsx/);
 });
 
 test('client build does not pass invalid options to rolldown', () => {
