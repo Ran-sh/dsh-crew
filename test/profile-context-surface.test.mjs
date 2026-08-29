@@ -16,6 +16,7 @@ test('blocking and async MCP requests expose the same profile and workspace fiel
   assert.ok((server.match(/constraints: constraintsSchema/g) ?? []).length >= 2);
   assert.match(server, /constraints\?\.timeout_seconds \?\? timeout_seconds \?\? profileValue\.timeout_seconds/);
   assert.match(server, /constraints\?\.allow_fallback \?\? profileValue\.fallback/);
+  assert.match(server, /constraints\?\.allow_no_changes === true/);
 });
 
 test('session config exposes profiles and the narrow extension contract', () => {
@@ -29,6 +30,7 @@ test('workflow snapshots profile/context metadata and honors profile fallback po
   assert.match(runtime, /client_job_id: spec\.client_job_id/);
   assert.match(runtime, /workspace_branch: spec\.workspace_branch/);
   assert.match(runtime, /job\.allow_fallback === false/);
+  assert.match(runtime, /allow_no_changes: spec\.allow_no_changes === true/);
 });
 
 test('readonly profiles are isolated instead of sharing the primary workspace', () => {

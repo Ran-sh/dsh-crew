@@ -32,6 +32,14 @@ inspected src/a.mjs
 none
 ## Verdict
 approved`;
+const READ_ONLY = `Checked package metadata.
+## Diff
+no files changed
+## Tests
+PASS — read package.json — name and version confirmed
+NOT RUN — build — read-only task with no code changes
+## Risks
+none`;
 
 const WORKER_RESULT = GOOD;
 
@@ -102,6 +110,32 @@ test('worker success -> completed with one attempt and a candidate', async () =>
   assert.equal(v.attempt, 1);
   assert.equal(v.candidate_available, true);
   assert.equal(v.outcome.task_status, 'success');
+});
+
+test('explicit no-change analysis completes when read evidence passes and the candidate is empty', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  a.captureCandidate = async () => ({
+    ok: true, kind: 'git-worktree', base_revision: 'abc123', changed_files: [], patch: '', fingerprint: 'empty-fp',
+  });
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'read package metadata', cwd: '/repo', allow_no_changes: true });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'done');
+  assert.equal(v.outcome.task_status, 'success');
+  assert.equal(v.outcome.workspace_evidence_ok, true);
+  assert.deepEqual(v.outcome.changes, []);
+  assert.equal(v.allow_no_changes, true);
+});
+
+test('no-change analysis still fails closed when the isolated candidate contains edits', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'read package metadata', cwd: '/repo', allow_no_changes: true });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'failed');
+  assert.equal(v.outcome.workspace_evidence_ok, false);
 });
 
 test('worker lifecycle exposes ordered canonical events without candidate payloads', async () => {

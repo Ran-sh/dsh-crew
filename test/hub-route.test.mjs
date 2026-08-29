@@ -84,13 +84,14 @@ test('versioned HTTP request resolves profile, workspace, constraints and caller
   } };
   const r = resolveHubSpawnPayload({
     job_id: 'client-1', objective: 'Implement it', role: 'worker', profile: 'safe', workspace_id: 'demo',
-    constraints: { timeout_seconds: 30, allow_fallback: true }, context_refs: ['docs/guide.md'],
+    constraints: { timeout_seconds: 30, allow_fallback: true, allow_no_changes: true }, context_refs: ['docs/guide.md'],
   }, () => cfg(), { profileRegistry: registry, workspaceRegistry: workspaces });
   assert.equal(r.ok, true);
   assert.equal(r.payload.client_job_id, 'client-1');
   assert.equal(r.payload.cwd, '/repo');
   assert.equal(r.payload.timeout_seconds, 30);
   assert.equal(r.payload.allow_fallback, true);
+  assert.equal(r.payload.allow_no_changes, true);
   assert.equal(r.payload.requested_isolation, 'worktree');
   assert.equal(r.payload.workspace_branch, 'main');
   assert.match(r.payload.task, /AGENTS\.md, docs\/guide\.md/);
@@ -107,6 +108,7 @@ test('versioned HTTP request rejects malformed workspace and constraints', () =>
     { objective: 'x', workspace: { repo_root: '/repo', branch: '--lock' } },
     { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { timeout_seconds: -1 } },
     { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { allow_fallback: 'yes' } },
+    { objective: 'x', workspace: { repo_root: '/repo' }, constraints: { allow_no_changes: 'yes' } },
   ]) {
     assert.equal(resolveHubSpawnPayload(payload, () => cfg(), dependencies).ok, false);
   }

@@ -31,6 +31,14 @@ FAIL — node --test — 1 failed
 ## Risks
 none`;
 const INCOMPLETE_RESULT = `I did it.`;
+const READ_ONLY_RESULT = `Checked package metadata.
+## Diff
+no files changed
+## Tests
+PASS — read package.json — name and version confirmed
+NOT RUN — build — read-only task with no code changes
+## Risks
+none`;
 
 // ---------- classifyTaskStatus ----------
 
@@ -64,6 +72,12 @@ test('good delivery report normalizes to a structured success outcome', () => {
   assert.ok(o.changes.length >= 1);
   assert.ok(o.tests.every((t) => ['PASS', 'FAIL', 'NOT RUN'].includes(t.status)));
   assert.equal(o.tests_status, 'PASS');
+});
+
+test('the contract no-change sentinel is not treated as a claimed file change', () => {
+  const o = buildOutcome({ result: READ_ONLY_RESULT, stopReason: 'completed' });
+  assert.deepEqual(o.changes, []);
+  assert.equal(o.tests_status, 'NOT RUN');
 });
 
 test('FAIL tests surface as partial with needs-escalation evidence', () => {

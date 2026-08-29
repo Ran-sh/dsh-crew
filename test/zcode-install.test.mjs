@@ -40,6 +40,7 @@ test('ZCode install writes managed policy, exact-tool agents, commands and nativ
       assert.match(dispatcher, /do not forward[^\n]*(?:workflow ID|provider|model)/i);
       assert.doesNotMatch(dispatcher, /pass the .* (?:task|request).*verbatim/i);
     }
+    assert.match(worker, /allow_no_changes:\s*true/);
     assert.match(policy, /asynchronous.*dsh_spawn_worker/i);
     assert.match(policy, /never start a duplicate/i);
     const cfg = readJson(join(home, '.zcode', 'cli', 'config.json'));
