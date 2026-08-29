@@ -7,6 +7,13 @@ function warningCodes(catalogBody) {
     .map((hint) => hint.code.trim()))];
 }
 
+function verifiedHubJob(job) {
+  return job?.status === 'done'
+    && job?.task_status === 'success'
+    && job?.delivery_complete === true
+    && job?.workspace_evidence_ok !== false;
+}
+
 /**
  * Enrich the conservative runtime matrix with evidence the config report has
  * already collected. This function performs no I/O and never reads provider
@@ -34,14 +41,14 @@ export function buildConfigReadinessMatrix({
     && Array.isArray(hubJobsBody?.jobs)
     ? hubJobsBody.jobs
     : [];
-  if (hubJobs.some((job) => job?.role === 'worker' && job?.status === 'done')) {
+  if (hubJobs.some((job) => job?.role === 'worker' && verifiedHubJob(job))) {
     evidence.model_execution = {
       status: 'PASS',
       reason_code: 'REAL_EXECUTION_PASSED',
       evidence_source: 'hub-jobs',
     };
   }
-  if (hubJobs.some((job) => job?.role === 'reviewer' && job?.status === 'done')) {
+  if (hubJobs.some((job) => job?.role === 'reviewer' && verifiedHubJob(job) && job?.review_verdict === 'approve')) {
     evidence.reviewer_pipeline = {
       status: 'PASS',
       reason_code: 'REAL_REVIEW_PASSED',

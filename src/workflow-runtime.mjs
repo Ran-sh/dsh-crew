@@ -15,7 +15,7 @@
 // appear here.
 
 import { resolveModelPolicy, shouldAutoReview, getRoleState } from './policy.mjs';
-import { buildOutcome, decideNextStep, JOB_PHASES, canTransition } from './workflow.mjs';
+import { applyWorkspaceEvidence, buildOutcome, decideNextStep, JOB_PHASES, canTransition } from './workflow.mjs';
 import { parseDeliveryReport } from './delivery.mjs';
 import { classifyFailure } from './failure-classification.mjs';
 import { createCanonicalJobEvent } from './job-contracts.mjs';
@@ -68,27 +68,6 @@ function mutationDetected(before, after) {
   if (before.fingerprint == null) return false;
   if (!after) return true;
   return after.fingerprint != null && before.fingerprint !== after.fingerprint;
-}
-
-function deliveryClaimsChanges(outcome) {
-  return Array.isArray(outcome?.changes) && outcome.changes.length > 0;
-}
-
-function workspaceEvidenceOK(outcome, candidate) {
-  if (!candidate) return true;
-  const hasChanges = Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0;
-  if (outcome?.execution_status !== 'completed') return true;
-  return deliveryClaimsChanges(outcome) === hasChanges;
-}
-
-function canAcceptVerifiedNoChange(job, outcome, candidate) {
-  if (job.allow_no_changes !== true || !candidate) return false;
-  if (!Array.isArray(candidate.changed_files) || candidate.changed_files.length !== 0) return false;
-  if (outcome?.execution_status !== 'completed' || outcome?.delivery?.complete !== true) return false;
-  if (outcome.workspace_evidence_ok !== true || deliveryClaimsChanges(outcome)) return false;
-  const tests = Array.isArray(outcome.tests) ? outcome.tests : [];
-  return tests.some((test) => test.status === 'PASS')
-    && !tests.some((test) => test.status === 'FAIL');
 }
 
 function sumUsage(attempts) {
@@ -396,7 +375,7 @@ export function createWorkflowRuntime(adapters, {
           failJob(job, Object.assign(new Error(ar.error ?? 'infrastructure failure'), { code: WORKFLOW_ERROR_CODES.ATTEMPT_INFRA_FAILURE }));
           return;
         }
-        const outcome = ar.outcome ?? buildOutcome({
+        let outcome = ar.outcome ?? buildOutcome({
           result: ar.result ?? '',
           stopReason: ar.stopReason,
           executionStatus: ar.status === 'done' ? 'completed' : 'failed',
@@ -416,11 +395,11 @@ export function createWorkflowRuntime(adapters, {
           } else {
             job.candidate = candidate;
             attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
-            outcome.workspace_evidence_ok = workspaceEvidenceOK(outcome, candidate);
-            if (canAcceptVerifiedNoChange(job, outcome, candidate)) {
-              outcome.task_status = 'success';
-              outcome.no_change_verified = true;
-            }
+            outcome = applyWorkspaceEvidence(outcome, {
+              evidenceAvailable: true,
+              hasChanges: Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0,
+              allowNoChanges: job.allow_no_changes,
+            });
             if (candidate.complete === false || candidate.replayable === false) {
               job.retain_workspace = true;
               job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });

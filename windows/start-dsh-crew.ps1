@@ -15,8 +15,8 @@ $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
 $services = @(
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; LastError = $null },
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; LastError = $null }
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; LastError = $null },
+  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -63,6 +63,47 @@ function Get-PortState {
   }
 }
 
+function Get-TrackedProcessTree {
+  param([int] $RootPid)
+  if ($RootPid -lt 1) { return @() }
+  $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  $owned = [System.Collections.Generic.HashSet[int]]::new()
+  [void] $owned.Add($RootPid)
+  do {
+    $added = $false
+    foreach ($candidate in $processes) {
+      $candidateId = [int] $candidate.ProcessId
+      $parentId = [int] $candidate.ParentProcessId
+      if ($owned.Contains($parentId) -and $owned.Add($candidateId)) { $added = $true }
+    }
+  } while ($added)
+  return @($owned | ForEach-Object { [int] $_ })
+}
+
+function Stop-OwnedListener {
+  param([pscustomobject] $Service, [int] $ListenerPid)
+  if ($Mode -ne 'watch' -or -not $Service.Process -or $Service.Process.HasExited -or -not $Service.RootPid -or $ListenerPid -lt 1) {
+    return $false
+  }
+  try {
+    $ownedProcessIds = @(Get-TrackedProcessTree -RootPid $Service.RootPid)
+    if ($ListenerPid -notin $ownedProcessIds) { return $false }
+    Write-LaunchLog ('Supervisor confirmed owned listener PID={0} under tracked root PID={1}; stopping that process tree after failed health checks.' -f $ListenerPid, $Service.RootPid) 'WARN'
+    foreach ($processId in $ownedProcessIds) {
+      Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+      $port = Get-PortState $Service.Port
+      if ($port.State -eq 'free') { return $true }
+      Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+  } catch {
+    Write-LaunchLog ('Supervisor could not stop its owned listener safely: {0}' -f $_.Exception.Message) 'WARN'
+  }
+  return $false
+}
+
 function Start-CrewService {
   param([pscustomobject] $Service)
   $serviceRunStamp = (Get-Date).ToString('yyyyMMdd-HHmmssfff')
@@ -75,6 +116,7 @@ function Start-CrewService {
     $process = Start-Process -FilePath $dshCli -ArgumentList $arguments -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $Service.Process = $process
+    $Service.RootPid = $process.Id
     $Service.State = 'starting'
     Write-LaunchLog ('Started {0} on port {1}; PID={2}; stdout={3}; stderr={4}' -f $Service.Profile, $Service.Port, $process.Id, $stdout, $stderr)
   } finally {
@@ -128,6 +170,13 @@ function Ensure-CrewServices {
     $service.State = 'pending'
 
     $port = Get-PortState $service.Port
+    if ($port.State -eq 'occupied') {
+      if (Stop-OwnedListener -Service $service -ListenerPid $port.Pid) {
+        $service.Process = $null
+        $service.RootPid = $null
+        $port = Get-PortState $service.Port
+      }
+    }
     if ($port.State -eq 'occupied') {
       $owner = if ($port.Pid) { "; listener PID=$($port.Pid)" } else { '' }
       throw ('Port {0} is occupied, but {1} failed its health contract{2}. Health error: {3}' -f $service.Port, $service.Name, $owner, $health.Error)

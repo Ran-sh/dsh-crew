@@ -20,7 +20,7 @@ import { buildDirectSelectionTrace, resolveWorkerModel, resolveModel } from '../
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
-import { buildOutcome, JOB_PHASES } from '../workflow.mjs';
+import { applyWorkspaceEvidence, buildOutcome, JOB_PHASES } from '../workflow.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
@@ -121,6 +121,18 @@ export function hubCanonicalEvents(job = {}) {
 
 // ---------- job registry ----------
 
+export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges = false, isolation = 'shared' } = {}) {
+  const changes = workspaceDiff?.changes ?? {};
+  const hasChanges = ['modified', 'deleted', 'renamed', 'untracked']
+    .some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
+  const evidenceAvailable = workspaceDiff?.kind === 'git' && workspaceDiff.dirtyBaseline !== true;
+  return applyWorkspaceEvidence(outcome, {
+    evidenceAvailable,
+    hasChanges,
+    allowNoChanges: allowNoChanges === true && isolation === 'worktree',
+  });
+}
+
 // Exported for the unit tests (test/hub-windows.test.mjs); instantiation
 // needs only a duck-typed ctx, so spawn()'s path guard is testable without a
 // live DSH host.
@@ -145,6 +157,10 @@ export class WorkerRegistry {  constructor(ctx) {
       startedAt: job.startedAt, endedAt: job.endedAt,
       isolation: job.isolation ?? 'shared', workspace_branch: job.workspace_branch ?? null,
       delivery_complete: !!job.delivery_complete,
+      allow_no_changes: job.allow_no_changes === true,
+      task_status: job.outcome?.task_status ?? null,
+      workspace_evidence_ok: job.outcome?.workspace_evidence_ok ?? null,
+      review_verdict: job.review?.verdict ?? null,
       workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
       workspace_retained: job.workspace_retained === true,
       cleanup_warning: job.cleanup_warning ?? null,
@@ -182,7 +198,7 @@ export class WorkerRegistry {  constructor(ctx) {
    * `role` (worker | reviewer) records who does the work; `tier` remains the
    * legacy model-class slot. Reviewer-role jobs always use the pro slot.
    */
-  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds, profile_id, workspace_context }) {
+  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds, profile_id, workspace_context, allow_no_changes }) {
     // role is only honored when the caller explicitly names it; a legacy
     // tier-only spawn (role === undefined) keeps the exact v0.1 resolution.
     const hasRole = role === 'worker' || role === 'reviewer';
@@ -291,6 +307,7 @@ export class WorkerRegistry {  constructor(ctx) {
       effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd: executionCwd, requested_cwd: cwd,
       isolation: isolatedWorkspace ? 'worktree' : 'shared',
+      allow_no_changes: allow_no_changes === true,
       workspace_branch: workspace_branch ?? null, isolatedWorkspace,
       profile_id: profile_id ?? null, workspace_context: workspace_context ?? null,
       prompt: workerPrompt, delivery: delivery === 'review' ? 'review' : 'coding',
@@ -451,6 +468,12 @@ export class WorkerRegistry {  constructor(ctx) {
         job.workspaceDiff = job.baseline.kind === 'git'
           ? await captureWorkspaceDiff({ cwd: executionCwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
           : job.baseline;
+        job.outcome = applyHubWorkspaceEvidence({
+          outcome: job.outcome,
+          workspaceDiff: job.workspaceDiff,
+          allowNoChanges: job.allow_no_changes,
+          isolation: job.isolation,
+        });
         if (job.role === 'reviewer' && job.review && job.workspaceDiff?.kind === 'git') {
           const changes = job.workspaceDiff.changes ?? {};
           const mutated = ['modified', 'deleted', 'renamed', 'untracked'].some((key) => Array.isArray(changes[key]) && changes[key].length > 0);

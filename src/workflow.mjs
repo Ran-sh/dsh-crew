@@ -67,12 +67,38 @@ const NO_CHANGE_SENTINELS = new Set([
   'no files changed',
   'no file changed',
   'no changes',
-  'none',
   '无文件变更',
   '没有文件变更',
   '未更改任何文件',
   '无变更',
 ]);
+
+function deliveryClaimsChanges(outcome) {
+  return Array.isArray(outcome?.changes) && outcome.changes.length > 0;
+}
+
+export function applyWorkspaceEvidence(outcome, {
+  evidenceAvailable = false,
+  hasChanges = false,
+  allowNoChanges = false,
+} = {}) {
+  const next = { ...outcome };
+  if (!evidenceAvailable || next.execution_status !== 'completed') return next;
+
+  next.workspace_evidence_ok = deliveryClaimsChanges(next) === hasChanges;
+  const tests = Array.isArray(next.tests) ? next.tests : [];
+  const verifiedNoChange = allowNoChanges === true
+    && hasChanges === false
+    && next.workspace_evidence_ok === true
+    && next.delivery?.complete === true
+    && tests.some((test) => test.status === 'PASS')
+    && !tests.some((test) => test.status === 'FAIL');
+  if (verifiedNoChange) {
+    next.task_status = 'success';
+    next.no_change_verified = true;
+  }
+  return next;
+}
 
 function parseChanges(section) {
   return splitSection(section).filter((line) => {
