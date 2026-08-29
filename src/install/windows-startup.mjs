@@ -56,9 +56,10 @@ export function windowsStartupStatus({
       const launcher = readFileSync(resolved.launcherFile, 'utf8');
       const helper = readFileSync(resolved.helperFile, 'utf8');
       ready = startup.includes(resolved.launcherFile)
-        && startup.includes('--background')
+        && startup.includes('--watch')
         && launcher.includes(WINDOWS_HELPER_FILENAME)
-        && helper.includes('DSH Crew managed Windows launcher');
+        && helper.includes('DSH Crew managed Windows launcher')
+        && helper.includes('DSHCrewServiceSupervisor');
     } catch { ready = false; }
   }
   return { supported: true, installed, ready, ...resolved };

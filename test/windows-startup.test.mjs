@@ -15,7 +15,7 @@ function fixture() {
   const startupDir = join(home, 'Startup');
   mkdirSync(join(root, 'windows'), { recursive: true });
   writeFileSync(join(root, 'windows', 'start-dsh-crew.cmd'), '@echo off\r\npowershell.exe -File "%~dp0start-dsh-crew.ps1" %*\r\n');
-  writeFileSync(join(root, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\nparam([string]$Mode = "open")\n');
+  writeFileSync(join(root, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\n# DSHCrewServiceSupervisor\nparam([string]$Mode = "open")\n');
   writeFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'Option Explicit\n__LAUNCHER__\n--watch\n');
   return { home, root, startupDir, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }

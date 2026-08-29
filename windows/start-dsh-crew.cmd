@@ -17,6 +17,11 @@ if /i "%~1"=="--open" (
   shift
   goto :validate
 )
+if /i "%~1"=="--watch" (
+  set "LAUNCH_MODE=watch"
+  shift
+  goto :validate
+)
 if /i "%~1"=="--help" goto :help
 goto :invalid_argument
 
@@ -41,11 +46,12 @@ exit /b %LAUNCH_EXIT%
 
 :invalid_argument
 echo ERROR: Unsupported launcher arguments: %LAUNCH_REQUEST%
-echo Use --open or --background.
+echo Use --open, --background, or --watch.
 exit /b 64
 
 :help
-echo Usage: %~nx0 [--open ^| --background]
+echo Usage: %~nx0 [--open ^| --background ^| --watch]
 echo   --open        Start both services and open http://127.0.0.1:3080/.
 echo   --background  Start both services silently without opening a browser.
+echo   --watch       Keep both services healthy and restart them after an exit.
 exit /b 0

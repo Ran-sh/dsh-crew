@@ -1,7 +1,7 @@
 # DSH Crew managed Windows launcher
 [CmdletBinding()]
 param(
-  [ValidateSet('background', 'open')]
+  [ValidateSet('background', 'open', 'watch')]
   [string] $Mode = 'open'
 )
 
@@ -14,7 +14,6 @@ $dshCli = Join-Path $crewHome 'runtime\node_modules\.bin\dsh.cmd'
 $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
-$runStamp = $startedAt.ToString('yyyyMMdd-HHmmss')
 $services = @(
   [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; LastError = $null },
   [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; LastError = $null }
@@ -66,8 +65,9 @@ function Get-PortState {
 
 function Start-CrewService {
   param([pscustomobject] $Service)
-  $stdout = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.out.log' -f $Service.Profile, $Service.Port, $runStamp)
-  $stderr = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.err.log' -f $Service.Profile, $Service.Port, $runStamp)
+  $serviceRunStamp = (Get-Date).ToString('yyyyMMdd-HHmmssfff')
+  $stdout = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.out.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
+  $stderr = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.err.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
   $previousHome = $env:DSH_HOME
   try {
     $env:DSH_HOME = $Service.Home
@@ -82,39 +82,7 @@ function Start-CrewService {
   }
 }
 
-try {
-  New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
-  Write-LaunchLog ('Launcher started; mode={0}; user={1}' -f $Mode, $env:USERNAME)
-
-  if (-not (Test-Path -LiteralPath $dshCli -PathType Leaf)) {
-    throw "DSH CLI was not found at $dshCli. Run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"
-  }
-  if (-not (Test-Path -LiteralPath (Join-Path $crewHome 'profiles\dsh-crew\package.json') -PathType Leaf)) {
-    throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
-  }
-  if (-not (Test-Path -LiteralPath (Join-Path $officialHome 'profiles\web\package.json') -PathType Leaf)) {
-    throw "The official web profile is missing under $officialHome. Run: dsh-crew integrate"
-  }
-
-  foreach ($service in $services) {
-    $health = Get-HealthState $service
-    if ($health.Ready) {
-      $service.State = 'ready'
-      Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
-      continue
-    }
-
-    $port = Get-PortState $service.Port
-    if ($port.State -eq 'occupied') {
-      $owner = if ($port.Pid) { "; listener PID=$($port.Pid)" } else { '' }
-      throw ('Port {0} is occupied, but {1} failed its health contract{2}. Health error: {3}' -f $service.Port, $service.Name, $owner, $health.Error)
-    }
-    if ($port.State -ne 'free') {
-      throw ('Could not determine whether port {0} is available: {1}' -f $service.Port, $port.Error)
-    }
-    Start-CrewService $service
-  }
-
+function Wait-CrewServices {
   $deadline = (Get-Date).AddSeconds(90)
   while (@($services | Where-Object State -eq 'starting').Count -gt 0 -and (Get-Date) -lt $deadline) {
     foreach ($service in ($services | Where-Object State -eq 'starting')) {
@@ -135,6 +103,106 @@ try {
     $details = ($notReady | ForEach-Object { '{0}:{1} ({2})' -f $_.Profile, $_.Port, $_.LastError }) -join '; '
     throw "Startup health deadline exceeded: $details"
   }
+}
+
+function Ensure-CrewServices {
+  param([switch] $QuietHealthy)
+
+  foreach ($service in $services) {
+    $health = Get-HealthState $service
+    if ($health.Ready) {
+      $wasReady = $service.State -eq 'ready'
+      $service.State = 'ready'
+      $service.LastError = $null
+      if (-not $QuietHealthy -or -not $wasReady) {
+        Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
+      }
+      continue
+    }
+
+    $service.LastError = $health.Error
+    if ($service.Process -and $service.Process.HasExited) {
+      Write-LaunchLog ('{0} process exited after startup; PID={1}; exit={2}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode) 'WARN'
+      $service.Process = $null
+    }
+    $service.State = 'pending'
+
+    $port = Get-PortState $service.Port
+    if ($port.State -eq 'occupied') {
+      $owner = if ($port.Pid) { "; listener PID=$($port.Pid)" } else { '' }
+      throw ('Port {0} is occupied, but {1} failed its health contract{2}. Health error: {3}' -f $service.Port, $service.Name, $owner, $health.Error)
+    }
+    if ($port.State -ne 'free') {
+      throw ('Could not determine whether port {0} is available: {1}' -f $service.Port, $port.Error)
+    }
+    if ($Mode -eq 'watch') {
+      Write-LaunchLog ('Supervisor detected {0} unavailable on {1}; restarting it.' -f $service.Name, $service.Port) 'WARN'
+    }
+    Start-CrewService $service
+  }
+
+  Wait-CrewServices
+}
+
+function Start-ServiceSupervisor {
+  $mutex = [System.Threading.Mutex]::new($false, 'Local\DSHCrewServiceSupervisor')
+  $ownsMutex = $false
+  try {
+    try {
+      $ownsMutex = $mutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+      $ownsMutex = $true
+    }
+    if (-not $ownsMutex) {
+      Write-LaunchLog 'Supervisor already active; duplicate watcher exiting.'
+      return
+    }
+
+    Write-LaunchLog 'Supervisor active; monitoring 3080 and 3210 every 10 seconds.'
+    $lastRecoveryError = $null
+    while ($true) {
+      try {
+        Ensure-CrewServices -QuietHealthy
+        if ($lastRecoveryError) {
+          Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'
+          $lastRecoveryError = $null
+        }
+      } catch {
+        $recoveryError = $_.Exception.Message
+        if ($recoveryError -ne $lastRecoveryError) {
+          Write-LaunchLog ('Supervisor recovery failed; will retry: {0}' -f $recoveryError) 'WARN'
+          $lastRecoveryError = $recoveryError
+        }
+      }
+      Start-Sleep -Seconds 10
+    }
+  } finally {
+    if ($ownsMutex) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+  }
+}
+
+try {
+  New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+  Write-LaunchLog ('Launcher started; mode={0}; user={1}' -f $Mode, $env:USERNAME)
+
+  if (-not (Test-Path -LiteralPath $dshCli -PathType Leaf)) {
+    throw "DSH CLI was not found at $dshCli. Run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $crewHome 'profiles\dsh-crew\package.json') -PathType Leaf)) {
+    throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $officialHome 'profiles\web\package.json') -PathType Leaf)) {
+    throw "The official web profile is missing under $officialHome. Run: dsh-crew integrate"
+  }
+
+  if ($Mode -eq 'watch') {
+    Start-ServiceSupervisor
+    Write-LaunchLog 'Supervisor stopped.' 'WARN'
+    exit 0
+  }
+
+  Ensure-CrewServices
 
   if ($Mode -eq 'open') {
     Start-Process 'http://127.0.0.1:3080/' | Out-Null
