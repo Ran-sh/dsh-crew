@@ -47,27 +47,20 @@ function Get-HealthState {
 
 function Get-PortState {
   param([int] $Port)
-  $client = $null
-  $async = $null
   try {
-    $client = [System.Net.Sockets.TcpClient]::new()
-    $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
-    if (-not $async.AsyncWaitHandle.WaitOne(800, $false)) {
-      return [pscustomobject]@{ State = 'unknown'; Error = 'TCP probe timed out.'; Pid = $null }
+    $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    $occupied = @($listeners | Where-Object Port -eq $Port).Count -gt 0
+    if (-not $occupied) {
+      return [pscustomobject]@{ State = 'free'; Error = $null; Pid = $null }
     }
-    $client.EndConnect($async)
+
     $ownerPid = $null
     try {
       $ownerPid = (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop | Select-Object -First 1).OwningProcess
     } catch { }
     return [pscustomobject]@{ State = 'occupied'; Error = $null; Pid = $ownerPid }
-  } catch [System.Net.Sockets.SocketException] {
-    return [pscustomobject]@{ State = 'free'; Error = $null; Pid = $null }
   } catch {
-    return [pscustomobject]@{ State = 'unknown'; Error = $_.Exception.Message; Pid = $null }
-  } finally {
-    if ($async -and $async.AsyncWaitHandle) { $async.AsyncWaitHandle.Close() }
-    if ($client) { $client.Close() }
+    return [pscustomobject]@{ State = 'unknown'; Error = ('Listener enumeration failed: {0}' -f $_.Exception.Message); Pid = $null }
   }
 }
 
