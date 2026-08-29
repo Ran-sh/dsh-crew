@@ -30,12 +30,49 @@ function commandExists(name) {
   return r.status === 0;
 }
 
+const PACKAGE_MANAGER_COMMAND = /^(?:npm|npx|pnpm|yarn|yarnpkg|bun|bunx)$/i;
+
+export function spawnCommand(command, platform = process.platform) {
+  if (platform === 'win32' && PACKAGE_MANAGER_COMMAND.test(command)) {
+    return `${command}.cmd`;
+  }
+  return command;
+}
+
+export function spawnNeedsShell(command, platform = process.platform) {
+  return platform === 'win32' && PACKAGE_MANAGER_COMMAND.test(command);
+}
+
+export function spawnInvocation(command, args = [], platform = process.platform, environment = process.env) {
+  const executable = spawnCommand(command, platform);
+  if (!spawnNeedsShell(command, platform)) return { command: executable, args };
+  const unsafe = args.find((arg) => !/^[A-Za-z0-9@._:+/=\-]+$/.test(String(arg)));
+  if (unsafe !== undefined) throw new Error(`unsafe package-manager argument: ${unsafe}`);
+  return {
+    command: environment.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', [executable, ...args].join(' ')],
+  };
+}
+
 function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, {
+  let invocation;
+  try {
+    invocation = spawnInvocation(cmd, args);
+  } catch (error) {
+    return { ok: false, status: -1, stdout: '', stderr: String(error?.message ?? error), error };
+  }
+  const r = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: opts.shell === true, cwd: opts.cwd ?? ROOT,
     env: opts.env ?? process.env,
   });
-  return { ok: r.status === 0, status: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  const processError = r.error ? `${r.error.name}: ${r.error.message}` : '';
+  return {
+    ok: r.status === 0,
+    status: r.status ?? -1,
+    stdout: r.stdout ?? '',
+    stderr: r.stderr || processError,
+    error: r.error ?? null,
+  };
 }
 
 /**
@@ -117,7 +154,7 @@ export async function setupInstall({
   } else if (!dryRun) {
     const cmd = pnpmOk ? 'pnpm' : 'npx';
     const baseArgs = pnpmOk ? [] : ['-y', 'pnpm'];
-    const d = run(cmd, [...baseArgs, 'install', '--frozen-lockfile']);
+    const d = run(cmd, [...baseArgs, 'install', '--frozen-lockfile'], { cwd: root });
     if (!d.ok) {
       if (depsPresent(root)) mark(log, true, `dependencies (already present; install skipped — ${(d.stderr || d.stdout || '').trim().split('\n')[0]})`);
       else {
@@ -129,8 +166,8 @@ export async function setupInstall({
 
   if (!dryRun) {
     const b = pnpmOk
-      ? run('pnpm', ['run', 'build:client'])
-      : run('npx', ['-y', 'pnpm', 'run', 'build:client']);
+      ? run('pnpm', ['run', 'build:client'], { cwd: root })
+      : run('npx', ['-y', 'pnpm', 'run', 'build:client'], { cwd: root });
     if (!b.ok) {
       log(`✗ client build failed:\n${(b.stderr || b.stdout || '').slice(0, 600)}`);
       return { ok: false, error: 'client build failed' };

@@ -15,6 +15,9 @@ import {
   setupStatus,
   readPackageName,
   checkRoot,
+  spawnCommand,
+  spawnNeedsShell,
+  spawnInvocation,
 } from '../scripts/setup.mjs';
 
 function makeTemp() {
@@ -36,6 +39,27 @@ function fakeInstaller(calls) {
     installStatus: () => ({ claude: { installed: false }, codex: { installed: false } }),
   };
 }
+
+test('package-manager subprocesses use a bounded Windows command-processor invocation', () => {
+  assert.equal(spawnCommand('pnpm', 'win32'), 'pnpm.cmd');
+  assert.equal(spawnCommand('npx', 'win32'), 'npx.cmd');
+  assert.equal(spawnCommand('pnpm', 'linux'), 'pnpm');
+  assert.equal(spawnCommand('where', 'win32'), 'where');
+  assert.equal(spawnNeedsShell('pnpm', 'win32'), true);
+  assert.equal(spawnNeedsShell('pnpm', 'linux'), false);
+  assert.equal(spawnNeedsShell('where', 'win32'), false);
+  assert.deepEqual(
+    spawnInvocation('pnpm', ['run', 'build:client'], 'win32', { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', 'pnpm.cmd run build:client'],
+    },
+  );
+  assert.throws(
+    () => spawnInvocation('pnpm', ['run', 'build&inject'], 'win32', { ComSpec: 'cmd.exe' }),
+    /unsafe package-manager argument/,
+  );
+});
 
 // ---------- readPackageName / checkRoot ----------
 
