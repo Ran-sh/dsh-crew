@@ -28,8 +28,19 @@ test('ZCode install writes managed policy, exact-tool agents, commands and nativ
     assert.ok(existsSync(join(home, '.zcode', 'commands', 'dsh-config.md')));
     assert.ok(existsSync(join(home, '.zcode', 'commands', 'dsh-status.md')));
     const worker = readFileSync(join(home, '.zcode', 'agents', 'ds-worker.md'), 'utf8');
+    const reviewer = readFileSync(join(home, '.zcode', 'agents', 'ds-reviewer.md'), 'utf8');
+    const policy = readFileSync(join(home, '.zcode', 'AGENTS.md'), 'utf8');
     assert.match(worker, /mcpServers:\s*\n\s*- dsh-crew/);
     for (const tool of ZCODE_MCP_TOOLS) assert.match(worker, new RegExp(`mcp__dsh-crew__${tool}`));
+    for (const dispatcher of [worker, reviewer]) {
+      assert.match(dispatcher, /dsh_spawn_worker/);
+      assert.match(dispatcher, /dsh_worker_result/);
+      assert.match(dispatcher, /wait_seconds[^\n]*1[05]/);
+      assert.match(dispatcher, /workflow ID[^\n]*(?:host|structured|result)/i);
+      assert.doesNotMatch(dispatcher, /Pass the .* request verbatim to `dsh_run_worker`/i);
+    }
+    assert.match(policy, /asynchronous.*dsh_spawn_worker/i);
+    assert.match(policy, /never start a duplicate/i);
     const cfg = readJson(join(home, '.zcode', 'cli', 'config.json'));
     assert.equal(cfg.mcp.servers['dsh-crew'].command, 'node');
     assert.equal(cfg.mcp.servers['dsh-crew'].args[0].toLowerCase(), join(ROOT, 'src', 'server.mjs').toLowerCase());
