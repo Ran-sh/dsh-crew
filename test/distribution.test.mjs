@@ -43,6 +43,8 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(helper, /RedirectStandardError/);
   assert.match(helper, /TcpClient/);
   assert.match(helper, /dsh-crew-launcher\.log/);
+  assert.doesNotMatch(helper, /\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
+  assert.match(helper, /@\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
   assert.match(startup, /__LAUNCHER__/);
   assert.match(startup, /--background/);
 
