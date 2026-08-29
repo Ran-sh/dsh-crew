@@ -26,6 +26,9 @@ test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spaw
     assert.ok(existsSync(join(home, '.codex', 'agents', 'ds-pro.toml')));
     assert.ok(existsSync(join(home, '.codex', 'prompts', 'dsh-config.md')));
     assert.ok(existsSync(join(home, '.codex', 'prompts', 'dsh-status.md')));
+    const agentsPolicy = read(join(home, '.codex', 'AGENTS.md'));
+    assert.match(agentsPolicy, /DSH CREW MANAGED POLICY:START/);
+    assert.match(agentsPolicy, /Operator decision gate when DSH Crew is unavailable/);
     const status = installStatus({ home });
     assert.equal(status.codex.installed, true);
     assert.equal(status.codex.ready, true);
@@ -37,6 +40,7 @@ test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spaw
       status_prompt: true,
       mcp: true,
       target_alignment: true,
+      global_policy: true,
     });
     // installCodex never tries to execute the codex CLI (its body is pure file I/O).
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -50,7 +54,7 @@ test('Codex readiness distinguishes a partial legacy install from a complete int
     const status = installStatus({ home }).codex;
     assert.equal(status.installed, true);
     assert.equal(status.ready, false);
-    assert.deepEqual(status.missing, ['worker_role', 'reviewer_role', 'config_prompt', 'status_prompt', 'mcp', 'target_alignment']);
+    assert.deepEqual(status.missing, ['worker_role', 'reviewer_role', 'config_prompt', 'status_prompt', 'mcp', 'target_alignment', 'global_policy']);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -168,6 +172,8 @@ test('Case 5: repeat install is idempotent', async () => {
     assert.equal(agents.filter((a) => a.startsWith('ds-') && a.endsWith('.toml')).length, 4);
     const prompts = readdirSync(join(home, '.codex', 'prompts'));
     assert.equal(prompts.filter((p) => p.startsWith('dsh-')).length, 2);
+    const policy = read(join(home, '.codex', 'AGENTS.md'));
+    assert.equal((policy.match(/DSH CREW MANAGED POLICY:START/g) ?? []).length, 1);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -181,6 +187,25 @@ test('Case 3: existing user agents are preserved', async () => {
     installCodex({ home });
     assert.ok(existsSync(join(agentsDir, 'my-reviewer.toml')), 'user agent must survive');
     assert.ok(existsSync(join(agentsDir, 'ds-flash.toml')));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('global capability policy preserves user-authored AGENTS instructions', () => {
+  const home = makeHome();
+  try {
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'AGENTS.md'), '# My rules\n\nKeep this sentence.\n');
+    installCodex({ home });
+    const installed = read(join(home, '.codex', 'AGENTS.md'));
+    assert.match(installed, /# My rules/);
+    assert.match(installed, /Keep this sentence/);
+    assert.match(installed, /DSH CREW MANAGED POLICY:START/);
+
+    uninstallCodex({ home });
+    const removed = read(join(home, '.codex', 'AGENTS.md'));
+    assert.match(removed, /# My rules/);
+    assert.match(removed, /Keep this sentence/);
+    assert.doesNotMatch(removed, /DSH CREW MANAGED POLICY/);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -229,6 +254,7 @@ test('Case 6: uninstall removes only dsh-crew artifacts', async () => {
     assert.equal(u.ok, true);
     assert.ok(!existsSync(join(cfgDir, 'agents', 'ds-flash.toml')));
     assert.ok(!existsSync(join(cfgDir, 'prompts', 'dsh-config.md')));
+    assert.ok(!existsSync(join(cfgDir, 'AGENTS.md')), 'installer-owned empty policy file removed');
     assert.ok(existsSync(join(cfgDir, 'agents', 'my-reviewer.toml')), 'user agent must survive uninstall');
     const cfg = read(join(cfgDir, 'config.toml'));
     assert.ok(!/dsh-crew/.test(cfg), 'dsh-crew MCP entry must be removed');
