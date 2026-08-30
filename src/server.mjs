@@ -338,7 +338,7 @@ async function buildConfigReport() {
   } else if (hubCompatibility.compatible) {
     try {
       providerCatalogChecked = true;
-      const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/models`);
+      const res = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/models`, { signal: AbortSignal.timeout(800) });
       const body = await res.json();
       providerCatalogBody = body;
       if (!body?.ok) providerResolutionError = body?.error ?? 'Unable to read Harness model catalog.';

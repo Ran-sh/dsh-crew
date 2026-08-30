@@ -202,6 +202,8 @@ export function createWorkflowRuntime(adapters, {
       startedAt: now,
       endedAt: null,
       workspaceHandle: null,
+        workspaceReleasePromise: null,
+        cancelPromise: null,
       waiters: [],
     };
     recordCanonical(job, 'job.created', { client_job_id: job.client_job_id }, null, now);
@@ -269,19 +271,26 @@ export function createWorkflowRuntime(adapters, {
       return;
     }
     if (!job.workspaceHandle) return;
-    try {
-      const r = await adapters.releaseWorkspace(job.workspaceHandle);
-      if (!r || r.ok !== true) {
-        // A failed cleanup leaves the isolated workspace in place; say so
-        // truthfully instead of claiming a clean release.
-        job.cleanup_warning = r?.error ?? 'worktree cleanup failed';
+    if (job.workspaceReleasePromise) return job.workspaceReleasePromise;
+    const handle = job.workspaceHandle;
+    job.workspaceReleasePromise = (async () => {
+      try {
+        const r = await adapters.releaseWorkspace(handle);
+        if (!r || r.ok !== true) {
+          // A failed cleanup leaves the isolated workspace in place; say so
+          // truthfully instead of claiming a clean release.
+          job.cleanup_warning = r?.error ?? 'worktree cleanup failed';
+          job.workspace_retained = true;
+        }
+      } catch (err) {
+        job.cleanup_warning = err?.message ?? String(err);
         job.workspace_retained = true;
+      } finally {
+        job.workspaceHandle = null;
+        job.workspaceReleasePromise = null;
       }
-    } catch (err) {
-      job.cleanup_warning = err?.message ?? String(err);
-      job.workspace_retained = true;
-    }
-    job.workspaceHandle = null;
+    })();
+    return job.workspaceReleasePromise;
   }
 
   async function runWorkflow(job) {
@@ -313,6 +322,7 @@ export function createWorkflowRuntime(adapters, {
         const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
         const reviewTask = adapters.buildReviewTask(job.original_task, null, { strictness: job.review_strictness ?? 'standard' });
         const review = await runReviewerAttempt(job, reviewTask, config, before);
+        if (job.cancelling) { await cancelWorkflow(job); return; }
         job.review = review;
         if (job.review) transition(job, JOB_PHASES.READY, 'review complete');
         finalize(job);
@@ -322,7 +332,7 @@ export function createWorkflowRuntime(adapters, {
       let attempt = 0;
       let escalationReason = null;
       for (;;) {
-        if (job.cancelling) { cancelWorkflow(job); return; }
+        if (job.cancelling) { await cancelWorkflow(job); return; }
         if (attempt > 0) transition(job, JOB_PHASES.RUNNING, `escalated attempt ${attempt}`);
         const resolvedPolicy = resolveModelPolicy(config, 'worker', { attempt });
         const fallbackPolicy = job.allow_fallback === false
@@ -356,7 +366,7 @@ export function createWorkflowRuntime(adapters, {
           },
         });
         job.current_attempt_id = null;
-        if (job.cancelling) { cancelWorkflow(job); return; }
+        if (job.cancelling) { await cancelWorkflow(job); return; }
         const attemptView = attemptRecord(ar, attempt);
         job.attempts.push(attemptView);
         recordCanonical(job, 'model.selected', {
@@ -419,7 +429,7 @@ export function createWorkflowRuntime(adapters, {
         job.decision = { step: decision.step, phase: decision.phase, reason: decision.reason };
         job.events.push({ at: clock(), phase: job.phase, type: 'attempt/complete', attempt, decision: decision.step });
 
-        if (job.cancelling) { cancelWorkflow(job); return; }
+        if (job.cancelling) { await cancelWorkflow(job); return; }
         if (decision.step === 'fail') {
           const finalAttemptCode = ar.status === 'failed' ? attemptView.error_code : null;
           failJob(job, Object.assign(new Error(`workflow failed: ${decision.reason}`), { code: finalAttemptCode }));
@@ -441,6 +451,7 @@ export function createWorkflowRuntime(adapters, {
           const before = job.candidate;
           const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null }, { strictness: job.review_strictness ?? 'standard' });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
+        if (job.cancelling) { await cancelWorkflow(job); return; }
           job.review = review;
           transition(job, JOB_PHASES.READY, decision.reason);
           finalize(job);
@@ -451,7 +462,7 @@ export function createWorkflowRuntime(adapters, {
         return;
       }
     } catch (err) {
-      if (job.cancelling) { cancelWorkflow(job); return; }
+      if (job.cancelling) { await cancelWorkflow(job); return; }
       failJob(job, err);
     } finally {
       await releaseWorkspace(job);
@@ -546,17 +557,24 @@ export function createWorkflowRuntime(adapters, {
   }
 
   function cancelWorkflow(job) {
+    if (job.cancelPromise) return job.cancelPromise;
     if (job.status !== 'running') return;
-    job.cancelling = true;
-    job.events.push({ at: clock(), phase: job.phase, type: 'cancel' });
-    const activeAttempt = job.current_attempt_id;
-    if (activeAttempt) adapters.cancelAttempt?.(activeAttempt).catch(() => {});
-    job.phase = JOB_PHASES.CANCELLED;
-    job.status = 'cancelled';
-    recordCanonical(job, 'job.cancelled', { active_attempt_id: activeAttempt ?? null });
-    job.endedAt = clock();
-    job.current_attempt_id = null;
-    for (const w of job.waiters.splice(0)) w();
+    job.cancelPromise = (async () => {
+      job.cancelling = true;
+      job.events.push({ at: clock(), phase: job.phase, type: 'cancel' });
+      const activeAttempt = job.current_attempt_id;
+      if (activeAttempt) {
+        try { await adapters.cancelAttempt?.(activeAttempt); } catch {}
+      }
+      await releaseWorkspace(job);
+      job.phase = JOB_PHASES.CANCELLED;
+      job.status = 'cancelled';
+      recordCanonical(job, 'job.cancelled', { active_attempt_id: activeAttempt ?? null });
+      job.endedAt = clock();
+      job.current_attempt_id = null;
+      for (const w of job.waiters.splice(0)) w();
+    })();
+    return job.cancelPromise;
   }
 
   function workflowView(job, { withResult = false } = {}) {
@@ -660,9 +678,9 @@ export function createWorkflowRuntime(adapters, {
   async function cancel(id) {
     const job = jobs.get(id);
     if (!job) return undefined;
-    cancelWorkflow(job);
     const qi = queue.indexOf(job);
     if (qi !== -1) queue.splice(qi, 1);
+    await cancelWorkflow(job);
     return workflowView(job);
   }
 
