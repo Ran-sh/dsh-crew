@@ -74,3 +74,54 @@ test('non-Windows startup integration is an explicit no-op', () => {
     assert.equal(existsSync(f.startupDir), false);
   } finally { f.cleanup(); }
 });
+test('Windows startup install fails closed on foreign pre-existing VBS/CMD/PS1 targets', () => {
+  const f = fixture();
+  try {
+    const launcherDir = join(f.home, '.config', 'dsh-crew', 'launchers');
+    mkdirSync(f.startupDir, { recursive: true });
+    mkdirSync(launcherDir, { recursive: true });
+
+    const startupFile = join(f.startupDir, 'DSH Crew.vbs');
+    const launcherFile = join(launcherDir, 'start-dsh-crew.cmd');
+    const helperFile = join(launcherDir, 'start-dsh-crew.ps1');
+    const foreignStartup = 'Option Explicit\nMsgBox "foreign vbs"\n';
+    const foreignLauncher = '@echo off\r\necho foreign launcher\r\n';
+    const foreignHelper = 'Write-Host "foreign helper"\r\n';
+    writeFileSync(startupFile, foreignStartup);
+    writeFileSync(launcherFile, foreignLauncher);
+    writeFileSync(helperFile, foreignHelper);
+
+    const result = installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'STARTUP_TARGET_COLLISION');
+    assert.equal(readFileSync(startupFile, 'utf8'), foreignStartup);
+    assert.equal(readFileSync(launcherFile, 'utf8'), foreignLauncher);
+    assert.equal(readFileSync(helperFile, 'utf8'), foreignHelper);
+  } finally { f.cleanup(); }
+});
+
+test('Windows startup uninstall preserves foreign pre-existing VBS/CMD/PS1 targets', () => {
+  const f = fixture();
+  try {
+    const launcherDir = join(f.home, '.config', 'dsh-crew', 'launchers');
+    mkdirSync(f.startupDir, { recursive: true });
+    mkdirSync(launcherDir, { recursive: true });
+
+    const startupFile = join(f.startupDir, 'DSH Crew.vbs');
+    const launcherFile = join(launcherDir, 'start-dsh-crew.cmd');
+    const helperFile = join(launcherDir, 'start-dsh-crew.ps1');
+    const foreignStartup = 'Option Explicit\nMsgBox "foreign vbs"\n';
+    const foreignLauncher = '@echo off\r\necho foreign launcher\r\n';
+    const foreignHelper = 'Write-Host "foreign helper"\r\n';
+    writeFileSync(startupFile, foreignStartup);
+    writeFileSync(launcherFile, foreignLauncher);
+    writeFileSync(helperFile, foreignHelper);
+
+    const result = uninstallWindowsStartup({ home: f.home, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(result.ok, true);
+    assert.equal(result.removed, false);
+    assert.equal(readFileSync(startupFile, 'utf8'), foreignStartup);
+    assert.equal(readFileSync(launcherFile, 'utf8'), foreignLauncher);
+    assert.equal(readFileSync(helperFile, 'utf8'), foreignHelper);
+  } finally { f.cleanup(); }
+});
