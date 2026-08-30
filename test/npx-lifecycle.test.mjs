@@ -232,6 +232,23 @@ test('packaged lifecycle invokes npm on Windows without shell mode', () => {
   );
 });
 
+test('packaged Windows npm invocation executes with a space-bearing prefix', { skip: process.platform !== 'win32' }, () => {
+  const t = tempHome();
+  try {
+    const prefix = join(t.dir, 'prefix with spaces');
+    const invocation = npmCliInvocation(['prefix', '--prefix', prefix], {
+      platform: 'win32', environment: process.env,
+    });
+    const result = spawnSync(invocation.command, invocation.args, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+      windowsHide: true, timeout: 60_000,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(resolve(result.stdout.trim()), resolve(prefix));
+  } finally { t.cleanup(); }
+});
+
 // ---------- dependency closure ----------
 
 test('copyProductionDependencyTree replicates transitive dependencies and required peers', () => {
