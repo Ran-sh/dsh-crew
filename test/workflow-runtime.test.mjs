@@ -40,6 +40,13 @@ PASS — read package.json — name and version confirmed
 NOT RUN — build — read-only task with no code changes
 ## Risks
 none`;
+const READ_ONLY_PASS = `Checked package metadata.
+## Diff
+no files changed
+## Tests
+PASS — read package.json — name and version confirmed
+## Risks
+none`;
 
 const WORKER_RESULT = GOOD;
 
@@ -136,6 +143,33 @@ test('no-change analysis still fails closed when the isolated candidate contains
   const v = rt.get(job.id, { withResult: true });
   assert.equal(v.status, 'failed');
   assert.equal(v.outcome.workspace_evidence_ok, false);
+});
+
+test('shared isolation cannot bypass explicit zero-change authorization', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY_PASS], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  a.allocateWorkspace = async (spec) => ({
+    ok: true, execution_cwd: spec.cwd, base_revision: 'abc123', isolation: 'shared', primary_workspace_dirty: false, handle: null,
+  });
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'read package metadata', cwd: '/repo', allow_no_changes: false });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'failed');
+  assert.equal(v.outcome.task_status, 'partial');
+  assert.equal(v.outcome.no_change_verified, undefined);
+});
+
+test('candidate capture failure cannot authorize a zero-change success', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY_PASS], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  a.captureCandidate = async () => null;
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'read package metadata', cwd: '/repo', allow_no_changes: true });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'failed');
+  assert.equal(v.outcome.task_status, 'partial');
+  assert.equal(v.candidate_capture_failed, true);
+  assert.equal(v.outcome.no_change_verified, undefined);
 });
 
 test('worker lifecycle exposes ordered canonical events without candidate payloads', async () => {
