@@ -197,7 +197,7 @@ test('package, runtime identity, and changelog identify candidate 0.5.3', () => 
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.version, '0.5.3');
   assert.equal(RUNTIME_VERSION, '0.5.3');
-  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.2/m);
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.3/m);
 });
 
 // ---------- dependency closure ----------
