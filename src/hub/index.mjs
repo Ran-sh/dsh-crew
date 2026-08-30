@@ -294,6 +294,16 @@ export class WorkerRegistry {  constructor(ctx) {
     const workerPrompt = appendDeliveryInstructions(task, { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
+
+    // Resolve presets before any side effect (registry entry, worktree): a
+    // rejected preset must fail spawn() cleanly instead of leaving a ghost
+    // "running" job and a leaked worktree behind.
+    const presets = this.ctx.get('agentPresets');
+    const wanted = preset ?? (tier === 'flash' ? cfg.preset_flash : cfg.preset_pro);
+    const presetId = presets === undefined
+      ? undefined
+      : (await presets.resolve(!wanted || wanted === 'default' ? undefined : wanted)).id;
+
     let executionCwd = cwd;
     let isolatedWorkspace = null;
     if ((requested_isolation === 'worktree' && jobRole === 'worker') || requested_isolation === 'readonly') {
@@ -321,6 +331,10 @@ export class WorkerRegistry {  constructor(ctx) {
       delivery_complete: false, delivery_missing: [], delivery_metadata: null,
       outcome: null,
       lastAssistantText: null, handle_dispose_promise: null, disposeHandle: null,
+      // Abort latch: cancel()/timeout set this the moment the job becomes
+      // terminal, even while agents.create() is still pending, so a handle
+      // acquired after that point is disposed instead of being driven.
+      abortRequested: false,
     };
     const disposeJobHandle = async () => {
       if (!job.handle) return;
@@ -333,12 +347,6 @@ export class WorkerRegistry {  constructor(ctx) {
     // degrade to { kind:'no-git' } instead of failing the job.
     job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     this.jobs.set(id, job);
-
-    const presets = this.ctx.get('agentPresets');
-    const wanted = preset ?? (tier === 'flash' ? cfg.preset_flash : cfg.preset_pro);
-    const presetId = presets === undefined
-      ? undefined
-      : (await presets.resolve(!wanted || wanted === 'default' ? undefined : wanted)).id;
 
     const onEvent = (session, event) => {
       switch (event.type) {
@@ -384,6 +392,15 @@ export class WorkerRegistry {  constructor(ctx) {
         },
       });
       job.handle = handle;
+      // The job may have become terminal (cancel/timeout) while create() was
+      // pending; the old disposer was a no-op in that window. Dispose the
+      // freshly acquired handle and never deliver the prompt.
+      if (job.status !== 'running' || job.abortRequested) {
+        try { await job.disposeHandle(); } catch (error) {
+          job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+        }
+        return;
+      }
       try {
         // Group the worker session under the workspace of its cwd; create the
         // workspace when none exists yet (resolveByPath is exact-match, so a
@@ -409,6 +426,7 @@ export class WorkerRegistry {  constructor(ctx) {
     if (timeoutMs) {
       job.timeoutHandle = setTimeout(async () => {
         if (job.status !== 'running') return;
+        job.abortRequested = true;
         job.status = 'failed';
         job.error = `job timed out after ${timeout_seconds}s`;
         job.error_code = 'JOB_TIMEOUT';
@@ -517,6 +535,7 @@ export class WorkerRegistry {  constructor(ctx) {
     const job = this.jobs.get(id);
     if (!job) return undefined;
     if (job.status === 'running') {
+      job.abortRequested = true;
       job.status = 'cancelled';
       job.phase = JOB_PHASES.CANCELLED;
       job.error = 'cancelled by request';

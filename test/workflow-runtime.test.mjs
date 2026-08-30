@@ -274,9 +274,14 @@ test('reviewer that modifies the candidate is flagged and candidate kept', async
   const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 'test' });
   await rt.wait(job.id, 2000);
   const v = rt.get(job.id, { withResult: true });
-  assert.equal(v.status, 'done');
+  // Fail-closed: a reviewer that mutated the candidate cannot approve its own
+  // mutation — the workflow must surface as failed, never as a false done.
+  assert.equal(v.status, 'failed');
+  assert.equal(v.error_code, 'REVIEW_CHANGES_REQUESTED');
   assert.equal(v.review.mutated_candidate, true);
+  assert.equal(v.review.verdict, 'request_changes');
   assert.equal(v.candidate.fingerprint, 'fp-1', 'implementation candidate stays the pre-review snapshot');
+  assert.ok(!v.canonical_events.some((event) => event.type === 'job.completed'), 'no job.completed event may exist');
 });
 
 // ---------- explicit reviewer job ----------

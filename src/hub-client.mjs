@@ -113,8 +113,26 @@ export function hubRequestError(body, status) {
   return err;
 }
 
-async function call(path, init) {
-  const res = await fetch(`${API}${path}`, init);
+// Transport deadlines: every Hub call is bounded so a wedged local HTTP
+// exchange can never outlive the workflow timeout contract. Long polls get
+// their requested wait plus grace; spawn gets a wider bound because worktree
+// creation can clone sizeable repositories. The env override exists for
+// deterministic deadline tests; production defaults stay at 10s.
+const ENV_TIMEOUT_MS = Number(process.env.DSH_CREW_HUB_TIMEOUT_MS);
+const DEFAULT_TIMEOUT_MS = Number.isInteger(ENV_TIMEOUT_MS) && ENV_TIMEOUT_MS > 0 ? ENV_TIMEOUT_MS : 10_000;
+const SPAWN_TIMEOUT_MS = Math.max(DEFAULT_TIMEOUT_MS, 60_000);
+const LONG_POLL_GRACE_MS = 5_000;
+
+async function call(path, init, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw hubRequestError({ error: `hub request timed out after ${timeoutMs}ms` }, 0);
+    }
+    throw err;
+  }
   const body = await res.json();
   if (!res.ok || body.ok === false) throw hubRequestError(body, res.status);
   return body;
@@ -125,8 +143,10 @@ export const hub = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(spec),
-  }).then((b) => b.job),
+  }, { timeoutMs: SPAWN_TIMEOUT_MS }).then((b) => b.job),
   list: () => call('/jobs').then((b) => b.jobs),
-  get: (id, waitSeconds = 0) => call(`/jobs/${id}?wait=${waitSeconds}`).then((b) => b.job),
+  get: (id, waitSeconds = 0) => call(`/jobs/${id}?wait=${waitSeconds}`, undefined, {
+    timeoutMs: waitSeconds > 0 ? (waitSeconds * 1000) + LONG_POLL_GRACE_MS : DEFAULT_TIMEOUT_MS,
+  }).then((b) => b.job),
   cancel: (id) => call(`/jobs/${id}/cancel`, { method: 'POST' }).then((b) => b.job),
 };

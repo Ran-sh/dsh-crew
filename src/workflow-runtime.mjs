@@ -453,6 +453,24 @@ export function createWorkflowRuntime(adapters, {
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
         if (job.cancelling) { await cancelWorkflow(job); return; }
           job.review = review;
+          // The review verdict is an acceptance gate, not a footnote: only a
+          // reviewer that ran to completion, delivered its own auditable
+          // contract, and approved may finalize as COMPLETED. Anything else
+          // fails closed through the existing FAILED machinery so the MCP
+          // surface reports a failed workflow instead of a false "done".
+          const reviewApproved = review.status === 'done'
+            && review.delivery_complete === true
+            && review.verdict === 'approve';
+          if (!reviewApproved) {
+            const code = review.verdict === 'request_changes'
+              ? 'REVIEW_CHANGES_REQUESTED'
+              : 'REVIEW_INCONCLUSIVE';
+            failJob(job, Object.assign(
+              new Error(`automatic review blocked acceptance: verdict=${review.verdict}, reviewer status=${review.status}, review delivery_complete=${review.delivery_complete === true}`),
+              { code },
+            ));
+            return;
+          }
           transition(job, JOB_PHASES.READY, decision.reason);
           finalize(job);
           return;
