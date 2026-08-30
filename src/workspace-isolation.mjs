@@ -12,7 +12,7 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
@@ -106,6 +106,21 @@ function splitFirstTab(line) {
   return i === -1 ? [line, ''] : [line.slice(0, i), line.slice(i + 1)];
 }
 
+async function firstLinkComponent(cwd, relPath) {
+  let current = resolve(cwd);
+  const segments = String(relPath ?? '').replace(/\\/g, '/').split('/').filter(Boolean);
+  for (let i = 0; i < segments.length; i += 1) {
+    current = join(current, segments[i]);
+    try {
+      const st = await lstat(current);
+      if (st.isSymbolicLink()) return segments.slice(0, i + 1).join('/');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function buildCandidatePatch(run, { cwd, base, nameStatus, untracked, limit }) {
   const tracked = [];
   const sensitive = new Set();
@@ -125,6 +140,8 @@ async function buildCandidatePatch(run, { cwd, base, nameStatus, untracked, limi
   let out = '';
   const redacted = [];
   const incompleteReasons = [];
+  const untrackedFiles = [];
+  const seenLinks = new Set();
   if (tracked.length > 0) {
     const r = await runGit(run, ['diff', '--binary', base, '--', ...tracked], { cwd });
     if (!r.ok) return { failed: true, reason: r.reason, error: r.error };
@@ -137,6 +154,20 @@ async function buildCandidatePatch(run, { cwd, base, nameStatus, untracked, limi
   if (redacted.length > 0) incompleteReasons.push('sensitive_content_redacted');
 
   for (const p of untracked) {
+    // Walk every path component with lstat so a symlink/junction anywhere in
+    // the path is never followed. Out-of-worktree targets are treated as
+    // non-replayable; only the link boundary is exposed.
+    const link = await firstLinkComponent(cwd, p);
+    if (link) {
+      if (!seenLinks.has(link)) {
+        seenLinks.add(link);
+        untrackedFiles.push(link);
+        out += `[UNTRACKED SYMLINK: ${link}]\n`;
+        incompleteReasons.push(`untracked_symlink:${link}`);
+      }
+      continue;
+    }
+    untrackedFiles.push(p);
     if (isSensitivePath(p)) {
       redacted.push(p);
       out += `[REDACTED SENSITIVE FILE: ${p} (untracked)]\n`;
@@ -154,13 +185,16 @@ async function buildCandidatePatch(run, { cwd, base, nameStatus, untracked, limi
     if (!next.complete) incompleteReasons.push(next.reason ?? `untracked_unreplayable:${p}`);
   }
 
+  // Fingerprint identity must represent the complete pre-truncation workspace
+  // diff, not the truncated patch bytes that are actually retained.
+  const workspaceDigest = createHash('sha256').update(out).digest('hex');
   const truncated = Buffer.byteLength(out, 'utf8') > limit;
   if (truncated) {
     out = Buffer.from(out, 'utf8').subarray(0, limit).toString('utf8');
     incompleteReasons.push('patch_truncated');
   }
   const complete = incompleteReasons.length === 0;
-  return { failed: false, patch: out, truncated, redacted, complete, incompleteReasons };
+  return { failed: false, patch: out, truncated, redacted, complete, incompleteReasons, untrackedFiles, workspaceDigest };
 }
 
 async function safeNewFilePatch(relPath, absPath) {
@@ -180,8 +214,8 @@ async function safeNewFilePatch(relPath, absPath) {
   }
 }
 
-function candidateFingerprint({ base, nameStatus, patch }) {
-  return createHash('sha256').update(`${base}\n${nameStatus ?? ''}\n${patch ?? ''}`).digest('hex');
+function candidateFingerprint({ base, nameStatus, workspaceDigest }) {
+  return createHash('sha256').update(`${base}\n${nameStatus ?? ''}\n${workspaceDigest ?? ''}`).digest('hex');
 }
 
 export async function captureCandidate({ worktreePath, baseRevision, git, limit = DIFF_LIMIT } = {}) {
@@ -204,6 +238,8 @@ export async function captureCandidate({ worktreePath, baseRevision, git, limit 
   const built = await buildCandidatePatch(run, { cwd: worktreePath, base, nameStatus: nameStatus.stdout, untracked, limit });
   if (built.failed) return { ok: false, reason: built.reason ?? CANDIDATE_CAPTURE_FAILED, error: built.error };
 
+  const untrackedFiles = built.untrackedFiles ?? untracked;
+
   const nameStatusOut = nameStatus.stdout;
   return {
     ok: true,
@@ -211,17 +247,17 @@ export async function captureCandidate({ worktreePath, baseRevision, git, limit 
     base_revision: base,
     committed_head: head.ok ? head.stdout.trim() : null,
     worktree_path: worktreePath,
-    changed_files: [...new Set([...trackedIn(nameStatusOut, untracked), ...built.redacted, ...untracked])],
+    changed_files: [...new Set([...trackedIn(nameStatusOut, untrackedFiles), ...built.redacted, ...untrackedFiles])],
     name_status: nameStatusOut,
     diff_stat: statRel.stdout,
     patch: built.patch,
     patch_truncated: built.truncated,
     sensitive_paths_redacted: built.redacted,
-    untracked_files: untracked,
+    untracked_files: untrackedFiles,
     complete: built.complete,
     replayable: built.complete,
     incomplete_reasons: built.incompleteReasons,
-    fingerprint: candidateFingerprint({ base, nameStatus: nameStatusOut, patch: built.patch }),
+    fingerprint: candidateFingerprint({ base, nameStatus: nameStatusOut, workspaceDigest: built.workspaceDigest }),
     candidate_commit: null,
   };
 }
