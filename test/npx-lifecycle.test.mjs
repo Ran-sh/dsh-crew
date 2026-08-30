@@ -45,6 +45,7 @@ import {
   USAGE,
   compareVersions,
   resolveUpdateCandidate,
+  npmCliInvocation,
 } from '../src/install/npx-lifecycle.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
@@ -198,6 +199,26 @@ test('package, runtime identity, and changelog identify candidate 0.5.5', () => 
   assert.equal(manifest.version, '0.5.5');
   assert.equal(RUNTIME_VERSION, '0.5.5');
   assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.5/m);
+});
+
+test('packaged lifecycle invokes npm on Windows without shell mode', () => {
+  assert.deepEqual(
+    npmCliInvocation(
+      ['pack', '@ran-sh/dsh-crew@latest', '--pack-destination', 'C:\\Users\\Test User\\Crew'],
+      { platform: 'win32', environment: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } },
+    ),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', 'npm.cmd "pack" "@ran-sh/dsh-crew@latest" "--pack-destination" "C:\\Users\\Test User\\Crew"'],
+    },
+  );
+  assert.deepEqual(npmCliInvocation(['pack', '@ran-sh/dsh-crew@latest'], { platform: 'linux' }), {
+    command: 'npm', args: ['pack', '@ran-sh/dsh-crew@latest'],
+  });
+  assert.throws(
+    () => npmCliInvocation(['pack', 'safe&whoami'], { platform: 'win32', environment: { ComSpec: 'cmd.exe' } }),
+    /unsafe npm argument/,
+  );
 });
 
 // ---------- dependency closure ----------
