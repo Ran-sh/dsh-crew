@@ -834,7 +834,10 @@ test('resolveUpdateCandidate extracts and validates a packed .tgz override', () 
     writeFileSync(join(stage, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '7.7.7' }));
     writeFileSync(join(stage, 'index.js'), 'module.exports=1;\n');
     const tgz = join(t.dir, 'candidate.tgz');
-    execFileSync('tar', ['-czf', tgz, '-C', join(t.dir, 'packsrc'), 'package']);
+    // Relative paths only: GNU tar interprets a `C:\...` argument as a remote
+    // rsh host ("Cannot connect to C:"), so anchor the invocation at t.dir
+    // instead of passing drive-letter paths.
+    execFileSync('tar', ['-czf', 'candidate.tgz', '-C', 'packsrc', 'package'], { cwd: t.dir });
     const r = resolveUpdateCandidate({ candidate: tgz, home: t.dir });
     assert.equal(r.ok, true, `unexpected failure: ${JSON.stringify(r)}`);
     assert.equal(r.version, '7.7.7');
@@ -876,14 +879,15 @@ test('resolveUpdateCandidate fails closed on registry pack failure and identity 
     assert.equal(failed.code, 'REGISTRY_PACK_FAILED');
     assert.match(failed.detail, /E404/);
 
-    const mismatchRunner = (command, args) => {
+    const mismatchRunner = (command, args, opts = {}) => {
       if (isNpmInvocation(command, args)) {
         const dest = npmPackDestination(args);
+        mkdirSync(dest, { recursive: true });
+        writeFileSync(join(dest, 'x.tgz'), 'fake');
         return { status: 0, stdout: JSON.stringify([{ filename: 'x.tgz', name: PKG_NAME, version: '1.0.0' }]), stderr: '' };
       }
       // tar "extracts" a manifest whose version disagrees with the pack output
-      const destIdx = args.indexOf('-C');
-      const root = join(args[destIdx + 1], 'package');
+      const root = join(opts.cwd, 'package');
       mkdirSync(root, { recursive: true });
       writeFileSync(join(root, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '2.0.0' }));
       return { status: 0, stdout: '', stderr: '' };
@@ -998,12 +1002,14 @@ test('registry mode never downgrades a newer managed payload', async () => {
     const before = readCurrentPointer({ home: t.dir });
     const callsBefore = rec.calls.length;
 
-    const runner = (command, args) => {
+    const runner = (command, args, opts = {}) => {
       if (isNpmInvocation(command, args)) {
+        const dest = npmPackDestination(args);
+        mkdirSync(dest, { recursive: true });
+        writeFileSync(join(dest, 'old.tgz'), 'fake');
         return { status: 0, stdout: JSON.stringify([{ filename: 'old.tgz', name: PKG_NAME, version: '0.0.1' }]), stderr: '' };
       }
-      const destIdx = args.indexOf('-C');
-      const root = join(args[destIdx + 1], 'package');
+      const root = join(opts.cwd, 'package');
       mkdirSync(root, { recursive: true });
       writeFileSync(join(root, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.0.1' }));
       return { status: 0, stdout: '', stderr: '' };

@@ -31,6 +31,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  copyFileSync,
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -700,8 +701,14 @@ export const UPDATE_DEFAULT_SPEC = `${UPDATE_PACKAGE_NAME}@latest`;
  */
 export function extractPackageTarball(tgzPath, destDir, { runner = spawnSync } = {}) {
   mkdirSync(destDir, { recursive: true });
-  const result = runner('tar', ['-xzf', String(tgzPath), '-C', destDir], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  // GNU tar interprets a `C:\...` argument as a remote rsh host ("Cannot
+  // connect to C:"), so anchor the invocation inside destDir and pass the
+  // archive by basename: every argument stays colon-free for both bsdtar
+  // (Windows 10+) and GNU tar, whatever PATH resolves first.
+  const localArchive = join(destDir, 'candidate.tgz');
+  copyFileSync(tgzPath, localArchive);
+  const result = runner('tar', ['-xzf', 'candidate.tgz'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, cwd: destDir,
   });
   const root = join(destDir, 'package');
   if (result.status !== 0 || !existsSync(join(root, 'package.json'))) {

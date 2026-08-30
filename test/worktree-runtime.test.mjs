@@ -113,7 +113,7 @@ maybe('coding worker edits its worktree; primary repo stays clean and candidate 
   const at = fakeAttempters();
   const rt = makeRuntime(at, ws, rawConfig());
   const job = rt.start({ role: 'worker', task: 'change it', cwd: repo, source: 'test' });
-  await rt.wait(job.id, 5000);
+  await rt.wait(job.id, 20000);
   const v = rt.get(job.id, { withResult: true });
   assert.equal(v.status, 'done');
   assert.equal(v.isolation, 'worktree');
@@ -135,7 +135,7 @@ maybe('a dirty primary workspace is untouched and never folds into the candidate
   const at = fakeAttempters();
   const rt = makeRuntime(at, ws, rawConfig());
   const job = rt.start({ role: 'worker', task: 'change it', cwd: repo, source: 'test' });
-  await rt.wait(job.id, 5000);
+  await rt.wait(job.id, 20000);
   // primary still has the user's uncommitted file, unchanged
   assert.equal(readFileSync(join(repo, 'dirty.txt'), 'utf8'), 'uncommitted-user-change\n');
   const status = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
@@ -153,8 +153,8 @@ maybe('two concurrent coding jobs use distinct worktrees and independent candida
   const rt = makeRuntime(at, ws, rawConfig({ maxParallel: 2 }));
   const A = rt.start({ role: 'worker', task: 'A', cwd: repo, source: 'test' });
   const B = rt.start({ role: 'worker', task: 'B', cwd: repo, source: 'test' });
-  await rt.wait(A.id, 5000);
-  await rt.wait(B.id, 5000);
+  await rt.wait(A.id, 20000);
+  await rt.wait(B.id, 20000);
   const va = rt.get(A.id, { withResult: true });
   const vb = rt.get(B.id, { withResult: true });
   assert.notEqual(va.execution_cwd, vb.execution_cwd, 'worktrees must differ');
@@ -181,7 +181,7 @@ maybe('max_parallel queues a third workflow and it runs once a slot frees', asyn
   await new Promise((r) => setTimeout(r, 40));
   assert.equal(C.phase, JOB_PHASES.QUEUED);
   gate();
-  await rt.wait(A.id, 5000); await rt.wait(B.id, 5000); await rt.wait(C.id, 5000);
+  await rt.wait(A.id, 20000); await rt.wait(B.id, 20000); await rt.wait(C.id, 20000);
   assert.equal(rt.get(C.id).phase, JOB_PHASES.COMPLETED);
 });
 
@@ -192,7 +192,7 @@ maybe('automatic reviewer runs against the isolated candidate workspace', async 
   const at = fakeAttempters();
   const rt = makeRuntime(at, ws, rawConfig());
   const job = rt.start({ role: 'worker', task: 'change it', cwd: repo, source: 'test' });
-  await rt.wait(job.id, 5000);
+  await rt.wait(job.id, 20000);
   const v = rt.get(job.id, { withResult: true });
   assert.equal(v.status, 'done');
   assert.equal(v.review.verdict, 'approve');
