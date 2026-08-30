@@ -102,8 +102,8 @@ test('workflow passes the exact escalation reason into the next attempt and resu
         status: 'done',
         result: first ? '## Diff\n- x\n## Tests\nFAIL — test — failed\n## Risks\n- x' : '## Diff\n- x\n## Tests\nPASS — test — ok\n## Risks\n- none',
         outcome: first
-          ? { execution_status: 'completed', task_status: 'partial', tests_status: 'FAIL', delivery: { complete: true }, changes: [] }
-          : { execution_status: 'completed', task_status: 'success', tests_status: 'PASS', delivery: { complete: true }, changes: [] },
+          ? { execution_status: 'completed', task_status: 'partial', tests_status: 'FAIL', delivery: { complete: true }, changes: ['- x'] }
+          : { execution_status: 'completed', task_status: 'success', tests_status: 'PASS', delivery: { complete: true }, changes: ['- x'] },
       };
     },
   });
