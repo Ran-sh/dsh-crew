@@ -142,7 +142,64 @@ function ownership({ home = homedir() } = {}) {
   return data && typeof data === 'object' && data.host === HOST ? data : null;
 }
 
-function writeOwnership({ home, configFile, configKind, target, files = [] }) {
+function ownedSourceRecords(owned) {
+  if (!owned) return [];
+  const records = [];
+  const seen = new Set();
+  const current = owned.config_file ? {
+    file: owned.config_file,
+    kind: owned.config_kind === 'shared' ? 'shared' : 'native',
+  } : null;
+  for (const record of [current, ...(Array.isArray(owned.config_files) ? owned.config_files : [])]) {
+    if (!record || typeof record.file !== 'string' || !record.file.trim()) continue;
+    const key = normalizePath(record.file);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    records.push({ file: record.file, kind: record.kind === 'shared' ? 'shared' : 'native' });
+  }
+  return records;
+}
+
+function removeOwnedMcp({ file, kind, target }) {
+  const config = readJson(file, null);
+  if (!config || typeof config !== 'object') return false;
+  const isShared = kind === 'shared';
+  const servers = isShared ? sharedServers(config) : nativeServers(config);
+  const current = servers[SERVER];
+  if (normalizePath(target) !== serverTarget(current)) return false;
+  const next = { ...config };
+  if (isShared) {
+    next.mcpServers = { ...servers };
+    delete next.mcpServers[SERVER];
+    if (Object.keys(next.mcpServers).length === 0) delete next.mcpServers;
+  } else {
+    next.mcp = { ...(next.mcp ?? {}), servers: { ...servers } };
+    delete next.mcp.servers[SERVER];
+    if (Object.keys(next.mcp.servers).length === 0) delete next.mcp.servers;
+    if (Object.keys(next.mcp).length === 0) delete next.mcp;
+  }
+  const changed = JSON.stringify(next) !== JSON.stringify(config);
+  if (changed) {
+    backup(file);
+    writeJson(file, next);
+  }
+  return changed;
+}
+
+function cleanupPriorMcpSources({ owned, exceptFile }) {
+  if (!owned) return [];
+  const actions = [];
+  const except = normalizePath(exceptFile);
+  for (const source of ownedSourceRecords(owned)) {
+    if (except && normalizePath(source.file) === except) continue;
+    if (removeOwnedMcp({ file: source.file, kind: source.kind, target: owned.target })) {
+      actions.push(`mcp: removed ${SERVER} from prior ${source.file}`);
+    }
+  }
+  return actions;
+}
+
+function writeOwnership({ home, configFile, configKind, target, files = [], configFiles = [] }) {
   writeJson(OWNERSHIP_FILE({ home }), {
     schema_version: 1,
     host: HOST,
@@ -151,6 +208,7 @@ function writeOwnership({ home, configFile, configKind, target, files = [] }) {
     config_kind: configKind,
     target,
     files,
+    config_files: configFiles,
     managed_at: new Date().toISOString(),
   });
 }
@@ -215,7 +273,8 @@ export function installZCode({ home = homedir(), root = ROOT } = {}) {
   const templates = templateFiles({ home, root });
   const missing = templates.find(({ source }) => !existsSync(source));
   if (missing) return { ok: false, code: 'ZCODE_TEMPLATE_MISSING', source: missing.source };
-  const priorFiles = ownership({ home })?.files ?? [];
+  const previousOwnership = ownership({ home });
+  const priorFiles = previousOwnership?.files ?? [];
   // Check for collisions before writing any other integration surface so a
   // failed install is transaction-like and leaves user files untouched.
   const mcp = updateMcp({ home, root });
@@ -224,12 +283,17 @@ export function installZCode({ home = homedir(), root = ROOT } = {}) {
   if (!policy.ok) return policy;
   const installed = installTemplates({ home, root, priorFiles });
   if (!installed.ok) return installed;
+  cleanupPriorMcpSources({ owned: previousOwnership, exceptFile: mcp.config_file });
+  const currentSourceRecord = { file: mcp.config_file, kind: mcp.config_kind };
+  const priorSourceRecords = ownedSourceRecords(previousOwnership)
+    .filter((record) => normalizePath(record.file) !== normalizePath(currentSourceRecord.file));
   writeOwnership({
     home,
     configFile: mcp.config_file,
     configKind: mcp.config_kind,
     target: mcp.target,
     files: installed.records,
+    configFiles: [currentSourceRecord, ...priorSourceRecords],
   });
   return { ok: true, ...mcp, policy_file: policy.file, files: installed.actions };
 }
@@ -270,23 +334,9 @@ export function uninstallZCode({ home = homedir() } = {}) {
   const actions = [];
   const owned = ownership({ home });
   if (owned) {
-    const file = owned.config_file;
-    const config = readJson(file, null);
-    if (config && typeof config === 'object') {
-      const kind = owned.config_kind === 'shared' ? 'shared' : 'native';
-      const servers = kind === 'shared' ? sharedServers(config) : nativeServers(config);
-      const current = servers[SERVER];
-      if (normalizePath(owned.target) === serverTarget(current)) {
-        const next = { ...config };
-        if (kind === 'shared') {
-          next.mcpServers = { ...servers }; delete next.mcpServers[SERVER];
-          if (Object.keys(next.mcpServers).length === 0) delete next.mcpServers;
-        } else {
-          next.mcp = { ...(next.mcp ?? {}), servers: { ...servers } }; delete next.mcp.servers[SERVER];
-          if (Object.keys(next.mcp.servers).length === 0) delete next.mcp.servers;
-          if (Object.keys(next.mcp).length === 0) delete next.mcp;
-        }
-        backup(file); writeJson(file, next); actions.push(`mcp: removed ${SERVER} from ${file}`);
+    for (const source of ownedSourceRecords(owned)) {
+      if (removeOwnedMcp({ file: source.file, kind: source.kind, target: owned.target })) {
+        actions.push(`mcp: removed ${SERVER} from ${source.file}`);
       }
     }
     rmSync(OWNERSHIP_FILE({ home }), { force: true });

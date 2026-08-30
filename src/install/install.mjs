@@ -8,8 +8,8 @@ export * from './install-legacy.mjs';
 export * from './windows-startup.mjs';
 export * from './zcode.mjs';
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import * as legacy from './install-legacy.mjs';
 import { normalizeModelPriority } from '../model-routing.mjs';
@@ -57,6 +57,18 @@ function readJson(file, fallback) {
 
 function validObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function writeFileAtomic(file, content) {
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true });
+  const temp = join(dir, `.${basename(file)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.dsh-crew.tmp`);
+  try {
+    writeFileSync(temp, content);
+    renameSync(temp, file);
+  } catch (error) {
+    try { rmSync(temp, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 function sourceVersion(stored) {
@@ -401,7 +413,7 @@ export function writeGlobalConfig(patch, { configFile = GLOBAL_CONFIG_FILE } = {
     ...normalized,
     config_schema_version: CONFIG_SCHEMA_VERSION,
   });
-  writeFileSync(configFile, JSON.stringify(persisted, null, 2) + '\n');
+  writeFileAtomic(configFile, JSON.stringify(persisted, null, 2) + '\n');
   return attachReadMetadata(normalizeGlobalConfig(persisted), {
     version: CONFIG_SCHEMA_VERSION,
     canonical: true,
