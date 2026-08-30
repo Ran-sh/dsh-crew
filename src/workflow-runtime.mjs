@@ -382,6 +382,9 @@ export function createWorkflowRuntime(adapters, {
         });
         transition(job, JOB_PHASES.VERIFYING, `attempt ${attempt} complete`);
 
+        let workspaceEvidenceAvailable = false;
+        let workspaceHasChanges = false;
+
         // Capture the latest candidate after every attempt. Capture failure is
         // not allowed to delete the only recoverable state: retain the worktree
         // and preserve the worker business result, while surfacing the warning.
@@ -395,17 +398,19 @@ export function createWorkflowRuntime(adapters, {
           } else {
             job.candidate = candidate;
             attemptView.candidate_fingerprint = candidate.fingerprint ?? null;
-            outcome = applyWorkspaceEvidence(outcome, {
-              evidenceAvailable: true,
-              hasChanges: Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0,
-              allowNoChanges: job.allow_no_changes,
-            });
+            workspaceEvidenceAvailable = true;
+            workspaceHasChanges = Array.isArray(candidate.changed_files) && candidate.changed_files.length > 0;
             if (candidate.complete === false || candidate.replayable === false) {
               job.retain_workspace = true;
               job.events.push({ at: clock(), phase: job.phase, type: 'candidate/incomplete', attempt, message: 'candidate is not fully replayable; worktree retained' });
             }
           }
         }
+        outcome = applyWorkspaceEvidence(outcome, {
+          evidenceAvailable: workspaceEvidenceAvailable,
+          hasChanges: workspaceHasChanges,
+          allowNoChanges: job.allow_no_changes,
+        });
         job.outcome = outcome;
 
         const reviewRequested = !isReviewJob && shouldAutoReview(config);

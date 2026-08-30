@@ -15,8 +15,8 @@ $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
 $services = @(
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; ConsecutiveFailures = 0; LastError = $null },
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; ConsecutiveFailures = 0; LastError = $null }
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
+  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -63,12 +63,34 @@ function Get-PortState {
   }
 }
 
+function Test-TrackedProcessIdentity {
+  param([int] $ProcessId, [long] $ExpectedStartTicks, [object[]] $ProcessTable)
+  if ($ProcessId -lt 1 -or $ExpectedStartTicks -lt 1) { return $false }
+  $record = @($ProcessTable | Where-Object { [int] $_.ProcessId -eq $ProcessId } | Select-Object -First 1)
+  if ($record.Count -eq 0) { return $false }
+  $startTicks = $null
+  if ($record[0].PSObject.Properties.Name -contains 'StartTicks') {
+    $startTicks = [long] $record[0].StartTicks
+  } else {
+    try { $startTicks = (Get-Process -Id $ProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { return $false }
+  }
+  return $startTicks -eq $ExpectedStartTicks
+}
+
 function Get-TrackedProcessTree {
-  param([int] $RootPid)
-  if ($RootPid -lt 1) { return @() }
-  $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  param([pscustomobject] $Service, [object[]] $ProcessTable = $null)
+  $processes = if ($null -ne $ProcessTable) { @($ProcessTable) } else { @(Get-CimInstance Win32_Process -ErrorAction Stop) }
   $owned = [System.Collections.Generic.HashSet[int]]::new()
-  [void] $owned.Add($RootPid)
+  $rootMatches = Test-TrackedProcessIdentity -ProcessId $Service.RootPid -ExpectedStartTicks $Service.RootStartedAtUtcTicks -ProcessTable $processes
+  $hasTrackedListener = $Service.ListenerPid -and $Service.ListenerStartedAtUtcTicks
+  if ($hasTrackedListener) {
+    $listenerMatches = Test-TrackedProcessIdentity -ProcessId $Service.ListenerPid -ExpectedStartTicks $Service.ListenerStartedAtUtcTicks -ProcessTable $processes
+    if (-not $listenerMatches) { return @() }
+    [void] $owned.Add([int] $Service.ListenerPid)
+  } elseif (-not $rootMatches) {
+    return @()
+  }
+  if ($rootMatches) { [void] $owned.Add([int] $Service.RootPid) }
   do {
     $added = $false
     foreach ($candidate in $processes) {
@@ -80,13 +102,29 @@ function Get-TrackedProcessTree {
   return @($owned | ForEach-Object { [int] $_ })
 }
 
+function Set-TrackedListenerIdentity {
+  param([pscustomobject] $Service)
+  $port = Get-PortState $Service.Port
+  if ($port.State -ne 'occupied' -or -not $port.Pid) { return $false }
+  $tree = @(Get-TrackedProcessTree -Service $Service)
+  if ($port.Pid -notin $tree) { return $false }
+  try {
+    $listener = Get-Process -Id $port.Pid -ErrorAction Stop
+    $Service.ListenerPid = [int] $port.Pid
+    $Service.ListenerStartedAtUtcTicks = $listener.StartTime.ToUniversalTime().Ticks
+    return $true
+  } catch {
+    return $false
+  }
+}
+
 function Stop-OwnedListener {
   param([pscustomobject] $Service, [int] $ListenerPid)
-  if ($Mode -ne 'watch' -or -not $Service.RootPid -or $ListenerPid -lt 1) {
+  if ($Mode -ne 'watch' -or -not $Service.ListenerPid -or $ListenerPid -ne $Service.ListenerPid) {
     return $false
   }
   try {
-    $ownedProcessIds = @(Get-TrackedProcessTree -RootPid $Service.RootPid)
+    $ownedProcessIds = @(Get-TrackedProcessTree -Service $Service)
     if ($ListenerPid -notin $ownedProcessIds) { return $false }
     Write-LaunchLog ('Supervisor confirmed owned listener PID={0} under tracked root PID={1}; stopping that process tree after {2} consecutive failed health checks.' -f $ListenerPid, $Service.RootPid, $Service.ConsecutiveFailures) 'WARN'
     foreach ($processId in $ownedProcessIds) {
@@ -117,6 +155,9 @@ function Start-CrewService {
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $Service.Process = $process
     $Service.RootPid = $process.Id
+    $Service.RootStartedAtUtcTicks = $process.StartTime.ToUniversalTime().Ticks
+    $Service.ListenerPid = $null
+    $Service.ListenerStartedAtUtcTicks = $null
     $Service.ConsecutiveFailures = 0
     $Service.State = 'starting'
     Write-LaunchLog ('Started {0} on port {1}; PID={2}; stdout={3}; stderr={4}' -f $Service.Profile, $Service.Port, $process.Id, $stdout, $stderr)
@@ -134,6 +175,7 @@ function Wait-CrewServices {
       if ($health.Ready) {
         $service.State = 'ready'
         $service.ConsecutiveFailures = 0
+        [void] (Set-TrackedListenerIdentity -Service $service)
         Write-LaunchLog ('{0} ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       } elseif ($service.Process -and $service.Process.HasExited) {
         throw ('{0} exited before becoming ready; PID={1}; exit={2}; last health error: {3}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode, $health.Error)
@@ -159,6 +201,7 @@ function Ensure-CrewServices {
       $service.State = 'ready'
       $service.ConsecutiveFailures = 0
       $service.LastError = $null
+      if (-not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
       if (-not $QuietHealthy -or -not $wasReady) {
         Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       }
@@ -181,6 +224,9 @@ function Ensure-CrewServices {
       if (Stop-OwnedListener -Service $service -ListenerPid $port.Pid) {
         $service.Process = $null
         $service.RootPid = $null
+        $service.RootStartedAtUtcTicks = $null
+        $service.ListenerPid = $null
+        $service.ListenerStartedAtUtcTicks = $null
         $service.ConsecutiveFailures = 0
         $port = Get-PortState $service.Port
       }
@@ -238,6 +284,8 @@ function Start-ServiceSupervisor {
     $mutex.Dispose()
   }
 }
+
+if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT -eq '1') { return }
 
 try {
   New-Item -ItemType Directory -Path $logRoot -Force | Out-Null

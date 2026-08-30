@@ -16,7 +16,8 @@ function processTree({ rootTicks, listenerTicks }) {
     '  [pscustomobject]@{ ProcessId = 30; ParentProcessId = 20; StartTicks = 300 },',
     '  [pscustomobject]@{ ProcessId = 40; ParentProcessId = 10; StartTicks = 400 }',
     ')',
-    '@(Get-TrackedProcessTree -Service $service -ProcessTable $table) | Sort-Object | ConvertTo-Json -Compress',
+    '$tree = @(Get-TrackedProcessTree -Service $service -ProcessTable $table | Sort-Object)',
+    'ConvertTo-Json -InputObject $tree -Compress',
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
