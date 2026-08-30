@@ -234,6 +234,51 @@ test('workflow cancellation targets the real adapter attempt id', async () => {
   await sleep(20);
   assert.equal(rt.get(job.id).status, 'cancelled');
 });
+test('cancel does not resolve before cancelAttempt settles and workspace release is reached', async () => {
+  let releaseExecute;
+  const executeGate = new Promise((res) => { releaseExecute = res; });
+  let settleCancelAttempt;
+  const cancelAttemptGate = new Promise((res) => { settleCancelAttempt = res; });
+  let cancelAttemptSettled = false;
+  let releaseReached = false;
+  const cancelled = [];
+  const adapter = makeRuntimeAdapter({
+    executeAttempt: async (spec) => {
+      spec.onAttemptStarted?.('hub-real-cancel-settle');
+      await executeGate;
+      return { id: 'hub-real-cancel-settle', role: 'worker', attempt: 0, status: 'done', result: GOOD, stopReason: 'completed' };
+    },
+    cancelAttempt: async (id) => {
+      cancelled.push(id);
+      await cancelAttemptGate;
+      cancelAttemptSettled = true;
+    },
+    releaseWorkspace: async () => {
+      releaseReached = true;
+      return { ok: true };
+    },
+  });
+  const rt = createWorkflowRuntime(adapter, { maxParallel: 1, idFactory: ids() });
+  const job = rt.start({ role: 'worker', task: 'long', cwd: '/repo' });
+  await sleep(20);
+  const cancelPromise = rt.cancel(job.id);
+  await sleep(20);
+  assert.deepEqual(cancelled, ['hub-real-cancel-settle']);
+  assert.equal(cancelAttemptSettled, false, 'cancelAttempt must still be settling');
+  const early = await Promise.race([
+    cancelPromise.then(() => true),
+    sleep(50).then(() => false),
+  ]);
+  assert.equal(early, false, 'cancel must not resolve before its cancelAttempt settles');
+  settleCancelAttempt();
+  releaseExecute();
+  await cancelPromise;
+  assert.equal(cancelAttemptSettled, true);
+  assert.equal(releaseReached, true);
+  const view = rt.get(job.id);
+  assert.equal(view.status, 'cancelled');
+  assert.equal(view.workspace_retained, false);
+});
 
 test('failure releases exactly one concurrency slot', async () => {
   let release;
