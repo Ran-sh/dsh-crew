@@ -202,6 +202,9 @@ test('preset resolution failure after selection leaves no ghost job or agent run
 test('a hanging hub fetch rejects with HUB_REQUEST_FAILED within the transport deadline', async () => {
   process.env.DSH_CREW_HUB = 'http://127.0.0.1:9';
   process.env.DSH_CREW_HUB_TIMEOUT_MS = '80';
+  // Neither the abort timer nor a pending promise keeps the event loop
+  // alive on every platform; hold it explicitly until the deadline fires.
+  const keepAlive = setTimeout(() => {}, 10_000);
   try {
     const { hub } = await import('../src/hub-client.mjs');
     // Wedged exchange: fetch honors the abort signal but never resolves.
@@ -220,6 +223,7 @@ test('a hanging hub fetch rejects with HUB_REQUEST_FAILED within the transport d
     );
     assert.ok(Date.now() - started < 3_000, 'transport deadline must be honored promptly');
   } finally {
+    clearTimeout(keepAlive);
     delete process.env.DSH_CREW_HUB_TIMEOUT_MS;
   }
 });

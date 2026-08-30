@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+// The launcher under test is a Windows PowerShell script driven through
+// powershell.exe; there is nothing to exercise on other platforms.
+const maybe = process.platform === 'win32' ? test : test.skip;
+
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
 
 function processTree({ rootTicks, listenerTicks }) {
@@ -29,14 +33,14 @@ function processTree({ rootTicks, listenerTicks }) {
   return JSON.parse(result.stdout.trim());
 }
 
-test('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
+maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
   assert.deepEqual(processTree({ rootTicks: 999, listenerTicks: 200 }), [20, 30]);
 });
 
-test('tracked process tree includes matching root and listener identities but excludes unrelated siblings', () => {
+maybe('tracked process tree includes matching root and listener identities but excludes unrelated siblings', () => {
   assert.deepEqual(processTree({ rootTicks: 100, listenerTicks: 200 }), [10, 20, 30, 40]);
 });
 
-test('reused listener PID invalidates ownership entirely', () => {
+maybe('reused listener PID invalidates ownership entirely', () => {
   assert.deepEqual(processTree({ rootTicks: 999, listenerTicks: 999 }), []);
 });

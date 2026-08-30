@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import {
   ZCODE_MCP_TOOLS,
@@ -13,7 +14,7 @@ import {
 } from '../src/install/zcode.mjs';
 import { installStatus } from '../src/install/install.mjs';
 
-const ROOT = new URL('../', import.meta.url).pathname.replace(/^\//, '').replace(/\//g, '\\').replace(/^([A-Za-z]):/, '$1:');
+const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const makeHome = () => mkdtempSync(join(tmpdir(), 'dsh-crew-zcode-test-'));
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
