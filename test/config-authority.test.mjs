@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   GLOBAL_CONFIG_DEFAULTS,
   GLOBAL_CONFIG_SCHEMA_VERSION,
@@ -198,6 +198,20 @@ test('legacy routing commands translate only their owned canonical dimensions', 
   assert.equal(balanced.worker.state, 'auto');
   assert.equal(balanced.review.state, 'manual');
   assert.equal(balanced.worker.model_policy.escalation.max_attempts, 4);
+});
+test('writeGlobalConfig uses same-directory atomic replacement and cleans temporary files', (t) => {
+  const file = fixture(t);
+  writeFileSync(file, JSON.stringify({ tier_policy: 'auto', max_parallel: 2 }));
+
+  const before = statSync(file);
+  writeGlobalConfig({ max_parallel: 5 }, { configFile: file });
+
+  const after = statSync(file);
+  assert.notEqual(after.ino, before.ino, 'live config path must be replaced atomically, not truncated in place');
+  assert.equal(disk(file).max_parallel, 5);
+  assert.equal(disk(file).execution.max_parallel, 5);
+  const leftovers = readdirSync(dirname(file)).filter((name) => name.includes('.tmp') || name.includes('.dsh-crew.'));
+  assert.deepEqual(leftovers, [], 'atomic write must clean its temporary file');
 });
 
 test('cache-busted config imports still resolve the v0.3 authority facade', async (t) => {

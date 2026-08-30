@@ -82,6 +82,82 @@ test('ZCode installer uses .agents fallback when native config is absent/empty',
     assert.ok(readJson(join(home, '.agents', 'mcp.json')).mcpServers['dsh-crew']);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+test('ZCode shared-to-native update removes stale shared Crew MCP and uninstall cleans both sources', () => {
+  const home = makeHome();
+  try {
+    const nativeFile = join(home, '.zcode', 'cli', 'config.json');
+    const sharedFile = join(home, '.agents', 'mcp.json');
+    mkdirSync(join(home, '.zcode', 'cli'), { recursive: true });
+    mkdirSync(join(home, '.agents'), { recursive: true });
+    writeFileSync(nativeFile, JSON.stringify({ mcp: { servers: {} } }));
+    writeFileSync(sharedFile, JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
+
+    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.ok(readJson(sharedFile).mcpServers['dsh-crew']);
+
+    // User adds a native MCP server, so ZCode now prefers native config.
+    writeFileSync(nativeFile, JSON.stringify({
+      mcp: { servers: { native: { command: 'node', args: ['native.mjs'] } } },
+    }));
+    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+
+    let native = readJson(nativeFile);
+    let shared = readJson(sharedFile);
+    assert.ok(native.mcp.servers['dsh-crew'], 'native source should get the Crew MCP entry');
+    assert.equal(shared.mcpServers['dsh-crew'], undefined, 'prior shared Crew entry must not remain');
+    assert.ok(shared.mcpServers['shared'], 'unrelated shared server must be preserved');
+    assert.ok(native.mcp.servers['native'], 'unrelated native server must be preserved');
+
+    assert.equal(uninstallZCode({ home }).ok, true);
+    native = readJson(nativeFile);
+    shared = readJson(sharedFile);
+    assert.equal(native.mcp.servers['dsh-crew'], undefined);
+    assert.ok(native.mcp.servers['native']);
+    assert.equal(shared.mcpServers['dsh-crew'], undefined);
+    assert.ok(shared.mcpServers['shared']);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ZCode native-to-shared update tracks prior native source so uninstall removes stale native Crew MCP', () => {
+  const home = makeHome();
+  try {
+    const nativeFile = join(home, '.zcode', 'cli', 'config.json');
+    const sharedFile = join(home, '.agents', 'mcp.json');
+    mkdirSync(join(home, '.zcode', 'cli'), { recursive: true });
+    mkdirSync(join(home, '.agents'), { recursive: true });
+    writeFileSync(nativeFile, JSON.stringify({
+      mcp: { servers: { native: { command: 'node', args: ['native.mjs'] } } },
+    }));
+    writeFileSync(sharedFile, JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
+
+    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.ok(readJson(nativeFile).mcp.servers['dsh-crew']);
+
+    // Switch to shared by clearing the active native list; keep the prior
+    // native source tracked so a stale Crew entry can still be uninstalled.
+    writeFileSync(nativeFile, JSON.stringify({ mcp: { servers: {} } }));
+    const updated = installZCode({ home, root: ROOT });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.config_kind, 'shared');
+    assert.equal(readJson(sharedFile).mcpServers['dsh-crew'] ? true : false, true);
+
+    // Simulate a stale native Crew entry left behind by the transition.
+    writeFileSync(nativeFile, JSON.stringify({
+      mcp: { servers: {
+        native: { command: 'node', args: ['native.mjs'] },
+        'dsh-crew': { command: 'node', args: [join(ROOT, 'src', 'server.mjs')] },
+      } },
+    }));
+    assert.equal(uninstallZCode({ home }).ok, true);
+
+    const native = readJson(nativeFile);
+    const shared = readJson(sharedFile);
+    assert.equal(native.mcp.servers['dsh-crew'], undefined, 'stale native Crew entry must be removed by uninstall');
+    assert.ok(native.mcp.servers['native'], 'unrelated native server must be preserved');
+    assert.equal(shared.mcpServers['dsh-crew'], undefined);
+    assert.ok(shared.mcpServers['shared'], 'unrelated shared server must be preserved');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 test('ZCode install fails closed on an unowned MCP collision and preserves files', () => {
   const home = makeHome();
