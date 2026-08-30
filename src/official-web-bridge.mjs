@@ -4,6 +4,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { crewDshHome } from './install/install.mjs';
 import { crewDshRuntimeModule } from './dsh-cli-runtime.mjs';
+import { isLocalHostname, isLoopbackAddress, localRequestCore, originAuthorityMatches } from './local-request-guard.mjs';
+
+export { isLoopbackAddress };
 
 export const CREW_BRIDGE_PREFIX = '/_dsh/dsh-crew';
 export const CREW_BRIDGE_TARGET = 'http://127.0.0.1:3210';
@@ -12,14 +15,6 @@ const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
   'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
 ]);
-
-export function isLoopbackAddress(address) {
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
-}
-
-function isLocalHostname(hostname) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
-}
 
 export function resolveCrewBridgeTarget(env = process.env) {
   const raw = env?.DSH_CREW_BRIDGE_TARGET;
@@ -34,22 +29,12 @@ export function resolveCrewBridgeTarget(env = process.env) {
 }
 
 export function isTrustedLocalRequest(req) {
-  if (!isLoopbackAddress(req?.socket?.remoteAddress)) return false;
+  if (!localRequestCore(req)) return false;
   const host = typeof req?.headers?.host === 'string' ? req.headers.host.trim().toLowerCase() : '';
   if (!host) return false;
-  let authority;
-  try { authority = new URL(`http://${host}`); } catch { return false; }
-  if (!isLocalHostname(authority.hostname.toLowerCase())) return false;
-  const fetchSite = String(req?.headers?.['sec-fetch-site'] ?? '').toLowerCase();
-  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
   const origin = req?.headers?.origin;
-  if (origin !== undefined) {
-    if (typeof origin !== 'string') return false;
-    let parsedOrigin;
-    try { parsedOrigin = new URL(origin); } catch { return false; }
-    if (!isLocalHostname(parsedOrigin.hostname.toLowerCase()) || parsedOrigin.host.toLowerCase() !== host) return false;
-  }
-  return true;
+  if (origin === undefined) return true;
+  return originAuthorityMatches(origin, host);
 }
 
 function safeHeaders(source) {

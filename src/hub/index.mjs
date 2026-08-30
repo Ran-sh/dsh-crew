@@ -30,6 +30,8 @@ import { buildExtensionContract } from '../extension-contract.mjs';
 import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
 import { buildHubExecutionRows } from '../config-readiness.mjs';
+import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
+import { raceWaiters } from '../removable-waiter.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -524,10 +526,7 @@ export class WorkerRegistry {  constructor(ctx) {
     const job = this.jobs.get(id);
     if (!job) return undefined;
     if (job.status !== 'running') return job;
-    await Promise.race([
-      new Promise((res) => job.waiters.push(res)),
-      timeoutMs > 0 ? new Promise((res) => setTimeout(res, timeoutMs)) : Promise.resolve(),
-    ]);
+    await raceWaiters(job.waiters, { timeoutMs, immediateWithoutTimeout: true });
     return job;
   }
 
@@ -560,30 +559,13 @@ export class WorkerRegistry {  constructor(ctx) {
 
 // ---------- loopback route helpers (pattern from dsh-noema) ----------
 
-function isIpv4Loopback(a) { return /^127(\.\d{1,3}){3}$/.test(a); }
-function isLoopbackAddress(address) {
-  if (!address) return false;
-  const n = address.toLowerCase().split('%', 1)[0];
-  if (n === '::1' || isIpv4Loopback(n)) return true;
-  if (!n.startsWith('::ffff:')) return false;
-  return isIpv4Loopback(n.slice(7));
-}
+// The common trust core and its Origin policies live in one shared module so
+// the hub and the 3080 bridge cannot drift apart (see local-request-guard.mjs).
 export function isLoopbackRequest(req) {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) return false;
-  let host;
-  try { host = new URL(`http://${String(req.headers.host ?? '')}`).hostname.toLowerCase(); } catch { return false; }
-  if (!(host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || isIpv4Loopback(host))) return false;
-  const fetchSite = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
-  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
+  if (!localRequestCore(req)) return false;
   const origin = req.headers?.origin;
-  if (origin !== undefined) {
-    if (typeof origin !== 'string') return false;
-    let parsed;
-    try { parsed = new URL(origin); } catch { return false; }
-    const originHost = parsed.hostname.toLowerCase();
-    if (!(originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1' || originHost === '[::1]' || isIpv4Loopback(originHost))) return false;
-  }
-  return true;
+  if (origin === undefined) return true;
+  return originLoopback(origin);
 }
 function sendJson(res, status, value, headers = {}) {
   const body = JSON.stringify(value);

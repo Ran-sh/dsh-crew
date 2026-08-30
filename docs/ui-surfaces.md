@@ -44,3 +44,22 @@ the full control plane and never becomes `READY`.
 
 The split changes presentation only. Crew state, credentials, routing policy,
 and model execution remain isolated under the Crew-owned home and profile.
+
+## Local trust model
+
+Both surfaces listen on loopback only and share one request guard
+(`src/local-request-guard.mjs`). A request is trusted when it proves, in
+order: (1) the TCP peer is a loopback address, (2) the `Host` header names a
+loopback host, (3) browser fetch-metadata (`Sec-Fetch-Site`) is `same-origin`
+or absent/`none`, and (4) when an `Origin` header is present it names a
+loopback host — on the 3080 bridge the `Origin` authority must additionally
+equal the request authority, while the 3210 hub accepts any loopback origin
+because the 3080 panel calls it cross-port.
+
+There is deliberately no bearer token: every process running as the local
+user is inside the trust boundary and may control Crew. The guards keep
+off-machine browsers, DNS-rebinding pages, and cross-machine proxies out;
+they do not authenticate local users. If a deployment ever needs to separate
+local principals, add a per-install random token to state-changing calls and
+inject it server-side in the bridge — do not use browser `Origin` as
+authentication.

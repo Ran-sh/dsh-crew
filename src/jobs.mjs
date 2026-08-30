@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
+import { raceWaiters } from './removable-waiter.mjs';
 import { buildDirectSelectionTrace } from './model-routing.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -255,10 +256,7 @@ export async function waitJob(id, timeoutMs) {
   const job = jobs.get(id);
   if (!job) throw new Error(`no such job: ${id}`);
   if (job.status !== 'running') return job;
-  await Promise.race([
-    new Promise((res) => job.waiters.push(res)),
-    timeoutMs ? new Promise((res) => setTimeout(res, timeoutMs)) : new Promise(() => {}),
-  ]);
+  await raceWaiters(job.waiters, { timeoutMs });
   return job;
 }
 

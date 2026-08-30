@@ -15,6 +15,7 @@
 // appear here.
 
 import { resolveModelPolicy, shouldAutoReview, getRoleState } from './policy.mjs';
+import { raceWaiters } from './removable-waiter.mjs';
 import { applyWorkspaceEvidence, buildOutcome, decideNextStep, JOB_PHASES, canTransition } from './workflow.mjs';
 import { parseDeliveryReport } from './delivery.mjs';
 import { classifyFailure } from './failure-classification.mjs';
@@ -679,10 +680,7 @@ export function createWorkflowRuntime(adapters, {
     const job = jobs.get(id);
     if (!job) return undefined;
     if (job.status !== 'running') return job;
-    await Promise.race([
-      new Promise((res) => job.waiters.push(res)),
-      timeoutMs > 0 ? new Promise((res) => setTimeout(res, timeoutMs)) : new Promise(() => {}),
-    ]);
+    await raceWaiters(job.waiters, { timeoutMs });
     return job;
   }
 

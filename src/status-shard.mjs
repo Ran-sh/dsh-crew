@@ -3,7 +3,7 @@
 // and readers merge all fresh shards. Kills the last-writer-wins race that a
 // single shared status.json had with multiple concurrent writers.
 
-import { writeFileSync, mkdirSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -21,9 +21,20 @@ export function createShardWriter(kind) {
   return {
     writer,
     publish(jobs) {
+      // Same durability pattern as the profile/workspace registries: write a
+      // same-directory temp file as 0600 and rename it over the shard, so a
+      // reader never observes a partially written shard (parse failures are
+      // silently ignored, which would make the writer look vanished).
       try {
         mkdirSync(SHARD_DIR, { recursive: true });
-        writeFileSync(file, JSON.stringify({ updatedAt: new Date().toISOString(), writer, jobs }, null, 2));
+        const temp = `${file}.tmp-${Date.now()}`;
+        try {
+          writeFileSync(temp, JSON.stringify({ updatedAt: new Date().toISOString(), writer, jobs }, null, 2), { encoding: 'utf8', mode: 0o600 });
+          renameSync(temp, file);
+        } catch (error) {
+          try { rmSync(temp, { force: true }); } catch {}
+          throw error;
+        }
       } catch {}
     },
     dispose: cleanup,
