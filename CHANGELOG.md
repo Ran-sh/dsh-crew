@@ -4,6 +4,22 @@
 
 Future changes go here.
 
+## 0.5.5 — 2026-08-30
+
+- Prevents candidate capture from following untracked symlinks or junctions
+  outside an isolated worktree, and makes reviewer mutation fingerprints cover
+  the complete sanitized diff even when the retained patch is truncated.
+- Makes current provider-catalog failure override stale successful execution
+  evidence so capability readiness remains fail-closed.
+- Preserves foreign Windows startup files, cleans ZCode MCP entries across
+  native/shared configuration transitions, and writes global configuration by
+  atomic same-directory replacement.
+- Bounds model-catalog diagnostics, waits for cancellation and worktree cleanup
+  before reporting completion, and adds focused regression coverage for every
+  corrected boundary.
+- Keeps the streamlined English and Chinese quick starts while restoring the
+  supported source-uninstall and legacy-launcher migration guidance.
+
 ## 0.5.4 — 2026-08-30
 
 - Corrects the release metadata guard so the changelog test verifies the

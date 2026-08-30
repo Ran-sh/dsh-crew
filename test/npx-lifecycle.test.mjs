@@ -193,11 +193,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 0.5.4', () => {
+test('package, runtime identity, and changelog identify candidate 0.5.5', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '0.5.4');
-  assert.equal(RUNTIME_VERSION, '0.5.4');
-  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.4/m);
+  assert.equal(manifest.version, '0.5.5');
+  assert.equal(RUNTIME_VERSION, '0.5.5');
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.5/m);
 });
 
 // ---------- dependency closure ----------
