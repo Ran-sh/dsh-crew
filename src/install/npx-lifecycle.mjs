@@ -63,6 +63,7 @@ export function npmCliInvocation(args, {
   return {
     command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
     args: ['/d', '/s', '/c', commandLine],
+    windowsVerbatimArguments: true,
   };
 }
 
@@ -240,7 +241,8 @@ function defaultNpmInstaller(stageRoot, log) {
   const invocation = npmCliInvocation(npmArgs);
   const result = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600_000,
-    windowsHide: true, env: sanitizedPackageManagerEnv(),
+    windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    env: sanitizedPackageManagerEnv(),
   });
   if (result.status !== 0) {
     log(`- npm fallback install failed (${result.status}): ${(result.stderr || result.stdout || '').trim().slice(-300)}`);
@@ -782,7 +784,9 @@ export function resolveUpdateCandidate({
     const invocation = npmCliInvocation(packArgs);
     const packed = runner(invocation.command, invocation.args, {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 600_000, windowsHide: true, env: sanitizedPackageManagerEnv(),
+      timeout: 600_000, windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      env: sanitizedPackageManagerEnv(),
     });
     if (packed.status !== 0) {
       return { ok: false, code: 'REGISTRY_PACK_FAILED', detail: `${effectiveSpec}: ${(packed.stderr || packed.stdout || '').trim().slice(-300)}` };

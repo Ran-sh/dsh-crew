@@ -221,6 +221,7 @@ test('packaged lifecycle invokes npm on Windows without shell mode', () => {
     {
       command: 'C:\\Windows\\System32\\cmd.exe',
       args: ['/d', '/s', '/c', 'npm.cmd "pack" "@ran-sh/dsh-crew@latest" "--pack-destination" "C:\\Users\\Test User\\Crew"'],
+      windowsVerbatimArguments: true,
     },
   );
   assert.deepEqual(npmCliInvocation(['pack', '@ran-sh/dsh-crew@latest'], { platform: 'linux' }), {
