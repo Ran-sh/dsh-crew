@@ -46,6 +46,36 @@ test('real generic execution evidence proves the selected model and disabled opt
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
 
+test('current provider catalog FAIL is not masked by historical model execution PASS', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'provider_catalog', status: 'FAIL', reason_code: 'PROVIDER_CATALOG_UNAVAILABLE' },
+      { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
+    ] },
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'UNAVAILABLE');
+  assert.equal(contract.readiness.components.model.reason_code, 'PROVIDER_CATALOG_UNAVAILABLE');
+  assert.equal(contract.readiness.status, 'UNAVAILABLE');
+});
+
+test('deepseek-official SKIP remains valid alongside historical model execution PASS', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'provider_catalog', status: 'SKIP', reason_code: 'PROVIDER_CATALOG_NOT_REQUIRED' },
+      { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
+    ] },
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'READY');
+  assert.equal(contract.readiness.components.model.reason_code, 'REAL_EXECUTION_PASSED');
+  assert.equal(contract.readiness.status, 'DEGRADED');
+});
+
 test('workspace conflict and read-only states remain machine-visible', () => {
   for (const status of ['CONFLICT', 'READ_ONLY']) {
     const contract = buildExtensionContract({
