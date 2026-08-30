@@ -4,6 +4,14 @@
 
 Future changes go here.
 
+## 0.5.6 — 2026-08-30
+
+- Removes Node's Windows `DEP0190` warning from packaged install/update flows
+  by replacing `shell: true` npm calls with a bounded explicit command-processor
+  invocation that preserves argv quoting, including paths containing spaces.
+- Adds a real Windows npm integration test in addition to the deterministic
+  invocation-shape and injection-rejection checks.
+
 ## 0.5.5 — 2026-08-30
 
 - Prevents candidate capture from following untracked symlinks or junctions
