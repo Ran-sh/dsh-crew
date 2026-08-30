@@ -61,6 +61,17 @@ function tempHome() {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+function isNpmInvocation(command, args) {
+  return command.endsWith('npm.cmd') || command === 'npm'
+    || (/cmd\.exe$/i.test(command) && /(?:^|\s)npm\.cmd(?:\s|$)/i.test(String(args.at(-1))));
+}
+
+function npmPackDestination(args) {
+  const index = args.indexOf('--pack-destination');
+  if (index >= 0) return args[index + 1];
+  return /"--pack-destination" "([^"]+)"/.exec(String(args.at(-1)))?.[1];
+}
+
 /** Build a realistic candidate "running instance" (packaged layout). */
 function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   const root = join(home, 'candidate');
@@ -819,8 +830,8 @@ test('resolveUpdateCandidate registry mode packs via npm and verifies identity',
   const t = tempHome();
   try {
     const runner = (command, args) => {
-      if (command.endsWith('npm.cmd') || command === 'npm') {
-        const dest = args[args.indexOf('--pack-destination') + 1];
+      if (isNpmInvocation(command, args)) {
+        const dest = npmPackDestination(args);
         const pkg = join(dest, 'x', 'package');
         mkdirSync(pkg, { recursive: true });
         writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '5.5.5' }));
@@ -848,8 +859,8 @@ test('resolveUpdateCandidate fails closed on registry pack failure and identity 
     assert.match(failed.detail, /E404/);
 
     const mismatchRunner = (command, args) => {
-      if (command.endsWith('npm.cmd') || command === 'npm') {
-        const dest = args[args.indexOf('--pack-destination') + 1];
+      if (isNpmInvocation(command, args)) {
+        const dest = npmPackDestination(args);
         return { status: 0, stdout: JSON.stringify([{ filename: 'x.tgz', name: PKG_NAME, version: '1.0.0' }]), stderr: '' };
       }
       // tar "extracts" a manifest whose version disagrees with the pack output
@@ -970,7 +981,7 @@ test('registry mode never downgrades a newer managed payload', async () => {
     const callsBefore = rec.calls.length;
 
     const runner = (command, args) => {
-      if (command.endsWith('npm.cmd') || command === 'npm') {
+      if (isNpmInvocation(command, args)) {
         return { status: 0, stdout: JSON.stringify([{ filename: 'old.tgz', name: PKG_NAME, version: '0.0.1' }]), stderr: '' };
       }
       const destIdx = args.indexOf('-C');

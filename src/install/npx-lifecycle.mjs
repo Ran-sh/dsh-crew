@@ -52,6 +52,20 @@ export const CURRENT_POINTER_FILENAME = 'current.json';
 export const KEEP_RELEASES = 2;
 export const INCOMPLETE_MARKER = '.dsh-crew-incomplete';
 
+export function npmCliInvocation(args, {
+  platform = process.platform,
+  environment = process.env,
+} = {}) {
+  if (platform !== 'win32') return { command: 'npm', args: [...args] };
+  const unsafe = args.find((arg) => /[\0\r\n"%!^&|<>]/.test(String(arg)));
+  if (unsafe !== undefined) throw new Error(`unsafe npm argument: ${unsafe}`);
+  const commandLine = ['npm.cmd', ...args.map((arg) => `"${String(arg)}"`)].join(' ');
+  return {
+    command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', commandLine],
+  };
+}
+
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export function crewAppRoot({ home = homedir() } = {}) {
@@ -218,12 +232,16 @@ export function copyProductionDependencyTree({
 }
 
 function defaultNpmInstaller(stageRoot, log) {
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const result = spawnSync(npm, [
+  const npmArgs = [
     'install', '--prefix', stageRoot,
     '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund',
     '--no-package-lock', '--loglevel=error',
-  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32', timeout: 600_000, windowsHide: true, env: sanitizedPackageManagerEnv() });
+  ];
+  const invocation = npmCliInvocation(npmArgs);
+  const result = spawnSync(invocation.command, invocation.args, {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600_000,
+    windowsHide: true, env: sanitizedPackageManagerEnv(),
+  });
   if (result.status !== 0) {
     log(`- npm fallback install failed (${result.status}): ${(result.stderr || result.stdout || '').trim().slice(-300)}`);
     return false;
@@ -759,11 +777,11 @@ export function resolveUpdateCandidate({
   mkdirSync(tmpDir, { recursive: true });
   try {
     const effectiveSpec = process.env.DSH_CREW_UPDATE_SPEC ?? spec;
-    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     const packArgs = ['pack', effectiveSpec, '--pack-destination', tmpDir, '--json', '--loglevel=error'];
     log(`- resolving update candidate from the configured npm registry (${effectiveSpec})`);
-    const packed = runner(npm, packArgs, {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32',
+    const invocation = npmCliInvocation(packArgs);
+    const packed = runner(invocation.command, invocation.args, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 600_000, windowsHide: true, env: sanitizedPackageManagerEnv(),
     });
     if (packed.status !== 0) {
