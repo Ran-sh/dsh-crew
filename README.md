@@ -47,8 +47,17 @@ dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```
 
-The runtime is isolated under `~/.config/dsh-crew/harness` with profile
-`dsh-crew`; the official `web` profile receives only the 3080 bridge.
+The runtime is isolated under `~/.config/dsh-crew/harness` with `profile: dsh-crew`;
+the official `web` profile receives only the 3080 bridge.
+
+## Legacy launcher migration
+
+For launchers at `<= 0.3.3`, refresh the launcher first. The old updater cannot discover newer releases and cannot be retroactively fixed:
+
+```bash
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew update
+```
 
 ## Install from source
 
@@ -57,6 +66,7 @@ git clone https://github.com/Ran-sh/dsh-crew.git
 cd dsh-crew
 node scripts/setup.mjs install
 node scripts/setup.mjs status
+node scripts/setup.mjs uninstall
 ```
 
 Run tests with `node --test test/*.test.mjs`. See [installation](./docs/installation.md),

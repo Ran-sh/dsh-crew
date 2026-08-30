@@ -44,8 +44,17 @@ dsh-crew update           # 更新并修复已启用集成
 dsh-crew uninstall        # 移除受管文件，保留配置/备份
 ```
 
-运行时隔离在 `~/.config/dsh-crew/harness`，使用 profile `dsh-crew`；官方 `web`
-profile 只接收 3080 轻量桥接。
+运行时隔离在 `~/.config/dsh-crew/harness`，使用 `profile: dsh-crew`；官方 `web` profile
+只接收 3080 轻量桥接。
+
+## 旧启动器迁移
+
+对于 `<= 0.3.3` 的旧启动器，请先刷新启动器。旧 updater 无法发现更新，也无法被追溯修复：
+
+```bash
+npm install -g @ran-sh/dsh-crew@latest
+dsh-crew update
+```
 
 ## 从源码安装
 
@@ -54,6 +63,7 @@ git clone https://github.com/Ran-sh/dsh-crew.git
 cd dsh-crew
 node scripts/setup.mjs install
 node scripts/setup.mjs status
+node scripts/setup.mjs uninstall
 ```
 
 测试：`node --test test/*.test.mjs`。更多信息见[安装方案](./docs/installation.md)、
