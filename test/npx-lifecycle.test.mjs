@@ -193,10 +193,10 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 0.5.2', () => {
+test('package, runtime identity, and changelog identify candidate 0.5.3', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '0.5.2');
-  assert.equal(RUNTIME_VERSION, '0.5.2');
+  assert.equal(manifest.version, '0.5.3');
+  assert.equal(RUNTIME_VERSION, '0.5.3');
   assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.2/m);
 });
 

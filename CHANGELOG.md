@@ -4,6 +4,25 @@
 
 Future changes go here.
 
+## 0.5.3 — 2026-08-30
+
+- Replaces the one-shot Windows login launcher with a single-instance service
+  supervisor that safely restores the isolated 3210 Crew backend and official
+  3080 UI after process exits, confirms repeated health failures before
+  recovery, and binds process ownership to PID plus creation time.
+- Makes ZCode dispatch asynchronous and transport-safe, keeps workflow/model
+  metadata at the host boundary, and verifies the same workflow instead of
+  creating duplicates after bounded waits.
+- Enforces explicit, isolated, evidence-backed authorization for successful
+  zero-change Worker jobs across MCP and direct Hub paths; shared workspaces,
+  missing candidates, mismatched diffs, and absent evidence fail closed.
+- Requires complete successful Result Contracts, consistent workspace evidence,
+  and an approving Reviewer verdict before live execution readiness becomes
+  PASS; the 3080/3210 extension and MCP configuration share this rule.
+- Fixes Windows source installation under current Node.js, canonical client
+  builds, quiet Codex/ZCode/Claude host detection, and live model-execution
+  readiness after verified Harness work.
+
 ## 0.5.2 — 2026-08-29
 
 - Adds a managed, capability-aware global Codex policy with a mandatory operator
