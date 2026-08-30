@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -155,6 +155,52 @@ maybe('sensitive untracked file appears only as a redacted marker', async (t) =>
     assert.equal(c.ok, true);
     assertNoSentinel(c, 'sensitive untracked');
     assert.match(c.patch, /\[REDACTED SENSITIVE FILE: \.env\.local/);
+  });
+});
+maybe('untracked symlink/junction pointing outside the worktree leaks no sentinel bytes', async (t) => {
+  const external = mkdtempSync(join(tmpdir(), 'dsh-crew-sec-ext-'));
+  t.after(() => rmSync(external, { recursive: true, force: true }));
+  await withWorktree(async ({ worktreePath, baseRevision }) => {
+    try {
+      writeFileSync(join(external, 'sentinel.txt'), `${SENTINEL}\n`);
+      if (process.platform === 'win32') {
+        // Windows directory junction; Git reports the sentinel as an untracked
+        // descendant of the innocent-looking link path.
+        symlinkSync(external, join(worktreePath, 'innocent'), 'junction');
+      } else {
+        symlinkSync(join(external, 'sentinel.txt'), join(worktreePath, 'innocent'));
+      }
+      const c = await captureCandidate({ worktreePath, baseRevision });
+      assert.equal(c.ok, true, `capture failed: ${c.error}`);
+      assertNoSentinel(c, 'symlink escape');
+      assert.ok(!c.patch.includes('sentinel.txt'), 'external filename should not be included through the link');
+      assert.equal(c.complete, false, 'out-of-worktree symlink target must mark candidate incomplete');
+      assert.ok(c.incomplete_reasons.some((r) => r.startsWith('untracked_symlink:')), `missing symlink reason in ${c.incomplete_reasons}`);
+      assert.ok(c.untracked_files.includes('innocent'), `untracked_files should name the link boundary, got ${c.untracked_files}`);
+      assert.ok(!c.untracked_files.some((p) => p.includes('/')), 'deep external paths must collapse to the link boundary');
+    } finally {
+      rmSync(join(worktreePath, 'innocent'), { recursive: true, force: true });
+    }
+  });
+});
+
+maybe('candidate fingerprint detects mutation beyond the truncated patch prefix', async (t) => {
+  await withWorktree(async ({ worktreePath, baseRevision }) => {
+    const prefix = 'A'.repeat(3000);
+    writeFileSync(join(worktreePath, 'big.txt'), `${prefix}FIRST_SUFFIX\n`);
+    const first = await captureCandidate({ worktreePath, baseRevision, limit: 256 });
+    assert.equal(first.ok, true, `first capture failed: ${first.error}`);
+    assert.equal(first.patch_truncated, true);
+
+    writeFileSync(join(worktreePath, 'big.txt'), `${prefix}SECOND_SUFFIX\n`);
+    const second = await captureCandidate({ worktreePath, baseRevision, limit: 256 });
+    assert.equal(second.ok, true, `second capture failed: ${second.error}`);
+    assert.equal(second.patch_truncated, true);
+
+    // The retained bytes are identical; only the state beyond the truncation
+    // boundary changed. The fingerprint must still detect the mutation.
+    assert.equal(first.patch, second.patch, 'test requires identical retained prefix');
+    assert.notEqual(first.fingerprint, second.fingerprint, 'fingerprint must not be derived from truncated patch text alone');
   });
 });
 
