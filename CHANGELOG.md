@@ -4,6 +4,11 @@
 
 Future changes go here.
 
+## 0.5.4 — 2026-08-30
+
+- Corrects the release metadata guard so the changelog test verifies the
+  current release entry instead of an older version heading.
+
 ## 0.5.3 — 2026-08-30
 
 - Replaces the one-shot Windows login launcher with a single-instance service
