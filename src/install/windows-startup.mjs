@@ -36,6 +36,31 @@ function renderVbs(template, launcherFile) {
   return template.replace('__LAUNCHER__', escaped);
 }
 
+function isManagedStartupFile(file, resolved) {
+  try {
+    if (file === resolved.startupFile) {
+      const text = readFileSync(file, 'utf16le').replace(/^\uFEFF/, '');
+      return text.includes(resolved.launcherFile) && (/WScript\.Shell/i.test(text) || /--watch/i.test(text) || /--background/i.test(text));
+    }
+    if (file === resolved.launcherFile) {
+      const text = readFileSync(file, 'utf8');
+      return (/DSH Crew Launcher/i.test(text) || /start-dsh-crew\.ps1/i.test(text)) && /dsh-crew/i.test(text);
+    }
+    if (file === resolved.helperFile) {
+      const text = readFileSync(file, 'utf8');
+      return /DSH Crew managed Windows launcher/i.test(text) || /DSHCrewServiceSupervisor/i.test(text);
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function startupTargetConflicts(resolved) {
+  return [resolved.startupFile, resolved.launcherFile, resolved.helperFile]
+    .filter((file) => existsSync(file) && !isManagedStartupFile(file, resolved));
+}
+
 export function windowsStartupStatus({
   home = homedir(),
   startupDir,
@@ -81,6 +106,10 @@ export function installWindowsStartup({
     return { ok: false, supported: true, code: 'STARTUP_ASSET_MISSING' };
   }
   const resolved = paths({ home, startupDir, env });
+  const conflicts = startupTargetConflicts(resolved);
+  if (conflicts.length > 0) {
+    return { ok: false, supported: true, code: 'STARTUP_TARGET_COLLISION', conflicts, ...resolved };
+  }
   mkdirSync(dirname(resolved.launcherFile), { recursive: true });
   mkdirSync(dirname(resolved.startupFile), { recursive: true });
   const beforeLauncher = existsSync(resolved.launcherFile) ? readFileSync(resolved.launcherFile) : null;
@@ -105,11 +134,15 @@ export function uninstallWindowsStartup({
   if (platform !== 'win32') return { ok: true, supported: false, removed: false };
   const resolved = paths({ home, startupDir, env });
   let removed = false;
+  const preserved = [];
   for (const file of [resolved.startupFile, resolved.launcherFile, resolved.helperFile]) {
-    if (existsSync(file)) {
-      rmSync(file, { force: true });
-      removed = true;
+    if (!existsSync(file)) continue;
+    if (!isManagedStartupFile(file, resolved)) {
+      preserved.push(file);
+      continue;
     }
+    rmSync(file, { force: true });
+    removed = true;
   }
-  return { ok: true, supported: true, removed, ...resolved };
+  return { ok: true, supported: true, removed, preserved, ...resolved };
 }

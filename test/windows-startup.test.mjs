@@ -125,3 +125,25 @@ test('Windows startup uninstall preserves foreign pre-existing VBS/CMD/PS1 targe
     assert.equal(readFileSync(helperFile, 'utf8'), foreignHelper);
   } finally { f.cleanup(); }
 });
+
+test('Windows startup uninstall still removes legacy DSH Crew VBS/CMD launcher content', () => {
+  const f = fixture();
+  try {
+    const launcherDir = join(f.home, '.config', 'dsh-crew', 'launchers');
+    mkdirSync(f.startupDir, { recursive: true });
+    mkdirSync(launcherDir, { recursive: true });
+    const launcherFile = join(launcherDir, 'start-dsh-crew.cmd');
+    const startupFile = join(f.startupDir, 'DSH Crew.vbs');
+    const keep = join(f.startupDir, 'keep-me.txt');
+    writeFileSync(keep, 'keep');
+    writeFileSync(launcherFile, '@echo off\r\ntitle DSH Crew Launcher\r\nset "DSH_CLI=%USERPROFILE%\\.config\\dsh-crew\\harness\\runtime\\node_modules\\.bin\\dsh.cmd"\r\n');
+    writeFileSync(startupFile, `\uFEFFOption Explicit\r\nDim shell, launcher\r\nSet shell = CreateObject("WScript.Shell")\r\nlauncher = "${launcherFile}"\r\nshell.Run command, 0, False\r\n`, 'utf16le');
+
+    const result = uninstallWindowsStartup({ home: f.home, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(result.ok, true);
+    assert.equal(result.removed, true);
+    assert.equal(existsSync(launcherFile), false);
+    assert.equal(existsSync(startupFile), false);
+    assert.equal(existsSync(keep), true);
+  } finally { f.cleanup(); }
+});
