@@ -1,70 +1,56 @@
-<p align="center"><img src="./docs/images/dsh-crew-logo.png" alt="DSH Crew" width="112" /></p>
-
 # DSH Crew
 
-Workers and independent reviewers for Codex Desktop, Claude Code, and ZCode, with daily controls inside the official DeepSeek Harness UI.
+An isolated Crew Harness for Codex Desktop, ZCode, and Claude Code. It
+provides Worker/Reviewer dispatch, model priorities, job tracking, and a
+capability-aware safety gate.
 
-[English](./README.md) · [简体中文](./README.zh.md)
+[简体中文](./README.zh.md)
 
 ## Quick start
 
-Requirements: Node.js; Git is also required for worktree isolation.
+Requirements: Node.js and Git.
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
 dsh-crew integrate
-```
-
-On Windows, installation also creates a per-user login-start entry. It starts the isolated Crew backend on 3210 and the official UI on 3080 without opening a browser. Open <http://127.0.0.1:3080> when you need the console.
-
-```bash
 dsh-crew status
-dsh-crew inspect
 ```
 
-- **3080**: daily console, Crew settings, Codex/Claude readiness, jobs.
-- **3210**: isolated Crew backend, Providers, Harness Models, low-level Harness settings.
-- **Codex / ZCode**: installation adds managed capability-aware policy blocks and dispatch roles. Existing user instructions remain untouched.
-- **ZCode**: uses `~/.zcode/cli/config.json` when native MCP servers exist, otherwise the compatible `~/.agents/mcp.json` source.
+Open <http://127.0.0.1:3080> for the daily console. On Windows, installation
+also registers login startup for the two local services.
 
-## Configure and use
+| Surface | Purpose |
+| --- | --- |
+| `3080` | Daily console, Crew settings, integrations, and jobs |
+| `3210` | Isolated Crew Harness, Providers, Harness Models, and low-level settings |
 
-In **Settings → DSH Crew**, refresh Harness Models and order the Worker and Reviewer model lists. One configured model is used directly; several models are tried in your chosen order. Worker can run automatically. Reviewer defaults to manual.
-
-Ask Codex or Claude naturally:
+In **Settings → DSH Crew**, refresh Harness Models and order the Worker and
+Reviewer model lists. Then ask a host agent:
 
 ```text
 Use ds-worker to implement this change and run its tests.
 Use ds-reviewer to review the result.
 ```
 
-Codex first discovers the live Crew capability/readiness contract. If it selected Crew and Crew becomes unavailable, it pauses and asks whether to repair Crew or continue locally; it does not silently fall back.
+Codex, ZCode, and Claude use the installed managed integration. The policy
+checks live Crew capabilities before dispatch; if a selected Crew capability
+becomes unavailable, the host pauses for an operator decision instead of
+silently falling back.
 
-## Commands
+## Useful commands
 
 ```bash
-dsh-crew status                    # installation and integration health
-dsh-crew inspect                   # live capabilities and readiness
-dsh-crew jobs list                 # jobs and Result Contracts
-dsh-crew jobs watch <id> --after 0
-dsh-crew update                    # update and repair enabled integrations
-dsh-crew integrate                 # add the official 3080 bridge
-dsh-crew detach                    # remove only the 3080 bridge
-dsh-crew uninstall                 # remove managed files; keep config/backups
-dsh-crew uninstall --purge         # also remove config/backups
+dsh-crew inspect          # live capabilities and readiness
+dsh-crew jobs list        # jobs and Result Contracts
+dsh-crew update           # update and repair enabled integrations
+dsh-crew uninstall        # remove managed files, keep backups/config
 ```
 
-The official `web` profile receives only a lightweight bridge. The Crew runtime, models, config, and credentials stay isolated under:
-
-```text
-~/.config/dsh-crew/harness
-profile: dsh-crew
-```
+The runtime is isolated under `~/.config/dsh-crew/harness` with profile
+`dsh-crew`; the official `web` profile receives only the 3080 bridge.
 
 ## Install from source
-
-Use this path to install the current GitHub `main` before it is published to npm:
 
 ```bash
 git clone https://github.com/Ran-sh/dsh-crew.git
@@ -73,21 +59,8 @@ node scripts/setup.mjs install
 node scripts/setup.mjs status
 ```
 
-Verify and remove it with:
-
-```bash
-node --test test/*.test.mjs
-pnpm run build:client
-node scripts/setup.mjs uninstall
-```
-
-For launchers at `<= 0.3.3`, refresh the launcher first. The old updater cannot discover newer releases and cannot be retroactively fixed:
-
-```bash
-npm install -g @ran-sh/dsh-crew@latest
-dsh-crew update
-```
-
-Installation ownership and rollback details: [Installation plan](./docs/installation.md). Architecture contracts: [UI surfaces](./docs/ui-surfaces.md) · [Readiness](./docs/readiness-matrix.md) · [Jobs and information flow](./docs/job-contracts.md).
+Run tests with `node --test test/*.test.mjs`. See [installation](./docs/installation.md),
+[UI surfaces](./docs/ui-surfaces.md), [readiness](./docs/readiness-matrix.md),
+and [job contracts](./docs/job-contracts.md) for details.
 
 MIT
