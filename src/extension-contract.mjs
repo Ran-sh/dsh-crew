@@ -41,11 +41,13 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
     .map((id) => row(readinessMatrix, id))
     .find((entry) => entry?.status === 'PASS');
   const catalogEvidence = row(readinessMatrix, 'provider_catalog');
-  const modelReadiness = realModelEvidence
-    ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
-    : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
-      ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
-      : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
+  const modelReadiness = catalogEvidence?.status === 'FAIL'
+    ? readinessFromRow(catalogEvidence)
+    : realModelEvidence
+      ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
+      : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
+        ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
+        : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
   const components = {
     harness: readinessFromRow(row(readinessMatrix, 'hub_compatibility')),
     model: modelReadiness,
