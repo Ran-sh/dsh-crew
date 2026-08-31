@@ -218,3 +218,22 @@ test('provider deletion records a bounded transaction audit when requested', asy
     { transaction_id: plan.plan_id, provider_id: 'opencode-go', state: 'VERIFIED' },
   ]);
 });
+
+test('bridged provider deletion can stop at RESTART_PENDING without false verification', async () => {
+  const calls = [];
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records }, replacementDefault: 'openrouter',
+  }).plan;
+  const result = await executeProviderDelete(plan, {
+    backup: async () => calls.push('backup'),
+    markTombstone: async () => calls.push('tombstone'),
+    scrubReferences: async () => calls.push('scrub'),
+    removeDeclarations: async () => calls.push('declarations'),
+    restart: async () => calls.push('restart'),
+    rollback: async () => calls.push('rollback'),
+    recordTransaction: async (audit) => calls.push(`audit:${audit.state}`),
+  }, { deferRestart: true });
+  assert.equal(result.state, 'RESTART_PENDING');
+  assert.equal(result.verification, null);
+  assert.deepEqual(calls, ['backup', 'tombstone', 'scrub', 'declarations', 'audit:RESTART_PENDING']);
+});

@@ -835,6 +835,41 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   );
 });
 
+test('providers CLI completes the deferred delete through the owned 3080 supervisor and 3210 verify', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    if (url.endsWith('/providers/opencode-go')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, result: { state: 'RESTART_PENDING', transaction_id: 'plan-1' } }) };
+    if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true, mode: 'official-3080-isolated-3210', execution_plane: 'hub-3210', listen_port: 3210 }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED' }) };
+  };
+  const result = await npxProviders({
+    args: ['delete', 'opencode-go'], planId: 'plan-1', expectedRevision: 'a'.repeat(64), confirm: true,
+    log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.match(calls[1][0], /127\.0\.0\.1:3080\/\_dsh\/dsh-crew\/supervisor\/restart/);
+  assert.match(calls[2][0], /providers\/opencode-go\/verify-delete/);
+});
+
+test('providers CLI completes the deferred rollback through the owned 3080 supervisor', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    if (url.endsWith('/providers/opencode-go/rollback')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, state: 'ROLLBACK_PENDING', transaction_id: 'plan-1' }) };
+    if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, state: 'ROLLED_BACK' }) };
+  };
+  const result = await npxProviders({
+    args: ['rollback', 'opencode-go'], planId: 'plan-1', confirm: true,
+    log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 3);
+  assert.match(calls[2][0], /providers\/opencode-go\/verify-rollback/);
+});
+
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
   const bin = join(REPO_ROOT, 'bin', 'dsh-crew.mjs');
   const bad = spawnSync(process.execPath, [bin, 'banana'], { encoding: 'utf8', timeout: 60_000 });

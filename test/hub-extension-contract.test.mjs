@@ -25,11 +25,14 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /req\.method === 'DELETE' && parts\.length === 1/);
   assert.match(hubSource, /PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE/);
   assert.match(hubSource, /const refreshed = planProviderDelete/);
-  assert.match(hubSource, /ownsCrew3210/);
+  assert.match(hubSource, /restart_required: true/);
   assert.match(hubSource, /const code = boundedMachineCodeFromError\(err\)/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'probe'/);
   assert.match(hubSource, /ctx\.providerProbe/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'rollback'/);
+  assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-delete'/);
+  assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-rollback'/);
+  assert.match(hubSource, /deferRestart: true/);
   assert.match(hubSource, /existingBackupId/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);

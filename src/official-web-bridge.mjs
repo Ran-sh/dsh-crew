@@ -94,6 +94,7 @@ export function createCrewSidecarSupervisor({
   pollInterval = 250,
 } = {}) {
   let starting = null;
+  let restarting = null;
   let runningChild = null;
   const runtime = crewDshRuntimeModule({ home });
   const dshHome = crewDshHome({ home });
@@ -124,10 +125,37 @@ export function createCrewSidecarSupervisor({
     return { ok: false, code: 'CREW_BACKEND_START_TIMEOUT' };
   }
 
+  async function restartOwnedBackend() {
+    const owned = runningChild;
+    const childAlive = owned && owned.killed !== true && owned.exitCode == null;
+    if (!childAlive) {
+      if (await healthCheck()) return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
+      const started = await start();
+      return started.ok ? { ...started, restarted: started.started === true } : started;
+    }
+    if (typeof owned.kill !== 'function' || owned.kill() !== true) {
+      return { ok: false, code: 'CREW_BACKEND_RESTART_UNAVAILABLE' };
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (!await healthCheck()) break;
+      await wait(pollInterval);
+    }
+    if (await healthCheck()) return { ok: false, code: 'CREW_BACKEND_STOP_TIMEOUT' };
+    const started = await start();
+    return started.ok ? { ...started, restarted: true } : started;
+  }
+
   return {
+    execution_plane: 'hub-3210',
+    profile: 'dsh-crew',
+    listen_port: Number(bridgePort),
     ensure() {
       if (!starting) starting = start().finally(() => { starting = null; });
       return starting;
+    },
+    restartOwnedBackend() {
+      if (!restarting) restarting = restartOwnedBackend().finally(() => { restarting = null; });
+      return restarting;
     },
   };
 }
@@ -177,6 +205,7 @@ export async function proxyCrewRequest(req, res, {
 
 export function registerOfficialWebBridge(ctx, options = {}) {
   return ctx.inject(['webServer'], (webCtx) => {
+    const supervisor = options.supervisor ?? processSupervisor;
     const disposeStatus = webCtx.webServer.register({
       kind: 'exact',
       path: `${CREW_BRIDGE_PREFIX}/bridge-status`,
@@ -192,12 +221,25 @@ export function registerOfficialWebBridge(ctx, options = {}) {
         });
       },
     });
+    const disposeRestart = webCtx.webServer.register({
+      kind: 'exact',
+      path: `${CREW_BRIDGE_PREFIX}/supervisor/restart`,
+      handler: async (req, res) => {
+        if (!isTrustedLocalRequest(req)) return sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
+        if (String(req.method ?? 'GET').toUpperCase() !== 'POST') return sendJson(res, 405, { ok: false, code: 'POST_ONLY' });
+        let body;
+        try { body = JSON.parse((await readBoundedBody(req, 8 * 1024)).toString('utf8') || '{}'); } catch { return sendJson(res, 400, { ok: false, code: 'SUPERVISOR_REQUEST_INVALID' }); }
+        if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'SUPERVISOR_RESTART_CONFIRM_REQUIRED' });
+        const result = await supervisor.restartOwnedBackend();
+        return sendJson(res, result?.ok === true ? 200 : 409, { ...result });
+      },
+    });
     const disposeProxy = webCtx.webServer.register({
       kind: 'prefix',
       path: CREW_BRIDGE_PREFIX,
       handler: (req, res) => proxyCrewRequest(req, res, options),
     });
-    return () => { disposeProxy?.(); disposeStatus?.(); };
+    return () => { disposeProxy?.(); disposeRestart?.(); disposeStatus?.(); };
   });
 }
 

@@ -178,6 +178,45 @@ test('sidecar supervisor never duplicates a still-running cold-start process aft
   assert.equal(spawns.length, 1);
 });
 
+test('sidecar supervisor restarts only the 3210 child it owns', async () => {
+  const spawns = [];
+  let healthy = false;
+  const supervisor = createCrewSidecarSupervisor({
+    home: 'C:\\Users\\test', exists: () => true,
+    healthCheck: async () => healthy,
+    spawnImpl: (...args) => {
+      const listeners = new Map();
+      const child = {
+        killed: false, exitCode: null,
+        once(name, callback) { listeners.set(name, callback); },
+        unref() {},
+        kill() { this.killed = true; this.exitCode = 0; healthy = false; listeners.get('exit')?.(0); return true; },
+      };
+      healthy = true;
+      spawns.push({ args, child });
+      return child;
+    },
+    wait: async () => {}, maxAttempts: 3,
+  });
+  assert.equal((await supervisor.ensure()).ok, true);
+  const restarted = await supervisor.restartOwnedBackend();
+  assert.equal(restarted.ok, true);
+  assert.equal(restarted.restarted, true);
+  assert.equal(spawns.length, 2);
+  assert.equal(spawns[0].child.killed, true);
+});
+
+test('sidecar supervisor refuses to restart an unowned listener', async () => {
+  const supervisor = createCrewSidecarSupervisor({
+    home: 'C:\\Users\\test', exists: () => true,
+    healthCheck: async () => true,
+    spawnImpl: () => { throw new Error('must not spawn'); },
+  });
+  const result = await supervisor.restartOwnedBackend();
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PORT_OWNERSHIP_CONFLICT');
+});
+
 test('official bridge registers a status endpoint and the Crew API prefix', () => {
   const registrations = [];
   const ctx = {
@@ -189,6 +228,7 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
   registerOfficialWebBridge(ctx, { ensureBackend: async () => ({ ok: true }) });
   assert.deepEqual(registrations.map(({ kind, path }) => ({ kind, path })), [
     { kind: 'exact', path: '/_dsh/dsh-crew/bridge-status' },
+    { kind: 'exact', path: '/_dsh/dsh-crew/supervisor/restart' },
     { kind: 'prefix', path: CREW_BRIDGE_PREFIX },
   ]);
   const response = responseRecorder();
@@ -207,6 +247,30 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
   });
 });
 
+test('bridge restart endpoint requires confirmation and uses only the owned supervisor', async () => {
+  const registrations = [];
+  let restarts = 0;
+  const ctx = { inject(_deps, setup) { return setup({ webServer: { register(value) { registrations.push(value); return () => {}; } } }); } };
+  registerOfficialWebBridge(ctx, {
+    supervisor: { restartOwnedBackend: async () => { restarts += 1; return { ok: true, restarted: true }; } },
+  });
+  const handler = registrations.find((entry) => entry.path.endsWith('/supervisor/restart')).handler;
+  const deniedReq = Readable.from([Buffer.from('{}')]);
+  Object.assign(deniedReq, { method: 'POST', url: '/_dsh/dsh-crew/supervisor/restart', headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } });
+  const denied = responseRecorder();
+  await handler(deniedReq, denied);
+  assert.equal(denied.status, 400);
+  assert.equal(restarts, 0);
+
+  const req = Readable.from([Buffer.from('{"confirm":true}')]);
+  Object.assign(req, { method: 'POST', url: '/_dsh/dsh-crew/supervisor/restart', headers: { host: '127.0.0.1:3080', 'content-type': 'application/json' }, socket: { remoteAddress: '127.0.0.1' } });
+  const res = responseRecorder();
+  await handler(req, res);
+  assert.equal(res.status, 200);
+  assert.equal(restarts, 1);
+  assert.equal(JSON.parse(res.body).restarted, true);
+});
+
 test('Cordis apply registers the bridge without returning an invalid injected effect', async () => {
   const registrations = [];
   const ctx = {
@@ -215,5 +279,5 @@ test('Cordis apply registers the bridge without returning an invalid injected ef
     },
   };
   assert.equal(await apply(ctx), undefined);
-  assert.equal(registrations.length, 2);
+  assert.equal(registrations.length, 3);
 });

@@ -865,6 +865,16 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         body: JSON.stringify({ plan_id: planned.plan.plan_id, expected_revision: planned.plan.expected_revision, confirm: true, lang: locale === 'zh' ? 'zh' : 'en' }),
       }), path);
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      if (result.restart_required === true && result.result?.state === 'RESTART_PENDING') {
+        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
+        const restarted = await readJson(await fetch(restartPath, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ confirm: true }),
+        }), restartPath);
+        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        const verified = await post(`/providers/${encoded}/verify-delete`, { transaction_id: planned.plan.plan_id, confirm: true });
+        if (!verified.ok || verified.state !== 'VERIFIED') throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
+      }
       setNotice(copy.saved);
       await refreshProviderInventory();
     } catch (error: any) {

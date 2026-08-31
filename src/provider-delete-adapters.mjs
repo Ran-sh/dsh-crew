@@ -202,7 +202,7 @@ export function createProviderDeleteFileHooks({
     if (!backupId) throw Object.assign(new Error('provider backup id is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
     const root = join(backupDir, backupId);
     const manifest = readJson(join(root, 'manifest.json'), null);
-    if (!manifest || manifest.schema_version !== 1 || !manifest.files || (expectedProviderId && manifest.provider_id !== expectedProviderId)) {
+    if (!manifest || manifest.schema_version !== 1 || !manifest.files || !manifest.plan || (expectedProviderId && manifest.provider_id !== expectedProviderId)) {
       throw Object.assign(new Error('provider backup is invalid'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
     }
     activeBackup = { root, manifest };
@@ -219,7 +219,19 @@ export function createProviderDeleteFileHooks({
     await acquireLock();
     const root = join(backupDir, planId);
     fs.mkdirSync(root, { recursive: true });
-    const manifest = { schema_version: 1, provider_id: plan.provider_id, files: {} };
+    const manifest = {
+      schema_version: 1,
+      provider_id: plan.provider_id,
+      plan: {
+        plan_id: plan.plan_id,
+        provider_id: plan.provider_id,
+        expected_revision: plan.expected_revision ?? null,
+        replacement_default: plan.replacement_default ?? null,
+        was_harness_default: plan.was_harness_default === true,
+        replacement_default_model: plan.replacement_default_model ?? null,
+      },
+      files: {},
+    };
     for (const key of FILE_KEYS) {
       const source = paths[key];
       assertManagedPath(source);
@@ -302,6 +314,8 @@ export function createProviderDeleteFileHooks({
     activeBackup.manifest.applied_profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
     persistManifest();
   };
+
+  const backupPlan = () => (activeBackup?.manifest?.plan ? { ...activeBackup.manifest.plan } : null);
 
   const verify = async (plan) => {
     assertManagedPath(profileFile);
@@ -391,6 +405,7 @@ export function createProviderDeleteFileHooks({
     backup,
     acquireLock,
     checkpointApplied,
+    backupPlan,
     markTombstone,
     scrubReferences,
     removeDeclarations,

@@ -1197,16 +1197,8 @@ export async function apply(ctx) {
             const health = hub.healthStore.record(providerId, model, observed?.ok === true ? { ok: true } : { error: observed?.error ?? observed });
             return sendJson(res, 200, { ok: true, provider_id: providerId, model, health });
           }
-          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'rollback') {
-            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_ROLLBACK_CONFIRM_REQUIRED' });
-            const supervisor = ctx.dshCrewSupervisor ?? null;
-            const restart = supervisor?.restart3210;
-            const ownsCrew3210 = supervisor?.execution_plane === 'hub-3210'
-              && supervisor?.listen_port === 3210
-              && supervisor?.profile === 'dsh-crew';
-            if (typeof restart !== 'function' || !ownsCrew3210) {
-              return sendJson(res, 503, { ok: false, code: 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' });
-            }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-delete') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_VERIFY_CONFIRM_REQUIRED' });
             const { transaction_id: transactionId } = body ?? {};
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
@@ -1215,21 +1207,65 @@ export async function apply(ctx) {
               backupDir: join(CONFIG_DIR, 'provider-backups'),
               existingBackupId: transactionId,
               expectedProviderId: providerId,
-              restart: (plan) => restart.call(supervisor, plan),
+            });
+            const plan = hooks.backupPlan();
+            if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
+            await hooks.acquireLock();
+            try {
+              const verification = await hooks.verify(plan);
+              if (verification?.providerAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
+                return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
+              }
+              await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
+              return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED', verification });
+            } finally {
+              await hooks.release();
+            }
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'rollback') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_ROLLBACK_CONFIRM_REQUIRED' });
+            const { transaction_id: transactionId } = body ?? {};
+            const hooks = createProviderDeleteFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              configFile: join(CONFIG_DIR, 'config.json'),
+              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+              backupDir: join(CONFIG_DIR, 'provider-backups'),
+              existingBackupId: transactionId,
+              expectedProviderId: providerId,
             });
             await hooks.acquireLock();
             try {
-              const plan = { plan_id: transactionId, provider_id: providerId };
+              const plan = hooks.backupPlan();
+              if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
               await hooks.rollback(plan);
-              const restarted = await hooks.restartRollback(plan);
-              if (restarted?.ok === false) return sendJson(res, 409, { ok: false, code: restarted.code ?? 'PROVIDER_DELETE_ROLLBACK_RESTART_FAILED' });
-              const verified = await hooks.verifyRollback(plan);
-              if (verified?.ok !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED' });
               try {
-                await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
+                await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLBACK_PENDING' }, plan);
               } catch (error) {
                 return sendJson(res, 409, { ok: false, code: boundedMachineCodeFromError(error) ?? 'PROVIDER_LIFECYCLE_RECORD_FAILED' });
               }
+              return sendJson(res, 202, { ok: true, restart_required: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLBACK_PENDING' });
+            } finally {
+              await hooks.release();
+            }
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-rollback') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_ROLLBACK_VERIFY_CONFIRM_REQUIRED' });
+            const { transaction_id: transactionId } = body ?? {};
+            const hooks = createProviderDeleteFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              configFile: join(CONFIG_DIR, 'config.json'),
+              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+              backupDir: join(CONFIG_DIR, 'provider-backups'),
+              existingBackupId: transactionId,
+              expectedProviderId: providerId,
+            });
+            const plan = hooks.backupPlan();
+            if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
+            await hooks.acquireLock();
+            try {
+              const verified = await hooks.verifyRollback(plan);
+              if (verified?.ok !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED' });
+              await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
               await hooks.release();
@@ -1262,25 +1298,16 @@ export async function apply(ctx) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_CHANGED' });
             }
             const executionPlan = { ...refreshed.plan, plan_id: stored.plan.plan_id, expected_revision: stored.plan.expected_revision };
-            const supervisor = ctx.dshCrewSupervisor ?? null;
-            const restart = supervisor?.restart3210;
-            const ownsCrew3210 = supervisor?.execution_plane === 'hub-3210'
-              && supervisor?.listen_port === 3210
-              && supervisor?.profile === 'dsh-crew';
-            if (typeof restart !== 'function' || !ownsCrew3210) {
-              return sendJson(res, 503, { ok: false, code: 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' });
-            }
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
-              restart: (plan) => restart.call(supervisor, plan),
             });
             providerDeletePlans.delete(body.plan_id);
             const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
-            const result = await executeProviderDelete(executionPlan, hooks);
-            return sendJson(res, result.state === 'VERIFIED' ? 200 : 409, { ok: result.state === 'VERIFIED', result });
+            const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
+            return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
           }
           return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
         } catch (err) {

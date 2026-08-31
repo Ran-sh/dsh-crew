@@ -124,7 +124,7 @@ function hookError(name) {
  * explicit so the Hub/API layer can provide atomic profile/config stores and a
  * supervisor that only restarts the owned 3210 child.
  */
-export async function executeProviderDelete(plan, hooks = {}) {
+export async function executeProviderDelete(plan, hooks = {}, { deferRestart = false } = {}) {
   let state = 'PLANNED';
   const events = [];
   pushState(events, state);
@@ -154,15 +154,17 @@ export async function executeProviderDelete(plan, hooks = {}) {
     await hooks.removeDeclarations(plan);
     transition('APPLIED');
     transition('RESTART_PENDING');
-    const restarted = await hooks.restart(plan);
-    if (restarted?.ok === false) throw Object.assign(new Error('provider delete restart failed'), { code: restarted.code });
-    if (typeof hooks.verify !== 'function') throw hookError('verify');
-    transition('VERIFYING');
-    verification = await hooks.verify(plan);
-    if (verification?.providerAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
-      throw Object.assign(new Error('provider delete verification incomplete'), { code: 'PROVIDER_DELETE_VERIFY_FAILED' });
+    if (!deferRestart) {
+      const restarted = await hooks.restart(plan);
+      if (restarted?.ok === false) throw Object.assign(new Error('provider delete restart failed'), { code: restarted.code });
+      if (typeof hooks.verify !== 'function') throw hookError('verify');
+      transition('VERIFYING');
+      verification = await hooks.verify(plan);
+      if (verification?.providerAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
+        throw Object.assign(new Error('provider delete verification incomplete'), { code: 'PROVIDER_DELETE_VERIFY_FAILED' });
+      }
+      transition('VERIFIED');
     }
-    transition('VERIFIED');
   } catch (error) {
     errorCode = boundedCode(error?.code);
     if (mutationsStarted && typeof hooks.rollback === 'function') {

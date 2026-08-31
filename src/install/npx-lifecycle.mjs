@@ -1251,8 +1251,44 @@ export async function npxProviders({
     throw new Error(`unknown providers action: ${action}`);
   }
   const response = await fetchImpl(url, init);
-  const body = await response.json();
+  let body = await response.json();
   if (!response.ok || body?.ok === false) throw new Error(body?.code ?? body?.error ?? 'Crew provider API unavailable');
+  if (action === 'delete' && body?.restart_required === true && body?.result?.state === 'RESTART_PENDING') {
+    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const restartBody = await restartResponse.json();
+    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-delete`;
+    const verifyResponse = await fetchImpl(verifyUrl, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
+    });
+    const verifyBody = await verifyResponse.json();
+    if (!verifyResponse.ok || verifyBody?.ok !== true) throw new Error(verifyBody?.code ?? verifyBody?.error ?? 'Crew provider deletion verification failed');
+    body = { ...body, restart: restartBody, verification: verifyBody };
+  }
+  if (action === 'rollback' && body?.restart_required === true && body?.state === 'ROLLBACK_PENDING') {
+    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const restartBody = await restartResponse.json();
+    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-rollback`;
+    const verifyResponse = await fetchImpl(verifyUrl, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
+    });
+    const verifyBody = await verifyResponse.json();
+    if (!verifyResponse.ok || verifyBody?.ok !== true) throw new Error(verifyBody?.code ?? verifyBody?.error ?? 'Crew provider rollback verification failed');
+    body = { ...body, restart: restartBody, verification: verifyBody };
+  }
   log(JSON.stringify(body, null, 2));
   return { ok: true, body };
 }
