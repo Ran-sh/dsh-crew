@@ -2,14 +2,19 @@
 
 ## Unreleased
 
+Future changes go here.
+
+## 1.0.0 — 2026-09-01
+
 - Hardens Provider lifecycle recovery with semantic rollback verification,
   tombstone-aware installer reconciliation, credential-reference inventory,
-  and guarded purge boundaries.
+  and an independent guarded purge transaction for Crew-owned credentials.
 - Adds a unified runtime readiness snapshot, v2 execution provenance events,
-  retained-release rollback, and a live capability handshake for the provider
-  CLI.
-- Clarifies that Standalone is legacy migration metadata only; production
-  execution remains on the isolated 3210 Crew Harness.
+  retained-release rollback, and capability-gated lifecycle CLI commands.
+- Locks production execution and all control-plane commands to the isolated
+  3210 Crew Harness; Standalone remains legacy migration metadata only.
+- Adds Provider lifecycle rollback UI and complete 3210 runtime provenance
+  checks across bridge, CLI, MCP, and client readiness surfaces.
 
 ## 0.5.7 — 2026-08-31
 
