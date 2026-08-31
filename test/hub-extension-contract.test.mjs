@@ -16,6 +16,10 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/providers`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/provider-health`/);
   assert.match(hubSource, /createProviderHealthStore/);
+  const providerPreviewStart = hubSource.indexOf("path: `${ROUTE_BASE}/provider`,");
+  const providerPreview = providerPreviewStart >= 0 ? hubSource.slice(providerPreviewStart, providerPreviewStart + 2_400) : '';
+  assert.match(providerPreview, /healthGate/);
+  assert.match(providerPreview, /tombstones: lifecycleState\.tombstones/);
   assert.match(hubSource, /delete-plan/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);

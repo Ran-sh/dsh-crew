@@ -1061,6 +1061,8 @@ export async function apply(ctx) {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         try {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const lifecycleState = readProviderLifecycleState();
+          const healthGate = config.health_gate ?? config.worker?.model_policy?.health_gate;
           const mode = normalizeWorkerProviderMode(config.worker_provider_mode);
           let selections;
           if (mode === 'deepseek-official') {
@@ -1082,6 +1084,10 @@ export async function apply(ctx) {
                 fallback: config[`${tier}_model_fallback`],
                 catalog,
                 harnessDefault: catalog.harness_default,
+                healthStore: hub.healthStore,
+                healthGate,
+                allowFallback: config.allow_fallback !== false,
+                tombstones: lifecycleState.tombstones,
               });
               selections[tier] = selected.ok
                 ? { provider: selected.provider, model: selected.model, source: selected.source }
