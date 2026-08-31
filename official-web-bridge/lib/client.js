@@ -512,6 +512,9 @@ const COPY = {
 		providerDeletePlan: "生成删除计划",
 		providerDelete: "确认删除",
 		providerPlanReady: "计划已生成；再次确认后才会修改 3210 配置。",
+		providerRollback: "回滚",
+		providerRollbackConfirm: "按已保存事务恢复这个 Harness Provider 及原有路由？",
+		providerRollbackUnavailable: "没有可验证的回滚事务",
 		providerReplacement: "替换 Harness 默认 Provider（输入 Provider id）",
 		providerDeleteConfirm: "确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。",
 		providerDeleteBlocked: "当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。",
@@ -831,6 +834,9 @@ const COPY = {
 		providerDeletePlan: "Plan deletion",
 		providerDelete: "Confirm delete",
 		providerPlanReady: "Plan ready; a second confirmation is required before changing 3210 config.",
+		providerRollback: "Rollback",
+		providerRollbackConfirm: "Restore this Harness Provider and its previous routing from the saved transaction?",
+		providerRollbackUnavailable: "No verified rollback transaction is available",
 		providerReplacement: "Replacement Harness Default provider id",
 		providerDeleteConfirm: "Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.",
 		providerDeleteBlocked: "This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).",
@@ -1988,6 +1994,43 @@ function WorkersPanel({ ctx }) {
 				});
 				if (!verified.ok || verified.state !== "VERIFIED") throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
 			}
+			setNotice(copy.saved);
+			await refreshProviderInventory();
+		} catch (error) {
+			setNotice(String(error?.message ?? error));
+		} finally {
+			setProviderLifecycleBusy(null);
+		}
+	};
+	const rollbackHarnessProvider = async (record, transactionId) => {
+		if (!record || !transactionId || record.desired_state !== "absent") {
+			setNotice(copy.providerRollbackUnavailable);
+			return;
+		}
+		if (!window.confirm(copy.providerRollbackConfirm)) return;
+		setProviderLifecycleBusy(`rollback:${record.id}`);
+		setNotice(copy.working);
+		try {
+			const encoded = encodeURIComponent(record.id);
+			const result = await post(`/providers/${encoded}/rollback`, {
+				transaction_id: transactionId,
+				confirm: true
+			});
+			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+			if (result.restart_required === true && result.state === "ROLLBACK_PENDING") {
+				const restartPath = "http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart";
+				const restarted = await readJson(await fetch(restartPath, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ confirm: true })
+				}), restartPath);
+				if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+				const verified = await post(`/providers/${encoded}/verify-rollback`, {
+					transaction_id: transactionId,
+					confirm: true
+				});
+				if (!verified.ok || verified.state !== "ROLLED_BACK") throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
+			} else if (result.state !== "ROLLED_BACK") throw new Error(result.code ?? copy.providerLifecycleError);
 			setNotice(copy.saved);
 			await refreshProviderInventory();
 		} catch (error) {
@@ -3538,6 +3581,7 @@ function WorkersPanel({ ctx }) {
 						(providerInventory?.records ?? []).map((record) => {
 							const blocked = record.ownership === "harness" || record.desired_state === "absent" || Number(record.references?.active_jobs ?? 0) > 0;
 							const lifecycle = record.desired_state === "absent" ? "absent" : record.lifecycle?.enabled === false ? "disabled" : record.lifecycle?.catalogued ? "catalogued" : "configured";
+							const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).find((entry) => entry.provider_id === record.id && ["VERIFIED", "RESTART_PENDING"].includes(entry.state));
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
 									display: "flex",
@@ -3582,6 +3626,18 @@ function WorkersPanel({ ctx }) {
 											deleteHarnessProvider(record);
 										},
 										children: providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan
+									}),
+									record.desired_state === "absent" && rollbackTransaction && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: {
+											...S.btn,
+											padding: "2px 8px"
+										},
+										disabled: providerLifecycleBusy !== null,
+										onClick: () => {
+											rollbackHarnessProvider(record, rollbackTransaction.transaction_id);
+										},
+										children: providerLifecycleBusy === `rollback:${record.id}` ? copy.working : copy.providerRollback
 									})
 								]
 							}, record.id);

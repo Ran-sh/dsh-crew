@@ -175,6 +175,12 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
     credential_purged_refs: Object.keys(credentialPurge.purged),
+    lifecycle_transactions: Object.entries(lifecycle.transactions ?? {}).slice(-64).map(([transactionId, transaction]) => ({
+      transaction_id: transactionId,
+      provider_id: transaction.provider_id,
+      state: transaction.state,
+      ...(transaction.expected_revision ? { expected_revision: transaction.expected_revision } : {}),
+    })),
   };
 }
 
