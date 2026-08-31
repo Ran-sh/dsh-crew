@@ -1255,7 +1255,22 @@ export async function apply(ctx) {
             if (!current.ok) return sendJson(res, 409, { ok: false, code: current.code });
             if (current.plan.expected_revision !== stored.plan.expected_revision) return sendJson(res, 409, { ok: false, code: 'CREDENTIAL_REFERENCE_CHANGED' });
             credentialPurgePlans.delete(body.plan_id);
-            const result = await executeCredentialPurge(current.plan, {});
+            const result = await executeCredentialPurge(current.plan, {
+              recheck: async (id) => {
+                const freshSnapshot = await readProviderInventorySnapshot(hub, ctx, config);
+                const freshCredentials = buildCredentialReferenceInventory({ providers: freshSnapshot.records, additional_refs: freshSnapshot.credential_history_refs });
+                const freshPlan = planCredentialPurge({ inventory: freshCredentials, referenceId: id });
+                if (!freshPlan.ok) return { ok: false };
+                const freshRecord = freshCredentials.records.find((entry) => entry.reference_id === id);
+                return {
+                  ok: true,
+                  revision: freshPlan.plan.expected_revision,
+                  orphan: freshRecord?.orphan === true,
+                  ownership: freshRecord?.ownership,
+                  purge_capability: freshRecord?.purge_capability,
+                };
+              },
+            });
             return sendJson(res, result.ok ? 200 : 503, result);
           }
           return sendJson(res, 404, { ok: false, code: 'CREDENTIAL_REFERENCE_ENDPOINT_NOT_FOUND' });

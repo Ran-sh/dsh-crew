@@ -40,7 +40,9 @@ test('credential purge execution fails closed without an explicit adapter', asyn
   const result = await executeCredentialPurge({
     plan_id: 'tx-1', reference_id: 'crew-store:ref-1', ownership: 'crew-owned',
     purge_capability: 'eligible', irreversible: true, state: 'PLANNED', expected_revision: 'a'.repeat(64),
-  }, {});
+  }, {
+    recheck: async () => ({ ok: true, revision: 'a'.repeat(64), orphan: true, ownership: 'crew-owned', purge_capability: 'eligible' }),
+  });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'CREDENTIAL_PURGE_UNAVAILABLE');
 });
