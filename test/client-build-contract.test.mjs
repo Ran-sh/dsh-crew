@@ -83,6 +83,12 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });
 
+test('provider lifecycle UI exposes rollback from backend transaction state', () => {
+  assert.match(panelSource, /lifecycle_transactions/);
+  assert.match(panelSource, /verify-rollback/);
+  assert.match(panelSource, /providerRollback|rollbackProvider/);
+});
+
 test('credential lifecycle UI keeps purge separate from provider deletion', () => {
   assert.match(panelSource, /credentialPurgePlan/);
   assert.match(panelSource, /credentialPurgeConfirm/);
