@@ -414,6 +414,7 @@ export function createProviderDeleteFileHooks({
       provider_id: result?.provider_id ?? plan?.provider_id,
       state: result?.state,
       expected_revision: plan?.expected_revision,
+      credential_refs: plan?.credential_refs,
     });
     if (result?.state === 'VERIFIED') {
       assertManagedPath(profileFile);

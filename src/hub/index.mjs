@@ -39,6 +39,8 @@ import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
 import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
+import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
+import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -140,13 +142,18 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     }
   } catch {}
   const lifecycle = readProviderLifecycleState();
-  return buildProviderInventory({
+  const inventory = buildProviderInventory({
     catalog,
     declarations,
     policy: providerInventoryPolicy(config),
     tombstones: lifecycle.tombstones,
     activeJobs: hub.list(),
   });
+  return {
+    ...inventory,
+    credential_history_refs: Object.values(lifecycle.transactions ?? {})
+      .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
+  };
 }
 
 function readProviderProfileRevision() {
@@ -895,9 +902,14 @@ export async function apply(ctx) {
   const disposers = [];
   const PROVIDER_DELETE_PLAN_TTL_MS = 10 * 60 * 1000;
   const providerDeletePlans = new Map();
+  const credentialPurgePlans = new Map();
   const rememberProviderDeletePlan = (plan) => {
     providerDeletePlans.set(plan.plan_id, { plan, created_at: Date.now() });
     while (providerDeletePlans.size > 32) providerDeletePlans.delete(providerDeletePlans.keys().next().value);
+  };
+  const rememberCredentialPurgePlan = (plan) => {
+    credentialPurgePlans.set(plan.plan_id, { plan, created_at: Date.now() });
+    while (credentialPurgePlans.size > 32) credentialPurgePlans.delete(credentialPurgePlans.keys().next().value);
   };
 
   // Multimodal bridge: register describe_image / generate_image for the DS
@@ -1191,6 +1203,64 @@ export async function apply(ctx) {
           });
         } catch {
           return sendJson(res, 503, { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE', error: 'Unable to read Harness provider inventory.' });
+        }
+      },
+    }));
+
+    // Credential references are a separate, secret-free inventory. Provider
+    // deletion can report these references, but never implies their purge.
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/credential-references`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const snapshot = await readProviderInventorySnapshot(hub, ctx, config);
+          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs });
+          return sendJson(res, 200, { ok: true, ...credentials, runtime: getHubRuntimeIdentity() });
+        } catch {
+          return sendJson(res, 503, { ok: false, code: 'CREDENTIAL_REFERENCE_INVENTORY_UNAVAILABLE' });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'prefix', path: `${ROUTE_BASE}/credential-references`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        let url;
+        try { url = new URL(req.url, 'http://localhost'); } catch { return sendJson(res, 400, { ok: false, code: 'CREDENTIAL_PURGE_PLAN_INVALID' }); }
+        const parts = url.pathname.slice(`${ROUTE_BASE}/credential-references`.length).split('/').filter(Boolean);
+        try {
+          const referenceId = decodeURIComponent(parts[0] ?? '');
+          const body = await readBody(req);
+          const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const snapshot = await readProviderInventorySnapshot(hub, ctx, config);
+          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs });
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'purge-plan') {
+            const planned = planCredentialPurge({ inventory: credentials, referenceId, expectedRevision: body?.expected_revision });
+            if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
+            rememberCredentialPurgePlan(planned.plan);
+            return sendJson(res, 200, { ok: true, plan: planned.plan });
+          }
+          if (req.method === 'DELETE' && parts.length === 1) {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'CREDENTIAL_PURGE_CONFIRM_REQUIRED' });
+            const stored = credentialPurgePlans.get(body?.plan_id);
+            if (!stored || Date.now() - stored.created_at > PROVIDER_DELETE_PLAN_TTL_MS || stored.plan.reference_id !== referenceId) {
+              credentialPurgePlans.delete(body?.plan_id);
+              return sendJson(res, 409, { ok: false, code: 'CREDENTIAL_PURGE_PLAN_EXPIRED' });
+            }
+            const current = planCredentialPurge({ inventory: credentials, referenceId, expectedRevision: stored.plan.expected_revision });
+            if (!current.ok) return sendJson(res, 409, { ok: false, code: current.code });
+            if (current.plan.expected_revision !== stored.plan.expected_revision) return sendJson(res, 409, { ok: false, code: 'CREDENTIAL_REFERENCE_CHANGED' });
+            credentialPurgePlans.delete(body.plan_id);
+            const result = await executeCredentialPurge(current.plan, {});
+            return sendJson(res, result.ok ? 200 : 503, result);
+          }
+          return sendJson(res, 404, { ok: false, code: 'CREDENTIAL_REFERENCE_ENDPOINT_NOT_FOUND' });
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, code: boundedMachineCodeFromError(error) ?? 'CREDENTIAL_PURGE_PLAN_INVALID' });
         }
       },
     }));

@@ -17,6 +17,18 @@ function validRevision(value) {
   return typeof value === 'string' && REVISION_PATTERN.test(value);
 }
 
+function normalizedCredentialRefs(value) {
+  if (!Array.isArray(value)) return undefined;
+  const refs = value.map((ref) => {
+    if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+    const kind = typeof ref.kind === 'string' && ref.kind.trim() ? ref.kind.trim() : null;
+    const name = typeof ref.name_or_handle === 'string' && ref.name_or_handle.trim() ? ref.name_or_handle.trim() : null;
+    const ownership = typeof ref.ownership === 'string' && ref.ownership.trim() ? ref.ownership.trim() : null;
+    return kind && name && ownership ? { kind, name_or_handle: name, ownership } : null;
+  }).filter(Boolean).slice(0, 32);
+  return refs;
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -24,10 +36,12 @@ function clone(value) {
 function normalizedTransaction(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   if (!validId(value.provider_id) || typeof value.state !== 'string' || !STATES.has(value.state)) return null;
+  const refs = normalizedCredentialRefs(value.credential_refs);
   return {
     provider_id: value.provider_id,
     state: value.state,
     ...(validRevision(value.expected_revision) ? { expected_revision: value.expected_revision } : {}),
+    ...(refs === undefined ? {} : { credential_refs: refs }),
   };
 }
 
@@ -70,7 +84,7 @@ export function clearProviderTombstone(state, providerId) {
   return out;
 }
 
-/** Record only non-secret transaction metadata; credential refs/values are ignored. */
+/** Record non-secret transaction metadata and credential reference names only. */
 export function recordProviderTransaction(state, transaction = {}) {
   const transactionId = requireProviderId(transaction.transaction_id ?? transaction.plan_id);
   const normalized = normalizedTransaction(transaction);

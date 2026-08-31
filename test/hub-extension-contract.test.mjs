@@ -14,6 +14,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/profiles`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/workspaces`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/providers`/);
+  assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/credential-references`/);
+  assert.match(hubSource, /purge-plan/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/provider-health`/);
   assert.match(hubSource, /createProviderHealthStore/);
   const providerPreviewStart = hubSource.indexOf("path: `${ROUTE_BASE}/provider`,");

@@ -36,10 +36,11 @@ test('transaction records are bounded and never retain credential values', () =>
   const state = normalizeProviderLifecycleState();
   const next = recordProviderTransaction(state, {
     transaction_id: 'tx-1', provider_id: 'opencode-go', state: 'VERIFIED',
-    expected_revision: 'b'.repeat(64), credential_refs: [{ name_or_handle: 'KEY', value: 'SECRET' }],
+    expected_revision: 'b'.repeat(64), credential_refs: [{ kind: 'env', name_or_handle: 'KEY', ownership: 'external', value: 'SECRET' }],
   });
   assert.deepEqual(next.transactions['tx-1'], {
     provider_id: 'opencode-go', state: 'VERIFIED', expected_revision: 'b'.repeat(64),
+    credential_refs: [{ kind: 'env', name_or_handle: 'KEY', ownership: 'external' }],
   });
   assert.equal(JSON.stringify(next).includes('SECRET'), false);
 });
