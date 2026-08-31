@@ -42,6 +42,8 @@ import {
   npxInspect,
   npxJobs,
   npxProviders,
+  npxReleases,
+  npxRollback,
   runNpxCli,
   USAGE,
   compareVersions,
@@ -801,6 +803,51 @@ test('jobs CLI projects list, contract watch, cancel and JSON request submission
     assert.equal(calls.at(-1)[1].method, 'POST');
     assert.match(calls.at(-1)[1].body, /"objective":"test"/);
   } finally { home.cleanup(); }
+});
+
+test('release rollback switches to a validated retained payload and restarts the owned runtime', async () => {
+  const t = tempHome();
+  try {
+    const releases = crewReleasesDir({ home: t.dir });
+    const oldDir = join(releases, 'old-0.5.6');
+    const currentDir = join(releases, 'current-0.5.7');
+    mkdirSync(oldDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
+    writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+    const calls = [];
+    const result = await npxRollback({
+      home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
+      activate: async ({ releaseDir }) => { calls.push(['activate', releaseDir]); return true; },
+      restart: async () => { calls.push(['restart']); return { ok: true }; },
+      verifyRuntime: async (version) => { calls.push(['verify', version]); return { ok: true, runtime_version: version }; },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.6');
+    assert.deepEqual(calls, [['activate', oldDir], ['restart'], ['verify', '0.5.6']]);
+  } finally { t.cleanup(); }
+});
+
+test('release rollback restores the previous pointer when activation fails', async () => {
+  const t = tempHome();
+  try {
+    const releases = crewReleasesDir({ home: t.dir });
+    const oldDir = join(releases, 'old-0.5.6');
+    const currentDir = join(releases, 'current-0.5.7');
+    mkdirSync(oldDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
+    writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+    const result = await npxRollback({
+      home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
+      activate: async () => false, restart: async () => ({ ok: true }),
+      verifyRuntime: async () => ({ ok: true, runtime_version: '0.5.6' }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.7');
+  } finally { t.cleanup(); }
 });
 
 test('providers CLI stays on the 3210 lifecycle API and binds destructive flags', async () => {
