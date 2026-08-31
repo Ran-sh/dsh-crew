@@ -148,6 +148,26 @@ test('a persisted transaction backup can be reopened for an explicit rollback', 
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
 });
 
+test('rollback verification rejects a restored provider with drifted routing semantics', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  writeFileSync(paths.profileFile, PROFILE.replace(/      opencode-go:[\s\S]*?      openrouter:/, '      openrouter:'));
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id, restart: async () => ({ ok: true }) });
+  await reopened.acquireLock();
+  await reopened.checkpointApplied(plan);
+  await reopened.rollback(plan);
+  const restored = JSON.parse(readFileSync(paths.configFile, 'utf8'));
+  writeFileSync(paths.configFile, JSON.stringify({ ...restored, flash_model_priority: [{ provider: 'openrouter', model: 'drifted' }] }, null, 2) + '\n');
+  const verified = await reopened.verifyRollback(plan);
+  await reopened.release();
+  assert.equal(verified.ok, false);
+  assert.equal(verified.routingRestored, false);
+});
+
 test('reopened rollback fails closed when an administrator changed managed state', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
