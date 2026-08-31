@@ -14,6 +14,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/profiles`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/workspaces`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/providers`/);
+  assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/provider-health`/);
+  assert.match(hubSource, /createProviderHealthStore/);
   assert.match(hubSource, /buildProviderInventory/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'events'/);
   assert.match(hubSource, /saveRoleProfiles\(await readBody\(req\)\)/);

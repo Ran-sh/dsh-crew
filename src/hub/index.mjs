@@ -36,6 +36,7 @@ import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
 import { readProviderDeclarations } from '../provider-profile-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
+import { createProviderHealthStore } from '../provider-health.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -197,6 +198,7 @@ export class WorkerRegistry {  constructor(ctx) {
     this.jobs = new Map();
     this.nextId = 1;
     this.shard = createShardWriter('hub');
+    this.healthStore = createProviderHealthStore();
   }
 
   view(job, withResult = false) {
@@ -274,6 +276,8 @@ export class WorkerRegistry {  constructor(ctx) {
     // default deepseek-official keeps legacy setups unchanged. Re-resolved on
     // every spawn so a Models change takes effect on the next worker.
     const cfg = normalizeGlobalConfig(this.getConfig?.() ?? {});
+    const lifecycleState = readProviderLifecycleState();
+    const healthGate = cfg.health_gate ?? cfg.worker?.model_policy?.health_gate;
     const workerProviderMode = normalizeWorkerProviderMode(cfg.worker_provider_mode);
     const getCurrentSelection = () => this.ctx.get('agentDefaultModel')?.currentSelection?.();
     let selection;
@@ -320,6 +324,10 @@ export class WorkerRegistry {  constructor(ctx) {
           policy,
           catalog,
           harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+          healthStore: this.healthStore,
+          healthGate,
+          allowFallback: cfg.allow_fallback !== false,
+          tombstones: lifecycleState.tombstones,
         });
       } else {
         selection = resolveWorkerModel({
@@ -329,6 +337,10 @@ export class WorkerRegistry {  constructor(ctx) {
           fallback: cfg[`${effTier}_model_fallback`],
           catalog,
           harnessDefault: catalog.harness_default ?? getCurrentSelection(),
+          healthStore: this.healthStore,
+          healthGate,
+          allowFallback: cfg.allow_fallback !== false,
+          tombstones: lifecycleState.tombstones,
           traceContext: {
             role: effRole,
             logicalAttempt: attempt,
@@ -580,6 +592,15 @@ export class WorkerRegistry {  constructor(ctx) {
           isolation: job.isolation,
           role: job.role,
         });
+        // Record only sanitized callability evidence. Cancelled jobs are
+        // operator actions, not provider health signals.
+        if (job.status !== 'cancelled') {
+          this.healthStore.record(job.provider, job.model, {
+            ok: job.status === 'done',
+            observed_at: Date.parse(job.endedAt ?? '') || Date.now(),
+            error: { code: job.error_code, message: job.error },
+          });
+        }
         if (job.role === 'reviewer' && job.review && job.workspaceDiff?.kind === 'git') {
           const changes = job.workspaceDiff.changes ?? {};
           const mutated = ['modified', 'deleted', 'renamed', 'untracked'].some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
@@ -1086,6 +1107,20 @@ export async function apply(ctx) {
         } catch {
           return sendJson(res, 503, { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE', error: 'Unable to read Harness provider inventory.' });
         }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/provider-health`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        return sendJson(res, 200, {
+          ok: true,
+          schema_version: 1,
+          health: hub.healthStore.list(),
+          runtime: getHubRuntimeIdentity(),
+        });
       },
     }));
 
