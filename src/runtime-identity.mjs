@@ -5,8 +5,18 @@
 // - HUB_PROTOCOL_VERSION changes only when Hub <-> MCP wire semantics become
 //   incompatible.
 //
-// Keep this module pure and dependency-free so Hub, MCP and tests all use the
-// exact same compatibility rules.
+// Keep this module dependency-light so Hub, MCP and tests all use the exact
+// same compatibility rules.
+
+import { randomUUID } from 'node:crypto';
+
+// Production Crew execution is intentionally bound to the isolated 3210 Hub.
+// These fields are public provenance only; no credential or session secret is
+// included in the identity contract.
+export const PRODUCTION_EXECUTION_PLANE = 'hub-3210';
+export const PRODUCTION_PROFILE = 'dsh-crew';
+export const PRODUCTION_LISTEN_PORT = 3210;
+const RUNTIME_ID = randomUUID();
 
 export const RUNTIME_VERSION = '0.5.6';
 export const HUB_PROTOCOL_VERSION = 1;
@@ -46,6 +56,8 @@ export const HUB_COMPATIBILITY_CODES = Object.freeze({
   PROTOCOL_MISSING: 'HUB_PROTOCOL_MISSING',
   PROTOCOL_MISMATCH: 'HUB_PROTOCOL_MISMATCH',
   CAPABILITY_MISSING: 'HUB_CAPABILITY_MISSING',
+  EXECUTION_PLANE_MISMATCH: 'HUB_EXECUTION_PLANE_MISMATCH',
+  LISTEN_PORT_MISMATCH: 'HUB_LISTEN_PORT_MISMATCH',
 });
 
 function normalizedCapabilities(value) {
@@ -60,6 +72,10 @@ export function getHubRuntimeIdentity() {
     ui_role: 'runtime',
     runtime_version: RUNTIME_VERSION,
     protocol_version: HUB_PROTOCOL_VERSION,
+    execution_plane: PRODUCTION_EXECUTION_PLANE,
+    profile: PRODUCTION_PROFILE,
+    listen_port: PRODUCTION_LISTEN_PORT,
+    runtime_id: RUNTIME_ID,
     capabilities: [...HUB_CAPABILITIES],
   };
 }
@@ -79,6 +95,10 @@ export function evaluateHubHandshake(body, { requiredCapabilities = REQUIRED_HUB
     service: typeof body?.service === 'string' ? body.service : null,
     runtime_version: typeof body?.runtime_version === 'string' ? body.runtime_version : null,
     protocol_version: Number.isInteger(body?.protocol_version) ? body.protocol_version : null,
+    execution_plane: typeof body?.execution_plane === 'string' ? body.execution_plane : null,
+    profile: typeof body?.profile === 'string' ? body.profile : null,
+    listen_port: Number.isInteger(body?.listen_port) ? body.listen_port : null,
+    runtime_id: typeof body?.runtime_id === 'string' ? body.runtime_id : null,
     capabilities,
     missing_capabilities: [],
     code: null,
@@ -86,6 +106,16 @@ export function evaluateHubHandshake(body, { requiredCapabilities = REQUIRED_HUB
 
   if (body?.service !== 'dsh-crew-hub') {
     return { ...base, code: HUB_COMPATIBILITY_CODES.SERVICE_MISMATCH };
+  }
+
+  // An explicit execution identity that is not the isolated 3210 Crew plane
+  // must never be accepted as the production Hub. Missing legacy fields remain
+  // compatible with the older protocol contract and are handled below.
+  if (body?.execution_plane !== undefined && body.execution_plane !== PRODUCTION_EXECUTION_PLANE) {
+    return { ...base, code: HUB_COMPATIBILITY_CODES.EXECUTION_PLANE_MISMATCH };
+  }
+  if (body?.listen_port !== undefined && body.listen_port !== PRODUCTION_LISTEN_PORT) {
+    return { ...base, code: HUB_COMPATIBILITY_CODES.LISTEN_PORT_MISMATCH };
   }
 
   if (!Number.isInteger(body?.protocol_version)) {
