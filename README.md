@@ -47,6 +47,9 @@ dsh-crew jobs list        # jobs and Result Contracts
 dsh-crew providers list   # 3210 Harness provider inventory (secret-free)
 dsh-crew providers probe <provider-id>
 curl http://127.0.0.1:3210/_dsh/dsh-crew/credential-references  # references/orphans only
+dsh-crew credentials list  # secret-free reference inventory
+dsh-crew credentials purge-plan env:NAME
+dsh-crew credentials purge env:NAME --plan <plan-id> --expected-revision <sha256> --confirm
 dsh-crew providers delete-plan <provider-id> --replacement-default <provider-id>
 dsh-crew providers delete <provider-id> --plan <plan-id> --expected-revision <sha256> --confirm
 dsh-crew releases list     # retained validated payloads
