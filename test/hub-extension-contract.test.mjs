@@ -24,6 +24,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(providerPreview, /tombstones: lifecycleState\.tombstones/);
   assert.match(hubSource, /delete-plan/);
   assert.match(hubSource, /createProviderDeleteFileHooks/);
+  assert.match(hubSource, /createCredentialPurgeFileHooks/);
+  assert.match(hubSource, /markCredentialPurged/);
   assert.match(hubSource, /req\.method === 'DELETE' && parts\.length === 1/);
   assert.match(hubSource, /PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE/);
   assert.match(hubSource, /const refreshed = planProviderDelete/);

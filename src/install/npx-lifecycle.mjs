@@ -1228,6 +1228,7 @@ Commands:
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
   providers   3210 provider lifecycle API: list|delete-plan|delete|rollback|probe
+  credentials 3210 credential references: list|purge-plan|purge (separate confirmation)
   releases    list retained, validated Crew payload releases
   rollback    switch to a retained payload version and verify the 3210 runtime
   update      resolve the newest permitted package from the configured npm registry (or
@@ -1239,8 +1240,8 @@ Options:
   --after <sequence>  with jobs watch/get: return canonical events after this cursor
   --detail <mode>     with jobs get/watch: compact (default) or full
   --request <path>    with jobs submit: JSON Job Request document
-  --plan <id>         with providers delete: approved plan id
-  --expected-revision <sha256>  with providers delete: profile revision from delete-plan
+  --plan <id>         with providers/credentials destructive actions: approved plan id
+  --expected-revision <sha256>  with providers/credentials actions: revision from plan
   --replacement-default <id>   with providers delete-plan: replacement Harness Default provider
   --confirm           with providers delete: confirm the destructive mutation
   --purge             with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
@@ -1318,6 +1319,11 @@ const JOB_CAPABILITY_REQUIREMENTS = Object.freeze({
   submit: Object.freeze(['jobs', 'roles', 'attempt-index', 'model-policy']),
 });
 const INSPECT_CAPABILITIES = Object.freeze(['extension-contract', 'evidence', 'runtime-provenance-v1']);
+const CREDENTIAL_CAPABILITY_REQUIREMENTS = Object.freeze({
+  list: Object.freeze(['credential-reference-inventory-v1']),
+  'purge-plan': Object.freeze(['credential-reference-inventory-v1', 'credential-purge-v1']),
+  purge: Object.freeze(['credential-reference-inventory-v1', 'credential-purge-v1']),
+});
 export const PRODUCTION_HUB_URL = 'http://127.0.0.1:3210';
 
 export async function assertProductionHub({ hubUrl, requiredCapabilities = [], purpose = 'command', fetchImpl = globalThis.fetch } = {}) {
@@ -1461,6 +1467,42 @@ export async function npxProviders({
   return { ok: true, body };
 }
 
+/** Independent credential-reference inventory and irreversible purge CLI. */
+export async function npxCredentials({
+  args = [],
+  planId,
+  expectedRevision,
+  confirm = false,
+  log = console.log,
+  fetchImpl = globalThis.fetch,
+  readConfig = realInstaller.readGlobalConfig,
+} = {}) {
+  const hubUrl = String(readConfig()?.hub_url ?? PRODUCTION_HUB_URL).replace(/\/$/, '');
+  const action = args[0] ?? 'list';
+  const id = args[1];
+  const requiredCapabilities = CREDENTIAL_CAPABILITY_REQUIREMENTS[action];
+  if (!requiredCapabilities) throw new Error(`unknown credentials action: ${action}`);
+  await assertProductionHub({ hubUrl, requiredCapabilities, purpose: 'credential', fetchImpl });
+  const base = `${hubUrl}${CREW_ROUTE_BASE}/credential-references`;
+  let url = base;
+  let init = { headers: { accept: 'application/json' } };
+  if (action === 'purge-plan') {
+    if (!id) throw new Error('credentials purge-plan requires a reference id');
+    url = `${base}/${encodeURIComponent(id)}/purge-plan`;
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ ...(expectedRevision ? { expected_revision: expectedRevision } : {}) }) };
+  } else if (action === 'purge') {
+    if (!id) throw new Error('credentials purge requires a reference id');
+    if (!planId || !expectedRevision || confirm !== true) throw new Error('credentials purge requires --plan, --expected-revision and --confirm');
+    url = `${base}/${encodeURIComponent(id)}`;
+    init = { method: 'DELETE', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ plan_id: planId, expected_revision: expectedRevision, confirm: true }) };
+  }
+  const response = await fetchImpl(url, init);
+  const body = await response.json();
+  if (!response.ok || body?.ok === false) throw new Error(body?.code ?? body?.error ?? 'Crew credential API unavailable');
+  log(JSON.stringify(body, null, 2));
+  return { ok: true, body };
+}
+
 function normalizeCommand(argv) {
   const flags = argv.slice(1);
   let candidate;
@@ -1540,7 +1582,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'credentials', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -1553,6 +1595,7 @@ export async function runNpxCli({
       inspect: commands.inspect ?? npxInspect,
       jobs: commands.jobs ?? npxJobs,
       providers: commands.providers ?? npxProviders,
+      credentials: commands.credentials ?? npxCredentials,
       releases: commands.releases ?? npxReleases,
       rollback: commands.rollback ?? npxRollback,
       update: commands.update ?? npxUpdate,
@@ -1563,6 +1606,7 @@ export async function runNpxCli({
     else if (command === 'update') result = await actions.update({ candidate, log });
     else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
     else if (command === 'providers') result = await actions.providers({ args, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, log });
+    else if (command === 'credentials') result = await actions.credentials({ args, planId, expectedRevision, confirm, log });
     else if (command === 'releases') result = await actions.releases({ args, log });
     else if (command === 'rollback') result = await actions.rollback({ version: args?.[0], args, log });
     else result = await actions[command]({ log });

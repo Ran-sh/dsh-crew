@@ -31,12 +31,14 @@ function capability(ownership, orphan) {
   return orphan ? 'eligible' : 'eligible-after-last-consumer';
 }
 
-export function buildCredentialReferenceInventory({ providers = [], additional_refs: additionalRefs = [] } = {}) {
+export function buildCredentialReferenceInventory({ providers = [], additional_refs: additionalRefs = [], purged_refs: purgedRefs = [] } = {}) {
   const entries = new Map();
+  const purged = new Set(Array.isArray(purgedRefs) ? purgedRefs.filter((value) => typeof value === 'string' && value.trim()) : []);
   const add = (ref, consumer) => {
     const normalized = normalizeReference(ref);
     if (!normalized) return;
     const referenceId = `${normalized.kind}:${normalized.name_or_handle}`;
+    if (purged.has(referenceId)) return;
     const current = entries.get(referenceId) ?? {
       reference_id: referenceId,
       kind: normalized.kind,

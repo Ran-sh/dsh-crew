@@ -110,7 +110,7 @@ const COPY = {
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
-    credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`,
+    credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用',
     customProviders: '自定义 Provider', addProvider: '＋ 添加 Provider',
     noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
     providerName: '名称', modelsField: '模型列表（逗号分隔）',
@@ -249,7 +249,7 @@ const COPY = {
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
-    credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`,
+    credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable',
     customProviders: 'Custom providers', addProvider: '＋ Add provider',
     noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
     providerName: 'Name', modelsField: 'Models (comma-separated)',
@@ -531,6 +531,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [providerInventory, setProviderInventory] = useState<any>(null);
   const [providerHealth, setProviderHealth] = useState<any[]>([]);
   const [credentialRefs, setCredentialRefs] = useState<any[]>([]);
+  const [credentialLifecycleBusy, setCredentialLifecycleBusy] = useState<string | null>(null);
   const [providerInventoryError, setProviderInventoryError] = useState('');
   const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
@@ -669,6 +670,31 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       setProviderInventoryError(error?.message ?? copy.providerNoInventory);
     }
   }, [get, copy]);
+
+  const purgeCredentialRef = useCallback(async (ref: any) => {
+    if (ref?.ownership !== 'crew-owned' || ref?.orphan !== true || ref?.purge_capability !== 'eligible') return;
+    const referenceId = String(ref.reference_id ?? '');
+    if (!referenceId || !window.confirm(copy.credentialPurgeConfirm)) return;
+    setCredentialLifecycleBusy(referenceId);
+    setNotice(copy.working);
+    try {
+      const encoded = encodeURIComponent(referenceId);
+      const planned = await post(`/credential-references/${encoded}/purge-plan`, {});
+      if (!planned.ok || !planned.plan) throw new Error(planned.code ?? copy.credentialPurgeUnavailable);
+      if (!window.confirm(`${copy.credentialPurgeConfirm}\n\n${referenceId}`)) return;
+      const result = await readJson(await fetch(withLang(`/credential-references/${encoded}`), {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan_id: planned.plan.plan_id, expected_revision: planned.plan.expected_revision, confirm: true, lang: locale === 'zh' ? 'zh' : 'en' }),
+      }), `/credential-references/${encoded}`);
+      if (!result.ok || result.state !== 'VERIFIED') throw new Error(result.code ?? copy.credentialPurgeUnavailable);
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      setNotice(String(error?.message ?? error));
+    } finally {
+      setCredentialLifecycleBusy(null);
+    }
+  }, [copy, locale, post, readJson, refreshProviderInventory, withLang]);
 
   useEffect(() => {
     if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshHarnessModels();
@@ -1417,6 +1443,14 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   <span style={S.mono}>{ref.reference_id}</span>
                   <span style={{ opacity: 0.65 }}>{ref.ownership}</span>
                   <span style={{ color: ref.orphan ? '#c98735' : undefined }}>{ref.orphan ? copy.credentialOrphan : copy.credentialInUse(ref.consumer_count ?? 0)}</span>
+                  <span style={{ flex: 1 }} />
+                  {ref.ownership === 'crew-owned' && ref.orphan === true && ref.purge_capability === 'eligible' && (
+                    <button type="button" style={{ ...S.btn, padding: '2px 8px' }}
+                      disabled={credentialLifecycleBusy !== null}
+                      onClick={() => { void purgeCredentialRef(ref); }}>
+                      {credentialLifecycleBusy === ref.reference_id ? copy.credentialPurging : copy.credentialPurgePlan}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

@@ -512,6 +512,10 @@ const COPY = {
 		credentialReferenceHint: "仅显示引用名、归属和孤儿状态；不会读取或删除密钥。",
 		credentialOrphan: "孤儿 · 可单独申请清理",
 		credentialInUse: (count) => `使用中 · ${count} 个 Provider`,
+		credentialPurgePlan: "申请清理",
+		credentialPurgeConfirm: "这是不可恢复的 Crew-owned 凭据清理，确认继续？",
+		credentialPurging: "清理中…",
+		credentialPurgeUnavailable: "凭据清理不可用",
 		customProviders: "自定义 Provider",
 		addProvider: "＋ 添加 Provider",
 		noCustomProviders: "暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。",
@@ -827,6 +831,10 @@ const COPY = {
 		credentialReferenceHint: "Names, ownership, and orphan status only; values are never read or deleted.",
 		credentialOrphan: "orphan · separate purge approval required",
 		credentialInUse: (count) => `in use · ${count} provider(s)`,
+		credentialPurgePlan: "Purge…",
+		credentialPurgeConfirm: "This irreversibly removes a Crew-owned credential. Continue?",
+		credentialPurging: "Purging…",
+		credentialPurgeUnavailable: "Credential purge unavailable",
 		customProviders: "Custom providers",
 		addProvider: "＋ Add provider",
 		noCustomProviders: "None yet. Added providers appear in the vision / image-gen selects above.",
@@ -1415,6 +1423,7 @@ function WorkersPanel({ ctx }) {
 	const [providerInventory, setProviderInventory] = (0, react.useState)(null);
 	const [providerHealth, setProviderHealth] = (0, react.useState)([]);
 	const [credentialRefs, setCredentialRefs] = (0, react.useState)([]);
+	const [credentialLifecycleBusy, setCredentialLifecycleBusy] = (0, react.useState)(null);
 	const [providerInventoryError, setProviderInventoryError] = (0, react.useState)("");
 	const [providerLifecycleBusy, setProviderLifecycleBusy] = (0, react.useState)(null);
 	const [modelPickerTier, setModelPickerTier] = (0, react.useState)(null);
@@ -1571,6 +1580,43 @@ function WorkersPanel({ ctx }) {
 			setProviderInventoryError(error?.message ?? copy.providerNoInventory);
 		}
 	}, [get, copy]);
+	const purgeCredentialRef = (0, react.useCallback)(async (ref) => {
+		if (ref?.ownership !== "crew-owned" || ref?.orphan !== true || ref?.purge_capability !== "eligible") return;
+		const referenceId = String(ref.reference_id ?? "");
+		if (!referenceId || !window.confirm(copy.credentialPurgeConfirm)) return;
+		setCredentialLifecycleBusy(referenceId);
+		setNotice(copy.working);
+		try {
+			const encoded = encodeURIComponent(referenceId);
+			const planned = await post(`/credential-references/${encoded}/purge-plan`, {});
+			if (!planned.ok || !planned.plan) throw new Error(planned.code ?? copy.credentialPurgeUnavailable);
+			if (!window.confirm(`${copy.credentialPurgeConfirm}\n\n${referenceId}`)) return;
+			const result = await readJson(await fetch(withLang(`/credential-references/${encoded}`), {
+				method: "DELETE",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					plan_id: planned.plan.plan_id,
+					expected_revision: planned.plan.expected_revision,
+					confirm: true,
+					lang: locale === "zh" ? "zh" : "en"
+				})
+			}), `/credential-references/${encoded}`);
+			if (!result.ok || result.state !== "VERIFIED") throw new Error(result.code ?? copy.credentialPurgeUnavailable);
+			setNotice(copy.saved);
+			await refreshProviderInventory();
+		} catch (error) {
+			setNotice(String(error?.message ?? error));
+		} finally {
+			setCredentialLifecycleBusy(null);
+		}
+	}, [
+		copy,
+		locale,
+		post,
+		readJson,
+		refreshProviderInventory,
+		withLang
+	]);
 	(0, react.useEffect)(() => {
 		if (surface === CREW_UI_SURFACES.OFFICIAL) refreshHarnessModels();
 	}, [surface, refreshHarnessModels]);
@@ -3569,6 +3615,19 @@ function WorkersPanel({ ctx }) {
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 											style: { color: ref.orphan ? "#c98735" : void 0 },
 											children: ref.orphan ? copy.credentialOrphan : copy.credentialInUse(ref.consumer_count ?? 0)
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1 } }),
+										ref.ownership === "crew-owned" && ref.orphan === true && ref.purge_capability === "eligible" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											style: {
+												...S.btn,
+												padding: "2px 8px"
+											},
+											disabled: credentialLifecycleBusy !== null,
+											onClick: () => {
+												purgeCredentialRef(ref);
+											},
+											children: credentialLifecycleBusy === ref.reference_id ? copy.credentialPurging : copy.credentialPurgePlan
 										})
 									]
 								}, ref.reference_id))

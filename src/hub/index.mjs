@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -41,6 +41,8 @@ import { planProviderDelete } from '../provider-lifecycle.mjs';
 import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
 import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
+import { createCredentialPurgeFileHooks } from '../credential-purge-adapters.mjs';
+import { markCredentialPurged, normalizeCredentialPurgeState } from '../credential-purge-state.mjs';
 import { buildRuntimeReadinessSnapshot } from '../runtime-readiness-snapshot.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
@@ -103,12 +105,29 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 // the profile realm): a valid dispatch role set.
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
+const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
 
 function readProviderLifecycleState() {
   try {
     return normalizeProviderLifecycleState(JSON.parse(readFileSync(join(CONFIG_DIR, 'provider-lifecycle.json'), 'utf8')));
   } catch {
     return normalizeProviderLifecycleState();
+  }
+}
+
+function readCredentialPurgeState() {
+  try { return normalizeCredentialPurgeState(JSON.parse(readFileSync(CREDENTIAL_PURGE_STATE_FILE, 'utf8'))); } catch { return normalizeCredentialPurgeState(); }
+}
+
+function writeCredentialPurgeState(state) {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const temp = `${CREDENTIAL_PURGE_STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(temp, JSON.stringify(normalizeCredentialPurgeState(state), null, 2) + '\n', 'utf8');
+    renameSync(temp, CREDENTIAL_PURGE_STATE_FILE);
+  } catch (error) {
+    try { rmSync(temp, { force: true }); } catch {}
+    throw error;
   }
 }
 
@@ -143,6 +162,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     }
   } catch {}
   const lifecycle = readProviderLifecycleState();
+  const credentialPurge = readCredentialPurgeState();
   const inventory = buildProviderInventory({
     catalog,
     declarations,
@@ -154,6 +174,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     ...inventory,
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
+    credential_purged_refs: Object.keys(credentialPurge.purged),
   };
 }
 
@@ -1245,7 +1266,7 @@ export async function apply(ctx) {
         try {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const snapshot = await readProviderInventorySnapshot(hub, ctx, config);
-          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs });
+          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs, purged_refs: snapshot.credential_purged_refs });
           return sendJson(res, 200, { ok: true, ...credentials, runtime: getHubRuntimeIdentity() });
         } catch {
           return sendJson(res, 503, { ok: false, code: 'CREDENTIAL_REFERENCE_INVENTORY_UNAVAILABLE' });
@@ -1265,7 +1286,7 @@ export async function apply(ctx) {
           const body = await readBody(req);
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const snapshot = await readProviderInventorySnapshot(hub, ctx, config);
-          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs });
+          const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs, purged_refs: snapshot.credential_purged_refs });
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'purge-plan') {
             const planned = planCredentialPurge({ inventory: credentials, referenceId, expectedRevision: body?.expected_revision });
             if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
@@ -1283,10 +1304,14 @@ export async function apply(ctx) {
             if (!current.ok) return sendJson(res, 409, { ok: false, code: current.code });
             if (current.plan.expected_revision !== stored.plan.expected_revision) return sendJson(res, 409, { ok: false, code: 'CREDENTIAL_REFERENCE_CHANGED' });
             credentialPurgePlans.delete(body.plan_id);
+            const adapter = createCredentialPurgeFileHooks({
+              credentialsFile: join(CONFIG_DIR, 'harness', '.credentials.yaml'),
+              crewHome: join(CONFIG_DIR, 'harness'),
+            });
             const result = await executeCredentialPurge(current.plan, {
               recheck: async (id) => {
                 const freshSnapshot = await readProviderInventorySnapshot(hub, ctx, config);
-                const freshCredentials = buildCredentialReferenceInventory({ providers: freshSnapshot.records, additional_refs: freshSnapshot.credential_history_refs });
+                const freshCredentials = buildCredentialReferenceInventory({ providers: freshSnapshot.records, additional_refs: freshSnapshot.credential_history_refs, purged_refs: freshSnapshot.credential_purged_refs });
                 const freshPlan = planCredentialPurge({ inventory: freshCredentials, referenceId: id });
                 if (!freshPlan.ok) return { ok: false };
                 const freshRecord = freshCredentials.records.find((entry) => entry.reference_id === id);
@@ -1298,7 +1323,15 @@ export async function apply(ctx) {
                   purge_capability: freshRecord?.purge_capability,
                 };
               },
+              ...(adapter.ok ? { purge: adapter.purge, verify: adapter.verify } : {}),
             });
+            if (result.state === 'PURGED' || result.state === 'VERIFIED') {
+              try {
+                writeCredentialPurgeState(markCredentialPurged(readCredentialPurgeState(), current.plan));
+              } catch {
+                return sendJson(res, 503, { ok: false, code: 'CREDENTIAL_PURGE_AUDIT_FAILED', state: result.state, reference_id: referenceId });
+              }
+            }
             return sendJson(res, result.ok ? 200 : 503, result);
           }
           return sendJson(res, 404, { ok: false, code: 'CREDENTIAL_REFERENCE_ENDPOINT_NOT_FOUND' });

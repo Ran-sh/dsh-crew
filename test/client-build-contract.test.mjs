@@ -83,6 +83,15 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });
 
+test('credential lifecycle UI keeps purge separate from provider deletion', () => {
+  assert.match(panelSource, /credentialPurgePlan/);
+  assert.match(panelSource, /credentialPurgeConfirm/);
+  assert.match(panelSource, /credentialLifecycleBusy/);
+  assert.match(panelSource, /credential-references\/\$\{encoded\}\/purge-plan/);
+  assert.match(panelSource, /method: 'DELETE'/);
+  assert.match(panelSource, /purge_capability === 'eligible'/);
+});
+
 test('role-first routing UI exposes ordering, health gates, and reviewer gate', () => {
   assert.match(panelSource, /ordering: v/);
   assert.match(panelSource, /health_gate: v/);
