@@ -81,9 +81,13 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
   if (activeJobCount(record, activeJobs) > 0) return fail('PROVIDER_IN_USE');
 
   const replacement = text(replacementDefault);
+  const replacementRecord = replacement ? recordById(inventory, replacement) : null;
   if (record.references?.harness_default) {
-    if (!replacement || replacement === id || !recordById(inventory, replacement) || recordById(inventory, replacement)?.desired_state === 'absent') {
+    if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent') {
       return fail('PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
+    }
+    if (typeof replacementRecord.models?.[0] !== 'string' || replacementRecord.models[0].trim() === '') {
+      return fail('PROVIDER_DEFAULT_REPLACEMENT_MODEL_REQUIRED');
     }
   }
 
@@ -95,6 +99,10 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
       provider: { id, display_name: text(record.display_name) ?? id },
       expected_revision: text(expectedRevision) ?? text(record.declaration?.revision),
       replacement_default: replacement,
+      was_harness_default: record.references?.harness_default === true,
+      ...(replacement
+        ? { replacement_default_model: text(replacementRecord?.models?.[0]) }
+        : {}),
       will_remove: [
         'profile declaration', 'runtime desired registration',
         'worker priority references', 'reviewer priority references',
@@ -125,6 +133,8 @@ export async function executeProviderDelete(plan, hooks = {}) {
   let mutationsStarted = false;
   let rollbackAttempted = false;
   let rollbackErrorCode = null;
+  let rollbackRuntimeRestarted = null;
+  let rollbackRuntimeVerified = null;
   const transition = (next) => {
     if (!canTransitionProviderDelete(state, next)) throw Object.assign(new Error(`illegal provider delete transition ${state} -> ${next}`), { code: 'PROVIDER_DELETE_STATE_INVALID' });
     state = next;
@@ -159,11 +169,24 @@ export async function executeProviderDelete(plan, hooks = {}) {
       rollbackAttempted = true;
       try {
         await hooks.rollback(plan);
+        if (typeof hooks.restartRollback === 'function') {
+          const restarted = await hooks.restartRollback(plan);
+          rollbackRuntimeRestarted = restarted?.ok !== false;
+          if (rollbackRuntimeRestarted && typeof hooks.verifyRollback === 'function') {
+            const verified = await hooks.verifyRollback(plan);
+            rollbackRuntimeVerified = verified?.ok !== false;
+          }
+        }
       } catch (rollbackError) {
         rollbackErrorCode = boundedCode(rollbackError?.code, 'PROVIDER_DELETE_ROLLBACK_FAILED');
+        rollbackRuntimeRestarted = false;
       }
     }
     if (state !== 'FAILED' && canTransitionProviderDelete(state, 'FAILED')) transition('FAILED');
+  } finally {
+    if (typeof hooks.release === 'function') {
+      try { await hooks.release(plan); } catch {}
+    }
   }
   return {
     transaction_id: plan?.plan_id ?? null,
@@ -172,6 +195,8 @@ export async function executeProviderDelete(plan, hooks = {}) {
     error_code: errorCode,
     rollback_attempted: rollbackAttempted,
     rollback_error_code: rollbackErrorCode,
+    rollback_runtime_restarted: rollbackRuntimeRestarted,
+    rollback_runtime_verified: rollbackRuntimeVerified,
     verification,
     events,
   };

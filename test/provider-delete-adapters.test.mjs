@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
@@ -22,12 +22,14 @@ const INVENTORY = {
       id: 'opencode-go', display_name: 'OpenCode Go', ownership: 'crew-managed-profile', origin: 'profile-managed',
       declaration: { present: true, file: 'profile.yml' }, desired_state: 'present',
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
+      models: ['mimo-v2.5'],
       references: { harness_default: false, active_jobs: 0 },
     },
     {
       id: 'openrouter', display_name: 'openrouter', ownership: 'crew-managed-profile', origin: 'profile-managed',
       declaration: { present: true, file: 'profile.yml' }, desired_state: 'present',
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
+      models: ['minimax/minimax-m3:free'],
       references: { harness_default: true, active_jobs: 0 },
     },
   ],
@@ -53,7 +55,8 @@ function planFor(profileFile) {
 
 test('file adapters apply a deletion and verify absence without touching credentials', async () => {
   const paths = fixture();
-  let config = JSON.parse(readFileSync(paths.configFile, 'utf8'));
+  let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')), custom_providers: [{ id: 'vision', api_key: 'SECRET_VALUE' }] };
+  writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
   const hooks = createProviderDeleteFileHooks({
     ...paths,
     backupDir: join(paths.dir, 'backups'),
@@ -66,8 +69,59 @@ test('file adapters apply a deletion and verify absence without touching credent
   assert.equal(result.error_code, null);
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), false);
   assert.deepEqual(config.worker.model_policy.priority, []);
-  assert.equal(JSON.stringify(config).includes('OPENCODE_GO_API_KEY'), false);
+  assert.equal(JSON.stringify(config).includes('SECRET_VALUE'), true, 'live config remains intact');
+  const backupRoot = readdirSync(join(paths.dir, 'backups'), { withFileTypes: true })
+    .find((entry) => entry.isDirectory());
+  const backupText = readdirSync(join(paths.dir, 'backups', backupRoot.name))
+    .map((file) => readFileSync(join(paths.dir, 'backups', backupRoot.name, file), 'utf8'))
+    .join('\n');
+  assert.equal(backupText.includes('SECRET_VALUE'), false);
+  assert.equal(backupText.includes('OPENCODE_GO_API_KEY'), true, 'credential references are metadata, not values');
   assert.match(readFileSync(paths.lifecycleFile, 'utf8'), /opencode-go/);
+});
+
+test('file adapters fail closed on malformed managed JSON', async () => {
+  const paths = fixture();
+  writeFileSync(paths.configFile, '{ malformed');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_DELETE_FILE_INVALID');
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
+});
+
+test('file adapters apply a valid replacement Harness Default', async () => {
+  const paths = fixture();
+  let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')), harness_default: { provider: 'opencode-go', model: 'mimo-v2.5' } };
+  writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
+  const hooks = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir: join(paths.dir, 'backups'),
+    readConfig: () => config,
+    writeConfig: (next) => { config = next; writeFileSync(paths.configFile, JSON.stringify(next, null, 2) + '\n'); },
+    restart: async () => ({ ok: true }),
+  });
+  const inventory = structuredClone(INVENTORY);
+  inventory.records.find((record) => record.id === 'opencode-go').references.harness_default = true;
+  inventory.records.find((record) => record.id === 'openrouter').references.harness_default = false;
+  const expectedRevision = inspectProviderProfile(PROFILE).revision;
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision,
+  }).plan;
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.deepEqual(config.harness_default, { provider: 'openrouter', model: 'minimax/minimax-m3:free' });
+});
+
+test('file adapters serialize concurrent transactions with a managed lock', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  const second = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(planFor(paths.profileFile));
+  await assert.rejects(() => second.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_BUSY');
+  await first.release();
+  await second.release();
 });
 
 test('file adapters fail before writes when the profile revision is stale', async () => {

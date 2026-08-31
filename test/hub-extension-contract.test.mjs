@@ -21,6 +21,12 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(providerPreview, /healthGate/);
   assert.match(providerPreview, /tombstones: lifecycleState\.tombstones/);
   assert.match(hubSource, /delete-plan/);
+  assert.match(hubSource, /createProviderDeleteFileHooks/);
+  assert.match(hubSource, /req\.method === 'DELETE' && parts\.length === 1/);
+  assert.match(hubSource, /PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE/);
+  assert.match(hubSource, /const refreshed = planProviderDelete/);
+  assert.match(hubSource, /ownsCrew3210/);
+  assert.match(hubSource, /const code = boundedMachineCodeFromError\(err\)/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'events'/);

@@ -14,6 +14,7 @@ const records = [
     origin: 'profile-managed',
     ownership: 'crew-managed-profile',
     declaration: { present: true, file: 'profiles/dsh-crew/cordis.patch.yml' },
+    models: ['mimo-v2.5'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
     references: {
@@ -29,6 +30,7 @@ const records = [
     origin: 'dynamic',
     ownership: 'dynamic-user',
     declaration: { present: true, file: 'settings.yaml' },
+    models: ['minimax/minimax-m3:free'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
     references: {
@@ -93,6 +95,15 @@ test('delete plan records impact and sanitized credential references', () => {
   assert.equal(JSON.stringify(result).includes('value'), false);
   assert.equal(result.plan.restart_required, true);
   assert.equal(result.plan.rollback.credentials_included, false);
+});
+
+test('Harness Default deletion requires an advertised replacement model', () => {
+  const inventory = { records: records.map((record) => ({ ...record, models: record.id === 'openrouter' ? [] : record.models })) };
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory, replacementDefault: 'openrouter',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DEFAULT_REPLACEMENT_MODEL_REQUIRED');
 });
 
 test('delete transaction reaches VERIFIED only after restart and absence evidence', async () => {
@@ -170,4 +181,22 @@ test('missing rollback hook fails before any destructive adapter runs', async ()
   assert.equal(result.error_code, 'PROVIDER_LIFECYCLE_HOOK_MISSING');
   assert.equal(result.rollback_attempted, false);
   assert.deepEqual(calls, []);
+});
+
+test('failed deletion restarts and verifies the restored runtime when hooks provide it', async () => {
+  const calls = [];
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records }, replacementDefault: 'openrouter',
+  }).plan;
+  const result = await executeProviderDelete(plan, {
+    backup: async () => {}, markTombstone: async () => {}, scrubReferences: async () => {},
+    removeDeclarations: async () => {}, restart: async () => ({ ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }),
+    rollback: async () => calls.push('rollback'),
+    restartRollback: async () => { calls.push('restart-rollback'); return { ok: true }; },
+    verifyRollback: async () => { calls.push('verify-rollback'); return { ok: true }; },
+  });
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.rollback_runtime_restarted, true);
+  assert.equal(result.rollback_runtime_verified, true);
+  assert.deepEqual(calls, ['rollback', 'restart-rollback', 'verify-rollback']);
 });

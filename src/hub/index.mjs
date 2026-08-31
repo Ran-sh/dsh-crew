@@ -38,6 +38,7 @@ import { inspectProviderProfile, readProviderDeclarations } from '../provider-pr
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
+import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -832,6 +833,12 @@ export async function apply(ctx) {
   // calls resolveHubSpawnPayload (above) to stamp the effective tier onto
   // the spawn payload.
   const disposers = [];
+  const PROVIDER_DELETE_PLAN_TTL_MS = 10 * 60 * 1000;
+  const providerDeletePlans = new Map();
+  const rememberProviderDeletePlan = (plan) => {
+    providerDeletePlans.set(plan.plan_id, { plan, created_at: Date.now() });
+    while (providerDeletePlans.size > 32) providerDeletePlans.delete(providerDeletePlans.keys().next().value);
+  };
 
   // Multimodal bridge: register describe_image / generate_image for the DS
   // model. Config is read per call so settings-page edits apply live; the
@@ -1138,9 +1145,6 @@ export async function apply(ctx) {
         let url;
         try { url = new URL(req.url, 'http://localhost'); } catch { return sendJson(res, 400, { ok: false, code: 'PROVIDER_PLAN_INVALID' }); }
         const parts = url.pathname.slice(`${ROUTE_BASE}/providers`.length).split('/').filter(Boolean);
-        if (req.method !== 'POST' || parts.length !== 2 || parts[1] !== 'delete-plan') {
-          return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
-        }
         try {
           const providerId = decodeURIComponent(parts[0]);
           const body = await readBody(req);
@@ -1148,17 +1152,69 @@ export async function apply(ctx) {
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
           const profile = readProviderProfileRevision();
           if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
-          const planned = planProviderDelete({
-            providerId,
-            inventory,
-            activeJobs: hub.list(),
-            replacementDefault: body?.replacement_default,
-            expectedRevision: profile.revision,
-          });
-          if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
-          return sendJson(res, 200, { ok: true, profile_revision: profile.revision, plan: planned.plan });
-        } catch {
-          return sendJson(res, 400, { ok: false, code: 'PROVIDER_PLAN_INVALID' });
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
+            const planned = planProviderDelete({
+              providerId,
+              inventory,
+              activeJobs: hub.list(),
+              replacementDefault: body?.replacement_default,
+              expectedRevision: profile.revision,
+            });
+            if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
+            rememberProviderDeletePlan(planned.plan);
+            return sendJson(res, 200, { ok: true, profile_revision: profile.revision, plan: planned.plan });
+          }
+          if (req.method === 'DELETE' && parts.length === 1) {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_CONFIRM_REQUIRED' });
+            if (body?.purge_orphan_credentials === true) {
+              return sendJson(res, 400, { ok: false, code: 'CREDENTIAL_PURGE_REQUIRES_EXPLICIT_CONFIRMATION' });
+            }
+            const stored = providerDeletePlans.get(body?.plan_id);
+            if (!stored || Date.now() - stored.created_at > PROVIDER_DELETE_PLAN_TTL_MS || stored.plan.provider_id !== providerId) {
+              providerDeletePlans.delete(body?.plan_id);
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_EXPIRED' });
+            }
+            if (body?.expected_revision !== stored.plan.expected_revision || profile.revision !== stored.plan.expected_revision) {
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROFILE_CHANGED' });
+            }
+            const refreshed = planProviderDelete({
+              providerId,
+              inventory,
+              activeJobs: hub.list(),
+              replacementDefault: stored.plan.replacement_default,
+              expectedRevision: profile.revision,
+            });
+            if (!refreshed.ok) return sendJson(res, 409, { ok: false, code: refreshed.code });
+            if (refreshed.plan.replacement_default_model !== stored.plan.replacement_default_model) {
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_CHANGED' });
+            }
+            const executionPlan = { ...refreshed.plan, plan_id: stored.plan.plan_id, expected_revision: stored.plan.expected_revision };
+            const supervisor = ctx.dshCrewSupervisor ?? null;
+            const restart = supervisor?.restart3210;
+            const ownsCrew3210 = supervisor?.execution_plane === 'hub-3210'
+              && supervisor?.listen_port === 3210
+              && supervisor?.profile === 'dsh-crew';
+            if (typeof restart !== 'function' || !ownsCrew3210) {
+              return sendJson(res, 503, { ok: false, code: 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' });
+            }
+            const hooks = createProviderDeleteFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              configFile: join(CONFIG_DIR, 'config.json'),
+              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+              backupDir: join(CONFIG_DIR, 'provider-backups'),
+              restart: (plan) => restart.call(supervisor, plan),
+            });
+            providerDeletePlans.delete(body.plan_id);
+            const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
+            const result = await executeProviderDelete(executionPlan, hooks);
+            return sendJson(res, result.state === 'VERIFIED' ? 200 : 409, { ok: result.state === 'VERIFIED', result });
+          }
+          return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
+        } catch (err) {
+          const code = boundedMachineCodeFromError(err) ?? 'PROVIDER_PLAN_INVALID';
+          const status = code === 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' ? 503
+            : code.startsWith('PROVIDER_') || code.startsWith('CREDENTIAL_') ? 409 : 400;
+          return sendJson(res, status, { ok: false, code });
         }
       },
     }));

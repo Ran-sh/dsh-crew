@@ -70,7 +70,7 @@ test('an escalated failed-attempt code does not leak after a later success', asy
   assert.equal(view.failure.category, 'none');
 });
 
-test('failed reviewer code remains diagnostic without changing reviewer completion semantics', async () => {
+test('failed reviewer code remains diagnostic and fails closed the reviewer workflow', async () => {
   const rt = runtimeFor([{
     status: 'failed',
     result: '',
@@ -82,8 +82,8 @@ test('failed reviewer code remains diagnostic without changing reviewer completi
   await rt.wait(job.id, 1000);
   const view = rt.get(job.id, { withResult: true });
 
-  assert.equal(view.status, 'done', 'existing reviewer completion semantics stay unchanged');
-  assert.equal(view.error_code, 'NO_WORKER_MODEL_AVAILABLE');
+  assert.equal(view.status, 'failed', 'a failed reviewer cannot finalize a successful workflow');
+  assert.equal(view.error_code, 'REVIEW_INCONCLUSIVE');
   assert.equal(view.child_attempts[0].error_code, 'NO_WORKER_MODEL_AVAILABLE');
-  assert.equal(view.failure.category, 'provider');
+  assert.equal(view.failure.category, 'verification');
 });
