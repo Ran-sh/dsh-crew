@@ -17,6 +17,12 @@ function verifiedHubJob(job) {
 export function buildHubExecutionRows(hubJobs = []) {
   const jobs = Array.isArray(hubJobs) ? hubJobs : [];
   const workerPassed = jobs.some((job) => job?.role === 'worker' && verifiedHubJob(job));
+  const workerPrimaryPassed = jobs.some((job) => job?.role === 'worker'
+    && verifiedHubJob(job)
+    && Number(job?.attempt ?? job?.selection_trace?.logical_attempt ?? 0) === 0);
+  const workerEscalationPassed = jobs.some((job) => job?.role === 'worker'
+    && verifiedHubJob(job)
+    && (Number(job?.attempt ?? job?.selection_trace?.logical_attempt ?? 0) > 0));
   const reviewerPassed = jobs.some((job) => job?.role === 'reviewer'
     && verifiedHubJob(job)
     && job?.review_verdict === 'approve');
@@ -24,6 +30,16 @@ export function buildHubExecutionRows(hubJobs = []) {
     workerPassed
       ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED', evidence_source: 'hub-jobs' }
       : { id: 'model_execution', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    workerPrimaryPassed
+      ? { id: 'worker_primary_callable', status: 'PASS', reason_code: 'WORKER_PRIMARY_CALLABLE', evidence_source: 'hub-jobs' }
+      : { id: 'worker_primary_callable', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    workerEscalationPassed
+      ? { id: 'worker_escalation_callable', status: 'PASS', reason_code: 'WORKER_ESCALATION_CALLABLE', evidence_source: 'hub-jobs' }
+      : { id: 'worker_escalation_callable', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    reviewerPassed
+      ? { id: 'reviewer_primary_callable', status: 'PASS', reason_code: 'REVIEWER_PRIMARY_CALLABLE', evidence_source: 'hub-jobs' }
+      : { id: 'reviewer_primary_callable', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    { id: 'provider_lifecycle_consistent', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
     reviewerPassed
       ? { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED', evidence_source: 'hub-jobs' }
       : { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },

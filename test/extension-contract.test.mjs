@@ -46,6 +46,20 @@ test('real generic execution evidence proves the selected model and disabled opt
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
 
+test('dynamic primary callability evidence is accepted without provider-specific release ids', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' },
+      { id: 'worker_primary_callable', status: 'PASS', reason_code: 'WORKER_PRIMARY_CALLABLE' },
+    ] },
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'READY');
+  assert.equal(contract.readiness.components.model.reason_code, 'WORKER_PRIMARY_CALLABLE');
+});
+
 test('current provider catalog FAIL is not masked by historical model execution PASS', () => {
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },

@@ -123,6 +123,8 @@ test('trusted live Hub jobs promote only verified worker and approved reviewer e
 
   assert.equal(row(matrix, 'model_execution').status, 'PASS');
   assert.equal(row(matrix, 'model_execution').evidence_source, 'hub-jobs');
+  assert.equal(row(matrix, 'worker_primary_callable').status, 'PASS');
+  assert.equal(row(matrix, 'reviewer_primary_callable').status, 'PASS');
   assert.equal(row(matrix, 'reviewer_pipeline').status, 'PASS');
   assert.equal(row(matrix, 'reviewer_pipeline').evidence_source, 'hub-jobs');
 });
@@ -146,6 +148,23 @@ test('normal process completion never promotes partial work or requested review 
   });
   assert.equal(row(matrix, 'model_execution').status, 'NOT_RUN');
   assert.equal(row(matrix, 'reviewer_pipeline').status, 'NOT_RUN');
+});
+
+test('escalated worker success does not masquerade as primary callability', () => {
+  const matrix = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerCatalogChecked: true,
+    providerCatalogBody: { ok: true, health: { hints: [] } },
+    hubJobsChecked: true,
+    hubJobsBody: {
+      ok: true,
+      jobs: [{ role: 'worker', attempt: 1, status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true }],
+    },
+  });
+  assert.equal(row(matrix, 'model_execution').status, 'PASS');
+  assert.equal(row(matrix, 'worker_primary_callable').status, 'NOT_RUN');
+  assert.equal(row(matrix, 'worker_escalation_callable').status, 'PASS');
 });
 
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {

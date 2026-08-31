@@ -37,7 +37,7 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
 export function buildExtensionContract({ config = {}, readinessMatrix = {}, workspace = null, profiles = null, runtime = null } = {}) {
   const workerEnabled = config.subagents_enabled !== false && config.worker_state !== 'disabled';
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
-  const realModelEvidence = ['model_execution', 'deepseek_flash', 'deepseek_pro', 'opencode_go_mimo_qwen']
+  const realModelEvidence = ['worker_primary_callable', 'model_execution', 'worker_escalation_callable', 'deepseek_flash', 'deepseek_pro']
     .map((id) => row(readinessMatrix, id))
     .find((entry) => entry?.status === 'PASS');
   const catalogEvidence = row(readinessMatrix, 'provider_catalog');

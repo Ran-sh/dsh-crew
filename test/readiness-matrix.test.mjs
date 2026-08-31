@@ -30,6 +30,9 @@ test('compatible Hub is PASS while execution and CI rows remain NOT_RUN without 
   assert.equal(row(matrix, 'linux_deterministic').status, 'NOT_RUN');
   assert.equal(row(matrix, 'deepseek_flash').status, 'NOT_RUN');
   assert.equal(row(matrix, 'standalone_official').reason_code, READINESS_REASON_CODES.CREDENTIAL_STATUS_NOT_PROBED);
+  assert.equal(row(matrix, 'opencode_go_mimo_qwen'), undefined);
+  assert.equal(row(matrix, 'worker_primary_callable').status, 'NOT_RUN');
+  assert.equal(row(matrix, 'reviewer_primary_callable').status, 'NOT_RUN');
 });
 
 test('unreachable Hub blocks Hub/catalog rows instead of reporting FAIL for unavailable infrastructure', () => {
