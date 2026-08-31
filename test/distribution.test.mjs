@@ -109,6 +109,12 @@ test('production dispatch is 3210-only and the control UI does not offer standal
   assert.doesNotMatch(client, /\['auto', 'hub', 'standalone'\]/);
 });
 
+test('control UI labels legacy standalone metadata without implying a production route', () => {
+  const client = read('src/client/index.tsx');
+  assert.doesNotMatch(client, /Standalone (?:always uses|始终用)/i);
+  assert.match(client, /legacy metadata|legacy migration metadata|旧版迁移元数据/i);
+});
+
 test('primary documentation states the legacy launcher migration boundary', () => {
   for (const file of ['README.md', 'README.zh.md']) {
     const doc = read(file);
