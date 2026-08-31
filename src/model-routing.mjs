@@ -27,11 +27,34 @@ export const MODEL_SELECTION_REASON_CODES = Object.freeze({
   PREFERRED_MODEL_UNAVAILABLE: 'PREFERRED_MODEL_UNAVAILABLE',
   PREFERRED_MODEL_AMBIGUOUS: 'PREFERRED_MODEL_AMBIGUOUS',
   ADAPTIVE_DEPRIORITIZED: 'ADAPTIVE_DEPRIORITIZED',
+  PROVIDER_TOMBSTONED: 'PROVIDER_TOMBSTONED',
+  CREDENTIAL_MISSING: 'CREDENTIAL_MISSING',
+  QUOTA_EXHAUSTED: 'QUOTA_EXHAUSTED',
+  RATE_LIMITED: 'RATE_LIMITED',
+  PROBE_TIMEOUT: 'PROBE_TIMEOUT',
+  PROVIDER_INTERNAL_ERROR: 'PROVIDER_INTERNAL_ERROR',
   HARNESS_DEFAULT_INVALID: 'HARNESS_DEFAULT_INVALID',
   HARNESS_DEFAULT_PROVIDER_UNAVAILABLE: 'HARNESS_DEFAULT_PROVIDER_UNAVAILABLE',
   PRIMARY_CANDIDATES_EXHAUSTED: 'PRIMARY_CANDIDATES_EXHAUSTED',
   ESCALATION_CANDIDATES_EXHAUSTED: 'ESCALATION_CANDIDATES_EXHAUSTED',
   NO_AVAILABLE_MODEL: 'NO_AVAILABLE_MODEL',
+});
+
+const HEALTH_BLOCK_REASONS = Object.freeze({
+  'credential-missing': MODEL_SELECTION_REASON_CODES.CREDENTIAL_MISSING,
+  'quota-exhausted': MODEL_SELECTION_REASON_CODES.QUOTA_EXHAUSTED,
+  'rate-limited': MODEL_SELECTION_REASON_CODES.RATE_LIMITED,
+  timeout: MODEL_SELECTION_REASON_CODES.PROBE_TIMEOUT,
+  'internal-error': MODEL_SELECTION_REASON_CODES.PROVIDER_INTERNAL_ERROR,
+});
+
+const BLOCKED_MODEL_CODES = Object.freeze({
+  [MODEL_SELECTION_REASON_CODES.CREDENTIAL_MISSING]: 'MODEL_BLOCKED_CREDENTIAL',
+  [MODEL_SELECTION_REASON_CODES.QUOTA_EXHAUSTED]: 'MODEL_BLOCKED_QUOTA',
+  [MODEL_SELECTION_REASON_CODES.RATE_LIMITED]: 'MODEL_BLOCKED_RATE_LIMIT',
+  [MODEL_SELECTION_REASON_CODES.PROBE_TIMEOUT]: 'MODEL_BLOCKED_TIMEOUT',
+  [MODEL_SELECTION_REASON_CODES.PROVIDER_INTERNAL_ERROR]: 'MODEL_BLOCKED_PROVIDER',
+  [MODEL_SELECTION_REASON_CODES.PROVIDER_TOMBSTONED]: 'MODEL_BLOCKED_TOMBSTONED',
 });
 
 export function normalizeModelRef(raw) {
@@ -109,6 +132,24 @@ function candidateDecision(ref, source, status, { reasonCode, advertised } = {})
     status,
     ...(reasonCode ? { reason_code: reasonCode } : {}),
     ...(advertised === false ? { advertised: false } : {}),
+  };
+}
+
+function healthAdmissionReason(ref, { healthStore, healthGate, tombstones } = {}) {
+  if (tombstones?.[ref?.provider] === 'absent') return MODEL_SELECTION_REASON_CODES.PROVIDER_TOMBSTONED;
+  if (healthGate !== 'hard-failures' || typeof healthStore?.get !== 'function') return null;
+  const observation = healthStore.get(ref?.provider, ref?.model);
+  if (observation?.fresh !== true) return null;
+  return HEALTH_BLOCK_REASONS[observation.state] ?? null;
+}
+
+function blockedSelection(trace, ref, source, reasonCode) {
+  trace.fallback_reason = reasonCode;
+  return {
+    ok: false,
+    code: BLOCKED_MODEL_CODES[reasonCode] ?? 'MODEL_BLOCKED_PROVIDER',
+    message: `Model ${ref?.provider ?? 'unknown'}/${ref?.model ?? 'unknown'} is blocked by ${reasonCode}.`,
+    selection_trace: trace,
   };
 }
 
@@ -209,6 +250,10 @@ export function resolveWorkerModel({
   traceContext = {},
   adaptive,
   adaptiveHealth,
+  healthStore,
+  healthGate,
+  allowFallback = true,
+  tombstones,
 } = {}) {
   const providers = providerMap(catalog);
   const normalizedPriority = normalizeModelPriority(priority);
@@ -240,6 +285,14 @@ export function resolveWorkerModel({
       continue;
     }
     const advertised = (provider.models ?? []).some((model) => model?.id === ref.model);
+    const healthReason = healthAdmissionReason(ref, { healthStore, healthGate, tombstones });
+    if (healthReason) {
+      trace.ordered_candidates.push(candidateDecision(ref, prioritySource, 'skipped', {
+        reasonCode: healthReason, advertised,
+      }));
+      if (allowFallback === false) return blockedSelection(trace, ref, prioritySource, healthReason);
+      continue;
+    }
     selectTrace(trace, ref, prioritySource, { advertised });
     return {
       ok: true,
@@ -321,6 +374,13 @@ export function resolveWorkerModel({
       const fallbackReason = traceContext.candidateSet === 'escalation'
         ? MODEL_SELECTION_REASON_CODES.ESCALATION_CANDIDATES_EXHAUSTED
         : MODEL_SELECTION_REASON_CODES.PRIMARY_CANDIDATES_EXHAUSTED;
+      const healthReason = healthAdmissionReason(defaultRef, { healthStore, healthGate, tombstones });
+      if (healthReason) {
+        trace.ordered_candidates.push(candidateDecision(defaultRef, 'harness-default', 'skipped', {
+          reasonCode: healthReason,
+        }));
+        if (allowFallback === false) return blockedSelection(trace, defaultRef, 'harness-default', healthReason);
+      } else {
       selectTrace(trace, defaultRef, 'harness-default', { fallbackReason });
       return {
         ok: true,
@@ -331,6 +391,7 @@ export function resolveWorkerModel({
           : {}),
         selection_trace: trace,
       };
+      }
     }
   }
   trace.fallback_reason = MODEL_SELECTION_REASON_CODES.NO_AVAILABLE_MODEL;
@@ -358,6 +419,10 @@ export function resolveModel({
   catalog,
   harnessDefault,
   adaptiveHealth,
+  healthStore,
+  healthGate,
+  allowFallback = true,
+  tombstones,
 } = {}) {
   const p = policy && typeof policy === 'object' ? policy : {};
   const escalated = Number.isInteger(attempt) && attempt > 0;
@@ -378,6 +443,10 @@ export function resolveModel({
     preferredModelId,
     adaptive: p.adaptive,
     adaptiveHealth,
+    healthStore,
+    healthGate,
+    allowFallback,
+    tombstones,
     traceContext: {
       role,
       logicalAttempt: attempt,
