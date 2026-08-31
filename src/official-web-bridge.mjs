@@ -16,16 +16,10 @@ const HOP_BY_HOP = new Set([
   'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
 ]);
 
-export function resolveCrewBridgeTarget(env = process.env) {
-  const raw = env?.DSH_CREW_BRIDGE_TARGET;
-  if (!raw) return CREW_BRIDGE_TARGET;
-  try {
-    const target = new URL(raw);
-    if (target.protocol !== 'http:' || !isLocalHostname(target.hostname.toLowerCase()) || target.pathname !== '/' || target.search || target.hash) return CREW_BRIDGE_TARGET;
-    const port = Number(target.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return CREW_BRIDGE_TARGET;
-    return target.origin;
-  } catch { return CREW_BRIDGE_TARGET; }
+export function resolveCrewBridgeTarget() {
+  // Production bridge routing is an invariant, not an environment setting.
+  // Tests can inject dependencies directly into createCrewSidecarSupervisor.
+  return CREW_BRIDGE_TARGET;
 }
 
 export function isTrustedLocalRequest(req) {
@@ -108,6 +102,7 @@ export function createCrewSidecarSupervisor({
   pollInterval = 250,
   ownershipFile = join(crewDshHome({ home }), 'supervisor-ownership.json'),
 } = {}) {
+  if (bridgeTarget !== CREW_BRIDGE_TARGET) throw new Error('Crew supervisor is fixed to the isolated 3210 Crew Hub');
   let starting = null;
   let restarting = null;
   let runningChild = null;
