@@ -154,9 +154,12 @@ export async function proxyCrewRequest(req, res, {
     if (backend?.ok === false) throw new Error('backend unavailable');
     const method = String(req.method ?? 'GET').toUpperCase();
     const bodyBuffer = method === 'GET' || method === 'HEAD' ? null : await readBoundedBody(req);
+    const requestHeaders = safeHeaders(req.headers);
+    requestHeaders['x-dsh-crew-bridge'] = '3080-to-3210';
+    requestHeaders['x-dsh-crew-execution-plane'] = 'hub-3210';
     const response = await fetchImpl(`${bridgeTarget}${req.url}`, {
       method,
-      headers: safeHeaders(req.headers),
+      headers: requestHeaders,
       body: bodyBuffer === null ? undefined : new Blob([bodyBuffer]),
       signal: AbortSignal.timeout(120_000),
     });
@@ -184,6 +187,8 @@ export function registerOfficialWebBridge(ctx, options = {}) {
           mode: 'official-3080-isolated-3210',
           surface: 'official-bridge',
           ui_role: 'control-plane',
+          execution_plane: 'hub-3210',
+          listen_port: 3210,
         });
       },
     });

@@ -78,6 +78,8 @@ test('proxy preserves the Crew path/query/body but strips hop-by-hop request hea
   assert.equal(upstream.init.headers.connection, undefined);
   assert.equal(upstream.init.headers['content-length'], undefined);
   assert.equal(upstream.init.headers['content-type'], 'application/json');
+  assert.equal(upstream.init.headers['x-dsh-crew-bridge'], '3080-to-3210');
+  assert.equal(upstream.init.headers['x-dsh-crew-execution-plane'], 'hub-3210');
   assert.equal(res.status, 201);
   assert.equal(res.headers.connection, undefined);
   assert.equal(res.headers['x-dsh-crew-bridge'], '3080-to-3210');
@@ -200,6 +202,8 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
     mode: 'official-3080-isolated-3210',
     surface: 'official-bridge',
     ui_role: 'control-plane',
+    execution_plane: 'hub-3210',
+    listen_port: 3210,
   });
 });
 
