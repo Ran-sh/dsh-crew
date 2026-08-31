@@ -118,6 +118,12 @@ test('shared client renders a full 3080 control plane and a minimal 3210 diagnos
   assert.match(panelSource, /http:\/\/127\.0\.0\.1:3080\/?/);
 });
 
+test('client consumes the Hub extension readiness snapshot instead of recomputing Crew state', () => {
+  assert.match(panelSource, /get\('\/extension'\)\.catch\(\(\) => null\)/);
+  assert.match(panelSource, /setReadinessSnapshot\(ext\.extension\?\.readiness_snapshot/);
+  assert.match(panelSource, /readinessSnapshot \}/);
+});
+
 test('3080 readiness matrix names every required host integration', () => {
   for (const label of ['Codex MCP', 'ds-worker', 'ds-reviewer', 'Claude plugin', 'ZCode MCP', 'Crew Harness', 'Official bridge']) {
     assert.match(panelSource, new RegExp(label));

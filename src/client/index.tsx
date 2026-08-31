@@ -540,6 +540,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
   const [surface, setSurface] = useState<string>('detecting');
   const [runtimeInfo, setRuntimeInfo] = useState<any>(undefined);
+  const [readinessSnapshot, setReadinessSnapshot] = useState<any>(undefined);
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
@@ -615,9 +616,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [j, s, c, pr, pi, ph, cr] = await Promise.all([
+      const [j, s, c, pr, pi, ph, cr, ext] = await Promise.all([
         get('/jobs'), get('/install/status'), get('/config'), get('/presets'),
-        get('/providers').catch(() => null), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null),
+        get('/providers').catch(() => null), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null), get('/extension').catch(() => null),
       ]);
       if (j.ok) setJobs(j.jobs ?? []);
       if (s.ok) setStatus(s.status);
@@ -629,6 +630,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (pi?.ok) setProviderInventory(pi);
       if (ph?.ok) setProviderHealth(ph.health ?? []);
       if (cr?.ok) setCredentialRefs(cr.records ?? []);
+      if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
     } catch { /* instance restarting */ }
   }, [get]);
 
@@ -960,7 +962,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
   const modelActivity = aggregateModelInvocations(jobs);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
-  const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface });
+  const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface, readinessSnapshot });
 
   if (!currentSurfaceResponsibilities.fullControlPlane) {
     return <MinimalCrewPanel locale={locale} surface={surface} runtime={runtimeInfo} />;
