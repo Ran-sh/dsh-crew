@@ -9,6 +9,17 @@ test('attemptFromView preserves error_code from Hub/Standalone views', () => {
   assert.equal(attempt.error_code, 'NO_WORKER_MODEL_AVAILABLE');
 });
 
+test('attemptFromView preserves Hub execution-plane provenance', () => {
+  const attempt = attemptFromView({
+    id: 'hub-3', status: 'done', execution_context: {
+      execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
+    },
+  }, { id: 'wf-3-a0', role: 'worker', attempt: 0 });
+  assert.deepEqual(attempt.execution_context, {
+    execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
+  });
+});
+
 test('attemptFromView accepts legacy code when error_code is absent', () => {
   const attempt = attemptFromView({
     id: 'hub-2', status: 'failed', code: 'ROLE_DISABLED',

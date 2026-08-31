@@ -71,6 +71,7 @@ export function attemptFromView(view, spec) {
     candidateSet: logicalAttempt > 0 ? 'escalation' : 'primary',
     provider: view?.provider ?? null,
     model: view?.model ?? null,
+    execution_context: view?.execution_context ?? null,
     source: source ?? 'transport-selection',
     escalationReason: spec.escalation_reason ?? null,
   });
@@ -88,6 +89,7 @@ export function attemptFromView(view, spec) {
     attempt: logicalAttempt,
     provider: view?.provider ?? null,
     model: view?.model ?? null,
+    execution_context: view?.execution_context ?? null,
     selection_source: source,
     selection_trace: selectionTrace,
     status: view?.status ?? 'failed',

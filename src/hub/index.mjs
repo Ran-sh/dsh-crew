@@ -237,6 +237,7 @@ export class WorkerRegistry {  constructor(ctx) {
       cleanup_warning: job.cleanup_warning ?? null,
       profile_id: job.profile_id ?? null,
       workspace_context: job.workspace_context ?? null,
+      execution_context: job.execution_context ?? null,
       event_cursor: hubCanonicalEvents(job).at(-1)?.sequence ?? 0,
     };
     if (withResult) {
@@ -398,6 +399,15 @@ export class WorkerRegistry {  constructor(ctx) {
       effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd: executionCwd, requested_cwd: cwd,
       isolation: isolatedWorkspace ? 'worktree' : 'shared',
+      execution_context: (() => {
+        const runtime = getHubRuntimeIdentity();
+        return {
+          execution_plane: runtime.execution_plane,
+          profile: runtime.profile,
+          listen_port: runtime.listen_port,
+          runtime_id: runtime.runtime_id,
+        };
+      })(),
       allow_no_changes: allow_no_changes === true,
       workspace_branch: workspace_branch ?? null, isolatedWorkspace,
       profile_id: profile_id ?? null, workspace_context: workspace_context ?? null,

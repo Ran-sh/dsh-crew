@@ -131,6 +131,21 @@ function changedFilesFromView(view) {
   ])];
 }
 
+function boundedExecutionContext(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const executionPlane = boundedText(value.execution_plane, 64);
+  const profile = boundedText(value.profile, 64);
+  const runtimeId = boundedText(value.runtime_id, 128);
+  const port = Number.isInteger(value.listen_port) ? value.listen_port : null;
+  if (!executionPlane && !profile && !runtimeId && port === null) return null;
+  return {
+    execution_plane: executionPlane,
+    profile,
+    listen_port: port,
+    runtime_id: runtimeId,
+  };
+}
+
 /**
  * Build the machine-first Result Contract for a workflow.
  *
@@ -163,6 +178,7 @@ export function buildEvidenceEnvelope(view = {}) {
       review_verdict: review?.verdict ?? null,
     },
     selection_trace: compactSelectionTrace(selectionAttempts),
+    execution_context: boundedExecutionContext(view.execution_context ?? selectionAttempts[0]?.execution_context),
     changed_files: changedFiles,
     changes: boundedStrings(outcome.changes),
     tests: boundedTests(outcome.tests),

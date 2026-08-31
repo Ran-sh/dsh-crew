@@ -569,6 +569,7 @@ export function createWorkflowRuntime(adapters, {
       attempt,
       provider: ar.provider ?? null,
       model: ar.model ?? null,
+      execution_context: ar.execution_context ?? null,
       selection_source: ar.selection_source ?? null,
       selection_trace: ar.selection_trace ?? null,
       status: ar.status ?? 'failed',
@@ -627,6 +628,7 @@ export function createWorkflowRuntime(adapters, {
       status: job.status,
       attempt: job.attempts.length,
       current_model: job.attempts[job.attempts.length - 1]?.model ?? null,
+      execution_context: job.attempts[job.attempts.length - 1]?.execution_context ?? null,
       model_class_hint: job.model_class_hint,
       source: job.source,
       profile_id: job.profile_id,
@@ -657,6 +659,7 @@ export function createWorkflowRuntime(adapters, {
     if (withResult) {
       v.child_attempts = job.attempts.map((a) => ({
         id: a.id, role: a.role, attempt: a.attempt, provider: a.provider, model: a.model,
+        execution_context: a.execution_context ?? null,
         selection_source: a.selection_source, selection_trace: a.selection_trace ?? null,
         status: a.status, stopReason: a.stopReason,
         outcome_task: a.outcome?.task_status ?? null,

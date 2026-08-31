@@ -67,6 +67,7 @@ const fullView = {
   }],
   profile_id: 'worker-default',
   workspace_context: { workspace_id: 'demo', repo_root: '/repo' },
+  execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
 };
 
 test('canonical job events use the versioned allow-list and stable envelope', () => {
@@ -99,6 +100,7 @@ test('evidence envelope is machine-first and excludes raw result and patch text'
   assert.equal(evidence.schema_version, 1);
   assert.equal(evidence.job_id, 'wf-1');
   assert.equal(evidence.client_job_id, 'client-42');
+  assert.deepEqual(evidence.execution_context, { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' });
   assert.equal(evidence.status, 'PASS');
   assert.equal(evidence.summary.task_status, 'success');
   assert.deepEqual(evidence.changed_files, ['src/a.mjs']);

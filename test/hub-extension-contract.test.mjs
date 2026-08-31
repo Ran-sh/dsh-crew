@@ -74,6 +74,16 @@ test('Hub registry lists completed jobs for live extension readiness evidence', 
   );
 });
 
+test('Hub job views expose 3210 execution provenance when present', () => {
+  const hub = new WorkerRegistry({});
+  const view = hub.view({
+    id: 'hub-provenance', sessionId: 'session-1', role: 'worker', tier: 'flash', provider: 'p', model: 'm',
+    status: 'done', source: 'test', task: 'x', effort: 'max', startedAt: 't0', endedAt: 't1',
+    execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
+  });
+  assert.deepEqual(view.execution_context, { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' });
+});
+
 test('direct Hub jobs project deterministic canonical events without raw result text', () => {
   const running = hubCanonicalEvents({
     id: 'hub-1', role: 'worker', attempt: 0, status: 'running', phase: 'running',
