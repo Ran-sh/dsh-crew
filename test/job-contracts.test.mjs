@@ -120,6 +120,17 @@ test('evidence envelope is machine-first and excludes raw result and patch text'
   assert.equal('result' in evidence, false);
 });
 
+test('execution provenance preserves the sanitized ingress authority', () => {
+  const view = { id: 'wf-ingress', status: 'done', execution_context: {
+    execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+    runtime_id: 'runtime-1', ingress: 'official-3080',
+  } };
+  const compact = projectWorkflowView(view, { detail: 'full' });
+  assert.equal(compact.execution_context.ingress, 'official-3080');
+  assert.equal(buildEvidenceEnvelope(view).execution_context.ingress, 'official-3080');
+  assert.equal(JSON.stringify(compact).includes('http'), false);
+});
+
 test('direct Hub evidence preserves its top-level model selection trace', () => {
   const directView = {
     id: 'hub-1', role: 'worker', attempt: 0, status: 'done', phase: 'completed',
