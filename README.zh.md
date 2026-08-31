@@ -40,12 +40,15 @@ dsh-crew status
 ```bash
 dsh-crew inspect          # 实时能力与就绪度
 dsh-crew jobs list        # 任务与 Result Contract
+dsh-crew providers list   # 3210 Harness Provider 清单（不含密钥）
+dsh-crew providers probe <provider-id>
 dsh-crew update           # 更新并修复已启用集成
 dsh-crew uninstall        # 移除受管文件，保留配置/备份
 ```
 
 运行时隔离在 `~/.config/dsh-crew/harness`，使用 `profile: dsh-crew`；官方 `web` profile
 只接收 3080 轻量桥接。
+生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行，3080 仅作为控制面桥接。
 
 ## 旧启动器迁移
 

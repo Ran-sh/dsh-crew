@@ -43,12 +43,16 @@ silently falling back.
 ```bash
 dsh-crew inspect          # live capabilities and readiness
 dsh-crew jobs list        # jobs and Result Contracts
+dsh-crew providers list   # 3210 Harness provider inventory (secret-free)
+dsh-crew providers probe <provider-id>
 dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```
 
 The runtime is isolated under `~/.config/dsh-crew/harness` with `profile: dsh-crew`;
 the official `web` profile receives only the 3080 bridge.
+All production Worker/Reviewer model calls are executed by the isolated 3210
+Crew Harness; 3080 is a control-plane bridge only.
 
 ## Legacy launcher migration
 
