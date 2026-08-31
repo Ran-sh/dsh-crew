@@ -591,13 +591,35 @@ export async function npxRollback({
     return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
   } catch (error) {
     const prior = { name: current.name, version: current.version, path: current.path };
+    let recovery;
     try {
       switchPointer(prior);
-      if (previousManifest) await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
-      await restart(prior.version);
-      await verifyRuntime(prior.version);
-    } catch { /* preserve the original bounded failure */ }
-    return { ok: false, error: error?.message ?? 'release rollback failed', code: error?.code ?? 'RELEASE_ROLLBACK_FAILED', restored: true };
+      if (!previousManifest) throw Object.assign(new Error('previous release manifest unavailable'), { stage: 'activation' });
+      const activated = await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
+      if (activated !== true) throw Object.assign(new Error('previous release activation failed'), { stage: 'activation' });
+      const restarted = await restart(prior.version);
+      if (restarted?.ok !== true) throw Object.assign(new Error('previous runtime restart failed'), { stage: 'restart' });
+      const runtime = await verifyRuntime(prior.version);
+      if (runtime?.ok !== true) throw Object.assign(new Error('previous runtime verification failed'), { stage: 'verification' });
+      const restoredPointer = readCurrentPointer({ home });
+      if (restoredPointer?.path !== prior.path || restoredPointer.version !== prior.version) {
+        throw Object.assign(new Error('previous release pointer was not restored'), { stage: 'pointer' });
+      }
+      recovery = { ok: true, version: prior.version, path: prior.path };
+    } catch (recoveryError) {
+      recovery = {
+        ok: false,
+        code: 'RELEASE_ROLLBACK_RECOVERY_FAILED',
+        stage: ['activation', 'restart', 'verification', 'pointer'].includes(recoveryError?.stage) ? recoveryError.stage : 'unknown',
+      };
+    }
+    return {
+      ok: false,
+      error: error?.message ?? 'release rollback failed',
+      code: error?.code ?? 'RELEASE_ROLLBACK_FAILED',
+      restored: recovery.ok === true,
+      recovery,
+    };
   }
 }
 

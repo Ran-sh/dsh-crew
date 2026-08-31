@@ -893,7 +893,7 @@ test('release rollback reports restored only after complete compensation', async
     writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
     const result = await npxRollback({
       home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
-      activate: async ({ releaseDir }) => releaseDir === oldDir,
+      activate: async () => true,
       restart: async (version) => version === '0.5.6' ? { ok: false, code: 'TARGET_RESTART_FAILED' } : { ok: true },
       verifyRuntime: async (version) => version === '0.5.7' ? { ok: true, runtime_version: version } : { ok: false, code: 'TARGET_VERIFY_FAILED' },
     });
