@@ -42,6 +42,7 @@ import {
   npxInspect,
   npxJobs,
   npxProviders,
+  npxCredentials,
   npxReleases,
   npxRollback,
   runNpxCli,
@@ -1068,6 +1069,26 @@ test('providers CLI completes the deferred rollback through the owned 3080 super
   assert.equal(result.ok, true);
   assert.equal(calls.length, 4);
   assert.match(calls[3][0], /providers\/opencode-go\/verify-rollback/);
+});
+
+test('credentials CLI exposes an independent plan-and-confirm purge flow', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    if (url.endsWith('/runtime')) return {
+      ok: true,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['credential-reference-inventory-v1', 'credential-purge-v1'] }),
+    };
+    return { ok: true, json: async () => ({ ok: true, records: [], plan: { plan_id: 'purge-1', expected_revision: 'a'.repeat(64) }, state: 'VERIFIED' }) };
+  };
+  const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
+  await npxCredentials({ ...common, args: ['list'] });
+  assert.match(calls.at(-1)[0], /credential-references$/);
+  await npxCredentials({ ...common, args: ['purge-plan', 'env:OLD_KEY'] });
+  assert.match(calls.at(-1)[0], /credential-references\/env%3AOLD_KEY\/purge-plan$/);
+  await npxCredentials({ ...common, args: ['purge', 'env:OLD_KEY'], planId: 'purge-1', expectedRevision: 'a'.repeat(64), confirm: true });
+  assert.equal(calls.at(-1)[1].method, 'DELETE');
+  assert.match(calls.at(-1)[1].body, /"confirm":true/);
 });
 
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
