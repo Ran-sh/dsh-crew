@@ -31,8 +31,17 @@ test('fresh config exposes schema-v3 canonical authority without writing a file'
   assert.equal(config.config_authority, 'canonical');
   assert.equal(config.config_migration_required, false);
   assert.equal(config.execution.max_parallel, 3);
+  assert.equal(config.execution.transport, 'hub-3210');
   assert.equal(config.worker.state, 'auto');
   assert.equal(config.review.state, 'disabled');
+});
+
+test('execution transport defaults to 3210 and only accepts the explicit legacy escape hatch', (t) => {
+  const file = fixture(t);
+  const legacy = writeGlobalConfig({ execution: { transport: 'standalone-legacy' } }, { configFile: file });
+  assert.equal(legacy.execution.transport, 'standalone-legacy');
+  const invalid = writeGlobalConfig({ execution: { transport: 'other' } }, { configFile: file });
+  assert.equal(invalid.execution.transport, 'hub-3210');
 });
 
 test('legacy files are imported read-only and report migration required', (t) => {

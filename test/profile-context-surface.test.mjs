@@ -22,6 +22,7 @@ test('blocking and async MCP requests expose the same profile and workspace fiel
 test('session config exposes profiles and the narrow extension contract', () => {
   assert.match(server, /role_profiles:/);
   assert.match(server, /extension_contract:/);
+  assert.match(server, /productionOnly: transport === 'hub-3210'/);
 });
 
 test('workflow snapshots profile/context metadata and honors profile fallback policy', () => {

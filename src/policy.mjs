@@ -17,6 +17,12 @@ function validObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+const EXECUTION_TRANSPORTS = new Set(['hub-3210', 'standalone-legacy']);
+
+function normalizeExecutionTransport(value) {
+  return EXECUTION_TRANSPORTS.has(value) ? value : 'hub-3210';
+}
+
 function hasCanonicalAuthority(raw) {
   return Number(raw?.config_schema_version) >= CONFIG_SCHEMA_VERSION
     && validObject(raw?.worker)
@@ -81,6 +87,7 @@ function normalizeCanonical(raw) {
       // There is one global dispatch permission. `execution.enabled` is a
       // canonical mirror of the top-level switch, never a second authority.
       enabled: base.subagents_enabled,
+      transport: normalizeExecutionTransport(raw?.execution?.transport ?? base.execution?.transport),
     },
     worker: {
       ...base.worker,

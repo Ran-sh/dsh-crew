@@ -44,3 +44,16 @@ test('explicit standalone ignores Hub compatibility state', () => {
     reason: 'explicit-standalone',
   });
 });
+
+test('production 3210 transport fails closed instead of falling back to standalone', () => {
+  const decision = resolveHubExecutionMode('auto', unreachable, { productionOnly: true });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.code, HUB_COMPATIBILITY_CODES.UNREACHABLE);
+  assert.match(decision.error, /3210|not reachable/i);
+});
+
+test('production 3210 transport rejects explicit standalone mode', () => {
+  const decision = resolveHubExecutionMode('standalone', compatible, { productionOnly: true });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.code, 'STANDALONE_EXECUTION_DISABLED');
+});

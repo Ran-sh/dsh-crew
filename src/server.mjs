@@ -144,7 +144,8 @@ function dispatchDisabled() {
 
 async function resolveMode() {
   const status = await hubStatus();
-  const decision = resolveHubExecutionMode(sessionConfig.mode, status);
+  const transport = currentGlobalConfig().execution?.transport ?? 'hub-3210';
+  const decision = resolveHubExecutionMode(sessionConfig.mode, status, { productionOnly: transport === 'hub-3210' });
   if (!decision.ok) {
     throw Object.assign(new Error(decision.error), {
       code: decision.code,

@@ -13,8 +13,15 @@ export function hubCompatibilityMessage(status = {}) {
   return `DSH workers hub is reachable but incompatible (${code}${detail}). Update/restart the Hub plugin before using Hub execution.`;
 }
 
-export function resolveHubExecutionMode(requestedMode = 'auto', status = {}) {
+export function resolveHubExecutionMode(requestedMode = 'auto', status = {}, { productionOnly = false } = {}) {
   if (requestedMode === 'standalone') {
+    if (productionOnly) {
+      return {
+        ok: false,
+        code: 'STANDALONE_EXECUTION_DISABLED',
+        error: 'Standalone execution is disabled for the production 3210 Crew transport.',
+      };
+    }
     return { ok: true, mode: 'standalone', reason: 'explicit-standalone' };
   }
 
@@ -36,6 +43,15 @@ export function resolveHubExecutionMode(requestedMode = 'auto', status = {}) {
       ok: false,
       code: status.code ?? HUB_COMPATIBILITY_CODES.UNREACHABLE,
       error: 'Session mode is "hub" but the DSH workers hub is not reachable.',
+      hub: status,
+    };
+  }
+
+  if (productionOnly) {
+    return {
+      ok: false,
+      code: status.code ?? HUB_COMPATIBILITY_CODES.UNREACHABLE,
+      error: `Production 3210 Crew transport is unavailable (${status.code ?? HUB_COMPATIBILITY_CODES.UNREACHABLE}).`,
       hub: status,
     };
   }
