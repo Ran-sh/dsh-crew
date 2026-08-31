@@ -11,6 +11,8 @@ test('dsh_worker_config exposes a top-level readiness matrix from the existing c
   assert.match(serverSource, /import \{ buildConfigReadinessMatrix \} from '\.\/config-readiness\.mjs';/);
   assert.match(serverSource, /providerCatalogChecked = true;[\s\S]*const res = await fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/models`, \{ signal: AbortSignal\.timeout\(800\) \}\);[\s\S]*providerCatalogBody = body;/);
   assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/jobs`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
+  assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/providers`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
+  assert.match(serverSource, /providerInventoryChecked,/);
   assert.match(serverSource, /const readinessMatrix = buildConfigReadinessMatrix\(\{[\s\S]*hubCompatibility,[\s\S]*workerProviderMode,[\s\S]*providerCatalogChecked,[\s\S]*providerCatalogBody,[\s\S]*\}\);/);
   assert.match(serverSource, /readiness_matrix:\s*readinessMatrix/);
 });

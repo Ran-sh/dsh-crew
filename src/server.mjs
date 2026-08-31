@@ -328,6 +328,8 @@ async function buildConfigReport() {
   let providerResolutionError;
   let providerCatalogChecked = false;
   let providerCatalogBody = null;
+  let providerInventoryChecked = false;
+  let providerInventoryBody = null;
   let hubJobsChecked = false;
   let hubJobsBody = null;
   const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
@@ -365,6 +367,18 @@ async function buildConfigReport() {
   }
   if (hubCompatibility.compatible) {
     try {
+      providerInventoryChecked = true;
+      const inventoryRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/providers`, { signal: AbortSignal.timeout(800) });
+      providerInventoryBody = inventoryRes.ok
+        ? await inventoryRes.json()
+        : { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
+    } catch {
+      providerInventoryChecked = true;
+      providerInventoryBody = { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
+    }
+  }
+  if (hubCompatibility.compatible) {
+    try {
       hubJobsChecked = true;
       const jobsRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/jobs`, { signal: AbortSignal.timeout(800) });
       hubJobsBody = await jobsRes.json();
@@ -378,6 +392,8 @@ async function buildConfigReport() {
     workerProviderMode,
     providerCatalogChecked,
     providerCatalogBody,
+    providerInventoryChecked,
+    providerInventoryBody,
     hubJobsChecked,
     hubJobsBody,
   });

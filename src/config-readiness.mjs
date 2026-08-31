@@ -14,6 +14,20 @@ function verifiedHubJob(job) {
     && job?.workspace_evidence_ok === true;
 }
 
+function structurallyConsistentProviderInventory(body) {
+  if (!body || typeof body !== 'object' || body.ok === false || !Array.isArray(body.records)) return false;
+  return body.records.every((record) => {
+    if (!record || typeof record.id !== 'string' || record.id.trim() === '') return false;
+    if (!['present', 'absent'].includes(record.desired_state)) return false;
+    if (!record.lifecycle || typeof record.lifecycle !== 'object' || Array.isArray(record.lifecycle)) return false;
+    for (const field of ['installed', 'configured', 'enabled', 'catalogued']) {
+      if (typeof record.lifecycle[field] !== 'boolean') return false;
+    }
+    if (record.desired_state === 'absent' && record.lifecycle.enabled === true) return false;
+    return true;
+  });
+}
+
 export function buildHubExecutionRows(hubJobs = []) {
   const jobs = Array.isArray(hubJobs) ? hubJobs : [];
   const workerPassed = jobs.some((job) => job?.role === 'worker' && verifiedHubJob(job));
@@ -57,6 +71,8 @@ export function buildConfigReadinessMatrix({
   workerProviderMode = null,
   providerCatalogChecked = false,
   providerCatalogBody = null,
+  providerInventoryChecked = false,
+  providerInventoryBody = null,
   hubJobsChecked = false,
   hubJobsBody = null,
 } = {}) {
@@ -94,6 +110,18 @@ export function buildConfigReadinessMatrix({
       reason_code: READINESS_REASON_CODES.PROVIDER_CATALOG_HEALTH_WARNING,
       evidence_source: 'harness-catalog',
     };
+  }
+
+  if (providerInventoryChecked) {
+    evidence.provider_lifecycle_consistent = structurallyConsistentProviderInventory(providerInventoryBody)
+      ? { status: 'PASS', reason_code: READINESS_REASON_CODES.PROVIDER_LIFECYCLE_CONSISTENT, evidence_source: 'provider-inventory' }
+      : {
+          status: 'FAIL',
+          reason_code: providerInventoryBody?.ok === false
+            ? READINESS_REASON_CODES.PROVIDER_INVENTORY_UNAVAILABLE
+            : READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT,
+          evidence_source: 'provider-inventory',
+        };
   }
 
   const matrix = buildReadinessMatrix({

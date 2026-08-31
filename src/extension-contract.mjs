@@ -41,6 +41,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
     .map((id) => row(readinessMatrix, id))
     .find((entry) => entry?.status === 'PASS');
   const catalogEvidence = row(readinessMatrix, 'provider_catalog');
+  const lifecycleEvidence = row(readinessMatrix, 'provider_lifecycle_consistent');
   const modelReadiness = catalogEvidence?.status === 'FAIL'
     ? readinessFromRow(catalogEvidence)
     : realModelEvidence
@@ -50,6 +51,9 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
         : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
   const components = {
     harness: readinessFromRow(row(readinessMatrix, 'hub_compatibility')),
+    provider_lifecycle: lifecycleEvidence
+      ? readinessFromRow(lifecycleEvidence, { notRun: 'DEGRADED' })
+      : component('DEGRADED', 'PROVIDER_LIFECYCLE_NOT_CHECKED'),
     model: modelReadiness,
     workspace: workspaceComponent(workspace),
     reviewer: reviewerEnabled

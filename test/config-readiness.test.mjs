@@ -167,6 +167,46 @@ test('escalated worker success does not masquerade as primary callability', () =
   assert.equal(row(matrix, 'worker_escalation_callable').status, 'PASS');
 });
 
+test('provider lifecycle readiness requires a structurally consistent 3210 inventory', () => {
+  const good = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerCatalogChecked: true,
+    providerCatalogBody: { ok: true, health: { hints: [] } },
+    providerInventoryChecked: true,
+    providerInventoryBody: {
+      ok: true,
+      records: [{ id: 'p', desired_state: 'present', lifecycle: { installed: true, configured: true, enabled: true, catalogued: true } }],
+    },
+  });
+  assert.equal(row(good, 'provider_lifecycle_consistent').status, 'PASS');
+
+  const bad = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerInventoryChecked: true,
+    providerInventoryBody: { ok: true, records: [{ id: 'p', desired_state: 'absent', lifecycle: { enabled: true } }] },
+  });
+  assert.equal(row(bad, 'provider_lifecycle_consistent').status, 'FAIL');
+  assert.equal(row(bad, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
+
+  const unavailable = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerInventoryChecked: true,
+    providerInventoryBody: { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' },
+  });
+  assert.equal(row(unavailable, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_INVENTORY_UNAVAILABLE);
+
+  const malformed = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerInventoryChecked: true,
+    providerInventoryBody: { ok: true, records: [{ id: 'p', desired_state: 'present', lifecycle: {} }] },
+  });
+  assert.equal(row(malformed, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
+});
+
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {
   for (const options of [
     { hubJobsChecked: false, hubJobsBody: { ok: true, jobs: [{ role: 'worker', status: 'done' }] } },
