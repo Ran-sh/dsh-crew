@@ -26,7 +26,7 @@ test('settings open only the core workflow by default', () => {
   const state = createDefaultSectionState();
   assert.deepEqual(SETTINGS_SECTION_IDS, [
     'integrations', 'workflow', 'flash', 'pro', 'dispatch', 'adaptive',
-    'runtime', 'multimodal', 'providers', 'jobs',
+    'runtime', 'multimodal', 'harnessProviders', 'providers', 'jobs',
   ]);
   assert.equal(state.workflow, true);
   assert.deepEqual(

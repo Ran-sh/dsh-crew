@@ -52,7 +52,7 @@ const COPY = {
     expandAll: '全部展开', collapseAll: '全部折叠',
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', providers: '自定义 Provider', jobs: '任务状态' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
     openHarness: '打开 3210 Crew Harness →',
     harnessHint: '底层 Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
@@ -102,6 +102,12 @@ const COPY = {
     presetFlash: 'flash 模式', presetPro: 'pro 模式',
     multimodal: '多模态',
     visionProvider: '视觉 provider', visionModel: '视觉模型', imagegenProvider: '生图 provider',
+    harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
+    providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
+    providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。',
+    providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
+    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
+    providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     customProviders: '自定义 Provider', addProvider: '＋ 添加 Provider',
     noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
     providerName: '名称', modelsField: '模型列表（逗号分隔）',
@@ -178,7 +184,7 @@ const COPY = {
     expandAll: 'Expand all', collapseAll: 'Collapse all',
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', providers: 'Custom providers', jobs: 'Task status' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
     openHarness: 'Open 3210 Crew Harness →',
     harnessHint: 'Low-level providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
@@ -228,6 +234,12 @@ const COPY = {
     presetFlash: 'flash preset', presetPro: 'pro preset',
     multimodal: 'Multimodal',
     visionProvider: 'Vision provider', visionModel: 'Vision model', imagegenProvider: 'Image-gen provider',
+    harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
+    providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
+    providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.',
+    providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
+    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
+    providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     customProviders: 'Custom providers', addProvider: '＋ Add provider',
     noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
     providerName: 'Name', modelsField: 'Models (comma-separated)',
@@ -502,6 +514,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [modelCatalog, setModelCatalog] = useState<any>(null);
   const [modelCatalogError, setModelCatalogError] = useState('');
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
+  const [providerInventory, setProviderInventory] = useState<any>(null);
+  const [providerInventoryError, setProviderInventoryError] = useState('');
+  const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
   const [modelQuery, setModelQuery] = useState('');
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
@@ -521,6 +536,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   useEffect(() => {
     if (modelCatalogError) setExpandedSections((current) => openSections(current, ['workflow', 'flash', 'pro']));
   }, [modelCatalogError]);
+
+  useEffect(() => {
+    if (providerInventoryError) setExpandedSections((current) => openSections(current, ['harnessProviders']));
+  }, [providerInventoryError]);
 
   useEffect(() => {
     if (testResult && !testResult.busy && testResult.ok === false) {
@@ -579,7 +598,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [j, s, c, pr] = await Promise.all([get('/jobs'), get('/install/status'), get('/config'), get('/presets')]);
+      const [j, s, c, pr, pi] = await Promise.all([get('/jobs'), get('/install/status'), get('/config'), get('/presets'), get('/providers')]);
       if (j.ok) setJobs(j.jobs ?? []);
       if (s.ok) setStatus(s.status);
       if (c.ok) setConfig((prev: any) => prev ?? c.config);
@@ -587,6 +606,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         { value: 'default', label: copy.presetDefault(pr.defaultId) },
         ...(pr.presets ?? []).map((x: any) => ({ value: x.id, label: x.name ?? x.id })),
       ]);
+      if (pi.ok) setProviderInventory(pi);
     } catch { /* instance restarting */ }
   }, [get]);
 
@@ -611,9 +631,24 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     }
   }, [get, copy]);
 
+  const refreshProviderInventory = useCallback(async () => {
+    setProviderInventoryError('');
+    try {
+      const result = await get('/providers');
+      if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
+      setProviderInventory(result);
+    } catch (error: any) {
+      setProviderInventoryError(error?.message ?? copy.providerNoInventory);
+    }
+  }, [get, copy]);
+
   useEffect(() => {
     if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshHarnessModels();
   }, [surface, refreshHarnessModels]);
+
+  useEffect(() => {
+    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshProviderInventory();
+  }, [surface, refreshProviderInventory]);
 
   const act = useCallback(async (target: string, confirmName?: string) => {
     if (confirmName && !window.confirm(copy.confirmRestore(confirmName))) return;
@@ -764,6 +799,41 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (config.imagegen_provider === id) patch.imagegen_provider = 'codex';
     setConfig((c: any) => ({ ...c, ...patch }));
     void applyPatch(patch);
+  };
+
+  const deleteHarnessProvider = async (record: any) => {
+    if (!record || record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
+      setNotice(copy.providerDeleteBlocked);
+      return;
+    }
+    let replacementDefault: string | undefined;
+    if (record.references?.harness_default === true) {
+      const candidate = (providerInventory?.records ?? []).find((item: any) => item.id !== record.id
+        && item.desired_state !== 'absent' && item.ownership !== 'harness' && (item.models?.length ?? 0) > 0)?.id ?? '';
+      const entered = window.prompt(copy.providerReplacement, candidate);
+      if (!entered?.trim()) return;
+      replacementDefault = entered.trim();
+    }
+    setProviderLifecycleBusy(record.id);
+    setNotice(copy.working);
+    try {
+      const encoded = encodeURIComponent(record.id);
+      const planned = await post(`/providers/${encoded}/delete-plan`, replacementDefault ? { replacement_default: replacementDefault } : {});
+      if (!planned.ok || !planned.plan) throw new Error(planned.code ?? copy.providerLifecycleError);
+      if (!window.confirm(`${copy.providerPlanReady}\n\n${copy.providerDeleteConfirm}\n${(planned.plan.will_remove ?? []).join('\n')}`)) return;
+      const path = `/providers/${encoded}`;
+      const result = await readJson(await fetch(withLang(path), {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan_id: planned.plan.plan_id, expected_revision: planned.plan.expected_revision, confirm: true, lang: locale === 'zh' ? 'zh' : 'en' }),
+      }), path);
+      if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      setNotice(String(error?.message ?? error));
+    } finally {
+      setProviderLifecycleBusy(null);
+    }
   };
 
   /** Card: title + one-line description header, then its fields. */
@@ -1225,6 +1295,35 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <CustomSelect value={config.imagegen_provider} onChange={(v) => field('imagegen_provider', v)}
               options={imagegenProviderOptions} /></label>
           </>))}
+        </CollapsibleSection>
+
+        <CollapsibleSection sectionId="harnessProviders" title={copy.sectionNames.harnessProviders}
+          summary={sectionSummary(copy.providerCount(providerInventory?.records?.length ?? 0), providerInventoryError ? copy.providerLifecycleError : '')}
+          expanded={!!expandedSections.harnessProviders} onToggle={() => toggleSection('harnessProviders')}>
+          {providerInventoryError && <div style={{ fontSize: 12, color: '#c55' }}>{providerInventoryError}</div>}
+          {!providerInventoryError && (providerInventory?.records?.length ?? 0) === 0 && (
+            <div style={{ fontSize: 12, opacity: 0.55 }}>{copy.providerNoInventory}</div>
+          )}
+          {(providerInventory?.records ?? []).map((record: any) => {
+            const blocked = record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
+            const lifecycle = record.desired_state === 'absent' ? 'absent' : record.lifecycle?.enabled === false ? 'disabled' : record.lifecycle?.catalogued ? 'catalogued' : 'configured';
+            return (
+              <div key={record.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' as const }}>
+                <span style={{ fontWeight: 600 }}>{record.display_name || record.id}</span>
+                <span style={{ ...S.chip(record.lifecycle?.enabled === true), ...S.mono }}>{record.id}</span>
+                <span style={{ opacity: 0.65 }}>{copy.providerState(lifecycle)}</span>
+                <span style={{ opacity: 0.65 }}>{copy.providerModels(record.models?.length ?? 0)}</span>
+                {Number(record.references?.active_jobs ?? 0) > 0 && <span style={{ color: '#c98735' }}>{copy.providerJobs(record.references.active_jobs)}</span>}
+                <span style={{ flex: 1 }} />
+                {record.ownership !== 'harness' && record.desired_state !== 'absent' && (
+                  <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={blocked || providerLifecycleBusy !== null}
+                    onClick={() => { void deleteHarnessProvider(record); }}>
+                    {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </CollapsibleSection>
 
         <CollapsibleSection sectionId="providers" title={copy.sectionNames.providers}

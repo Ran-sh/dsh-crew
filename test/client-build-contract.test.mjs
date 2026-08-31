@@ -71,6 +71,14 @@ test('task status uses the compact table layout instead of stacked list cards', 
   assert.doesNotMatch(panelSource, /role=["']listitem["']/);
 });
 
+test('provider lifecycle UI distinguishes Harness providers from multimodal adapters', () => {
+  assert.match(panelSource, /get\('\/providers'\)/);
+  assert.match(panelSource, /sectionId=["']harnessProviders["']/);
+  assert.match(panelSource, /delete-plan/);
+  assert.match(panelSource, /Harness Providers|Harness Provider/);
+  assert.match(panelSource, /Multimodal adapters|多模态适配器/);
+});
+
 test('shared client renders a full 3080 control plane and a minimal 3210 diagnostic surface', () => {
   assert.match(panelSource, /classifyCrewSurface/);
   assert.match(panelSource, /surfaceResponsibilities/);

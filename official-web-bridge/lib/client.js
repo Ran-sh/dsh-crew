@@ -38,6 +38,7 @@ const SETTINGS_SECTION_IDS = Object.freeze([
 	"adaptive",
 	"runtime",
 	"multimodal",
+	"harnessProviders",
 	"providers",
 	"jobs"
 ]);
@@ -375,7 +376,8 @@ const COPY = {
 			adaptive: "自适应路由",
 			runtime: "运行 / 生效边界",
 			multimodal: "视觉与生图",
-			providers: "自定义 Provider",
+			harnessProviders: "Harness Providers",
+			providers: "多模态适配器",
 			jobs: "任务状态"
 		},
 		openHarness: "打开 3210 Crew Harness →",
@@ -491,6 +493,19 @@ const COPY = {
 		visionProvider: "视觉 provider",
 		visionModel: "视觉模型",
 		imagegenProvider: "生图 provider",
+		harnessProviders: "Harness Providers",
+		harnessProviderHint: "3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。",
+		providerState: (state) => `状态：${state}`,
+		providerModels: (count) => `${count} 个模型`,
+		providerJobs: (count) => `${count} 个运行任务`,
+		providerDeletePlan: "生成删除计划",
+		providerDelete: "确认删除",
+		providerPlanReady: "计划已生成；再次确认后才会修改 3210 配置。",
+		providerReplacement: "替换 Harness 默认 Provider（输入 Provider id）",
+		providerDeleteConfirm: "确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。",
+		providerDeleteBlocked: "当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。",
+		providerLifecycleError: "Provider 生命周期操作失败",
+		providerNoInventory: "暂时无法读取 3210 Provider inventory。",
 		customProviders: "自定义 Provider",
 		addProvider: "＋ 添加 Provider",
 		noCustomProviders: "暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。",
@@ -654,7 +669,8 @@ const COPY = {
 			adaptive: "Adaptive routing",
 			runtime: "Runtime / activation boundaries",
 			multimodal: "Vision & image generation",
-			providers: "Custom providers",
+			harnessProviders: "Harness Providers",
+			providers: "Multimodal adapters",
 			jobs: "Task status"
 		},
 		openHarness: "Open 3210 Crew Harness →",
@@ -770,6 +786,19 @@ const COPY = {
 		visionProvider: "Vision provider",
 		visionModel: "Vision model",
 		imagegenProvider: "Image-gen provider",
+		harnessProviders: "Harness Providers",
+		harnessProviderHint: "Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.",
+		providerState: (state) => `State: ${state}`,
+		providerModels: (count) => `${count} models`,
+		providerJobs: (count) => `${count} running jobs`,
+		providerDeletePlan: "Plan deletion",
+		providerDelete: "Confirm delete",
+		providerPlanReady: "Plan ready; a second confirmation is required before changing 3210 config.",
+		providerReplacement: "Replacement Harness Default provider id",
+		providerDeleteConfirm: "Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.",
+		providerDeleteBlocked: "This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).",
+		providerLifecycleError: "Provider lifecycle operation failed",
+		providerNoInventory: "3210 Provider inventory is temporarily unavailable.",
 		customProviders: "Custom providers",
 		addProvider: "＋ Add provider",
 		noCustomProviders: "None yet. Added providers appear in the vision / image-gen selects above.",
@@ -1339,6 +1368,9 @@ function WorkersPanel({ ctx }) {
 	const [modelCatalog, setModelCatalog] = (0, react.useState)(null);
 	const [modelCatalogError, setModelCatalogError] = (0, react.useState)("");
 	const [modelCatalogBusy, setModelCatalogBusy] = (0, react.useState)(false);
+	const [providerInventory, setProviderInventory] = (0, react.useState)(null);
+	const [providerInventoryError, setProviderInventoryError] = (0, react.useState)("");
+	const [providerLifecycleBusy, setProviderLifecycleBusy] = (0, react.useState)(null);
 	const [modelPickerTier, setModelPickerTier] = (0, react.useState)(null);
 	const [modelQuery, setModelQuery] = (0, react.useState)("");
 	const [testResult, setTestResult] = (0, react.useState)(null);
@@ -1362,6 +1394,9 @@ function WorkersPanel({ ctx }) {
 			"pro"
 		]));
 	}, [modelCatalogError]);
+	(0, react.useEffect)(() => {
+		if (providerInventoryError) setExpandedSections((current) => openSections(current, ["harnessProviders"]));
+	}, [providerInventoryError]);
 	(0, react.useEffect)(() => {
 		if (testResult && !testResult.busy && testResult.ok === false) setExpandedSections((current) => openSections(current, ["providers"]));
 	}, [testResult]);
@@ -1422,11 +1457,12 @@ function WorkersPanel({ ctx }) {
 	}, [detectSurface]);
 	const refreshAll = (0, react.useCallback)(async () => {
 		try {
-			const [j, s, c, pr] = await Promise.all([
+			const [j, s, c, pr, pi] = await Promise.all([
 				get("/jobs"),
 				get("/install/status"),
 				get("/config"),
-				get("/presets")
+				get("/presets"),
+				get("/providers")
 			]);
 			if (j.ok) setJobs(j.jobs ?? []);
 			if (s.ok) setStatus(s.status);
@@ -1438,6 +1474,7 @@ function WorkersPanel({ ctx }) {
 				value: x.id,
 				label: x.name ?? x.id
 			}))]);
+			if (pi.ok) setProviderInventory(pi);
 		} catch {}
 	}, [get]);
 	(0, react.useEffect)(() => {
@@ -1467,9 +1504,22 @@ function WorkersPanel({ ctx }) {
 			setModelCatalogBusy(false);
 		}
 	}, [get, copy]);
+	const refreshProviderInventory = (0, react.useCallback)(async () => {
+		setProviderInventoryError("");
+		try {
+			const result = await get("/providers");
+			if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
+			setProviderInventory(result);
+		} catch (error) {
+			setProviderInventoryError(error?.message ?? copy.providerNoInventory);
+		}
+	}, [get, copy]);
 	(0, react.useEffect)(() => {
 		if (surface === CREW_UI_SURFACES.OFFICIAL) refreshHarnessModels();
 	}, [surface, refreshHarnessModels]);
+	(0, react.useEffect)(() => {
+		if (surface === CREW_UI_SURFACES.OFFICIAL) refreshProviderInventory();
+	}, [surface, refreshProviderInventory]);
 	const act = (0, react.useCallback)(async (target, confirmName) => {
 		if (confirmName && !window.confirm(copy.confirmRestore(confirmName))) return;
 		setBusy(true);
@@ -1747,6 +1797,45 @@ function WorkersPanel({ ctx }) {
 			...patch
 		}));
 		applyPatch(patch);
+	};
+	const deleteHarnessProvider = async (record) => {
+		if (!record || record.ownership === "harness" || record.desired_state === "absent" || Number(record.references?.active_jobs ?? 0) > 0) {
+			setNotice(copy.providerDeleteBlocked);
+			return;
+		}
+		let replacementDefault;
+		if (record.references?.harness_default === true) {
+			const candidate = (providerInventory?.records ?? []).find((item) => item.id !== record.id && item.desired_state !== "absent" && item.ownership !== "harness" && (item.models?.length ?? 0) > 0)?.id ?? "";
+			const entered = window.prompt(copy.providerReplacement, candidate);
+			if (!entered?.trim()) return;
+			replacementDefault = entered.trim();
+		}
+		setProviderLifecycleBusy(record.id);
+		setNotice(copy.working);
+		try {
+			const encoded = encodeURIComponent(record.id);
+			const planned = await post(`/providers/${encoded}/delete-plan`, replacementDefault ? { replacement_default: replacementDefault } : {});
+			if (!planned.ok || !planned.plan) throw new Error(planned.code ?? copy.providerLifecycleError);
+			if (!window.confirm(`${copy.providerPlanReady}\n\n${copy.providerDeleteConfirm}\n${(planned.plan.will_remove ?? []).join("\n")}`)) return;
+			const path = `/providers/${encoded}`;
+			const result = await readJson(await fetch(withLang(path), {
+				method: "DELETE",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					plan_id: planned.plan.plan_id,
+					expected_revision: planned.plan.expected_revision,
+					confirm: true,
+					lang: locale === "zh" ? "zh" : "en"
+				})
+			}), path);
+			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+			setNotice(copy.saved);
+			await refreshProviderInventory();
+		} catch (error) {
+			setNotice(String(error?.message ?? error));
+		} finally {
+			setProviderLifecycleBusy(null);
+		}
 	};
 	/** Card: title + one-line description header, then its fields. */
 	const block = (text, fields, gridded = true) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -3189,6 +3278,80 @@ function WorkersPanel({ ctx }) {
 							})]
 						})
 					] }))
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(CollapsibleSection, {
+					sectionId: "harnessProviders",
+					title: copy.sectionNames.harnessProviders,
+					summary: sectionSummary(copy.providerCount(providerInventory?.records?.length ?? 0), providerInventoryError ? copy.providerLifecycleError : ""),
+					expanded: !!expandedSections.harnessProviders,
+					onToggle: () => toggleSection("harnessProviders"),
+					children: [
+						providerInventoryError && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: {
+								fontSize: 12,
+								color: "#c55"
+							},
+							children: providerInventoryError
+						}),
+						!providerInventoryError && (providerInventory?.records?.length ?? 0) === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: {
+								fontSize: 12,
+								opacity: .55
+							},
+							children: copy.providerNoInventory
+						}),
+						(providerInventory?.records ?? []).map((record) => {
+							const blocked = record.ownership === "harness" || record.desired_state === "absent" || Number(record.references?.active_jobs ?? 0) > 0;
+							const lifecycle = record.desired_state === "absent" ? "absent" : record.lifecycle?.enabled === false ? "disabled" : record.lifecycle?.catalogued ? "catalogued" : "configured";
+							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 8,
+									fontSize: 12.5,
+									flexWrap: "wrap"
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { fontWeight: 600 },
+										children: record.display_name || record.id
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											...S.chip(record.lifecycle?.enabled === true),
+											...S.mono
+										},
+										children: record.id
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { opacity: .65 },
+										children: copy.providerState(lifecycle)
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { opacity: .65 },
+										children: copy.providerModels(record.models?.length ?? 0)
+									}),
+									Number(record.references?.active_jobs ?? 0) > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: { color: "#c98735" },
+										children: copy.providerJobs(record.references.active_jobs)
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1 } }),
+									record.ownership !== "harness" && record.desired_state !== "absent" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: {
+											...S.btn,
+											padding: "2px 8px"
+										},
+										disabled: blocked || providerLifecycleBusy !== null,
+										onClick: () => {
+											deleteHarnessProvider(record);
+										},
+										children: providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan
+									})
+								]
+							}, record.id);
+						})
+					]
 				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(CollapsibleSection, {
 					sectionId: "providers",
