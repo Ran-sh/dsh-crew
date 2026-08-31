@@ -34,9 +34,10 @@ import { buildHubExecutionRows } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
-import { readProviderDeclarations } from '../provider-profile-store.mjs';
+import { inspectProviderProfile, readProviderDeclarations } from '../provider-profile-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
+import { planProviderDelete } from '../provider-lifecycle.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -145,6 +146,17 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     tombstones: lifecycle.tombstones,
     activeJobs: hub.list(),
   });
+}
+
+function readProviderProfileRevision() {
+  const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
+  try {
+    if (!existsSync(profileFile)) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+    const parsed = inspectProviderProfile(readFileSync(profileFile, 'utf8'));
+    return parsed.ok ? { ok: true, revision: parsed.revision } : { ok: false, code: parsed.code };
+  } catch {
+    return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+  }
 }
 
 export function hubCanonicalEvents(job = {}) {
@@ -1106,6 +1118,41 @@ export async function apply(ctx) {
           });
         } catch {
           return sendJson(res, 503, { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE', error: 'Unable to read Harness provider inventory.' });
+        }
+      },
+    }));
+
+    // Deletion is two-phase: this endpoint only computes a revision-bound,
+    // secret-free impact plan. A later mutation endpoint must present that
+    // plan and perform restart/verification through an owned supervisor.
+    disposers.push(webServer.register({
+      kind: 'prefix', path: `${ROUTE_BASE}/providers`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        let url;
+        try { url = new URL(req.url, 'http://localhost'); } catch { return sendJson(res, 400, { ok: false, code: 'PROVIDER_PLAN_INVALID' }); }
+        const parts = url.pathname.slice(`${ROUTE_BASE}/providers`.length).split('/').filter(Boolean);
+        if (req.method !== 'POST' || parts.length !== 2 || parts[1] !== 'delete-plan') {
+          return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
+        }
+        try {
+          const providerId = decodeURIComponent(parts[0]);
+          const body = await readBody(req);
+          const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const inventory = await readProviderInventorySnapshot(hub, ctx, config);
+          const profile = readProviderProfileRevision();
+          if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
+          const planned = planProviderDelete({
+            providerId,
+            inventory,
+            activeJobs: hub.list(),
+            replacementDefault: body?.replacement_default,
+            expectedRevision: profile.revision,
+          });
+          if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
+          return sendJson(res, 200, { ok: true, profile_revision: profile.revision, plan: planned.plan });
+        } catch {
+          return sendJson(res, 400, { ok: false, code: 'PROVIDER_PLAN_INVALID' });
         }
       },
     }));
