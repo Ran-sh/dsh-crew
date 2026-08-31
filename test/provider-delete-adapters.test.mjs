@@ -148,6 +148,18 @@ test('a persisted transaction backup can be reopened for an explicit rollback', 
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
 });
 
+test('persisted provider delete backup retains sanitized credential references for final audit', async () => {
+  const paths = fixture();
+  const plan = { ...planFor(paths.profileFile), credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'external' }] };
+  const backupDir = join(paths.dir, 'backups');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await hooks.backup(plan);
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
+  assert.deepEqual(reopened.backupPlan().credential_refs, plan.credential_refs);
+  await hooks.release();
+  await reopened.release();
+});
+
 test('rollback verification rejects a restored provider with drifted routing semantics', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
