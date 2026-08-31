@@ -34,14 +34,15 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }
 
-export function buildExtensionContract({ config = {}, readinessMatrix = {}, workspace = null, profiles = null, runtime = null } = {}) {
+export function buildExtensionContract({ config = {}, readinessMatrix = {}, readinessSnapshot = null, workspace = null, profiles = null, runtime = null } = {}) {
+  const matrix = readinessSnapshot?.readiness_matrix ?? readinessMatrix;
   const workerEnabled = config.subagents_enabled !== false && config.worker_state !== 'disabled';
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
   const realModelEvidence = ['worker_primary_callable', 'model_execution', 'worker_escalation_callable', 'deepseek_flash', 'deepseek_pro']
-    .map((id) => row(readinessMatrix, id))
+    .map((id) => row(matrix, id))
     .find((entry) => entry?.status === 'PASS');
-  const catalogEvidence = row(readinessMatrix, 'provider_catalog');
-  const lifecycleEvidence = row(readinessMatrix, 'provider_lifecycle_consistent');
+  const catalogEvidence = row(matrix, 'provider_catalog');
+  const lifecycleEvidence = row(matrix, 'provider_lifecycle_consistent');
   const modelReadiness = catalogEvidence?.status === 'FAIL'
     ? readinessFromRow(catalogEvidence)
     : realModelEvidence
@@ -50,14 +51,14 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
         ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
         : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
   const components = {
-    harness: readinessFromRow(row(readinessMatrix, 'hub_compatibility')),
+    harness: readinessFromRow(row(matrix, 'hub_compatibility')),
     provider_lifecycle: lifecycleEvidence
       ? readinessFromRow(lifecycleEvidence, { notRun: 'DEGRADED' })
       : component('DEGRADED', 'PROVIDER_LIFECYCLE_NOT_CHECKED'),
     model: modelReadiness,
     workspace: workspaceComponent(workspace),
     reviewer: reviewerEnabled
-      ? readinessFromRow(row(readinessMatrix, 'reviewer_pipeline'))
+      ? readinessFromRow(row(matrix, 'reviewer_pipeline'))
       : component('DEGRADED', 'REVIEWER_DISABLED'),
   };
   const states = Object.values(components).map((entry) => entry.status);
@@ -66,6 +67,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, work
     schema_version: EXTENSION_CONTRACT_SCHEMA_VERSION,
     kind: 'dsh-crew-extension',
     runtime: runtime ?? null,
+    ...(readinessSnapshot ? { readiness_snapshot: readinessSnapshot } : {}),
     capabilities: {
       'deepseek.worker': workerEnabled,
       'deepseek.reviewer': reviewerEnabled,

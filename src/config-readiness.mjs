@@ -80,6 +80,8 @@ export function buildConfigReadinessMatrix({
   providerCatalogBody = null,
   providerInventoryChecked = false,
   providerInventoryBody = null,
+  providerHealthChecked = false,
+  providerHealthBody = null,
   hubJobsChecked = false,
   hubJobsBody = null,
 } = {}) {
@@ -129,6 +131,14 @@ export function buildConfigReadinessMatrix({
             : READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT,
           evidence_source: 'provider-inventory',
         };
+  }
+
+  if (providerHealthChecked && providerHealthBody?.ok === false) {
+    evidence.provider_health = {
+      status: 'FAIL',
+      reason_code: 'PROVIDER_HEALTH_UNAVAILABLE',
+      evidence_source: 'provider-health',
+    };
   }
 
   const matrix = buildReadinessMatrix({

@@ -10,6 +10,7 @@ import { RUNTIME_VERSION, getHubRuntimeIdentity } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
+import { buildRuntimeReadinessSnapshot } from './runtime-readiness-snapshot.mjs';
 import { classifyFailure, classifyFailureCode } from './failure-classification.mjs';
 import {
   normalizeGlobalConfig,
@@ -331,6 +332,8 @@ async function buildConfigReport() {
   let providerCatalogBody = null;
   let providerInventoryChecked = false;
   let providerInventoryBody = null;
+  let providerHealthChecked = false;
+  let providerHealthBody = null;
   let hubJobsChecked = false;
   let hubJobsBody = null;
   const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
@@ -380,6 +383,16 @@ async function buildConfigReport() {
   }
   if (hubCompatibility.compatible) {
     try {
+      providerHealthChecked = true;
+      const healthRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/provider-health`, { signal: AbortSignal.timeout(800) });
+      providerHealthBody = healthRes.ok ? await healthRes.json() : { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
+    } catch {
+      providerHealthChecked = true;
+      providerHealthBody = { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
+    }
+  }
+  if (hubCompatibility.compatible) {
+    try {
       hubJobsChecked = true;
       const jobsRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/jobs`, { signal: AbortSignal.timeout(800) });
       hubJobsBody = await jobsRes.json();
@@ -395,11 +408,21 @@ async function buildConfigReport() {
     providerCatalogBody,
     providerInventoryChecked,
     providerInventoryBody,
+    providerHealthChecked,
+    providerHealthBody,
     hubJobsChecked,
     hubJobsBody,
   });
   const roleProfiles = loadRoleProfiles();
   const workspaceReadiness = await assessWorkspaceReadiness({ cwd: process.cwd() });
+  const readinessSnapshot = buildRuntimeReadinessSnapshot({
+    runtime: getHubRuntimeIdentity(),
+    readinessMatrix,
+    selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
+    health: providerHealthBody?.health,
+    jobs: hubJobsBody?.jobs,
+    workspace: workspaceReadiness,
+  });
   const extensionContract = buildExtensionContract({
     config: {
       ...globalConfig,
@@ -409,6 +432,7 @@ async function buildConfigReport() {
       escalate_on_failure: sessionConfig.escalate_on_failure ?? legacy.escalate_on_failure,
     },
     readinessMatrix,
+    readinessSnapshot,
     workspace: workspaceReadiness,
     profiles: roleProfiles,
     runtime: getHubRuntimeIdentity(),
@@ -451,6 +475,7 @@ async function buildConfigReport() {
     runtime_controls: runtimeControls,
     activation_boundaries: activationBoundaries,
     readiness_matrix: readinessMatrix,
+    readiness_snapshot: readinessSnapshot,
     role_profiles: roleProfiles,
     extension_contract: extensionContract,
     hub_reachable: hubCompatibility.reachable,

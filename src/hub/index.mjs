@@ -41,6 +41,7 @@ import { planProviderDelete } from '../provider-lifecycle.mjs';
 import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
 import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
+import { buildRuntimeReadinessSnapshot } from '../runtime-readiness-snapshot.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -1081,14 +1082,25 @@ export async function apply(ctx) {
           : await assessWorkspaceReadiness({ cwd: requestedContext?.repo_root ?? null });
         const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
         const [modelExecution, reviewerExecution] = buildHubExecutionRows(liveJobs);
+        const readinessMatrix = { rows: [
+          { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+          catalogStatus,
+          modelExecution,
+          reviewerExecution,
+          { id: 'provider_lifecycle_consistent', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' },
+        ] };
+        const readinessSnapshot = buildRuntimeReadinessSnapshot({
+          runtime: getHubRuntimeIdentity(),
+          readinessMatrix,
+          selections: { worker: liveJobs.find((job) => job?.role === 'worker') ?? null, reviewer: liveJobs.find((job) => job?.role === 'reviewer') ?? null },
+          health: hub.healthStore.list(),
+          jobs: liveJobs,
+          workspace: workspaceReadiness,
+        });
         const contract = buildExtensionContract({
           config,
-          readinessMatrix: { rows: [
-            { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
-            catalogStatus,
-            modelExecution,
-            reviewerExecution,
-          ] },
+          readinessMatrix,
+          readinessSnapshot,
           workspace: workspaceReadiness,
           profiles,
           runtime: getHubRuntimeIdentity(),

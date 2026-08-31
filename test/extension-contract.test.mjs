@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildExtensionContract } from '../src/extension-contract.mjs';
+import { buildRuntimeReadinessSnapshot } from '../src/runtime-readiness-snapshot.mjs';
 
 test('extension contract exposes only Crew capabilities and conservative readiness', () => {
   const contract = buildExtensionContract({
@@ -99,4 +100,18 @@ test('workspace conflict and read-only states remain machine-visible', () => {
     assert.equal(contract.readiness.components.workspace.state, status);
     assert.equal(contract.readiness.components.workspace.status, 'DEGRADED');
   }
+});
+
+test('extension contract consumes the unified readiness snapshot as its matrix authority', () => {
+  const snapshot = buildRuntimeReadinessSnapshot({ readinessMatrix: { rows: [
+    { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+    { id: 'provider_catalog', status: 'FAIL', reason_code: 'PROVIDER_CATALOG_UNAVAILABLE' },
+  ] } });
+  const contract = buildExtensionContract({
+    config: {},
+    readinessMatrix: { rows: [{ id: 'hub_compatibility', status: 'PASS' }] },
+    readinessSnapshot: snapshot,
+  });
+  assert.equal(contract.readiness_snapshot, snapshot);
+  assert.equal(contract.readiness.components.model.status, 'UNAVAILABLE');
 });
