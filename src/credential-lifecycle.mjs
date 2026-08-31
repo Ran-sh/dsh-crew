@@ -37,6 +37,7 @@ export function planCredentialPurge({ inventory, referenceId, expectedRevision }
       kind: text(record.kind),
       name_or_handle: text(record.name_or_handle),
       ownership: 'crew-owned',
+      purge_capability: 'eligible',
       expected_revision: revision,
       state: 'PLANNED',
       irreversible: true,
