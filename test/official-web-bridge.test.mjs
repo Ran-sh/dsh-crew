@@ -35,8 +35,8 @@ test('bridge is fixed to the loopback Crew backend and accepts loopback clients 
   for (const address of ['10.0.0.2', '192.168.1.8', undefined]) assert.equal(isLoopbackAddress(address), false);
 });
 
-test('test-only target override remains strictly loopback HTTP', () => {
-  assert.equal(resolveCrewBridgeTarget({ DSH_CREW_BRIDGE_TARGET: 'http://127.0.0.1:45678' }), 'http://127.0.0.1:45678');
+test('production bridge ignores environment target overrides and stays on 3210', () => {
+  assert.equal(resolveCrewBridgeTarget({ DSH_CREW_BRIDGE_TARGET: 'http://127.0.0.1:45678' }), CREW_BRIDGE_TARGET);
   for (const target of ['https://127.0.0.1:1', 'http://example.com:3210', 'http://0.0.0.0:3210/path']) {
     assert.equal(resolveCrewBridgeTarget({ DSH_CREW_BRIDGE_TARGET: target }), CREW_BRIDGE_TARGET);
   }
@@ -156,17 +156,10 @@ test('sidecar supervisor coalesces concurrent starts and launches only the isola
   assert.equal(spawns[0].options.detached, true);
 });
 
-test('sidecar supervisor uses the validated target port when explicitly injected', async () => {
-  const spawns = [];
-  let checks = 0;
-  const supervisor = createCrewSidecarSupervisor({
+test('sidecar supervisor rejects an explicitly injected non-3210 target', () => {
+  assert.throws(() => createCrewSidecarSupervisor({
     home: 'C:\\Users\\test', bridgeTarget: 'http://127.0.0.1:45678', exists: () => true,
-    healthCheck: async () => ++checks > 1,
-    spawnImpl: (...args) => { spawns.push(args); return { unref() {} }; }, wait: async () => {},
-  });
-  await supervisor.ensure();
-  assert.equal(spawns.length, 1);
-  assert.deepEqual(spawns[0][1].slice(-2), ['--port', '45678']);
+  }), /fixed to the isolated 3210 Crew Hub/i);
 });
 
 test('sidecar supervisor never duplicates a still-running cold-start process after a timeout', async () => {
