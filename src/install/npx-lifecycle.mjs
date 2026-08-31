@@ -508,6 +508,98 @@ function gcOldReleases({ home, keep = KEEP_RELEASES }) {
   return removed;
 }
 
+export function listManagedReleases({ home = homedir() } = {}) {
+  const pointer = readCurrentPointer({ home });
+  const root = crewReleasesDir({ home });
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const path = join(root, entry.name);
+      const manifest = readManifest(path);
+      if (!manifest?.name || !manifest?.version) return null;
+      const validation = validateInstalledPayload(path, { expectedName: manifest.name, expectedVersion: manifest.version });
+      return {
+        name: manifest.name,
+        version: manifest.version,
+        path,
+        current: pointer?.path === path,
+        healthy: validation.ok,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => compareVersions(b.version, a.version) || b.path.localeCompare(a.path));
+}
+
+async function restartOwnedRuntime(fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  });
+  const body = await response.json();
+  return response.ok && body?.ok === true ? body : { ok: false, code: body?.code ?? 'CREW_3210_RESTART_FAILED' };
+}
+
+async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/runtime', { headers: { accept: 'application/json' } });
+  const body = await response.json();
+  return response.ok && body?.ok === true && body.runtime_version === version
+    ? { ok: true, runtime_version: body.runtime_version }
+    : { ok: false, code: 'RUNTIME_VERSION_MISMATCH' };
+}
+
+export async function npxReleases({ home = homedir(), log = console.log } = {}) {
+  const releases = listManagedReleases({ home });
+  log(JSON.stringify(releases, null, 2));
+  return { ok: true, releases };
+}
+
+export async function npxRollback({
+  home = homedir(),
+  version,
+  log = console.log,
+  installer = realInstaller,
+  ensureRuntime,
+  validatePayload = validateInstalledPayload,
+  activate,
+  restart = () => restartOwnedRuntime(),
+  verifyRuntime = (targetVersion) => verifyRuntimeVersion(targetVersion),
+} = {}) {
+  const targetVersion = typeof version === 'string' ? version.trim() : '';
+  if (!targetVersion) return { ok: false, error: 'rollback requires a target version' };
+  const current = readCurrentPointer({ home });
+  if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };
+  const target = listManagedReleases({ home }).find((release) => release.version === targetVersion);
+  if (!target) return { ok: false, error: `retained release ${targetVersion} was not found` };
+  if (target.path === current.path) return { ok: true, idempotent: true, version: target.version, path: target.path };
+  const targetManifest = readManifest(target.path);
+  const validation = validatePayload(target.path, { expectedName: targetManifest?.name, expectedVersion: targetManifest?.version });
+  if (!validation.ok) return { ok: false, error: 'target release failed payload validation' };
+  const previousManifest = readManifest(current.path);
+  const activateReleaseFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer, ensureRuntime }));
+  const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
+  try {
+    switchPointer(target);
+    if (!await activateReleaseFn({ releaseDir: target.path, manifest: targetManifest })) throw new Error('target release activation failed');
+    const restarted = await restart(target.version);
+    if (restarted?.ok === false) throw Object.assign(new Error('target runtime restart failed'), { code: restarted.code });
+    const runtime = await verifyRuntime(target.version);
+    if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_VERSION_MISMATCH' });
+    log(`✓ rolled back Crew payload to ${target.version}`);
+    return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
+  } catch (error) {
+    const prior = { name: current.name, version: current.version, path: current.path };
+    try {
+      switchPointer(prior);
+      if (previousManifest) await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
+      await restart(prior.version);
+      await verifyRuntime(prior.version);
+    } catch { /* preserve the original bounded failure */ }
+    return { ok: false, error: error?.message ?? 'release rollback failed', code: error?.code ?? 'RELEASE_ROLLBACK_FAILED', restored: true };
+  }
+}
+
 function registrationLinkPath({ home, name }) {
   return join(crewProfileDir({ home }), 'node_modules', ...name.split('/'));
 }
@@ -1113,6 +1205,8 @@ Commands:
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
   providers   3210 provider lifecycle API: list|delete-plan|delete|rollback|probe
+  releases    list retained, validated Crew payload releases
+  rollback    switch to a retained payload version and verify the 3210 runtime
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
@@ -1372,7 +1466,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -1385,6 +1479,8 @@ export async function runNpxCli({
       inspect: commands.inspect ?? npxInspect,
       jobs: commands.jobs ?? npxJobs,
       providers: commands.providers ?? npxProviders,
+      releases: commands.releases ?? npxReleases,
+      rollback: commands.rollback ?? npxRollback,
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
     };
@@ -1393,6 +1489,8 @@ export async function runNpxCli({
     else if (command === 'update') result = await actions.update({ candidate, log });
     else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
     else if (command === 'providers') result = await actions.providers({ args, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, log });
+    else if (command === 'releases') result = await actions.releases({ args, log });
+    else if (command === 'rollback') result = await actions.rollback({ version: args?.[0], args, log });
     else result = await actions[command]({ log });
     return result?.ok === false ? 1 : 0;
   } catch (err) {
