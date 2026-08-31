@@ -74,6 +74,9 @@ test('canonical job events use the versioned allow-list and stable envelope', ()
   assert.ok(JOB_EVENT_TYPES.includes('job.created'));
   assert.ok(JOB_EVENT_TYPES.includes('model.fallback'));
   assert.ok(JOB_EVENT_TYPES.includes('review.completed'));
+  assert.ok(JOB_EVENT_TYPES.includes('runtime.bound'));
+  assert.ok(JOB_EVENT_TYPES.includes('model.admitted'));
+  assert.ok(JOB_EVENT_TYPES.includes('agent.created'));
 
   const event = createCanonicalJobEvent({
     jobId: 'wf-1', type: 'worker.started', sequence: 2, at: 123,

@@ -139,14 +139,14 @@ test('direct Hub jobs project deterministic canonical events without raw result 
     id: 'hub-1', role: 'worker', attempt: 0, status: 'running', phase: 'running',
     provider: 'p', model: 'm', selection_source: 'priority', startedAt: '2026-01-01T00:00:00Z',
   });
-  assert.deepEqual(running.map((event) => event.type), ['job.created', 'job.started', 'model.selected', 'worker.started']);
+  assert.deepEqual(running.map((event) => event.type), ['job.created', 'job.started', 'runtime.bound', 'model.selected', 'model.admitted', 'worker.started', 'agent.created']);
   const done = hubCanonicalEvents({
     id: 'hub-1', role: 'worker', attempt: 0, status: 'done', phase: 'completed',
     provider: 'p', model: 'm', selection_source: 'priority', startedAt: '2026-01-01T00:00:00Z', endedAt: '2026-01-01T00:01:00Z',
     result: 'SECRET RAW RESULT', outcome: { task_status: 'success' },
   });
   assert.deepEqual(done.map((event) => event.type), [
-    'job.created', 'job.started', 'model.selected', 'worker.started', 'worker.completed', 'job.completed',
+    'job.created', 'job.started', 'runtime.bound', 'model.selected', 'model.admitted', 'worker.started', 'agent.created', 'worker.completed', 'job.completed',
   ]);
   assert.doesNotMatch(JSON.stringify(done), /SECRET RAW RESULT/);
 });
