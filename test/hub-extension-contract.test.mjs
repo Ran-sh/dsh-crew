@@ -46,6 +46,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /saveWorkspaceContexts\(await readBody\(req\)\)/);
   assert.match(hubSource, /buildHubExecutionRows\(liveJobs\)/);
   assert.match(hubSource, /buildRuntimeReadinessSnapshot/);
+  assert.match(hubSource, /ingress/);
 });
 
 test('Hub mutation surface rejects cross-site browser requests', () => {

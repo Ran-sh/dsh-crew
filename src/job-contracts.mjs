@@ -10,7 +10,10 @@ export const JOB_CONTRACT_SCHEMA_VERSION = 1;
 export const JOB_EVENT_TYPES = Object.freeze([
   'job.created',
   'job.started',
+  'runtime.bound',
   'model.selected',
+  'model.admitted',
+  'agent.created',
   'model.fallback',
   'worker.started',
   'worker.completed',
@@ -137,12 +140,14 @@ function boundedExecutionContext(value) {
   const profile = boundedText(value.profile, 64);
   const runtimeId = boundedText(value.runtime_id, 128);
   const port = Number.isInteger(value.listen_port) ? value.listen_port : null;
-  if (!executionPlane && !profile && !runtimeId && port === null) return null;
+  const ingress = value.ingress === 'official-3080' || value.ingress === 'direct-3210' ? value.ingress : null;
+  if (!executionPlane && !profile && !runtimeId && port === null && !ingress) return null;
   return {
     execution_plane: executionPlane,
     profile,
     listen_port: port,
     runtime_id: runtimeId,
+    ...(ingress ? { ingress } : {}),
   };
 }
 

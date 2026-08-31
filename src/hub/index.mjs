@@ -176,8 +176,22 @@ export function hubCanonicalEvents(job = {}) {
   const definitions = [
     ['job.created', atStart, { client_job_id: job.client_job_id ?? null }],
     ['job.started', atStart, {}],
+    ['runtime.bound', atStart, {
+      execution_plane: job.execution_context?.execution_plane ?? null,
+      profile: job.execution_context?.profile ?? null,
+      listen_port: Number.isInteger(job.execution_context?.listen_port) ? job.execution_context.listen_port : null,
+      runtime_id: job.execution_context?.runtime_id ?? null,
+    }],
     ['model.selected', atStart, { provider: job.provider ?? null, model: job.model ?? null, source: job.selection_source ?? null }],
+    ['model.admitted', atStart, {
+      provider: job.provider ?? null,
+      model: job.model ?? null,
+      health_state: job.health_state ?? 'unprobed',
+      reason_code: job.health_reason_code ?? null,
+      observed_at: Number.isFinite(job.health_observed_at) ? job.health_observed_at : null,
+    }],
     [role === 'reviewer' ? 'review.started' : 'worker.started', atStart, { run_id: job.id }],
+    ['agent.created', atStart, { run_id: job.id }],
   ];
   if (job.status !== 'running') {
     definitions.push([
@@ -327,7 +341,7 @@ export class WorkerRegistry {  constructor(ctx) {
    * `role` (worker | reviewer) records who does the work; `tier` remains the
    * legacy model-class slot. Reviewer-role jobs always use the pro slot.
    */
-  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds, profile_id, workspace_context, allow_no_changes }) {
+  async spawn({ task, tier = 'flash', role, attempt = 0, effort = 'max', cwd, source = 'api', preset, delivery = 'coding', client_job_id, requested_isolation, workspace_branch, timeout_seconds, profile_id, workspace_context, allow_no_changes, ingress = 'direct-3210' }) {
     // role is only honored when the caller explicitly names it; a legacy
     // tier-only spawn (role === undefined) keeps the exact v0.1 resolution.
     const hasRole = role === 'worker' || role === 'reviewer';
@@ -463,6 +477,7 @@ export class WorkerRegistry {  constructor(ctx) {
           profile: runtime.profile,
           listen_port: runtime.listen_port,
           runtime_id: runtime.runtime_id,
+          ingress: ingress === 'official-3080' ? 'official-3080' : 'direct-3210',
         };
       })(),
       allow_no_changes: allow_no_changes === true,
@@ -1000,7 +1015,8 @@ export async function apply(ctx) {
             // as its raw default (pro-only + no tier used to spawn flash).
             const resolved = resolveHubSpawnPayload(payload, () => hub.getConfig?.() ?? {});
             if (!resolved.ok) return sendJson(res, 400, { ok: false, error: resolved.error, code: resolved.code });
-            const job = await hub.spawn(resolved.payload);
+            const ingress = req.headers?.['x-dsh-crew-ingress'] === 'official-3080' ? 'official-3080' : 'direct-3210';
+            const job = await hub.spawn({ ...resolved.payload, ingress });
             return sendJson(res, 200, { ok: true, job: hub.view(job) });
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'cancel') {
