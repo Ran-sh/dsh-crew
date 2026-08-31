@@ -55,7 +55,9 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(helper, /ConsecutiveFailures/);
   assert.match(helper, /ConsecutiveFailures -lt 3/);
   assert.match(helper, /consecutive failed health checks/i);
-  assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 2);
+  assert.match(helper, /ManagedByBridge/);
+  assert.match(helper, /Start-BridgedCrewService/);
+  assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 3);
   assert.doesNotMatch(helper, /(?:while|if) \(\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
   assert.match(startup, /__LAUNCHER__/);
   assert.match(startup, /--watch/);
@@ -98,6 +100,13 @@ test('package ships a lightweight official-web bridge instead of loading the ful
   assert.match(bridgePatch, /@ran-sh\/dsh-crew-web-bridge/);
   assert.match(bridgeClient, /ModuleLoader__\.load\(\{ id: ["']@ran-sh\/dsh-crew-web-bridge["']/);
   assert.match(bridgeEntry, /official-web-bridge\.mjs/);
+});
+
+test('production dispatch is 3210-only and the control UI does not offer standalone execution', () => {
+  const server = read('src/server.mjs');
+  const client = read('src/client/index.tsx');
+  assert.match(server, /resolveHubExecutionMode\(sessionConfig\.mode, status, \{ productionOnly: true \}\)/);
+  assert.doesNotMatch(client, /\['auto', 'hub', 'standalone'\]/);
 });
 
 test('primary documentation states the legacy launcher migration boundary', () => {

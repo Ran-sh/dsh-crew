@@ -15,8 +15,8 @@ $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
 $services = @(
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
+  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; ManagedByBridge = $false; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; ManagedByBridge = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -41,6 +41,18 @@ function Get-HealthState {
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Response did not contain a ready runtime contract.' }
   } catch {
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
+  }
+}
+
+function Start-BridgedCrewService {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/ping' -TimeoutSec 5
+    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+      return [pscustomobject]@{ Ready = $true; Error = $null }
+    }
+    return [pscustomobject]@{ Ready = $false; Error = ('3080 bridge returned HTTP {0}.' -f $response.StatusCode) }
+  } catch {
+    return [pscustomobject]@{ Ready = $false; Error = ('3080 bridge could not start the supervised 3210 backend: {0}' -f $_.Exception.Message) }
   }
 }
 
@@ -175,7 +187,7 @@ function Wait-CrewServices {
       if ($health.Ready) {
         $service.State = 'ready'
         $service.ConsecutiveFailures = 0
-        [void] (Set-TrackedListenerIdentity -Service $service)
+        if (-not $service.ManagedByBridge) { [void] (Set-TrackedListenerIdentity -Service $service) }
         Write-LaunchLog ('{0} ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       } elseif ($service.Process -and $service.Process.HasExited) {
         throw ('{0} exited before becoming ready; PID={1}; exit={2}; last health error: {3}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode, $health.Error)
@@ -184,7 +196,9 @@ function Wait-CrewServices {
     if (@($services | Where-Object State -eq 'starting').Count -gt 0) { Start-Sleep -Milliseconds 500 }
   }
 
-  $notReady = @($services | Where-Object State -ne 'ready')
+  $notReady = @($services | Where-Object {
+    $_.State -ne 'ready' -and -not ($_.ManagedByBridge -and $_.State -eq 'pending')
+  })
   if ($notReady.Count -gt 0) {
     $details = ($notReady | ForEach-Object { '{0}:{1} ({2})' -f $_.Profile, $_.Port, $_.LastError }) -join '; '
     throw "Startup health deadline exceeded: $details"
@@ -193,18 +207,33 @@ function Wait-CrewServices {
 
 function Ensure-CrewServices {
   param([switch] $QuietHealthy)
+  $officialRestarted = $false
 
   foreach ($service in $services) {
     $health = Get-HealthState $service
+    if ($service.ManagedByBridge -and $officialRestarted) {
+      # A restarted 3080 process must re-establish ownership of 3210 through
+      # its own sidecar, even if an old detached listener still answers.
+      $service.State = 'pending'
+      $service.LastError = 'Waiting for the restarted 3080 bridge to claim 3210.'
+      continue
+    }
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
       $service.State = 'ready'
       $service.ConsecutiveFailures = 0
       $service.LastError = $null
-      if (-not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
+      if (-not $service.ManagedByBridge -and -not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
       if (-not $QuietHealthy -or -not $wasReady) {
         Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       }
+      continue
+    }
+
+    if ($service.ManagedByBridge) {
+      $service.LastError = $health.Error
+      $service.ConsecutiveFailures += 1
+      $service.State = 'pending'
       continue
     }
 
@@ -242,9 +271,24 @@ function Ensure-CrewServices {
       Write-LaunchLog ('Supervisor detected {0} unavailable on {1}; restarting it.' -f $service.Name, $service.Port) 'WARN'
     }
     Start-CrewService $service
+    if (-not $service.ManagedByBridge) { $officialRestarted = $true }
   }
 
   Wait-CrewServices
+
+  # The 3080 official bridge is the sole owner of the 3210 child. Trigger it
+  # only after 3080 is healthy, then wait on the direct 3210 runtime contract.
+  foreach ($service in ($services | Where-Object ManagedByBridge -eq $true | Where-Object State -ne 'ready')) {
+    $bridge = Start-BridgedCrewService
+    if (-not $bridge.Ready) {
+      $service.LastError = $bridge.Error
+      throw $bridge.Error
+    }
+    $service.State = 'starting'
+    $service.ConsecutiveFailures = 0
+    $service.LastError = $null
+  }
+  if (@($services | Where-Object State -eq 'starting').Count -gt 0) { Wait-CrewServices }
 }
 
 function Start-ServiceSupervisor {

@@ -14,6 +14,7 @@ const compatibleHub = {
   protocol_version: 1,
   code: null,
 };
+const HUB_CONTEXT = { execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' } };
 
 test('deepseek-official skips provider catalog while execution rows remain NOT_RUN', () => {
   const matrix = buildConfigReadinessMatrix({
@@ -115,8 +116,8 @@ test('trusted live Hub jobs promote only verified worker and approved reviewer e
     hubJobsBody: {
       ok: true,
       jobs: [
-        { id: 'hub-worker-1', role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true },
-        { id: 'hub-reviewer-1', role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'approve' },
+        { id: 'hub-worker-1', ...HUB_CONTEXT, role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true },
+        { id: 'hub-reviewer-1', ...HUB_CONTEXT, role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'approve' },
       ],
     },
   });
@@ -139,10 +140,10 @@ test('normal process completion never promotes partial work or requested review 
     hubJobsBody: {
       ok: true,
       jobs: [
-        { role: 'worker', status: 'done', task_status: 'partial', delivery_complete: true, workspace_evidence_ok: true },
-        { role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: null },
-        { role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'request_changes' },
-        { role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, review_verdict: 'approve' },
+        { ...HUB_CONTEXT, role: 'worker', status: 'done', task_status: 'partial', delivery_complete: true, workspace_evidence_ok: true },
+        { ...HUB_CONTEXT, role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: null },
+        { ...HUB_CONTEXT, role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'request_changes' },
+        { ...HUB_CONTEXT, role: 'reviewer', status: 'done', task_status: 'success', delivery_complete: true, review_verdict: 'approve' },
       ],
     },
   });
@@ -159,12 +160,26 @@ test('escalated worker success does not masquerade as primary callability', () =
     hubJobsChecked: true,
     hubJobsBody: {
       ok: true,
-      jobs: [{ role: 'worker', attempt: 1, status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true }],
+      jobs: [{ ...HUB_CONTEXT, role: 'worker', attempt: 1, status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true }],
     },
   });
   assert.equal(row(matrix, 'model_execution').status, 'PASS');
   assert.equal(row(matrix, 'worker_primary_callable').status, 'NOT_RUN');
   assert.equal(row(matrix, 'worker_escalation_callable').status, 'PASS');
+});
+
+test('foreign or missing execution provenance never promotes readiness', () => {
+  for (const context of [undefined, { execution_plane: 'standalone', profile: 'legacy', listen_port: 3080, runtime_id: 'runtime-foreign' }, { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210 }]) {
+    const matrix = buildConfigReadinessMatrix({
+      hubCompatibility: compatibleHub,
+      workerProviderMode: 'follow-dsh',
+      providerCatalogChecked: true,
+      providerCatalogBody: { ok: true, health: { hints: [] } },
+      hubJobsChecked: true,
+      hubJobsBody: { ok: true, jobs: [{ role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, execution_context: context }] },
+    });
+    assert.equal(row(matrix, 'worker_primary_callable').status, 'NOT_RUN');
+  }
 });
 
 test('provider lifecycle readiness requires a structurally consistent 3210 inventory', () => {

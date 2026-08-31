@@ -1,4 +1,5 @@
 import { buildReadinessMatrix, READINESS_REASON_CODES } from './readiness-matrix.mjs';
+import { PRODUCTION_EXECUTION_PLANE, PRODUCTION_PROFILE, PRODUCTION_LISTEN_PORT } from './runtime-identity.mjs';
 
 function warningCodes(catalogBody) {
   const hints = Array.isArray(catalogBody?.health?.hints) ? catalogBody.health.hints : [];
@@ -8,10 +9,16 @@ function warningCodes(catalogBody) {
 }
 
 function verifiedHubJob(job) {
+  const context = job?.execution_context;
   return job?.status === 'done'
     && job?.task_status === 'success'
     && job?.delivery_complete === true
-    && job?.workspace_evidence_ok === true;
+    && job?.workspace_evidence_ok === true
+    && context?.execution_plane === PRODUCTION_EXECUTION_PLANE
+    && context?.profile === PRODUCTION_PROFILE
+    && Number(context?.listen_port) === PRODUCTION_LISTEN_PORT
+    && typeof context?.runtime_id === 'string'
+    && context.runtime_id.trim().length > 0;
 }
 
 function structurallyConsistentProviderInventory(body) {

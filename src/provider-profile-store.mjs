@@ -61,7 +61,14 @@ function parseProviderMap(source) {
         const nextIndent = indentOf(next);
         if (nextIndent < providerIndent) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
         if (nextIndent === providerIndent) break;
-        if (/^\s*-\s+/.test(next)) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+        // Provider values may contain nested YAML sequences (for example the
+        // `models:` list emitted by the live Harness profile). A sequence at
+        // the same indentation as a provider field is malformed, however;
+        // valid child items must be indented below that field. Keep the
+        // parser structure-aware without attempting to deserialize values.
+        if (/^\s*-\s+/.test(next) && nextIndent < providerIndent + 4) {
+          return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+        }
       }
       end += 1;
     }

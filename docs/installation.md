@@ -31,7 +31,7 @@ node scripts/setup.mjs status
 | Windows login startup | `DSH Crew.vbs`, `start-dsh-crew.cmd`, and `start-dsh-crew.ps1` | Only DSH Crew-owned files are removed; foreign pre-existing content at those exact paths is preserved or fails closed |
 | Official 3080 UI | Optional lightweight bridge after `integrate` | `detach` removes the bridge; a backup is kept |
 
-The Windows login launcher starts the official UI on 3080 and the isolated Crew backend on 3210. It does not open a browser and does not store credentials.
+The Windows login launcher starts the official UI on 3080. The 3080 bridge then starts and owns the isolated Crew backend on 3210, so provider restart/rollback operations have one verifiable supervisor. It does not open a browser and does not store credentials.
 
 ZCode uses `~/.zcode/cli/config.json` when it already has native MCP servers. If
 that native list is empty, the installer uses `~/.agents/mcp.json`; unrelated

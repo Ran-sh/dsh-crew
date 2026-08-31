@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hubCanonicalEvents, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
@@ -28,7 +28,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /restart_required: true/);
   assert.match(hubSource, /const code = boundedMachineCodeFromError\(err\)/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'probe'/);
-  assert.match(hubSource, /ctx\.providerProbe/);
+  assert.match(hubSource, /providerProbe/);
+  assert.match(hubSource, /createProviderProbe/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'rollback'/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-delete'/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-rollback'/);
@@ -48,6 +49,47 @@ test('Hub mutation surface rejects cross-site browser requests', () => {
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
   assert.equal(isLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3210', origin: 'http://[::1]:3080', 'sec-fetch-site': 'same-origin' } }), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
+});
+
+test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
+  const calls = [];
+  const probe = createProviderProbe({
+    llm: {
+      stream(options) {
+        calls.push(options);
+        return (async function* stream() {
+          yield { type: 'finish', reason: { kind: 'stop' } };
+        }());
+      },
+    },
+  });
+  assert.equal(typeof probe, 'function');
+  assert.deepEqual(await probe({ provider: 'opencode-muse', model: 'mimo-v2.5', signal: new AbortController().signal }), { ok: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].provider, 'opencode-muse');
+  assert.equal(calls[0].model, 'mimo-v2.5');
+  assert.equal(calls[0].maxTokens, 1);
+  assert.equal(calls[0].messages.length, 1);
+  assert.equal(calls[0].messages[0].content[0].text, 'dsh-crew provider probe');
+
+  const failed = createProviderProbe({
+    llm: { stream: () => (async function* stream() { yield { type: 'finish', reason: { kind: 'error', failure: { code: 'QUOTA_EXHAUSTED' } } }; }()) },
+  });
+  const observed = await failed({ provider: 'p', model: 'm', signal: new AbortController().signal });
+  assert.equal(observed.ok, false);
+  assert.equal(observed.error.code, 'QUOTA_EXHAUSTED');
+});
+
+test('provider probe follows the configured priority for the selected provider', () => {
+  const model = selectProviderProbeModel({
+    providerId: 'opencode-muse',
+    record: { models: ['deepseek-v4-flash', 'mimo-v2.5'] },
+    config: {
+      worker: { model_policy: { priority: [{ provider: 'opencode-muse', model: 'mimo-v2.5' }] } },
+      flash_model_priority: [{ provider: 'opencode-muse', model: 'deepseek-v4-flash' }],
+    },
+  });
+  assert.equal(model, 'mimo-v2.5');
 });
 
 test('Hub registry lists completed jobs for live extension readiness evidence', () => {

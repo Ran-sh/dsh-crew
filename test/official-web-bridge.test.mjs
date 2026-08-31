@@ -2,11 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { join } from 'node:path';
+import { rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   CREW_BRIDGE_PREFIX,
   CREW_BRIDGE_TARGET,
   apply,
   createCrewSidecarSupervisor,
+  defaultHealthCheck,
+  defaultRuntimeIdentity,
   isLoopbackAddress,
   isTrustedLocalRequest,
   proxyCrewRequest,
@@ -60,6 +64,7 @@ test('proxy preserves the Crew path/query/body but strips hop-by-hop request hea
       'content-length': '17',
       'content-type': 'application/json',
       'x-request-id': 'safe-id',
+      'x-dsh-crew-ingress': 'spoofed',
     },
     socket: { remoteAddress: '127.0.0.1' },
   });
@@ -68,7 +73,7 @@ test('proxy preserves the Crew path/query/body but strips hop-by-hop request hea
     ensureBackend: async () => ({ ok: true }),
     fetchImpl: async (url, init) => {
       upstream = { url, init, body: Buffer.from(await init.body.arrayBuffer()).toString('utf8') };
-      return new Response('{"ok":true}', { status: 201, headers: { 'content-type': 'application/json', connection: 'close' } });
+      return new Response('{"ok":true}', { status: 201, headers: { 'content-type': 'application/json', connection: 'close', 'x-dsh-crew-ingress': 'spoofed-upstream' } });
     },
   });
   assert.equal(upstream.url, 'http://127.0.0.1:3210/_dsh/dsh-crew/spawn?wait=1');
@@ -80,9 +85,11 @@ test('proxy preserves the Crew path/query/body but strips hop-by-hop request hea
   assert.equal(upstream.init.headers['content-type'], 'application/json');
   assert.equal(upstream.init.headers['x-dsh-crew-bridge'], '3080-to-3210');
   assert.equal(upstream.init.headers['x-dsh-crew-execution-plane'], 'hub-3210');
+  assert.equal(upstream.init.headers['x-dsh-crew-ingress'], 'official-3080');
   assert.equal(res.status, 201);
   assert.equal(res.headers.connection, undefined);
   assert.equal(res.headers['x-dsh-crew-bridge'], '3080-to-3210');
+  assert.equal(res.headers['x-dsh-crew-ingress'], 'official-3080');
   assert.deepEqual(JSON.parse(res.body), { ok: true });
 });
 
@@ -178,6 +185,24 @@ test('sidecar supervisor never duplicates a still-running cold-start process aft
   assert.equal(spawns.length, 1);
 });
 
+test('sidecar health checks require the 3210 runtime handshake, not a generic ping', async () => {
+  const valid = await defaultHealthCheck(async () => new Response(JSON.stringify({
+    ok: true, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
+  }), { status: 200 }), CREW_BRIDGE_TARGET);
+  assert.equal(valid, true);
+  assert.deepEqual(await defaultRuntimeIdentity(async () => new Response(JSON.stringify({
+    ok: true, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
+  }), { status: 200 }), CREW_BRIDGE_TARGET), {
+    execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
+  });
+  const wrongProfile = await defaultHealthCheck(async () => new Response(JSON.stringify({
+    ok: true, execution_plane: 'hub-3210', profile: 'web', listen_port: 3210, runtime_id: 'runtime-1',
+  }), { status: 200 }), CREW_BRIDGE_TARGET);
+  assert.equal(wrongProfile, false);
+  const pingOnly = await defaultHealthCheck(async () => new Response('{"ok":true}', { status: 200 }), CREW_BRIDGE_TARGET);
+  assert.equal(pingOnly, false);
+});
+
 test('sidecar supervisor restarts only the 3210 child it owns', async () => {
   const spawns = [];
   let healthy = false;
@@ -215,6 +240,48 @@ test('sidecar supervisor refuses to restart an unowned listener', async () => {
   const result = await supervisor.restartOwnedBackend();
   assert.equal(result.ok, false);
   assert.equal(result.code, 'PORT_OWNERSHIP_CONFLICT');
+});
+
+test('sidecar supervisor refuses to adopt a healthy 3210 listener it did not spawn', async () => {
+  const supervisor = createCrewSidecarSupervisor({
+    home: 'C:\\Users\\test', exists: () => true,
+    healthCheck: async () => true,
+    spawnImpl: () => { throw new Error('must not spawn'); },
+  });
+  const result = await supervisor.ensure();
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PORT_OWNERSHIP_CONFLICT');
+});
+
+test('sidecar supervisor adopts its persisted healthy child after the 3080 process restarts', async () => {
+  const ownershipFile = join(tmpdir(), `dsh-crew-supervisor-${process.pid}.json`);
+  writeFileSync(ownershipFile, JSON.stringify({ schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210 }));
+  let healthy = true;
+  const killed = [];
+  const spawns = [];
+  try {
+    const supervisor = createCrewSidecarSupervisor({
+      home: tmpdir(), ownershipFile, exists: () => true,
+      healthCheck: async () => healthy,
+      killImpl: (pid) => { killed.push(pid); healthy = false; },
+      runtimeIdentity: async () => ({ execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: healthy ? 'runtime-2' : 'runtime-1' }),
+      spawnImpl: (...args) => {
+        const child = { pid: 9876, killed: false, exitCode: null, once() {}, unref() {}, kill() { this.killed = true; healthy = false; return true; } };
+        spawns.push({ args, child });
+        healthy = true;
+        return child;
+      },
+      wait: async () => {}, maxAttempts: 3,
+    });
+    const adopted = await supervisor.ensure();
+    assert.deepEqual(adopted, { ok: true, started: false, adopted: true, owned: true });
+    const restarted = await supervisor.restartOwnedBackend();
+    assert.equal(restarted.ok, true);
+    assert.deepEqual(killed, [4321]);
+    assert.equal(spawns.length, 1);
+  } finally {
+    rmSync(ownershipFile, { force: true });
+  }
 });
 
 test('official bridge registers a status endpoint and the Crew API prefix', () => {

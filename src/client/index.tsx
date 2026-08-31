@@ -151,7 +151,7 @@ const COPY = {
     cardRuntime: { t: '执行与连接', d: 'worker 会话跑在本实例内还是独立进程，单个任务的超时上限，以及 CC / Codex 探测本实例的地址。' },
     cardMM: { t: '视觉与生图', d: '给纯文本的 DSH 模型借来眼睛和画笔：describe_image、会话贴图转写与 generate_image 都用这里的设置。' },
     cardCustomProv: { t: '自定义 Provider', d: '接入自己的 API 或本地命令；保存后会出现在上面的视觉 / 生图 provider 选择里。' },
-    modeDesc: { auto: 'auto · 优先 hub', hub: 'hub · 必须 hub', standalone: 'standalone · 独立进程' },
+    modeDesc: { auto: 'auto · 优先 3210', hub: 'hub · 必须 3210' },
     save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 Worker / Reviewer 任务。',
     adaptiveTitle: '自适应模型路由（实验）', adaptiveHint: '默认关闭；只重排系统自动候选，手动模型优先级始终保持原序。健康信号仅来自本进程已观察到的成功、失败、超时与粗粒度延迟，重启后清空。',
     adaptiveEnabled: '启用自适应路由', adaptiveWindow: '健康窗口', adaptiveSamples: '最少样本', adaptiveBoundary: '下一个工作流生效',
@@ -288,7 +288,7 @@ const COPY = {
     cardRuntime: { t: 'Execution & connection', d: 'Whether worker sessions run inside this instance or a separate process, the per-job timeout, and the address CC / Codex probes.' },
     cardMM: { t: 'Vision & image generation', d: "Lends the harness's text-only models eyes and a brush: describe_image, pasted-image transcription and generate_image all use these settings." },
     cardCustomProv: { t: 'Custom providers', d: 'Bring your own API or local command; saved providers appear in the vision / image-gen selects above.' },
-    modeDesc: { auto: 'auto · prefer hub', hub: 'hub · require hub', standalone: 'standalone' },
+    modeDesc: { auto: 'auto · prefer 3210', hub: 'hub · require 3210' },
     save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No Worker / Reviewer jobs yet.',
     adaptiveTitle: 'Adaptive model routing (experimental)', adaptiveHint: 'Off by default. Only system-derived candidates may be reordered; explicit model priorities always keep their order. Health uses only process-local success, failure, timeout, and coarse latency observations and resets on restart.',
     adaptiveEnabled: 'Enable adaptive routing', adaptiveWindow: 'Health window', adaptiveSamples: 'Minimum samples', adaptiveBoundary: 'Effective for the next workflow',
@@ -1289,7 +1289,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           {block(copy.cardRuntime, (<>
           <label style={S.field}><span style={S.fieldLabel}>{copy.mode}</span>
             <CustomSelect value={config.mode} onChange={(v) => field('mode', v)}
-              options={(['auto', 'hub', 'standalone'] as const).map((m) => ({ value: m, label: copy.modeDesc[m] }))} /></label>
+              options={(['auto', 'hub'] as const).map((m) => ({ value: m, label: copy.modeDesc[m] }))} /></label>
           <label style={S.field}><span style={S.fieldLabel}>{copy.timeout}</span>
             <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const }} type="number" min={60} max={7200} value={config.default_timeout_seconds}
               onChange={(e) => fieldLocal('default_timeout_seconds', Number(e.target.value))}

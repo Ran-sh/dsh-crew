@@ -203,6 +203,55 @@ export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChang
   });
 }
 
+/**
+ * Build the explicit provider callability probe used by the 3210 lifecycle
+ * route. It performs one token-bounded Harness stream through the same llm
+ * runtime used by WorkerRegistry; no credential values are read or returned.
+ */
+export function createProviderProbe(ctx) {
+  const llm = ctx?.llm ?? ctx?.get?.('llm');
+  if (!llm || typeof llm.stream !== 'function') return null;
+  return async ({ provider, model, signal }) => {
+    try {
+      const stream = llm.stream({
+        provider,
+        model,
+        messages: [userMessage('dsh-crew provider probe')],
+        maxTokens: 1,
+        temperature: 0,
+        signal,
+      });
+      for await (const chunk of stream) {
+        if (chunk?.type !== 'finish') continue;
+        const reason = chunk.reason;
+        if (reason?.kind === 'error' || reason?.kind === 'aborted') {
+          return { ok: false, error: reason.failure ?? { code: `PROVIDER_PROBE_${String(reason.kind).toUpperCase()}` } };
+        }
+        return { ok: true };
+      }
+      return { ok: false, error: { code: 'PROVIDER_PROBE_NO_FINISH' } };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  };
+}
+
+/** Pick the first configured model for a provider, falling back to its live catalog. */
+export function selectProviderProbeModel({ providerId, record, config } = {}) {
+  const advertised = new Set(Array.isArray(record?.models) ? record.models.filter((model) => typeof model === 'string') : []);
+  if (advertised.size === 0) return null;
+  const priorities = [
+    ...(Array.isArray(config?.worker?.model_policy?.priority) ? config.worker.model_policy.priority : []),
+    ...(Array.isArray(config?.flash_model_priority) ? config.flash_model_priority : []),
+    ...(Array.isArray(config?.review?.model_policy?.priority) ? config.review.model_policy.priority : []),
+    ...(Array.isArray(config?.pro_model_priority) ? config.pro_model_priority : []),
+  ];
+  for (const ref of priorities) {
+    if (ref?.provider === providerId && advertised.has(ref.model)) return ref.model;
+  }
+  return [...advertised][0];
+}
+
 // Exported for the unit tests (test/hub-windows.test.mjs); instantiation
 // needs only a duck-typed ctx, so spawn()'s path guard is testable without a
 // live DSH host.
@@ -833,6 +882,7 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
 export async function apply(ctx) {
   seedLangFromHost(ctx);
   const hub = new WorkerRegistry(ctx);
+  const builtInProviderProbe = createProviderProbe(ctx);
   try {
     const { readGlobalConfig } = await import('../install/install.mjs');
     hub.getConfig = () => readGlobalConfig();
@@ -1178,18 +1228,24 @@ export async function apply(ctx) {
             const record = inventory.records.find((entry) => entry.id === providerId);
             if (!record) return sendJson(res, 404, { ok: false, code: 'PROVIDER_NOT_FOUND' });
             if (record.desired_state === 'absent') return sendJson(res, 409, { ok: false, code: 'PROVIDER_TOMBSTONED' });
-            const model = typeof record.models?.[0] === 'string' ? record.models[0] : null;
+            const model = selectProviderProbeModel({ providerId, record, config });
             if (!model) return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROBE_MODEL_UNAVAILABLE' });
-            if (typeof ctx.providerProbe !== 'function') return sendJson(res, 503, { ok: false, code: 'PROVIDER_PROBE_UNAVAILABLE' });
+            let explicitProviderProbe;
+            try { explicitProviderProbe = ctx?.providerProbe; } catch { explicitProviderProbe = undefined; }
+            const providerProbe = typeof explicitProviderProbe === 'function' ? explicitProviderProbe : builtInProviderProbe;
+            if (typeof providerProbe !== 'function') return sendJson(res, 503, { ok: false, code: 'PROVIDER_PROBE_UNAVAILABLE' });
             let observed;
             let timer;
             try {
               const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ error: { name: 'TimeoutError' } }), 15_000); });
               observed = await Promise.race([
-                Promise.resolve().then(() => ctx.providerProbe({ provider: providerId, model, signal: AbortSignal.timeout(15_000) })),
+                Promise.resolve().then(() => providerProbe({ provider: providerId, model, signal: AbortSignal.timeout(15_000) })),
                 timeout,
               ]);
             } catch (error) {
+              // Keep probe transport failures as bounded health evidence so a
+              // credential/quota/timeout result is visible to routing policy;
+              // never copy the raw provider error into the response.
               observed = { error };
             } finally {
               clearTimeout(timer);
@@ -1311,8 +1367,9 @@ export async function apply(ctx) {
           }
           return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
         } catch (err) {
-          const code = boundedMachineCodeFromError(err) ?? 'PROVIDER_PLAN_INVALID';
-          const status = code === 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' ? 503
+          const isProbe = req.method === 'POST' && parts.length === 2 && parts[1] === 'probe';
+          const code = boundedMachineCodeFromError(err) ?? (isProbe ? 'PROVIDER_PROBE_FAILED' : 'PROVIDER_PLAN_INVALID');
+          const status = code === 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' || code.startsWith('PROVIDER_PROBE') ? 503
             : code.startsWith('PROVIDER_') || code.startsWith('CREDENTIAL_') ? 409 : 400;
           return sendJson(res, status, { ok: false, code });
         }

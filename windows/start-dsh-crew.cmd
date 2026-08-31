@@ -51,7 +51,7 @@ exit /b 64
 
 :help
 echo Usage: %~nx0 [--open ^| --background ^| --watch]
-echo   --open        Start both services and open http://127.0.0.1:3080/.
-echo   --background  Start both services silently without opening a browser.
-echo   --watch       Keep both services healthy and restart them after an exit.
+echo   --open        Start the 3080 console and its supervised 3210 backend, then open the console.
+echo   --background  Start the 3080 console and its supervised 3210 backend silently.
+echo   --watch       Keep the 3080 console and supervised 3210 backend healthy.
 exit /b 0

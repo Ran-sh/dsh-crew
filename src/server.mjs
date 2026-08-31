@@ -56,7 +56,9 @@ const constraintsSchema = z.object({
 // Initial values come from the global config (~/.config/dsh-crew/config.json,
 // edited on the DSH settings page); dsh_worker_config overrides per session.
 // All dispatch decisions (dsh_run_worker AND dsh_spawn_worker, hub AND
-// standalone) go through the same policy resolver in src/policy.mjs.
+// production dispatches go through the 3210-only policy resolver in
+// src/policy.mjs; the historical standalone path is retained only for
+// read/migration compatibility and is never selected for execution.
 import { readGlobalConfig } from './install/install.mjs';
 const initialGlobalConfig = normalizeGlobalConfig(readGlobalConfig());
 const legacyDefaults = deriveLegacyConfig(initialGlobalConfig);
@@ -65,7 +67,7 @@ const sessionConfig = {
   enabled: true,
   default_tier: legacyDefaults.default_tier,
   default_effort: legacyDefaults.default_effort,
-  mode: legacyDefaults.mode, // auto | hub | standalone
+  mode: legacyDefaults.mode === 'standalone' ? 'hub' : legacyDefaults.mode, // auto | hub; legacy standalone is migrated to hub
   default_timeout_seconds: legacyDefaults.default_timeout_seconds,
   tier_policy: undefined,
   escalate_on_failure: legacyDefaults.escalate_on_failure,
@@ -83,7 +85,7 @@ function resetSessionConfig() {
     enabled: true,
     default_tier: legacyDefaults.default_tier,
     default_effort: legacyDefaults.default_effort,
-    mode: legacyDefaults.mode,
+    mode: legacyDefaults.mode === 'standalone' ? 'hub' : legacyDefaults.mode,
     default_timeout_seconds: legacyDefaults.default_timeout_seconds,
     tier_policy: undefined,
     escalate_on_failure: legacyDefaults.escalate_on_failure,
@@ -144,8 +146,7 @@ function dispatchDisabled() {
 
 async function resolveMode() {
   const status = await hubStatus();
-  const transport = currentGlobalConfig().execution?.transport ?? 'hub-3210';
-  const decision = resolveHubExecutionMode(sessionConfig.mode, status, { productionOnly: transport === 'hub-3210' });
+  const decision = resolveHubExecutionMode(sessionConfig.mode, status, { productionOnly: true });
   if (!decision.ok) {
     throw Object.assign(new Error(decision.error), {
       code: decision.code,
@@ -275,7 +276,7 @@ server.registerTool('dsh_worker_config', {
     enabled: z.boolean().optional().describe('false = refuse all worker dispatch this session'),
     default_tier: z.enum(['flash', 'pro']).optional(),
     default_effort: z.enum(['off', 'high', 'max']).optional(),
-    mode: z.enum(['auto', 'hub', 'standalone']).optional(),
+    mode: z.enum(['auto', 'hub']).optional().describe('Execution mode. Production dispatch always uses the isolated 3210 Crew Harness; standalone is retained only as a legacy read/migration value.'),
     default_timeout_seconds: z.number().int().positive().max(7200).optional(),
     tier_policy: z.enum(['auto', 'flash-only', 'pro-only']).optional().describe('session hard clamp: flash-only / pro-only pin every dispatch to one tier'),
     escalate_on_failure: z.boolean().optional().describe('allow an unverified worker attempt to retry through the stronger model policy (applies to run and spawn)'),

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { crewDshHome } from './install/install.mjs';
@@ -71,14 +71,26 @@ async function readBoundedBody(req, limit = MAX_BODY_BYTES) {
   return Buffer.concat(chunks);
 }
 
-async function defaultHealthCheck(fetchImpl = globalThis.fetch, bridgeTarget = CREW_BRIDGE_TARGET) {
+export async function defaultRuntimeIdentity(fetchImpl = globalThis.fetch, bridgeTarget = CREW_BRIDGE_TARGET) {
   try {
-    const response = await fetchImpl(`${bridgeTarget}${CREW_BRIDGE_PREFIX}/ping`, {
+    const response = await fetchImpl(`${bridgeTarget}${CREW_BRIDGE_PREFIX}/runtime`, {
       signal: AbortSignal.timeout(1_500),
       headers: { accept: 'application/json' },
     });
-    return response.ok;
-  } catch { return false; }
+    if (!response.ok) return null;
+    const body = await response.json();
+    if (!(body?.ok === true
+      && body.execution_plane === 'hub-3210'
+      && body.profile === 'dsh-crew'
+      && Number(body.listen_port) === 3210
+      && typeof body.runtime_id === 'string'
+      && body.runtime_id.trim().length > 0)) return null;
+    return { execution_plane: body.execution_plane, profile: body.profile, listen_port: Number(body.listen_port), runtime_id: body.runtime_id.trim() };
+  } catch { return null; }
+}
+
+export async function defaultHealthCheck(fetchImpl = globalThis.fetch, bridgeTarget = CREW_BRIDGE_TARGET) {
+  return (await defaultRuntimeIdentity(fetchImpl, bridgeTarget)) !== null;
 }
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,9 +101,12 @@ export function createCrewSidecarSupervisor({
   bridgeTarget = resolveCrewBridgeTarget(),
   healthCheck = () => defaultHealthCheck(globalThis.fetch, bridgeTarget),
   spawnImpl = spawn,
+  killImpl = (pid) => process.kill(pid),
+  runtimeIdentity = () => defaultRuntimeIdentity(globalThis.fetch, bridgeTarget),
   wait = delay,
   maxAttempts = 120,
   pollInterval = 250,
+  ownershipFile = join(crewDshHome({ home }), 'supervisor-ownership.json'),
 } = {}) {
   let starting = null;
   let restarting = null;
@@ -100,10 +115,86 @@ export function createCrewSidecarSupervisor({
   const dshHome = crewDshHome({ home });
   const bridgePort = new URL(bridgeTarget).port;
 
+  function readOwnership() {
+    try {
+      const record = JSON.parse(readFileSync(ownershipFile, 'utf8'));
+      if (record?.schema_version !== 1
+        || !Number.isInteger(record.pid) || record.pid < 1
+        || record.profile !== 'dsh-crew'
+        || record.execution_plane !== 'hub-3210'
+        || Number(record.port) !== Number(bridgePort)) return null;
+      return record;
+    } catch { return null; }
+  }
+
+  function clearOwnership(expectedPid) {
+    try {
+      const current = readOwnership();
+      if (expectedPid !== undefined && current?.pid !== expectedPid) return;
+      rmSync(ownershipFile, { force: true });
+    } catch {}
+  }
+
+  function persistOwnership(pid, identity = null) {
+    if (!Number.isInteger(pid) || pid < 1) return false;
+    try {
+      mkdirSync(dshHome, { recursive: true });
+      const temp = `${ownershipFile}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(temp, JSON.stringify({
+        schema_version: 1,
+        pid,
+        profile: 'dsh-crew',
+        execution_plane: 'hub-3210',
+        port: Number(bridgePort),
+        runtime_id: typeof identity?.runtime_id === 'string' ? identity.runtime_id : null,
+      }) + '\n');
+      renameSync(temp, ownershipFile);
+      return true;
+    } catch { return false; }
+  }
+
+  function adoptedChild(pid) {
+    return {
+      pid,
+      killed: false,
+      exitCode: null,
+      kill() {
+        try {
+          killImpl(pid);
+          this.killed = true;
+          this.exitCode = 0;
+          clearOwnership(pid);
+          return true;
+        } catch { return false; }
+      },
+      unref() {},
+    };
+  }
+
+  async function adoptPersistedChild() {
+    if (runningChild && runningChild.killed !== true && runningChild.exitCode == null) return true;
+    const record = readOwnership();
+    if (!record || !(await healthCheck())) {
+      if (record) clearOwnership(record.pid);
+      return false;
+    }
+    const identity = await runtimeIdentity();
+    if (!identity || (record.runtime_id && identity.runtime_id !== record.runtime_id)) {
+      clearOwnership(record.pid);
+      return false;
+    }
+    runningChild = adoptedChild(record.pid);
+    return true;
+  }
+
   async function start() {
-    if (await healthCheck()) return { ok: true, started: false };
-    if (!exists(runtime)) return { ok: false, code: 'CREW_RUNTIME_NOT_INSTALLED' };
     const childAlive = runningChild && runningChild.killed !== true && runningChild.exitCode == null;
+    if (await healthCheck()) {
+      if (childAlive) return { ok: true, started: false, owned: true };
+      if (await adoptPersistedChild()) return { ok: true, started: false, adopted: true, owned: true };
+      return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
+    }
+    if (!exists(runtime)) return { ok: false, code: 'CREW_RUNTIME_NOT_INSTALLED' };
     if (!childAlive) {
       runningChild = spawnImpl(process.execPath, [
         runtime, '--profile', 'dsh-crew', '--host', '127.0.0.1', '--port', bridgePort,
@@ -115,21 +206,48 @@ export function createCrewSidecarSupervisor({
         windowsHide: true,
       });
       const ownedChild = runningChild;
+      if (Number.isInteger(ownedChild?.pid) && !persistOwnership(ownedChild.pid)) {
+        try { ownedChild.kill?.(); } catch {}
+        runningChild = null;
+        return { ok: false, code: 'SUPERVISOR_OWNERSHIP_PERSIST_FAILED' };
+      }
       ownedChild.once?.('exit', () => { if (runningChild === ownedChild) runningChild = null; });
       ownedChild.unref?.();
     }
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      if (await healthCheck()) return { ok: true, started: true };
+      if (await healthCheck()) {
+        if (Number.isInteger(runningChild?.pid)) {
+          const identity = await runtimeIdentity();
+          if (!identity) {
+            try { runningChild?.kill?.(); } catch {}
+            runningChild = null;
+            return { ok: false, code: 'SUPERVISOR_RUNTIME_IDENTITY_UNAVAILABLE' };
+          }
+          if (!persistOwnership(runningChild.pid, identity)) {
+            try { runningChild.kill?.(); } catch {}
+            runningChild = null;
+            return { ok: false, code: 'SUPERVISOR_OWNERSHIP_PERSIST_FAILED' };
+          }
+        }
+        return { ok: true, started: true, owned: true };
+      }
       await wait(pollInterval);
     }
     return { ok: false, code: 'CREW_BACKEND_START_TIMEOUT' };
   }
 
   async function restartOwnedBackend() {
-    const owned = runningChild;
-    const childAlive = owned && owned.killed !== true && owned.exitCode == null;
+    let owned = runningChild;
+    let childAlive = owned && owned.killed !== true && owned.exitCode == null;
+    if (!childAlive && await healthCheck()) {
+      if (await adoptPersistedChild()) {
+        owned = runningChild;
+        childAlive = true;
+      } else {
+        return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
+      }
+    }
     if (!childAlive) {
-      if (await healthCheck()) return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
       const started = await start();
       return started.ok ? { ...started, restarted: started.started === true } : started;
     }
@@ -183,8 +301,12 @@ export async function proxyCrewRequest(req, res, {
     const method = String(req.method ?? 'GET').toUpperCase();
     const bodyBuffer = method === 'GET' || method === 'HEAD' ? null : await readBoundedBody(req);
     const requestHeaders = safeHeaders(req.headers);
+    for (const name of Object.keys(requestHeaders)) {
+      if (name.startsWith('x-dsh-crew-')) delete requestHeaders[name];
+    }
     requestHeaders['x-dsh-crew-bridge'] = '3080-to-3210';
     requestHeaders['x-dsh-crew-execution-plane'] = 'hub-3210';
+    requestHeaders['x-dsh-crew-ingress'] = 'official-3080';
     const response = await fetchImpl(`${bridgeTarget}${req.url}`, {
       method,
       headers: requestHeaders,
@@ -193,8 +315,12 @@ export async function proxyCrewRequest(req, res, {
     });
     const responseBody = Buffer.from(await response.arrayBuffer());
     const headers = safeHeaders(Object.fromEntries(response.headers.entries()));
+    for (const name of Object.keys(headers)) {
+      if (name.startsWith('x-dsh-crew-')) delete headers[name];
+    }
     headers['content-length'] = String(responseBody.length);
     headers['x-dsh-crew-bridge'] = '3080-to-3210';
+    headers['x-dsh-crew-ingress'] = 'official-3080';
     res.writeHead(response.status, headers);
     res.end(responseBody);
   } catch (error) {

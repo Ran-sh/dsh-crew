@@ -604,9 +604,8 @@ const COPY = {
 			d: "接入自己的 API 或本地命令；保存后会出现在上面的视觉 / 生图 provider 选择里。"
 		},
 		modeDesc: {
-			auto: "auto · 优先 hub",
-			hub: "hub · 必须 hub",
-			standalone: "standalone · 独立进程"
+			auto: "auto · 优先 3210",
+			hub: "hub · 必须 3210"
 		},
 		save: "保存",
 		saved: "已保存",
@@ -916,9 +915,8 @@ const COPY = {
 			d: "Bring your own API or local command; saved providers appear in the vision / image-gen selects above."
 		},
 		modeDesc: {
-			auto: "auto · prefer hub",
-			hub: "hub · require hub",
-			standalone: "standalone"
+			auto: "auto · prefer 3210",
+			hub: "hub · require 3210"
 		},
 		save: "Save",
 		saved: "Saved",
@@ -3203,11 +3201,7 @@ function WorkersPanel({ ctx }) {
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CustomSelect, {
 								value: config.mode,
 								onChange: (v) => field("mode", v),
-								options: [
-									"auto",
-									"hub",
-									"standalone"
-								].map((m) => ({
+								options: ["auto", "hub"].map((m) => ({
 									value: m,
 									label: copy.modeDesc[m]
 								}))

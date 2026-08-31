@@ -18,7 +18,8 @@ dsh-crew status
 ```
 
 Open <http://127.0.0.1:3080> for the daily console. On Windows, installation
-also registers login startup for the two local services.
+also registers login startup for the 3080 console; its official bridge starts
+and owns the isolated 3210 Harness backend.
 
 | Surface | Purpose |
 | --- | --- |
