@@ -46,6 +46,19 @@ export function planCredentialPurge({ inventory, referenceId, expectedRevision }
 
 export async function executeCredentialPurge(plan, hooks = {}) {
   if (!plan?.plan_id || !plan?.reference_id) return { ok: false, code: 'CREDENTIAL_PURGE_PLAN_INVALID' };
+  if (plan.state !== 'PLANNED') return { ok: false, code: 'CREDENTIAL_PURGE_PLAN_STATE_INVALID' };
+  if (plan.ownership !== 'crew-owned' || plan.purge_capability !== 'eligible') {
+    return { ok: false, code: 'CREDENTIAL_PURGE_NOT_ALLOWED' };
+  }
+  if (plan.irreversible !== true) return { ok: false, code: 'CREDENTIAL_PURGE_PLAN_INVALID' };
+  if (!REVISION_PATTERN.test(plan.expected_revision ?? '')) return { ok: false, code: 'CREDENTIAL_REFERENCE_REVISION_INVALID' };
+  if (typeof hooks.recheck === 'function') {
+    const current = await hooks.recheck(plan.reference_id);
+    if (current?.ok !== true || current.revision !== plan.expected_revision || current.orphan !== true
+      || current.ownership !== 'crew-owned' || current.purge_capability !== 'eligible') {
+      return { ok: false, code: 'CREDENTIAL_REFERENCE_CHANGED' };
+    }
+  }
   if (typeof hooks.purge !== 'function' || typeof hooks.verify !== 'function') {
     return { ok: false, code: 'CREDENTIAL_PURGE_UNAVAILABLE', state: 'PURGE_PENDING_CONFIRMATION' };
   }

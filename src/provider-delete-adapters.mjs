@@ -233,6 +233,11 @@ export function createProviderDeleteFileHooks({
         replacement_default: plan.replacement_default ?? null,
         was_harness_default: plan.was_harness_default === true,
         replacement_default_model: plan.replacement_default_model ?? null,
+        credential_refs: (Array.isArray(plan.credential_refs) ? plan.credential_refs : []).map((ref) => ({
+          kind: typeof ref?.kind === 'string' ? ref.kind.trim() : 'unknown',
+          name_or_handle: typeof ref?.name_or_handle === 'string' ? ref.name_or_handle.trim() : 'unknown',
+          ownership: typeof ref?.ownership === 'string' ? ref.ownership.trim() : 'unknown',
+        })).filter((ref) => ref.kind && ref.name_or_handle && ref.ownership).slice(0, 32),
       },
       files: {},
     };
