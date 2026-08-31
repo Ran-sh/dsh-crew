@@ -850,6 +850,60 @@ test('release rollback restores the previous pointer when activation fails', asy
   } finally { t.cleanup(); }
 });
 
+test('release rollback reports compensation failure instead of claiming restored', async () => {
+  const cases = ['prior activation', 'prior restart', 'prior verification'];
+  for (const label of cases) {
+    const t = tempHome();
+    try {
+      const releases = crewReleasesDir({ home: t.dir });
+      const oldDir = join(releases, 'old-0.5.6');
+      const currentDir = join(releases, 'current-0.5.7');
+      mkdirSync(oldDir, { recursive: true });
+      mkdirSync(currentDir, { recursive: true });
+      writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
+      writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
+      writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+      const result = await npxRollback({
+        home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
+        activate: async ({ releaseDir }) => releaseDir === oldDir || label !== 'prior activation',
+        restart: async (version) => version === '0.5.6'
+          ? { ok: false, code: 'TARGET_RESTART_FAILED' }
+          : label === 'prior restart' ? { ok: false, code: 'PRIOR_RESTART_FAILED' } : { ok: true },
+        verifyRuntime: async (version) => version === '0.5.7' && label === 'prior verification'
+          ? { ok: false, code: 'PRIOR_VERIFY_FAILED' } : { ok: true, runtime_version: version },
+      });
+      assert.equal(result.ok, false, label);
+      assert.equal(result.restored, false, label);
+      assert.equal(result.recovery?.ok, false, label);
+      assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.7', label);
+    } finally { t.cleanup(); }
+  }
+});
+
+test('release rollback reports restored only after complete compensation', async () => {
+  const t = tempHome();
+  try {
+    const releases = crewReleasesDir({ home: t.dir });
+    const oldDir = join(releases, 'old-0.5.6');
+    const currentDir = join(releases, 'current-0.5.7');
+    mkdirSync(oldDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
+    writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+    const result = await npxRollback({
+      home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
+      activate: async ({ releaseDir }) => releaseDir === oldDir,
+      restart: async (version) => version === '0.5.6' ? { ok: false, code: 'TARGET_RESTART_FAILED' } : { ok: true },
+      verifyRuntime: async (version) => version === '0.5.7' ? { ok: true, runtime_version: version } : { ok: false, code: 'TARGET_VERIFY_FAILED' },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.restored, true);
+    assert.equal(result.recovery?.ok, true);
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.7');
+  } finally { t.cleanup(); }
+});
+
 test('CLI dispatch exposes release inventory and rollback commands', async () => {
   const seen = [];
   const commands = {
