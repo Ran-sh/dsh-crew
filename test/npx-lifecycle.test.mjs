@@ -805,6 +805,45 @@ test('jobs CLI projects list, contract watch, cancel and JSON request submission
   } finally { home.cleanup(); }
 });
 
+test('inspect and jobs CLI reject non-3210 configured targets before any request', async () => {
+  for (const hubUrl of ['http://127.0.0.1:3080', 'http://127.0.0.1:45678', 'not-a-url']) {
+    let calls = 0;
+    const common = { readConfig: () => ({ hub_url: hubUrl }), fetchImpl: async () => { calls += 1; return { ok: true, json: async () => ({}) }; }, log: () => {} };
+    await assert.rejects(() => npxInspect(common), /3210 Crew Hub/);
+    await assert.rejects(() => npxJobs({ ...common, args: ['list'] }), /3210 Crew Hub/);
+    assert.equal(calls, 0, hubUrl);
+  }
+});
+
+test('jobs submit and cancel stop at the runtime capability gate', async () => {
+  const badRuntimes = [
+    { service: 'other-service' },
+    { service: 'dsh-crew-hub', execution_plane: 'standalone', profile: 'legacy', listen_port: 3080 },
+    { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'wrong', listen_port: 3210 },
+    { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3080 },
+    { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, capabilities: ['jobs'] },
+  ];
+  for (const runtime of badRuntimes) {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push([url, init]);
+      return { ok: true, json: async () => ({ ok: true, ...runtime }) };
+    };
+    const common = { readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl, log: () => {} };
+    await assert.rejects(() => npxJobs({ ...common, args: ['cancel', 'job-1'] }), /3210 Crew Hub|missing job capability/i);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0][0], /3210\/_dsh\/dsh-crew\/runtime$/);
+    const home = tempHome();
+    try {
+      const request = join(home.dir, 'job.json');
+      writeFileSync(request, JSON.stringify({ objective: 'test', workspace: { repo_root: home.dir } }));
+      calls.length = 0;
+      await assert.rejects(() => npxJobs({ ...common, args: ['submit'], request }), /3210 Crew Hub|missing job capability/i);
+      assert.equal(calls.length, 1);
+    } finally { home.cleanup(); }
+  }
+});
+
 test('release rollback switches to a validated retained payload and restarts the owned runtime', async () => {
   const t = tempHome();
   try {
