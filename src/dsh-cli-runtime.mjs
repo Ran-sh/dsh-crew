@@ -20,6 +20,7 @@ import {
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { crewDshHome, crewProfileDir } from './install/install.mjs';
+import { reconcileProviderDesiredState } from './provider-desired-state.mjs';
 
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
 export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
@@ -323,6 +324,28 @@ function ensureProfileScaffold(profileRoot) {
   return changed;
 }
 
+function readCrewTombstones(home) {
+  const lifecycleFile = join(dirname(crewDshHome({ home })), 'provider-lifecycle.json');
+  if (!existsSync(lifecycleFile)) return { ok: true, tombstones: {} };
+  try {
+    const state = JSON.parse(readFileSync(lifecycleFile, 'utf8'));
+    return { ok: true, tombstones: state?.tombstones && typeof state.tombstones === 'object' && !Array.isArray(state.tombstones) ? state.tombstones : {} };
+  } catch { return { ok: false, code: 'PROVIDER_LIFECYCLE_STATE_INVALID' }; }
+}
+
+function reconcileCrewProfileProviders({ home, profileRoot }) {
+  const patchFile = join(profileRoot, 'cordis.patch.yml');
+  if (!existsSync(patchFile)) return { ok: true, changed: false, removed: [] };
+  const lifecycle = readCrewTombstones(home);
+  if (!lifecycle.ok) return lifecycle;
+  const source = readFileSync(patchFile, 'utf8');
+  if (source.trim() === '[]') return { ok: true, changed: false, removed: [] };
+  const reconciled = reconcileProviderDesiredState(source, { tombstones: lifecycle.tombstones });
+  if (!reconciled.ok) return reconciled;
+  if (reconciled.changed) writeFileSync(patchFile, reconciled.text);
+  return reconciled;
+}
+
 function ensureDirectoryLink(linkPath, targetRoot) {
   let stat;
   try { stat = lstatSync(linkPath); } catch { stat = null; }
@@ -409,7 +432,11 @@ export function ensurePluginRegistration({
 }
 
 export function ensureCrewPluginRegistration({ home = homedir(), root, name } = {}) {
-  return ensurePluginRegistration({ profileRoot: crewProfileDir({ home }), root, name });
+  const result = ensurePluginRegistration({ profileRoot: crewProfileDir({ home }), root, name });
+  if (!result.ok) return result;
+  const reconciled = reconcileCrewProfileProviders({ home, profileRoot: result.profileRoot });
+  if (!reconciled.ok) return reconciled;
+  return { ...result, changed: result.changed || reconciled.changed, provider_reconciliation: reconciled.removed ?? [] };
 }
 
 /**
