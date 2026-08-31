@@ -29,6 +29,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /const code = boundedMachineCodeFromError\(err\)/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'probe'/);
   assert.match(hubSource, /ctx\.providerProbe/);
+  assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'rollback'/);
+  assert.match(hubSource, /existingBackupId/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'events'/);

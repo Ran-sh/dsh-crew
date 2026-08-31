@@ -1150,9 +1150,9 @@ export async function apply(ctx) {
           const body = await readBody(req);
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
-          const profile = readProviderProfileRevision();
-          if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
+            const profile = readProviderProfileRevision();
+            if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
             const planned = planProviderDelete({
               providerId,
               inventory,
@@ -1187,6 +1187,39 @@ export async function apply(ctx) {
             const health = hub.healthStore.record(providerId, model, observed?.ok === true ? { ok: true } : { error: observed?.error ?? observed });
             return sendJson(res, 200, { ok: true, provider_id: providerId, model, health });
           }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'rollback') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_ROLLBACK_CONFIRM_REQUIRED' });
+            const supervisor = ctx.dshCrewSupervisor ?? null;
+            const restart = supervisor?.restart3210;
+            const ownsCrew3210 = supervisor?.execution_plane === 'hub-3210'
+              && supervisor?.listen_port === 3210
+              && supervisor?.profile === 'dsh-crew';
+            if (typeof restart !== 'function' || !ownsCrew3210) {
+              return sendJson(res, 503, { ok: false, code: 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' });
+            }
+            const { transaction_id: transactionId } = body ?? {};
+            const hooks = createProviderDeleteFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              configFile: join(CONFIG_DIR, 'config.json'),
+              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+              backupDir: join(CONFIG_DIR, 'provider-backups'),
+              existingBackupId: transactionId,
+              expectedProviderId: providerId,
+              restart: (plan) => restart.call(supervisor, plan),
+            });
+            await hooks.acquireLock();
+            try {
+              const plan = { plan_id: transactionId, provider_id: providerId };
+              await hooks.rollback(plan);
+              const restarted = await hooks.restartRollback(plan);
+              if (restarted?.ok === false) return sendJson(res, 409, { ok: false, code: restarted.code ?? 'PROVIDER_DELETE_ROLLBACK_RESTART_FAILED' });
+              const verified = await hooks.verifyRollback(plan);
+              if (verified?.ok !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED' });
+              return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
+            } finally {
+              await hooks.release();
+            }
+          }
           if (req.method === 'DELETE' && parts.length === 1) {
             if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_CONFIRM_REQUIRED' });
             if (body?.purge_orphan_credentials === true) {
@@ -1197,6 +1230,8 @@ export async function apply(ctx) {
               providerDeletePlans.delete(body?.plan_id);
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_EXPIRED' });
             }
+            const profile = readProviderProfileRevision();
+            if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
             if (body?.expected_revision !== stored.plan.expected_revision || profile.revision !== stored.plan.expected_revision) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROFILE_CHANGED' });
             }

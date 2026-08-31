@@ -173,6 +173,8 @@ export function createProviderDeleteFileHooks({
   readConfig = () => defaultReadConfig(configFile),
   writeConfig = (config) => defaultWriteConfig(configFile, config),
   restart,
+  existingBackupId = null,
+  expectedProviderId = null,
   fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync },
 } = {}) {
   validatePaths({ profile: profileFile, config: configFile, lifecycle: lifecycleFile });
@@ -182,9 +184,8 @@ export function createProviderDeleteFileHooks({
   let lockPath = null;
   let lockOwned = false;
 
-  const backup = async (plan) => {
-    const planId = safePlanId(plan?.plan_id);
-    if (!planId) throw Object.assign(new Error('provider delete plan id is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+  const acquireLock = async () => {
+    if (lockOwned) return;
     fs.mkdirSync(backupDir, { recursive: true });
     lockPath = join(backupDir, '.delete.lock');
     try {
@@ -193,9 +194,31 @@ export function createProviderDeleteFileHooks({
     } catch (error) {
       throw Object.assign(new Error('another provider deletion is active'), { code: error?.code === 'EEXIST' ? 'PROVIDER_DELETE_BUSY' : 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
     }
+  };
+
+  if (existingBackupId !== null) {
+    const backupId = safePlanId(existingBackupId);
+    if (!backupId) throw Object.assign(new Error('provider backup id is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+    const root = join(backupDir, backupId);
+    const manifest = readJson(join(root, 'manifest.json'), null);
+    if (!manifest || manifest.schema_version !== 1 || !manifest.files || (expectedProviderId && manifest.provider_id !== expectedProviderId)) {
+      throw Object.assign(new Error('provider backup is invalid'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
+    }
+    activeBackup = { root, manifest };
+  }
+
+  const persistManifest = () => {
+    if (!activeBackup) return;
+    atomicWrite(join(activeBackup.root, 'manifest.json'), JSON.stringify(activeBackup.manifest, null, 2) + '\n');
+  };
+
+  const backup = async (plan) => {
+    const planId = safePlanId(plan?.plan_id);
+    if (!planId) throw Object.assign(new Error('provider delete plan id is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+    await acquireLock();
     const root = join(backupDir, planId);
     fs.mkdirSync(root, { recursive: true });
-    const manifest = { schema_version: 1, files: {} };
+    const manifest = { schema_version: 1, provider_id: plan.provider_id, files: {} };
     for (const key of FILE_KEYS) {
       const source = paths[key];
       assertManagedPath(source);
@@ -211,9 +234,9 @@ export function createProviderDeleteFileHooks({
     manifest.config_projection = configProjection(config);
     manifest.config_revision = sha256(JSON.stringify(config));
     manifest.lifecycle_revision = sha256(JSON.stringify(lifecycle));
-    const manifestFile = join(root, 'manifest.json');
-    atomicWrite(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+    manifest.profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
     activeBackup = { root, manifest };
+    persistManifest();
     return { ok: true, backup_id: planId };
   };
 
@@ -224,7 +247,12 @@ export function createProviderDeleteFileHooks({
     if (activeBackup?.manifest?.lifecycle_revision && sha256(JSON.stringify(state)) !== activeBackup.manifest.lifecycle_revision) {
       throw Object.assign(new Error('provider lifecycle changed'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
     }
-    atomicWrite(lifecycleFile, JSON.stringify(markProviderTombstone(state, providerId), null, 2) + '\n');
+    const marked = markProviderTombstone(state, providerId);
+    atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n');
+    if (activeBackup) {
+      activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(marked));
+      persistManifest();
+    }
   };
 
   const scrubReferences = async (plan) => {
@@ -243,6 +271,10 @@ export function createProviderDeleteFileHooks({
       };
     }
     await writeConfig(scrubbed.config);
+    if (activeBackup) {
+      activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(scrubbed.config));
+      persistManifest();
+    }
   };
 
   const removeDeclarations = async (plan) => {
@@ -254,6 +286,20 @@ export function createProviderDeleteFileHooks({
     });
     if (!result.ok) throw Object.assign(new Error('provider profile changed'), { code: result.code });
     atomicWrite(profileFile, result.text);
+    if (activeBackup) {
+      activeBackup.manifest.applied_profile_revision = result.revision;
+      persistManifest();
+    }
+  };
+
+  const checkpointApplied = async () => {
+    if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
+    const config = await readConfig();
+    const lifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(config));
+    activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(lifecycle));
+    activeBackup.manifest.applied_profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
+    persistManifest();
   };
 
   const verify = async (plan) => {
@@ -280,6 +326,15 @@ export function createProviderDeleteFileHooks({
 
   const rollback = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_ROLLBACK_UNAVAILABLE' });
+    const allowedRevision = (current, original, applied) => current === original || (typeof applied === 'string' && current === applied);
+    const currentConfig = await readConfig();
+    const currentLifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    const currentProfile = fs.readFileSync(profileFile, 'utf8');
+    if (!allowedRevision(sha256(JSON.stringify(currentConfig)), activeBackup.manifest.config_revision, activeBackup.manifest.applied_config_revision)
+      || !allowedRevision(sha256(JSON.stringify(currentLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision)
+      || !allowedRevision(sha256(currentProfile), activeBackup.manifest.profile_revision, activeBackup.manifest.applied_profile_revision)) {
+      throw Object.assign(new Error('managed provider state changed after the transaction'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+    }
     for (const key of FILE_KEYS) {
       const target = paths[key];
       const entry = activeBackup.manifest.files[key];
@@ -317,6 +372,8 @@ export function createProviderDeleteFileHooks({
 
   return {
     backup,
+    acquireLock,
+    checkpointApplied,
     markTombstone,
     scrubReferences,
     removeDeclarations,

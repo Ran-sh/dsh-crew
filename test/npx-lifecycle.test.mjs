@@ -818,6 +818,9 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   await npxProviders({ ...common, args: ['probe', 'opencode-go'] });
   assert.equal(calls.at(-1)[1].method, 'POST');
   assert.match(calls.at(-1)[0], /providers\/opencode-go\/probe$/);
+  await npxProviders({ ...common, args: ['rollback', 'opencode-go'], planId: 'plan-1', confirm: true });
+  assert.equal(calls.at(-1)[1].method, 'POST');
+  assert.match(calls.at(-1)[0], /providers\/opencode-go\/rollback$/);
   await npxProviders({ ...common, args: ['delete', 'opencode-go'], planId: 'plan-1', expectedRevision: 'a'.repeat(64), confirm: true });
   assert.equal(calls.at(-1)[1].method, 'DELETE');
   assert.match(calls.at(-1)[1].body, /"confirm":true/);

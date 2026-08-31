@@ -124,6 +124,41 @@ test('file adapters serialize concurrent transactions with a managed lock', asyn
   await second.release();
 });
 
+test('a persisted transaction backup can be reopened for an explicit rollback', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  writeFileSync(paths.profileFile, PROFILE.replace(/      opencode-go:[\s\S]*?      openrouter:/, '      openrouter:'));
+  const reopened = createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+    restart: async () => ({ ok: true }),
+  });
+  await reopened.acquireLock();
+  await reopened.checkpointApplied(plan);
+  await reopened.rollback(plan);
+  const verified = await reopened.verifyRollback(plan);
+  await reopened.release();
+  assert.equal(verified.ok, true);
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
+});
+
+test('reopened rollback fails closed when an administrator changed managed state', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  writeFileSync(paths.configFile, JSON.stringify({ ...CONFIG, flash_model_priority: [{ provider: 'openrouter', model: 'other' }] }));
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id, restart: async () => ({ ok: true }) });
+  await reopened.acquireLock();
+  await assert.rejects(() => reopened.rollback(plan), (error) => error.code === 'PROVIDER_DELETE_STATE_CHANGED');
+  await reopened.release();
+});
+
 test('file adapters fail before writes when the profile revision is stale', async () => {
   const paths = fixture();
   let config = JSON.parse(readFileSync(paths.configFile, 'utf8'));
