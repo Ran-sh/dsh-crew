@@ -85,3 +85,17 @@ test('credential purge execution requires a fresh recheck before any irreversibl
   assert.equal(result.code, 'CREDENTIAL_REFERENCE_RECHECK_REQUIRED');
   assert.equal(called, false);
 });
+
+test('planner output is accepted by the guarded executor after a matching recheck', async () => {
+  const planned = planCredentialPurge({ inventory, referenceId: 'crew-store:ref-1' });
+  assert.equal(planned.ok, true);
+  let purged = false;
+  const result = await executeCredentialPurge(planned.plan, {
+    recheck: async () => ({ ok: true, revision: planned.plan.expected_revision, orphan: true, ownership: 'crew-owned', purge_capability: 'eligible' }),
+    purge: async () => { purged = true; },
+    verify: async () => ({ ok: true }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(purged, true);
+});
