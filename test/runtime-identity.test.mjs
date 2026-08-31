@@ -36,6 +36,18 @@ test('legacy reachability-only ping is detected as stale instead of compatible',
   assert.equal(result.code, HUB_COMPATIBILITY_CODES.PROTOCOL_MISSING);
 });
 
+test('strict production handshake rejects provenance-less runtime identities', () => {
+  const result = evaluateHubHandshake({
+    ok: true,
+    service: 'dsh-crew-hub',
+    runtime_version: RUNTIME_VERSION,
+    protocol_version: HUB_PROTOCOL_VERSION,
+    capabilities: HUB_CAPABILITIES,
+  }, { strictProduction: true });
+  assert.equal(result.compatible, false);
+  assert.equal(result.code, HUB_COMPATIBILITY_CODES.PROVENANCE_MISSING);
+});
+
 test('wrong service is not treated as a dsh-crew Hub', () => {
   const result = evaluateHubHandshake({ ok: true, service: 'other', protocol_version: HUB_PROTOCOL_VERSION, capabilities: HUB_CAPABILITIES });
   assert.equal(result.compatible, false);
