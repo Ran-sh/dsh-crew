@@ -198,6 +198,10 @@ test('Crew registration reconciles tombstoned provider declarations before profi
     const patch = readFileSync(join(first.profileRoot, 'cordis.patch.yml'), 'utf8');
     assert.equal(patch.includes('opencode-go:'), false);
     assert.equal(patch.includes('openrouter:'), true);
+    const secondRepair = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(secondRepair.ok, true, JSON.stringify(secondRepair));
+    const patchAfterSecondRepair = readFileSync(join(first.profileRoot, 'cordis.patch.yml'), 'utf8');
+    assert.equal(patchAfterSecondRepair.includes('opencode-go:'), false);
   } finally { t.cleanup(); }
 });
 
