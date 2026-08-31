@@ -36,6 +36,11 @@ export const HUB_CAPABILITIES = Object.freeze([
   'profiles',
   'workspace-context',
   'extension-contract',
+  'provider-inventory',
+  'provider-lifecycle-v1',
+  'provider-health-v1',
+  'provider-probe-stream-v1',
+  'credential-reference-inventory-v1',
 ]);
 
 // Capabilities the current MCP workflow depends on for full Hub execution.
