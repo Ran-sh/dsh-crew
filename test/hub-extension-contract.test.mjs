@@ -7,7 +7,7 @@ import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
 
 test('Hub advertises the extension, profile, context, evidence and event surfaces', () => {
-  for (const capability of ['canonical-events', 'evidence', 'profiles', 'workspace-context', 'extension-contract', 'provider-inventory', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1', 'credential-reference-inventory-v1']) {
+  for (const capability of ['canonical-events', 'evidence', 'profiles', 'workspace-context', 'extension-contract', 'provider-inventory', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1', 'credential-reference-inventory-v1', 'runtime-provenance-v1']) {
     assert.ok(HUB_CAPABILITIES.includes(capability), capability);
   }
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/extension`/);
