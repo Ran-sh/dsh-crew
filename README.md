@@ -45,6 +45,8 @@ dsh-crew inspect          # live capabilities and readiness
 dsh-crew jobs list        # jobs and Result Contracts
 dsh-crew providers list   # 3210 Harness provider inventory (secret-free)
 dsh-crew providers probe <provider-id>
+dsh-crew providers delete-plan <provider-id> --replacement-default <provider-id>
+dsh-crew providers delete <provider-id> --plan <plan-id> --expected-revision <sha256> --confirm
 dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```
