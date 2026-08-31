@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-Future changes go here.
+- Hardens Provider lifecycle recovery with semantic rollback verification,
+  tombstone-aware installer reconciliation, credential-reference inventory,
+  and guarded purge boundaries.
+- Adds a unified runtime readiness snapshot, v2 execution provenance events,
+  retained-release rollback, and a live capability handshake for the provider
+  CLI.
+- Clarifies that Standalone is legacy migration metadata only; production
+  execution remains on the isolated 3210 Crew Harness.
 
 ## 0.5.7 — 2026-08-31
 
