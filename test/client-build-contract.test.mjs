@@ -89,6 +89,14 @@ test('role-first routing UI exposes ordering, health gates, and reviewer gate', 
   assert.match(panelSource, /enabled: patch\.ordering === 'health-aware'/);
 });
 
+test('model priority rows render fresh provider health without treating catalog presence as callable', () => {
+  assert.match(panelSource, /get\('\/provider-health'\)/);
+  assert.match(panelSource, /entry\.provider === ref\.provider && entry\.model === ref\.model && entry\.fresh === true/);
+  assert.match(panelSource, /healthUnprobed/);
+  assert.match(panelSource, /health\?\.state === 'callable'/);
+  assert.match(panelSource, /get\('\/provider-health'\)\.catch\(\(\) => null\)/);
+});
+
 test('shared client renders a full 3080 control plane and a minimal 3210 diagnostic surface', () => {
   assert.match(panelSource, /classifyCrewSurface/);
   assert.match(panelSource, /surfaceResponsibilities/);

@@ -446,6 +446,8 @@ const COPY = {
 		notAdvertised: "当前未列出",
 		noPriority: "未配置优先项",
 		modelPoolSummary: (p, m) => `Providers: ${p} · Models: ${m}`,
+		healthUnprobed: "UNPROBED",
+		checkedAgo: (s) => `${s} 秒前检查`,
 		partialCatalog: "部分 Provider 读取失败",
 		catalogFailed: "无法读取 Harness 模型目录",
 		removePriority: "移除",
@@ -756,6 +758,8 @@ const COPY = {
 		notAdvertised: "Currently not advertised",
 		noPriority: "No priority models configured",
 		modelPoolSummary: (p, m) => `Providers: ${p} · Models: ${m}`,
+		healthUnprobed: "UNPROBED",
+		checkedAgo: (s) => `checked ${s}s ago`,
 		partialCatalog: "Some providers failed to load",
 		catalogFailed: "Unable to read Harness model catalog",
 		removePriority: "Remove",
@@ -1403,6 +1407,7 @@ function WorkersPanel({ ctx }) {
 	const [modelCatalogError, setModelCatalogError] = (0, react.useState)("");
 	const [modelCatalogBusy, setModelCatalogBusy] = (0, react.useState)(false);
 	const [providerInventory, setProviderInventory] = (0, react.useState)(null);
+	const [providerHealth, setProviderHealth] = (0, react.useState)([]);
 	const [providerInventoryError, setProviderInventoryError] = (0, react.useState)("");
 	const [providerLifecycleBusy, setProviderLifecycleBusy] = (0, react.useState)(null);
 	const [modelPickerTier, setModelPickerTier] = (0, react.useState)(null);
@@ -1491,12 +1496,13 @@ function WorkersPanel({ ctx }) {
 	}, [detectSurface]);
 	const refreshAll = (0, react.useCallback)(async () => {
 		try {
-			const [j, s, c, pr, pi] = await Promise.all([
+			const [j, s, c, pr, pi, ph] = await Promise.all([
 				get("/jobs"),
 				get("/install/status"),
 				get("/config"),
 				get("/presets"),
-				get("/providers")
+				get("/providers").catch(() => null),
+				get("/provider-health").catch(() => null)
 			]);
 			if (j.ok) setJobs(j.jobs ?? []);
 			if (s.ok) setStatus(s.status);
@@ -1508,15 +1514,17 @@ function WorkersPanel({ ctx }) {
 				value: x.id,
 				label: x.name ?? x.id
 			}))]);
-			if (pi.ok) setProviderInventory(pi);
+			if (pi?.ok) setProviderInventory(pi);
+			if (ph?.ok) setProviderHealth(ph.health ?? []);
 		} catch {}
 	}, [get]);
 	(0, react.useEffect)(() => {
 		if (surface !== CREW_UI_SURFACES.OFFICIAL) return void 0;
 		refreshAll();
 		const timer = setInterval(() => {
-			get("/jobs").then((j) => {
+			Promise.all([get("/jobs"), get("/provider-health").catch(() => null)]).then(([j, health]) => {
 				if (j.ok) setJobs(j.jobs ?? []);
+				if (health?.ok) setProviderHealth(health.health ?? []);
 			}).catch(() => {});
 		}, 3e3);
 		return () => clearInterval(timer);
@@ -1541,9 +1549,10 @@ function WorkersPanel({ ctx }) {
 	const refreshProviderInventory = (0, react.useCallback)(async () => {
 		setProviderInventoryError("");
 		try {
-			const result = await get("/providers");
+			const [result, health] = await Promise.all([get("/providers"), get("/provider-health").catch(() => null)]);
 			if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
 			setProviderInventory(result);
+			if (health?.ok) setProviderHealth(health.health ?? []);
 		} catch (error) {
 			setProviderInventoryError(error?.message ?? copy.providerNoInventory);
 		}
@@ -2292,6 +2301,9 @@ function WorkersPanel({ ctx }) {
 							model: provider?.models?.find((item) => item.id === ref.model)
 						};
 					};
+					const modelHealth = (ref) => providerHealth.find((entry) => entry.provider === ref.provider && entry.model === ref.model && entry.fresh === true) ?? null;
+					const healthLabel = (health) => health?.state ? String(health.state).toUpperCase().replace(/-/g, " ") : copy.healthUnprobed;
+					const healthAge = (health) => Number.isFinite(health?.observed_at) ? copy.checkedAgo(Math.max(0, Math.round((Date.now() - health.observed_at) / 1e3))) : "";
 					const filteredProviders = catalogProviders.map((provider) => ({
 						...provider,
 						models: (provider.models ?? []).filter((model) => {
@@ -2348,6 +2360,7 @@ function WorkersPanel({ ctx }) {
 									},
 									children: priority.map((ref, index) => {
 										const meta = modelMeta(ref);
+										const health = modelHealth(ref);
 										const warning = !meta.provider ? copy.providerUnavailable : !meta.model ? copy.notAdvertised : "";
 										return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 											style: {
@@ -2391,6 +2404,15 @@ function WorkersPanel({ ctx }) {
 																" / ",
 																ref.model
 															]
+														}),
+														/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+															style: {
+																display: "block",
+																fontSize: 10.5,
+																color: health?.state === "callable" ? "#3fb950" : health ? "#c98735" : "inherit",
+																opacity: health ? .9 : .5
+															},
+															children: [healthLabel(health), healthAge(health) ? ` · ${healthAge(health)}` : ""]
 														}),
 														warning && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 															style: {

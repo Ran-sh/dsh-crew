@@ -80,6 +80,7 @@ const COPY = {
     modelPriority: '模型优先级', addPriorityModel: '＋ 添加优先模型', modelSearch: '搜索 Provider 或 Model…',
     harnessDefault: 'Harness 默认模型', providerUnavailable: 'Provider 不可用', notAdvertised: '当前未列出',
     noPriority: '未配置优先项', modelPoolSummary: (p: number, m: number) => `Providers: ${p} · Models: ${m}`,
+    healthUnprobed: 'UNPROBED', checkedAgo: (s: number) => `${s} 秒前检查`,
     partialCatalog: '部分 Provider 读取失败', catalogFailed: '无法读取 Harness 模型目录', removePriority: '移除', moveUp: '上移', moveDown: '下移',
     needsModelSelection: '多个 Provider 提供默认偏好模型，且 Harness Default 无法消歧；当前将回退到 Harness Default，请手动选择。',
     responsibilities: '职责',
@@ -216,6 +217,7 @@ const COPY = {
     modelPriority: 'Model Priority', addPriorityModel: '＋ Add Priority Model', modelSearch: 'Search Provider or Model…',
     harnessDefault: 'Harness Default', providerUnavailable: 'Provider unavailable', notAdvertised: 'Currently not advertised',
     noPriority: 'No priority models configured', modelPoolSummary: (p: number, m: number) => `Providers: ${p} · Models: ${m}`,
+    healthUnprobed: 'UNPROBED', checkedAgo: (s: number) => `checked ${s}s ago`,
     partialCatalog: 'Some providers failed to load', catalogFailed: 'Unable to read Harness model catalog', removePriority: 'Remove', moveUp: 'Move up', moveDown: 'Move down',
     needsModelSelection: 'Multiple providers advertise the preferred model and Harness Default cannot disambiguate them. Falling back to Harness Default; choose a priority model explicitly.',
     responsibilities: 'Responsibilities',
@@ -523,6 +525,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [modelCatalogError, setModelCatalogError] = useState('');
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
   const [providerInventory, setProviderInventory] = useState<any>(null);
+  const [providerHealth, setProviderHealth] = useState<any[]>([]);
   const [providerInventoryError, setProviderInventoryError] = useState('');
   const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
@@ -606,7 +609,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [j, s, c, pr, pi] = await Promise.all([get('/jobs'), get('/install/status'), get('/config'), get('/presets'), get('/providers')]);
+      const [j, s, c, pr, pi, ph] = await Promise.all([
+        get('/jobs'), get('/install/status'), get('/config'), get('/presets'),
+        get('/providers').catch(() => null), get('/provider-health').catch(() => null),
+      ]);
       if (j.ok) setJobs(j.jobs ?? []);
       if (s.ok) setStatus(s.status);
       if (c.ok) setConfig((prev: any) => prev ?? c.config);
@@ -614,14 +620,20 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         { value: 'default', label: copy.presetDefault(pr.defaultId) },
         ...(pr.presets ?? []).map((x: any) => ({ value: x.id, label: x.name ?? x.id })),
       ]);
-      if (pi.ok) setProviderInventory(pi);
+      if (pi?.ok) setProviderInventory(pi);
+      if (ph?.ok) setProviderHealth(ph.health ?? []);
     } catch { /* instance restarting */ }
   }, [get]);
 
   useEffect(() => {
     if (surface !== CREW_UI_SURFACES.OFFICIAL) return undefined;
     void refreshAll();
-    const timer = setInterval(() => { void get('/jobs').then((j) => { if (j.ok) setJobs(j.jobs ?? []); }).catch(() => {}); }, 3000);
+    const timer = setInterval(() => {
+      void Promise.all([get('/jobs'), get('/provider-health').catch(() => null)]).then(([j, health]) => {
+        if (j.ok) setJobs(j.jobs ?? []);
+        if (health?.ok) setProviderHealth(health.health ?? []);
+      }).catch(() => {});
+    }, 3000);
     return () => clearInterval(timer);
   }, [surface, refreshAll, get]);
 
@@ -642,9 +654,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const refreshProviderInventory = useCallback(async () => {
     setProviderInventoryError('');
     try {
-      const result = await get('/providers');
+      const [result, health] = await Promise.all([get('/providers'), get('/provider-health').catch(() => null)]);
       if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
       setProviderInventory(result);
+      if (health?.ok) setProviderHealth(health.health ?? []);
     } catch (error: any) {
       setProviderInventoryError(error?.message ?? copy.providerNoInventory);
     }
@@ -1004,6 +1017,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             const model = provider?.models?.find((item: any) => item.id === ref.model);
             return { provider, model };
           };
+          const modelHealth = (ref: any) => providerHealth.find((entry: any) => entry.provider === ref.provider && entry.model === ref.model && entry.fresh === true) ?? null;
+          const healthLabel = (health: any) => health?.state ? String(health.state).toUpperCase().replace(/-/g, ' ') : copy.healthUnprobed;
+          const healthAge = (health: any) => Number.isFinite(health?.observed_at)
+            ? copy.checkedAgo(Math.max(0, Math.round((Date.now() - health.observed_at) / 1000)))
+            : '';
           const filteredProviders = catalogProviders.map((provider) => ({
             ...provider,
             models: (provider.models ?? []).filter((model: any) => {
@@ -1027,6 +1045,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   {priority.map((ref, index) => {
                     const meta = modelMeta(ref);
+                    const health = modelHealth(ref);
                     const warning = !meta.provider ? copy.providerUnavailable : !meta.model ? copy.notAdvertised : '';
                     return (
                       <div key={refKey(ref)} style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '6px 8px', border: '1px solid rgba(128,128,128,0.2)', borderRadius: 6 }}>
@@ -1034,6 +1053,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ display: 'block', fontSize: 12.5 }}>{meta.model?.name ?? ref.model}</span>
                           <span style={{ display: 'block', fontSize: 10.5, opacity: 0.58, fontFamily: 'monospace' }}>{ref.provider} / {ref.model}</span>
+                          <span style={{ display: 'block', fontSize: 10.5, color: health?.state === 'callable' ? '#3fb950' : health ? '#c98735' : 'inherit', opacity: health ? 0.9 : 0.5 }}>
+                            {healthLabel(health)}{healthAge(health) ? ` · ${healthAge(health)}` : ''}
+                          </span>
                           {warning && <span style={{ display: 'block', fontSize: 10.5, color: '#c98735' }}>{warning}</span>}
                         </span>
                         <button type="button" style={{ ...S.btn, padding: '2px 7px' }} title={copy.moveUp} disabled={index === 0}
