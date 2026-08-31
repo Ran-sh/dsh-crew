@@ -51,3 +51,15 @@ test('tombstoned providers are never selected even when catalogued', () => {
   assert.equal(result.provider, 'p2');
   assert.equal(result.selection_trace.ordered_candidates[0].reason_code, 'PROVIDER_TOMBSTONED');
 });
+
+test('fresh preferred-default selection also honors health gate and fallback policy', () => {
+  const result = resolveWorkerModel({
+    tier: 'flash', priority: [], priorityConfigured: false,
+    preferredModelId: 'm1', catalog,
+    healthStore: health({ 'p1/m1': 'quota-exhausted' }),
+    healthGate: 'hard-failures', allowFallback: false,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'MODEL_BLOCKED_QUOTA');
+  assert.equal(result.selection_trace.ordered_candidates[0].reason_code, 'QUOTA_EXHAUSTED');
+});
