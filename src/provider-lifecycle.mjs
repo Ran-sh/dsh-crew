@@ -132,7 +132,7 @@ export async function executeProviderDelete(plan, hooks = {}) {
   };
   try {
     if (!plan?.plan_id || !plan?.provider_id) throw Object.assign(new Error('provider delete plan is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
-    for (const name of ['backup', 'markTombstone', 'scrubReferences', 'removeDeclarations', 'restart']) {
+    for (const name of ['backup', 'markTombstone', 'scrubReferences', 'removeDeclarations', 'restart', 'rollback']) {
       if (typeof hooks[name] !== 'function') throw hookError(name);
     }
     await hooks.backup(plan);
