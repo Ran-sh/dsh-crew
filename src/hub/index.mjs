@@ -337,10 +337,19 @@ export class WorkerRegistry {  constructor(ctx) {
       // terminal, even while agents.create() is still pending, so a handle
       // acquired after that point is disposed instead of being driven.
       abortRequested: false,
+      abortPromise: null,
+      resolveAbort: null,
     };
+    job.abortPromise = new Promise((resolve) => { job.resolveAbort = resolve; });
     const disposeJobHandle = async () => {
       if (!job.handle) return;
-      job.handle_dispose_promise ??= Promise.resolve().then(() => job.handle.dispose());
+      if (!job.handle_dispose_promise) {
+        try {
+          job.handle_dispose_promise = Promise.resolve(job.handle.dispose());
+        } catch (error) {
+          job.handle_dispose_promise = Promise.reject(error);
+        }
+      }
       await job.handle_dispose_promise;
     };
     job.disposeHandle = disposeJobHandle;
@@ -379,7 +388,7 @@ export class WorkerRegistry {  constructor(ctx) {
     };
 
     const run = async () => {
-      const handle = await this.ctx.agents.create({
+      const createPromise = this.ctx.agents.create({
         sessionId,
         meta: { cwd: executionCwd, ...(presetId === undefined ? {} : { agentPreset: presetId }) },
         agentOptions: { provider: selection.provider, model: selection.model },
@@ -393,6 +402,22 @@ export class WorkerRegistry {  constructor(ctx) {
           });
         },
       });
+      const created = await Promise.race([
+        createPromise.then((handle) => ({ handle })),
+        job.abortPromise.then(() => ({ aborted: true })),
+      ]);
+      if (created.aborted) {
+        createPromise.then(async (handle) => {
+          if (handle && (job.status !== 'running' || job.abortRequested)) {
+            job.handle = handle;
+            try { await job.disposeHandle(); } catch (error) {
+              job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+            }
+          }
+        }).catch(() => {});
+        return;
+      }
+      const handle = created.handle;
       job.handle = handle;
       // The job may have become terminal (cancel/timeout) while create() was
       // pending; the old disposer was a no-op in that window. Dispose the
@@ -434,9 +459,11 @@ export class WorkerRegistry {  constructor(ctx) {
         if (job.status !== 'running') return;
         job.abortRequested = true;
         job.status = 'failed';
+        job.phase = JOB_PHASES.FAILED;
         job.error = `job timed out after ${timeout_seconds}s`;
         job.error_code = 'JOB_TIMEOUT';
         job.endedAt = new Date().toISOString();
+        job.resolveAbort?.();
         this.publish();
         for (const waiter of job.waiters.splice(0)) waiter();
         try { await disposeJobHandle(); } catch (error) {
@@ -542,6 +569,8 @@ export class WorkerRegistry {  constructor(ctx) {
       job.status = 'cancelled';
       job.phase = JOB_PHASES.CANCELLED;
       job.error = 'cancelled by request';
+      job.resolveAbort?.();
+      for (const waiter of job.waiters.splice(0)) waiter();
       try { await job.disposeHandle?.(); } catch (error) {
         job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
       }
