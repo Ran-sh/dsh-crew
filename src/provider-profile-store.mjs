@@ -26,32 +26,43 @@ function parseProviderMap(source) {
   const llmStart = lines.findIndex((line) => /^-\s+id:\s*llm-pi-ai\s*$/.test(line));
   if (llmStart < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
 
-  const providersLine = lines.findIndex((line, index) => index > llmStart && /^\s+providers:\s*$/.test(line));
-  if (providersLine < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
-  const providersIndent = indentOf(lines[providersLine]);
-  const providerIndent = providersIndent + 2;
-  const entries = [];
   let blockEnd = lines.length;
   for (let index = llmStart + 1; index < lines.length; index += 1) {
-    if (index > llmStart && /^-\s+/.test(lines[index])) {
+    // Only a true top-level sequence item can end the managed llm-pi-ai item;
+    // nested list entries are part of a provider value and must be validated.
+    if (indentOf(lines[index]) === 0 && /^-\s+/.test(lines[index])) {
       blockEnd = index;
       break;
     }
   }
 
+  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^\s+providers:\s*$/.test(line));
+  if (providersLine < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+  const providersIndent = indentOf(lines[providersLine]);
+  const providerIndent = providersIndent + 2;
+  const entries = [];
+
   for (let index = providersLine + 1; index < blockEnd; index += 1) {
     const line = lines[index];
     if (!nonBlank(line)) continue;
     const indent = indentOf(line);
-    if (indent <= providersIndent) break;
-    if (indent !== providerIndent) continue;
+    if (indent <= providersIndent) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+    if (indent !== providerIndent) {
+      if (/^\s*-\s+/.test(line)) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+      continue;
+    }
     const match = line.match(/^\s*([A-Za-z0-9][A-Za-z0-9._-]*):\s*$/);
     if (!match) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
     const id = match[1];
     let end = index + 1;
     while (end < blockEnd) {
       const next = lines[end];
-      if (nonBlank(next) && indentOf(next) <= providerIndent) break;
+      if (nonBlank(next)) {
+        const nextIndent = indentOf(next);
+        if (nextIndent < providerIndent) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+        if (nextIndent === providerIndent) break;
+        if (/^\s*-\s+/.test(next)) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
+      }
       end += 1;
     }
     entries.push({ id, start: index, end });
