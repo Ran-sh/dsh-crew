@@ -115,6 +115,10 @@ function configProjection(config) {
   return projection;
 }
 
+function lifecycleProjection(state) {
+  return { tombstones: { ...(state?.tombstones ?? {}) } };
+}
+
 function restoreConfigProjection(config, projection) {
   const next = typeof structuredClone === 'function' ? structuredClone(config) : JSON.parse(JSON.stringify(config));
   for (const key of ['flash_model_priority', 'pro_model_priority', 'harness_default', 'agent_default_model', 'agentDefaultModel']) {
@@ -247,6 +251,8 @@ export function createProviderDeleteFileHooks({
     manifest.config_projection = configProjection(config);
     manifest.config_revision = sha256(JSON.stringify(config));
     manifest.lifecycle_revision = sha256(JSON.stringify(lifecycle));
+    manifest.routing_projection_digest = sha256(JSON.stringify(manifest.config_projection));
+    manifest.lifecycle_projection_digest = sha256(JSON.stringify(lifecycleProjection(lifecycle)));
     manifest.profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
     activeBackup = { root, manifest };
     persistManifest();
@@ -381,8 +387,23 @@ export function createProviderDeleteFileHooks({
     const source = fs.readFileSync(profileFile, 'utf8');
     const parsed = readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
     const providerPresent = parsed.ok && parsed.declarations.some((declaration) => declaration.id === plan.provider_id);
+    const config = await readConfig();
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
-    return { ok: providerPresent && state.tombstones[plan.provider_id] !== 'absent' };
+    const routingRestored = typeof activeBackup?.manifest?.routing_projection_digest === 'string'
+      && sha256(JSON.stringify(configProjection(config))) === activeBackup.manifest.routing_projection_digest;
+    const lifecycleRestored = typeof activeBackup?.manifest?.lifecycle_projection_digest === 'string'
+      && sha256(JSON.stringify(lifecycleProjection(state))) === activeBackup.manifest.lifecycle_projection_digest;
+    const declarationRestored = typeof activeBackup?.manifest?.profile_revision === 'string'
+      && sha256(source) === activeBackup.manifest.profile_revision;
+    return {
+      ok: providerPresent && state.tombstones[plan.provider_id] !== 'absent'
+        && routingRestored && lifecycleRestored && declarationRestored,
+      providerPresent,
+      tombstoneCleared: state.tombstones[plan.provider_id] !== 'absent',
+      routingRestored,
+      lifecycleRestored,
+      declarationRestored,
+    };
   };
 
   const recordTransaction = async (result, plan) => {
