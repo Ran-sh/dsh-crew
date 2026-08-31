@@ -65,3 +65,16 @@ test('removing the final provider removes the managed sequence item cleanly', ()
   assert.equal(result.text.includes('opencode-go:'), false);
   assert.equal(result.text.includes('dsh-crew-hub'), true);
 });
+
+test('malformed nested sequence or unexpected dedent fails closed without partial deletion', () => {
+  const nestedSequence = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n        - unexpected: true\n      openrouter:\n        displayName: openrouter\n- insert:\n    - id: dsh-crew-hub\n`;
+  const nested = removeProviderDeclarations(nestedSequence, { providerIds: ['opencode-go'] });
+  assert.equal(nested.ok, false);
+  assert.equal(nested.code, 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED');
+  assert.equal(nested.text, undefined);
+
+  const unexpectedDedent = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n    unexpected: true\n- insert:\n    - id: dsh-crew-hub\n`;
+  const dedent = removeProviderDeclarations(unexpectedDedent, { providerIds: ['opencode-go'] });
+  assert.equal(dedent.ok, false);
+  assert.equal(dedent.code, 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED');
+});
