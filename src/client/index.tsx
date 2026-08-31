@@ -138,6 +138,10 @@ const COPY = {
     workerStateLabel: 'Worker 状态', reviewStateLabel: 'Reviewer 状态',
     roleStateHint: 'auto：orchestrator 可自动派发；manual：仅显式点名；disabled：禁用。未显式设置时由协作模式推导。',
     autoReview: '自动复审', autoReviewHint: 'worker 成功后自动运行一次 reviewer（独立模型策略，只读）',
+    modelOrdering: '候选排序', orderingDesc: { manual: '手动顺序', 'health-aware': '健康感知' },
+    orderingHint: '手动 priority 始终保持顺序；健康感知仅重排未显式锁定的自动候选。',
+    healthGate: '健康门', healthGateDesc: { 'hard-failures': '跳过明确不可调用', off: '关闭健康门' },
+    reviewGate: 'Reviewer 验收门', reviewGateDesc: { required: 'required · 未批准则失败', optional: 'optional · 记录但不阻断', off: 'off · 不自动复审' },
     isolation: '工作区隔离', isolationHint: 'worktree 为默认；非 Git 仓库时需显式 shared，否则任务以 NOT_GIT_REPOSITORY 失败。',
     isolationDesc: { worktree: 'worktree · 每个 coding worker 独立临时 git worktree（主工作区不动）', shared: 'shared · 旧版就地执行' },
     maxParallel: '最大并行', maxParallelHint: '同时运行的工作流上限（1–16）；超出进入队列。',
@@ -270,6 +274,10 @@ const COPY = {
     workerStateLabel: 'Worker state', reviewStateLabel: 'Reviewer state',
     roleStateHint: 'auto = the orchestrator may dispatch automatically; manual = only when explicitly named; disabled = off. When unset, derived from the collaboration mode.',
     autoReview: 'Automatic review', autoReviewHint: 'Run one reviewer pass (independent model policy, read-only) after a successful worker run',
+    modelOrdering: 'Candidate ordering', orderingDesc: { manual: 'Manual order', 'health-aware': 'Health-aware' },
+    orderingHint: 'Explicit priority always keeps its order; health-aware mode only reorders automatic, unlocked candidates.',
+    healthGate: 'Health gate', healthGateDesc: { 'hard-failures': 'Skip known hard failures', off: 'Health gate off' },
+    reviewGate: 'Reviewer acceptance gate', reviewGateDesc: { required: 'required · fail unless approved', optional: 'optional · record without blocking', off: 'off · no automatic review' },
     isolation: 'Workspace isolation', isolationHint: 'worktree is the default; non-git workspaces require explicit shared, otherwise jobs fail with NOT_GIT_REPOSITORY.',
     isolationDesc: { worktree: 'worktree · each coding worker runs in its own temporary git worktree (primary untouched)', shared: 'shared · legacy in-place execution' },
     maxParallel: 'Max parallel', maxParallelHint: 'Upper bound of concurrently running workflows (1–16); extra ones queue.',
@@ -685,6 +693,23 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
   /** Text/number inputs: track locally, apply on blur. */
   const fieldLocal = (key: string, value: any) => setConfig((c: any) => ({ ...c, [key]: value }));
+  const rolePolicyField = (role: 'worker' | 'review', patch: Record<string, any>) => {
+    const effectivePatch = role === 'worker' && (patch.ordering === 'manual' || patch.ordering === 'health-aware')
+      ? { ...patch, adaptive: { ...normalizeAdaptive(config?.worker?.model_policy?.adaptive), enabled: patch.ordering === 'health-aware' } }
+      : patch;
+    setConfig((current: any) => ({
+      ...current,
+      [role]: {
+        ...current?.[role],
+        model_policy: { ...current?.[role]?.model_policy, ...effectivePatch },
+      },
+    }));
+    void applyPatch({ [role]: { model_policy: effectivePatch } });
+  };
+  const reviewField = (patch: Record<string, any>) => {
+    setConfig((current: any) => ({ ...current, review: { ...current?.review, ...patch } }));
+    void applyPatch({ review: patch });
+  };
 
   // --- custom providers & user-added models -------------------------------
   const customProviders: any[] = config?.custom_providers ?? [];
@@ -863,18 +888,19 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const adaptive = normalizeAdaptive(config?.worker?.model_policy?.adaptive);
   const setAdaptiveLocal = (candidate: AdaptiveConfig) => {
     const next = normalizeAdaptive(candidate);
+    const ordering = next.enabled ? 'health-aware' : 'manual';
     setConfig((current: any) => ({
       ...current,
       worker: {
         ...current.worker,
-        model_policy: { ...current.worker?.model_policy, adaptive: next },
+        model_policy: { ...current.worker?.model_policy, adaptive: next, ordering },
       },
     }));
-    return next;
+    return { next, ordering };
   };
   const saveAdaptive = (candidate: AdaptiveConfig) => {
-    const next = setAdaptiveLocal(candidate);
-    void applyPatch({ worker: { model_policy: { adaptive: next } } });
+    const { next, ordering } = setAdaptiveLocal(candidate);
+    void applyPatch({ worker: { model_policy: { adaptive: next, ordering } } });
   };
   const modelActivity = aggregateModelInvocations(jobs);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
@@ -1100,11 +1126,30 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                     options={(['auto', 'manual', 'disabled'] as const).map((s) => ({ value: s, label: copy.tierStateDesc[s] }))} /></label>
               </>))}
               {block({ t: copy.autoReview, d: copy.autoReviewHint }, (
-                <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }}>
-                  <input type="checkbox" checked={config.auto_review ?? !!config.pro_reviews_flash} onChange={(e) => field('auto_review', e.target.checked)} />
-                  <span style={{ fontSize: 12.5 }}>{copy.autoReview}</span>
-                </label>
-              ), false)}
+                <>
+                  <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6 }}>
+                    <input type="checkbox" checked={config.auto_review ?? !!config.pro_reviews_flash} onChange={(e) => field('auto_review', e.target.checked)} />
+                    <span style={{ fontSize: 12.5 }}>{copy.autoReview}</span>
+                  </label>
+                  <label style={S.field}><span style={S.fieldLabel}>{copy.reviewGate}</span>
+                    <CustomSelect value={config.review?.gate ?? 'required'} onChange={(v) => reviewField({ gate: v })}
+                      options={(['required', 'optional', 'off'] as const).map((value) => ({ value, label: copy.reviewGateDesc[value] }))} /></label>
+                </>
+              ))}
+              {block({ t: copy.modelOrdering, d: copy.orderingHint }, (<>
+                {(['worker', 'review'] as const).map((role) => (
+                  <div key={role} style={{ display: 'contents' }}>
+                    <label style={S.field}><span style={S.fieldLabel}>{role === 'worker' ? copy.roleWorker : copy.roleReviewer} · {copy.modelOrdering}</span>
+                      <CustomSelect value={config?.[role]?.model_policy?.ordering ?? 'manual'}
+                        onChange={(v) => rolePolicyField(role, { ordering: v })}
+                        options={(['manual', 'health-aware'] as const).map((value) => ({ value, label: copy.orderingDesc[value] }))} /></label>
+                    <label style={S.field}><span style={S.fieldLabel}>{role === 'worker' ? copy.roleWorker : copy.roleReviewer} · {copy.healthGate}</span>
+                      <CustomSelect value={config?.[role]?.model_policy?.health_gate ?? 'hard-failures'}
+                        onChange={(v) => rolePolicyField(role, { health_gate: v })}
+                        options={(['hard-failures', 'off'] as const).map((value) => ({ value, label: copy.healthGateDesc[value] }))} /></label>
+                  </div>
+                ))}
+              </>))}
               {block({ t: copy.isolation, d: copy.isolationHint }, (<>
                 <label style={S.field}><span style={S.fieldLabel}>{copy.isolation}</span>
                   <CustomSelect value={config.isolation ?? 'worktree'} onChange={(v) => field('isolation', v)}

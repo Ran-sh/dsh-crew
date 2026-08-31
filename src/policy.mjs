@@ -72,10 +72,14 @@ function normalizeLegacySnapshot(raw, canonical) {
 }
 
 function modelPolicyWithAdaptive(basePolicy, rawPolicy) {
+  const adaptive = normalizeAdaptiveRouting(rawPolicy?.adaptive);
+  const ordering = rawPolicy?.ordering === 'health-aware' || rawPolicy?.ordering === 'manual'
+    ? rawPolicy.ordering
+    : adaptive.enabled ? 'health-aware' : 'manual';
   return {
     ...basePolicy,
-    adaptive: normalizeAdaptiveRouting(rawPolicy?.adaptive),
-    ordering: rawPolicy?.ordering === 'health-aware' ? 'health-aware' : 'manual',
+    adaptive: { ...adaptive, enabled: ordering === 'health-aware' },
+    ordering,
     health_gate: rawPolicy?.health_gate === 'off' ? 'off' : 'hard-failures',
   };
 }
@@ -192,9 +196,15 @@ export function resolveModelPolicy(config = {}, role = 'worker', context = {}) {
   const rawPolicy = role === 'reviewer'
     ? config?.review?.model_policy
     : config?.worker?.model_policy;
+  const adaptive = normalizeAdaptiveRouting(rawPolicy?.adaptive ?? base.adaptive);
+  const ordering = rawPolicy?.ordering === 'health-aware' || rawPolicy?.ordering === 'manual'
+    ? rawPolicy.ordering
+    : adaptive.enabled ? 'health-aware' : 'manual';
   return {
     ...base,
-    adaptive: normalizeAdaptiveRouting(rawPolicy?.adaptive ?? base.adaptive),
+    adaptive: { ...adaptive, enabled: ordering === 'health-aware' },
+    ordering,
+    health_gate: rawPolicy?.health_gate === 'off' ? 'off' : 'hard-failures',
   };
 }
 

@@ -79,6 +79,16 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });
 
+test('role-first routing UI exposes ordering, health gates, and reviewer gate', () => {
+  assert.match(panelSource, /ordering: v/);
+  assert.match(panelSource, /health_gate: v/);
+  assert.match(panelSource, /reviewField\(\{ gate: v \}\)/);
+  assert.match(panelSource, /health-aware/);
+  assert.match(panelSource, /required.*optional.*off/s);
+  assert.match(panelSource, /ordering = next\.enabled \? 'health-aware' : 'manual'/);
+  assert.match(panelSource, /enabled: patch\.ordering === 'health-aware'/);
+});
+
 test('shared client renders a full 3080 control plane and a minimal 3210 diagnostic surface', () => {
   assert.match(panelSource, /classifyCrewSurface/);
   assert.match(panelSource, /surfaceResponsibilities/);

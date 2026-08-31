@@ -339,7 +339,7 @@ export class WorkerRegistry {  constructor(ctx) {
           catalog,
           harnessDefault: catalog.harness_default ?? getCurrentSelection(),
           healthStore: this.healthStore,
-          healthGate,
+          healthGate: policy.health_gate ?? healthGate,
           allowFallback: cfg.allow_fallback !== false,
           tombstones: lifecycleState.tombstones,
         });

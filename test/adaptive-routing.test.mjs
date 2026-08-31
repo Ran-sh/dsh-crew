@@ -267,3 +267,20 @@ test('schema-v3 canonical policy preserves adaptive opt-in while legacy/default 
   assert.deepEqual(resolveModelPolicy(normalized, 'worker').adaptive, { enabled: true, window_size: 12, min_samples: 3 });
   assert.deepEqual(resolveModelPolicy({}, 'worker').adaptive, { enabled: false, window_size: 8, min_samples: 2 });
 });
+
+test('schema-v4 ordering is the role-first authority for adaptive reordering', () => {
+  const base = {
+    config_schema_version: 4,
+    subagents_enabled: true,
+    execution: { enabled: true, transport: 'hub-3210', mode: 'auto', max_parallel: 3, isolation: 'worktree' },
+    worker: { state: 'auto', model_policy: { priority: [], escalation_priority: [], ordering: 'health-aware', health_gate: 'hard-failures', adaptive: { enabled: false, window_size: 10, min_samples: 2 }, escalation: { enabled: false, max_attempts: 2 } } },
+    review: { state: 'manual', auto_review: false, gate: 'required', model_policy: { priority: [], ordering: 'manual', adaptive: { enabled: true } } },
+    legacy: { collaboration_mode: 'custom', flash_state: 'auto', pro_state: 'auto' },
+  };
+  const normalized = normalizeGlobalConfig(base);
+  assert.equal(normalized.worker.model_policy.ordering, 'health-aware');
+  assert.equal(normalized.worker.model_policy.adaptive.enabled, true);
+  assert.equal(normalized.review.model_policy.ordering, 'manual');
+  assert.equal(normalized.review.model_policy.adaptive.enabled, false);
+  assert.equal(resolveModelPolicy(normalized, 'worker').health_gate, 'hard-failures');
+});
