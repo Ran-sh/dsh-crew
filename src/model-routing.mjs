@@ -314,21 +314,44 @@ export function resolveWorkerModel({
       }
     }
     if (matches.length === 1) {
-      rankForTrace(trace, matches, { adaptive, adaptiveHealth });
-      selectTrace(trace, matches[0], 'preferred-default');
-      return { ok: true, ...matches[0], source: 'preferred-default', selection_trace: trace };
+      const preferred = matches[0];
+      const healthReason = healthAdmissionReason(preferred, { healthStore, healthGate, tombstones });
+      if (healthReason) {
+        trace.ordered_candidates.push(candidateDecision(preferred, 'preferred-default', 'skipped', {
+          reasonCode: healthReason,
+        }));
+        if (allowFallback === false) return blockedSelection(trace, preferred, 'preferred-default', healthReason);
+      } else {
+        rankForTrace(trace, matches, { adaptive, adaptiveHealth });
+        selectTrace(trace, preferred, 'preferred-default');
+        return { ok: true, ...preferred, source: 'preferred-default', selection_trace: trace };
+      }
     }
     if (matches.length > 1) {
+      const availableMatches = matches.filter((candidate) => {
+        const healthReason = healthAdmissionReason(candidate, { healthStore, healthGate, tombstones });
+        if (!healthReason) return true;
+        trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
+          reasonCode: healthReason,
+        }));
+        return false;
+      });
+      if (availableMatches.length === 0) {
+        const blocked = matches.find((candidate) => healthAdmissionReason(candidate, { healthStore, healthGate, tombstones }));
+        if (blocked && allowFallback === false) {
+          return blockedSelection(trace, blocked, 'preferred-default', healthAdmissionReason(blocked, { healthStore, healthGate, tombstones }));
+        }
+      }
       const preferredProvider = normalizeModelRef(harnessDefault)?.provider;
-      const deterministicMatch = matches.find((candidate) => candidate.provider === preferredProvider) ?? null;
+      const deterministicMatch = availableMatches.find((candidate) => candidate.provider === preferredProvider) ?? null;
       const baseline = deterministicMatch
-        ? [deterministicMatch, ...matches.filter((candidate) => candidate.provider !== deterministicMatch.provider)]
-        : matches;
+        ? [deterministicMatch, ...availableMatches.filter((candidate) => candidate.provider !== deterministicMatch.provider)]
+        : availableMatches;
       const ranked = rankForTrace(trace, baseline, { adaptive, adaptiveHealth });
       const adaptiveChoice = ranked.trace.decision_supported ? ranked.candidates[0] : null;
       const match = adaptiveChoice ?? deterministicMatch;
       if (match) {
-        const decisionOrder = adaptiveChoice ? ranked.candidates : matches;
+        const decisionOrder = adaptiveChoice ? ranked.candidates : availableMatches;
         for (const candidate of decisionOrder) {
           if (candidate.provider === match.provider && candidate.model === match.model) continue;
           trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
