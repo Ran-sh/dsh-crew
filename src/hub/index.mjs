@@ -416,6 +416,10 @@ export class WorkerRegistry {  constructor(ctx) {
         this.ctx.logger?.warn?.(`dsh-crew: workspace attach failed for ${executionCwd}: ${err?.message ?? err}`);
       }
       await handle.agent.whenIdle();
+      // Cancel/timeout may have become terminal while waiting for the initial
+      // idle boundary; do not deliver the prompt to a job that is no longer
+      // running. The shared finally block still disposes the handle exactly once.
+      if (job.status !== 'running' || job.abortRequested) return;
       handle.agent.followup(userMessage(job.prompt));
       await handle.agent.whenIdle();
       job.result = job.lastAssistantText ?? '';
