@@ -4,6 +4,17 @@
 
 Future changes go here.
 
+## 0.5.7 — 2026-08-31
+
+- Makes the isolated 3210 Harness the only production execution path; the
+  official 3080 surface remains a control-plane bridge.
+- Persists and verifies 3210 supervisor ownership across 3080 restarts, and
+  hardens bridge provenance and runtime identity checks.
+- Adds bounded real Harness provider probes that follow configured model
+  priority, plus live-profile parsing for nested model declarations.
+- Requires 3210 execution provenance for readiness evidence and updates the
+  Windows launcher to let the 3080 bridge own the 3210 child.
+
 ## 0.5.6 — 2026-08-30
 
 - Removes Node's Windows `DEP0190` warning from packaged install/update flows
