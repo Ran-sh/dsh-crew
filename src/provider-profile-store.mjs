@@ -85,6 +85,37 @@ export function inspectProviderProfile(source) {
   };
 }
 
+function scalarField(lines, entry, field) {
+  const pattern = new RegExp(`^\\s+${field}:\\s*(.*?)\\s*$`);
+  for (const line of lines.slice(entry.start, entry.end)) {
+    const match = line.match(pattern);
+    if (!match) continue;
+    const value = match[1].trim();
+    if (!value) return null;
+    return value.replace(/^(?:"([\\s\\S]*)"|'([\\s\\S]*)')$/, '$1$2');
+  }
+  return null;
+}
+
+/** Return profile provider provenance and credential reference names only. */
+export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const declarations = parsed.entries.map((entry) => {
+    const displayName = scalarField(parsed.lines, entry, 'displayName');
+    const credentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+    return {
+      id: entry.id,
+      display_name: displayName ?? entry.id,
+      origin: 'profile-managed',
+      ownership: 'crew-managed-profile',
+      file,
+      ...(credentialRef ? { credential_ref: credentialRef } : {}),
+    };
+  });
+  return { ok: true, declarations };
+}
+
 /**
  * Remove provider declarations from a known profile patch after an optional
  * content-revision check. The returned text is safe to write atomically by the
