@@ -50,3 +50,11 @@ test('credential reference inventory ignores malformed refs and never exposes va
   assert.equal(result.records.length, 1);
   assert.equal(JSON.stringify(result).includes('secret-value'), false);
 });
+
+test('credential reference inventory omits references already purged by the Crew store', () => {
+  const result = buildCredentialReferenceInventory({
+    additional_refs: [{ kind: 'env', name_or_handle: 'OLD_KEY', ownership: 'crew' }],
+    purged_refs: ['env:OLD_KEY'],
+  });
+  assert.deepEqual(result.records, []);
+});
