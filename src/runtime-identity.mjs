@@ -63,6 +63,7 @@ export const HUB_COMPATIBILITY_CODES = Object.freeze({
   PROTOCOL_MISSING: 'HUB_PROTOCOL_MISSING',
   PROTOCOL_MISMATCH: 'HUB_PROTOCOL_MISMATCH',
   CAPABILITY_MISSING: 'HUB_CAPABILITY_MISSING',
+  PROVENANCE_MISSING: 'HUB_PROVENANCE_MISSING',
   EXECUTION_PLANE_MISMATCH: 'HUB_EXECUTION_PLANE_MISMATCH',
   LISTEN_PORT_MISMATCH: 'HUB_LISTEN_PORT_MISMATCH',
 });
@@ -94,7 +95,7 @@ export function getHubRuntimeIdentity() {
  * `compatible` means the response is from dsh-crew and satisfies the current
  * protocol + required capability contract.
  */
-export function evaluateHubHandshake(body, { requiredCapabilities = REQUIRED_HUB_CAPABILITIES } = {}) {
+export function evaluateHubHandshake(body, { requiredCapabilities = REQUIRED_HUB_CAPABILITIES, strictProduction = false } = {}) {
   const capabilities = normalizedCapabilities(body?.capabilities);
   const base = {
     reachable: true,
@@ -131,6 +132,13 @@ export function evaluateHubHandshake(body, { requiredCapabilities = REQUIRED_HUB
 
   if (body.protocol_version !== HUB_PROTOCOL_VERSION) {
     return { ...base, code: HUB_COMPATIBILITY_CODES.PROTOCOL_MISMATCH };
+  }
+
+  if (strictProduction && !(body?.execution_plane === PRODUCTION_EXECUTION_PLANE
+    && body?.profile === PRODUCTION_PROFILE
+    && Number.isInteger(body?.listen_port) && body.listen_port === PRODUCTION_LISTEN_PORT
+    && typeof body?.runtime_id === 'string' && body.runtime_id.trim().length > 0)) {
+    return { ...base, code: HUB_COMPATIBILITY_CODES.PROVENANCE_MISSING };
   }
 
   const required = normalizedCapabilities(requiredCapabilities);

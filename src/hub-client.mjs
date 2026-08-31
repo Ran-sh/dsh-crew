@@ -90,7 +90,7 @@ export async function hubStatus({ force = false } = {}) {
         endpoint: 'runtime',
       });
     }
-    return cacheStatus(evaluateHubHandshake(runtime.body));
+    return cacheStatus(evaluateHubHandshake(runtime.body, { strictProduction: true }));
   } catch {
     return cacheStatus(EMPTY_STATUS);
   }
