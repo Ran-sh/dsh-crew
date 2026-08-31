@@ -1112,7 +1112,7 @@ Commands:
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
-  providers   3210 provider lifecycle API: list|delete-plan|delete
+  providers   3210 provider lifecycle API: list|delete-plan|delete|probe
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
@@ -1238,6 +1238,10 @@ export async function npxProviders({
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       body: JSON.stringify({ plan_id: resolvedPlan, expected_revision: resolvedRevision, confirm: true }),
     };
+  } else if (action === 'probe') {
+    if (!id) throw new Error('providers probe requires a provider id');
+    url = `${base}/${encodeURIComponent(id)}/probe`;
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: '{}' };
   } else {
     throw new Error(`unknown providers action: ${action}`);
   }

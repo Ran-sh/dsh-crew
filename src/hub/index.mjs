@@ -1164,6 +1164,29 @@ export async function apply(ctx) {
             rememberProviderDeletePlan(planned.plan);
             return sendJson(res, 200, { ok: true, profile_revision: profile.revision, plan: planned.plan });
           }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'probe') {
+            const record = inventory.records.find((entry) => entry.id === providerId);
+            if (!record) return sendJson(res, 404, { ok: false, code: 'PROVIDER_NOT_FOUND' });
+            if (record.desired_state === 'absent') return sendJson(res, 409, { ok: false, code: 'PROVIDER_TOMBSTONED' });
+            const model = typeof record.models?.[0] === 'string' ? record.models[0] : null;
+            if (!model) return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROBE_MODEL_UNAVAILABLE' });
+            if (typeof ctx.providerProbe !== 'function') return sendJson(res, 503, { ok: false, code: 'PROVIDER_PROBE_UNAVAILABLE' });
+            let observed;
+            let timer;
+            try {
+              const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ error: { name: 'TimeoutError' } }), 15_000); });
+              observed = await Promise.race([
+                Promise.resolve().then(() => ctx.providerProbe({ provider: providerId, model, signal: AbortSignal.timeout(15_000) })),
+                timeout,
+              ]);
+            } catch (error) {
+              observed = { error };
+            } finally {
+              clearTimeout(timer);
+            }
+            const health = hub.healthStore.record(providerId, model, observed?.ok === true ? { ok: true } : { error: observed?.error ?? observed });
+            return sendJson(res, 200, { ok: true, provider_id: providerId, model, health });
+          }
           if (req.method === 'DELETE' && parts.length === 1) {
             if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_CONFIRM_REQUIRED' });
             if (body?.purge_orphan_credentials === true) {
