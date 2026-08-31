@@ -850,6 +850,17 @@ test('release rollback restores the previous pointer when activation fails', asy
   } finally { t.cleanup(); }
 });
 
+test('CLI dispatch exposes release inventory and rollback commands', async () => {
+  const seen = [];
+  const commands = {
+    releases: async ({ args }) => { seen.push(['releases', args]); return { ok: true }; },
+    rollback: async ({ version }) => { seen.push(['rollback', version]); return { ok: true }; },
+  };
+  assert.equal(await runNpxCli({ argv: ['releases', 'list'], commands, log: () => {}, error: () => {} }), 0);
+  assert.equal(await runNpxCli({ argv: ['rollback', '0.5.6'], commands, log: () => {}, error: () => {} }), 0);
+  assert.deepEqual(seen, [['releases', ['list']], ['rollback', '0.5.6']]);
+});
+
 test('providers CLI stays on the 3210 lifecycle API and binds destructive flags', async () => {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
