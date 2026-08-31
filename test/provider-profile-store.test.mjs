@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   inspectProviderProfile,
+  readProviderDeclarations,
   removeProviderDeclarations,
 } from '../src/provider-profile-store.mjs';
 
@@ -13,6 +14,34 @@ test('inspectProviderProfile returns provider ids and a revision without values'
   assert.deepEqual(result.providerIds, ['opencode-go', 'opencode-alt', 'opencode-muse', 'openrouter']);
   assert.match(result.revision, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(result).includes('OPENCODE_GO_API_KEY'), false);
+});
+
+test('readProviderDeclarations returns provenance and credential references only', () => {
+  const result = readProviderDeclarations(PROFILE, { file: 'profiles/dsh-crew/cordis.patch.yml' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.declarations, [
+    {
+      id: 'opencode-go', display_name: 'OpenCode Go', origin: 'profile-managed',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      credential_ref: 'OPENCODE_GO_API_KEY',
+    },
+    {
+      id: 'opencode-alt', display_name: 'Opencode', origin: 'profile-managed',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      credential_ref: 'OPENCODE_ALT_API_KEY',
+    },
+    {
+      id: 'opencode-muse', display_name: 'opencode-go-muse', origin: 'profile-managed',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      credential_ref: 'OPENCODE_MUSE_API_KEY',
+    },
+    {
+      id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      credential_ref: 'OPENROUTER_API_KEY',
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes('secret-value'), false);
 });
 
 test('removeProviderDeclarations removes only selected providers and preserves the rest', () => {
