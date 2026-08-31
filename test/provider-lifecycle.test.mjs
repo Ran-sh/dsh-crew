@@ -132,3 +132,22 @@ test('delete transaction fails closed when restart or verification is incomplete
   assert.equal(failedVerify.state, 'FAILED');
   assert.equal(failedVerify.error_code, 'PROVIDER_DELETE_VERIFY_FAILED');
 });
+
+test('post-write failure invokes compensating rollback before reporting FAILED', async () => {
+  const calls = [];
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records }, replacementDefault: 'openrouter',
+  }).plan;
+  const result = await executeProviderDelete(plan, {
+    backup: async () => calls.push('backup'),
+    markTombstone: async () => calls.push('tombstone'),
+    scrubReferences: async () => calls.push('scrub'),
+    removeDeclarations: async () => calls.push('declarations'),
+    restart: async () => { calls.push('restart'); return { ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }; },
+    rollback: async () => calls.push('rollback'),
+  });
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'CREW_BACKEND_START_TIMEOUT');
+  assert.equal(result.rollback_attempted, true);
+  assert.deepEqual(calls, ['backup', 'tombstone', 'scrub', 'declarations', 'restart', 'rollback']);
+});
