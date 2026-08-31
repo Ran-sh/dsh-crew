@@ -325,6 +325,19 @@ export function createWorkflowRuntime(adapters, {
         const review = await runReviewerAttempt(job, reviewTask, config, before);
         if (job.cancelling) { await cancelWorkflow(job); return; }
         job.review = review;
+        const reviewApproved = review.status === 'done'
+          && review.delivery_complete === true
+          && review.verdict === 'approve';
+        if (!reviewApproved) {
+          const code = review.verdict === 'request_changes'
+            ? 'REVIEW_CHANGES_REQUESTED'
+            : 'REVIEW_INCONCLUSIVE';
+          failJob(job, Object.assign(
+            new Error(`explicit review blocked acceptance: verdict=${review.verdict}, reviewer status=${review.status}, review delivery_complete=${review.delivery_complete === true}`),
+            { code },
+          ));
+          return;
+        }
         if (job.review) transition(job, JOB_PHASES.READY, 'review complete');
         finalize(job);
         return;
