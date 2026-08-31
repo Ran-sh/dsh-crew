@@ -200,3 +200,21 @@ test('failed deletion restarts and verifies the restored runtime when hooks prov
   assert.equal(result.rollback_runtime_verified, true);
   assert.deepEqual(calls, ['rollback', 'restart-rollback', 'verify-rollback']);
 });
+
+test('provider deletion records a bounded transaction audit when requested', async () => {
+  const calls = [];
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records }, replacementDefault: 'openrouter',
+  }).plan;
+  const result = await executeProviderDelete(plan, {
+    backup: async () => {}, markTombstone: async () => {}, scrubReferences: async () => {},
+    removeDeclarations: async () => {}, restart: async () => ({ ok: true }), rollback: async () => {},
+    verify: async () => ({ providerAbsent: true, routingClear: true, tombstonePresent: true }),
+    recordTransaction: async (audit) => calls.push(audit),
+  });
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(result.audit_recorded, true);
+  assert.deepEqual(calls.map(({ transaction_id, provider_id, state }) => ({ transaction_id, provider_id, state })), [
+    { transaction_id: plan.plan_id, provider_id: 'opencode-go', state: 'VERIFIED' },
+  ]);
+});

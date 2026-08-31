@@ -183,12 +183,8 @@ export async function executeProviderDelete(plan, hooks = {}) {
       }
     }
     if (state !== 'FAILED' && canTransitionProviderDelete(state, 'FAILED')) transition('FAILED');
-  } finally {
-    if (typeof hooks.release === 'function') {
-      try { await hooks.release(plan); } catch {}
-    }
   }
-  return {
+  const result = {
     transaction_id: plan?.plan_id ?? null,
     provider_id: plan?.provider_id ?? null,
     state,
@@ -200,4 +196,17 @@ export async function executeProviderDelete(plan, hooks = {}) {
     verification,
     events,
   };
+  if (typeof hooks.recordTransaction === 'function') {
+    try {
+      await hooks.recordTransaction(result, plan);
+      result.audit_recorded = true;
+    } catch (error) {
+      result.audit_recorded = false;
+      result.audit_error_code = boundedCode(error?.code, 'PROVIDER_LIFECYCLE_RECORD_FAILED');
+    }
+  }
+  if (typeof hooks.release === 'function') {
+    try { await hooks.release(plan); } catch {}
+  }
+  return result;
 }

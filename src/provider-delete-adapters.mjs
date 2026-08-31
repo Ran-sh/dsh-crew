@@ -26,6 +26,7 @@ import { scrubProviderReferences } from './provider-config-scrub.mjs';
 import {
   markProviderTombstone,
   normalizeProviderLifecycleState,
+  recordProviderTransaction,
 } from './provider-lifecycle-state.mjs';
 
 const FILE_KEYS = Object.freeze(['profile', 'config', 'lifecycle']);
@@ -370,6 +371,22 @@ export function createProviderDeleteFileHooks({
     return { ok: providerPresent && state.tombstones[plan.provider_id] !== 'absent' };
   };
 
+  const recordTransaction = async (result, plan) => {
+    assertManagedPath(lifecycleFile);
+    const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    const next = recordProviderTransaction(state, {
+      transaction_id: result?.transaction_id ?? plan?.plan_id,
+      provider_id: result?.provider_id ?? plan?.provider_id,
+      state: result?.state,
+      expected_revision: plan?.expected_revision,
+    });
+    if (result?.state === 'VERIFIED') {
+      assertManagedPath(profileFile);
+      next.last_verified_revision[plan.provider_id] = sha256(fs.readFileSync(profileFile, 'utf8'));
+    }
+    atomicWrite(lifecycleFile, JSON.stringify(next, null, 2) + '\n');
+  };
+
   return {
     backup,
     acquireLock,
@@ -385,6 +402,7 @@ export function createProviderDeleteFileHooks({
       : async () => ({ ok: false, code: 'PROVIDER_DELETE_RESTART_SUPERVISOR_UNAVAILABLE' }),
     verify,
     verifyRollback,
+    recordTransaction,
     rollback,
     release,
   };

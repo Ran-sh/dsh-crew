@@ -57,6 +57,7 @@ test('file adapters apply a deletion and verify absence without touching credent
   const paths = fixture();
   let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')), custom_providers: [{ id: 'vision', api_key: 'SECRET_VALUE' }] };
   writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
+  const plan = planFor(paths.profileFile);
   const hooks = createProviderDeleteFileHooks({
     ...paths,
     backupDir: join(paths.dir, 'backups'),
@@ -64,7 +65,7 @@ test('file adapters apply a deletion and verify absence without touching credent
     writeConfig: (next) => { config = next; writeFileSync(paths.configFile, JSON.stringify(next, null, 2) + '\n'); },
     restart: async () => ({ ok: true }),
   });
-  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  const result = await executeProviderDelete(plan, hooks);
   assert.equal(result.state, 'VERIFIED');
   assert.equal(result.error_code, null);
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), false);
@@ -77,7 +78,9 @@ test('file adapters apply a deletion and verify absence without touching credent
     .join('\n');
   assert.equal(backupText.includes('SECRET_VALUE'), false);
   assert.equal(backupText.includes('OPENCODE_GO_API_KEY'), true, 'credential references are metadata, not values');
-  assert.match(readFileSync(paths.lifecycleFile, 'utf8'), /opencode-go/);
+  const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
+  assert.equal(lifecycle.tombstones['opencode-go'], 'absent');
+  assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
 });
 
 test('file adapters fail closed on malformed managed JSON', async () => {
@@ -196,6 +199,9 @@ test('file adapter rollback restores every backed-up managed file', async () => 
   assert.equal(result.rollback_attempted, true);
   assert.equal(readFileSync(paths.profileFile, 'utf8'), originalProfile);
   assert.equal(readFileSync(paths.configFile, 'utf8'), originalConfig);
-  assert.equal(readFileSync(paths.lifecycleFile, 'utf8'), originalLifecycle);
+  const restoredLifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
+  assert.deepEqual(restoredLifecycle.tombstones, {});
+  assert.equal(restoredLifecycle.transactions[result.transaction_id].state, 'FAILED');
+  assert.equal(originalLifecycle.includes('SECRET'), false);
   assert.equal(existsSync(join(paths.dir, 'backups')), true);
 });

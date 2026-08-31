@@ -1225,6 +1225,11 @@ export async function apply(ctx) {
               if (restarted?.ok === false) return sendJson(res, 409, { ok: false, code: restarted.code ?? 'PROVIDER_DELETE_ROLLBACK_RESTART_FAILED' });
               const verified = await hooks.verifyRollback(plan);
               if (verified?.ok !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED' });
+              try {
+                await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
+              } catch (error) {
+                return sendJson(res, 409, { ok: false, code: boundedMachineCodeFromError(error) ?? 'PROVIDER_LIFECYCLE_RECORD_FAILED' });
+              }
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
               await hooks.release();
