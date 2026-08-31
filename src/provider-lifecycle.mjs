@@ -122,6 +122,9 @@ export async function executeProviderDelete(plan, hooks = {}) {
   pushState(events, state);
   let errorCode = null;
   let verification = null;
+  let mutationsStarted = false;
+  let rollbackAttempted = false;
+  let rollbackErrorCode = null;
   const transition = (next) => {
     if (!canTransitionProviderDelete(state, next)) throw Object.assign(new Error(`illegal provider delete transition ${state} -> ${next}`), { code: 'PROVIDER_DELETE_STATE_INVALID' });
     state = next;
@@ -133,6 +136,9 @@ export async function executeProviderDelete(plan, hooks = {}) {
       if (typeof hooks[name] !== 'function') throw hookError(name);
     }
     await hooks.backup(plan);
+    // From this point onward at least one destructive adapter may have
+    // committed; any later failure must attempt compensation before returning.
+    mutationsStarted = true;
     await hooks.markTombstone(plan.provider_id, 'absent', plan);
     await hooks.scrubReferences(plan);
     await hooks.removeDeclarations(plan);
@@ -149,6 +155,14 @@ export async function executeProviderDelete(plan, hooks = {}) {
     transition('VERIFIED');
   } catch (error) {
     errorCode = boundedCode(error?.code);
+    if (mutationsStarted && typeof hooks.rollback === 'function') {
+      rollbackAttempted = true;
+      try {
+        await hooks.rollback(plan);
+      } catch (rollbackError) {
+        rollbackErrorCode = boundedCode(rollbackError?.code, 'PROVIDER_DELETE_ROLLBACK_FAILED');
+      }
+    }
     if (state !== 'FAILED' && canTransitionProviderDelete(state, 'FAILED')) transition('FAILED');
   }
   return {
@@ -156,6 +170,8 @@ export async function executeProviderDelete(plan, hooks = {}) {
     provider_id: plan?.provider_id ?? null,
     state,
     error_code: errorCode,
+    rollback_attempted: rollbackAttempted,
+    rollback_error_code: rollbackErrorCode,
     verification,
     events,
   };
