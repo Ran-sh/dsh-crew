@@ -106,6 +106,7 @@ test('delete transaction reaches VERIFIED only after restart and absence evidenc
     scrubReferences: async () => calls.push('scrub'),
     removeDeclarations: async () => calls.push('declarations'),
     restart: async () => { calls.push('restart'); return { ok: true }; },
+    rollback: async () => calls.push('rollback'),
     verify: async () => { calls.push('verify'); return { providerAbsent: true, routingClear: true, tombstonePresent: true }; },
   });
   assert.equal(result.state, 'VERIFIED');
@@ -119,14 +120,14 @@ test('delete transaction fails closed when restart or verification is incomplete
   }).plan;
   const failedRestart = await executeProviderDelete(plan, {
     backup: async () => {}, markTombstone: async () => {}, scrubReferences: async () => {},
-    removeDeclarations: async () => {}, restart: async () => ({ ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }),
+    removeDeclarations: async () => {}, restart: async () => ({ ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }), rollback: async () => {},
   });
   assert.equal(failedRestart.state, 'FAILED');
   assert.equal(failedRestart.error_code, 'CREW_BACKEND_START_TIMEOUT');
 
   const failedVerify = await executeProviderDelete(plan, {
     backup: async () => {}, markTombstone: async () => {}, scrubReferences: async () => {},
-    removeDeclarations: async () => {}, restart: async () => ({ ok: true }),
+    removeDeclarations: async () => {}, restart: async () => ({ ok: true }), rollback: async () => {},
     verify: async () => ({ providerAbsent: true, routingClear: false, tombstonePresent: true }),
   });
   assert.equal(failedVerify.state, 'FAILED');
@@ -150,4 +151,23 @@ test('post-write failure invokes compensating rollback before reporting FAILED',
   assert.equal(result.error_code, 'CREW_BACKEND_START_TIMEOUT');
   assert.equal(result.rollback_attempted, true);
   assert.deepEqual(calls, ['backup', 'tombstone', 'scrub', 'declarations', 'restart', 'rollback']);
+});
+
+test('missing rollback hook fails before any destructive adapter runs', async () => {
+  const calls = [];
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records }, replacementDefault: 'openrouter',
+  }).plan;
+  const result = await executeProviderDelete(plan, {
+    backup: async () => calls.push('backup'),
+    markTombstone: async () => calls.push('tombstone'),
+    scrubReferences: async () => calls.push('scrub'),
+    removeDeclarations: async () => calls.push('declarations'),
+    restart: async () => ({ ok: true }),
+    verify: async () => ({ providerAbsent: true, routingClear: true, tombstonePresent: true }),
+  });
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_LIFECYCLE_HOOK_MISSING');
+  assert.equal(result.rollback_attempted, false);
+  assert.deepEqual(calls, []);
 });
