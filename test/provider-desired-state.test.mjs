@@ -29,7 +29,11 @@ test('desired-state reconciliation removes tombstoned declarations without touch
 
 test('desired-state reconciliation is a no-op when no tombstoned declaration is present', () => {
   const result = reconcileProviderDesiredState(PROFILE, { tombstones: { missing: 'absent' } });
-  assert.deepEqual(result, { ok: true, changed: false, removed: [], text: PROFILE });
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, false);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.text, PROFILE);
+  assert.match(result.revision, /^[a-f0-9]{64}$/);
 });
 
 test('desired-state reconciliation fails closed on an unsupported profile shape', () => {

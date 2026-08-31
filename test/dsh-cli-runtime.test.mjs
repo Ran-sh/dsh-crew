@@ -184,6 +184,23 @@ test('offline Crew registration replaces a stale link while preserving unrelated
   } finally { t.cleanup(); }
 });
 
+test('Crew registration reconciles tombstoned provider declarations before profile use', () => {
+  const t = tempHome();
+  try {
+    const root = pluginRoot(t.dir);
+    const first = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    writeFileSync(join(first.profileRoot, 'cordis.patch.yml'), `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n      openrouter:\n        displayName: openrouter\n`);
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'provider-lifecycle.json'), JSON.stringify({ tombstones: { 'opencode-go': 'absent' } }));
+    const repaired = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(repaired.ok, true, JSON.stringify(repaired));
+    assert.equal(repaired.changed, true);
+    const patch = readFileSync(join(first.profileRoot, 'cordis.patch.yml'), 'utf8');
+    assert.equal(patch.includes('opencode-go:'), false);
+    assert.equal(patch.includes('openrouter:'), true);
+  } finally { t.cleanup(); }
+});
+
 test('offline Crew registration fails closed on malformed metadata and link conflicts', () => {
   const malformed = tempHome();
   try {
