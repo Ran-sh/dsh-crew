@@ -52,3 +52,16 @@ test('unknown profile shape and missing provider fail closed', () => {
   assert.equal(missing.ok, false);
   assert.equal(missing.code, 'PROVIDER_NOT_FOUND');
 });
+
+test('removing the final provider removes the managed sequence item cleanly', () => {
+  const source = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n- insert:\n    - id: dsh-crew-hub\n`;
+  const inspected = inspectProviderProfile(source);
+  const result = removeProviderDeclarations(source, {
+    providerIds: ['opencode-go'],
+    expectedRevision: inspected.revision,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.remaining, []);
+  assert.equal(result.text.includes('opencode-go:'), false);
+  assert.equal(result.text.includes('dsh-crew-hub'), true);
+});
