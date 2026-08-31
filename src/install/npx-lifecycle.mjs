@@ -1254,7 +1254,8 @@ export async function npxInspect({
   fetchImpl = globalThis.fetch,
   readConfig = realInstaller.readGlobalConfig,
 } = {}) {
-  const hubUrl = readConfig()?.hub_url ?? 'http://127.0.0.1:3210';
+  const hubUrl = String(readConfig()?.hub_url ?? PRODUCTION_HUB_URL).replace(/\/$/, '');
+  await assertProductionHub({ hubUrl, requiredCapabilities: INSPECT_CAPABILITIES, purpose: 'inspect', fetchImpl });
   const url = `${String(hubUrl).replace(/\/$/, '')}/_dsh/dsh-crew/extension`;
   const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
   const body = await response.json();
@@ -1278,6 +1279,9 @@ export async function npxJobs({
   const base = `${hubUrl}/_dsh/dsh-crew/jobs`;
   const action = args[0] ?? 'list';
   const id = args[1];
+  const requiredCapabilities = JOB_CAPABILITY_REQUIREMENTS[action];
+  if (!requiredCapabilities) throw new Error(`unknown jobs action: ${action}`);
+  await assertProductionHub({ hubUrl, requiredCapabilities, purpose: 'job', fetchImpl });
   let url = base;
   let init = { headers: { accept: 'application/json' } };
   if (action === 'get' || action === 'watch') {
@@ -1291,8 +1295,6 @@ export async function npxJobs({
     if (!request) throw new Error('jobs submit requires --request <json-file>');
     const document = JSON.parse(readFileSync(resolve(request), 'utf8'));
     init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(document) };
-  } else if (action !== 'list') {
-    throw new Error(`unknown jobs action: ${action}`);
   }
   const response = await fetchImpl(url, init);
   const body = await response.json();
@@ -1308,14 +1310,18 @@ const PROVIDER_CAPABILITY_REQUIREMENTS = Object.freeze({
   rollback: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
   probe: Object.freeze(['provider-inventory', 'provider-health-v1', 'provider-probe-stream-v1']),
 });
+const JOB_CAPABILITY_REQUIREMENTS = Object.freeze({
+  list: Object.freeze(['jobs']),
+  get: Object.freeze(['jobs', 'jobs-wait']),
+  watch: Object.freeze(['jobs', 'jobs-wait']),
+  cancel: Object.freeze(['jobs', 'jobs-cancel']),
+  submit: Object.freeze(['jobs', 'roles', 'attempt-index', 'model-policy']),
+});
+const INSPECT_CAPABILITIES = Object.freeze(['extension-contract', 'evidence', 'runtime-provenance-v1']);
+export const PRODUCTION_HUB_URL = 'http://127.0.0.1:3210';
 
-/**
- * Confirm the target is the live isolated Hub and advertises the lifecycle
- * surface before sending a provider request. This prevents a same-port stale
- * Hub from turning a later 404 into an ambiguous destructive failure.
- */
-export async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl = globalThis.fetch } = {}) {
-  const required = PROVIDER_CAPABILITY_REQUIREMENTS[action] ?? PROVIDER_CAPABILITY_REQUIREMENTS.list;
+export async function assertProductionHub({ hubUrl, requiredCapabilities = [], purpose = 'command', fetchImpl = globalThis.fetch } = {}) {
+  if (hubUrl !== PRODUCTION_HUB_URL) throw new Error(`${purpose} requires the isolated 3210 Crew Hub`);
   const response = await fetchImpl(`${hubUrl}${CREW_ROUTE_BASE}/runtime`, { headers: { accept: 'application/json' } });
   let body;
   try { body = await response.json(); } catch { body = null; }
@@ -1323,12 +1329,27 @@ export async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl 
     && body?.service === 'dsh-crew-hub'
     && body?.execution_plane === 'hub-3210'
     && body?.profile === 'dsh-crew'
-    && Number(body?.listen_port) === 3210;
-  if (!validIdentity) throw new Error('providers CLI requires a compatible isolated 3210 Crew Hub');
+    && Number(body?.listen_port) === 3210
+    && typeof body?.runtime_id === 'string' && body.runtime_id.trim().length > 0;
+  if (!validIdentity) throw new Error(`${purpose} requires a compatible isolated 3210 Crew Hub`);
   const advertised = new Set(Array.isArray(body.capabilities) ? body.capabilities.filter((value) => typeof value === 'string') : []);
-  const missing = required.filter((capability) => !advertised.has(capability));
-  if (missing.length > 0) throw new Error(`missing provider lifecycle capability: ${missing.join(', ')}`);
-  return { ok: true, capabilities: [...advertised] };
+  const missing = requiredCapabilities.filter((capability) => !advertised.has(capability));
+  if (missing.length > 0) throw new Error(`missing ${purpose} capability: ${missing.join(', ')}`);
+  return { ok: true, runtime: body, capabilities: [...advertised] };
+}
+
+/**
+ * Confirm the target is the live isolated Hub and advertises the lifecycle
+ * surface before sending a provider request. This prevents a same-port stale
+ * Hub from turning a later 404 into an ambiguous destructive failure.
+ */
+export async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl = globalThis.fetch } = {}) {
+  return assertProductionHub({
+    hubUrl,
+    requiredCapabilities: PROVIDER_CAPABILITY_REQUIREMENTS[action] ?? PROVIDER_CAPABILITY_REQUIREMENTS.list,
+    purpose: 'provider lifecycle',
+    fetchImpl,
+  });
 }
 
 /**
@@ -1346,8 +1367,7 @@ export async function npxProviders({
   fetchImpl = globalThis.fetch,
   readConfig = realInstaller.readGlobalConfig,
 } = {}) {
-  const configuredHubUrl = String(readConfig()?.hub_url ?? 'http://127.0.0.1:3210').replace(/\/$/, '');
-  if (configuredHubUrl !== 'http://127.0.0.1:3210') throw new Error('providers CLI requires the isolated 3210 Crew Hub');
+  const configuredHubUrl = String(readConfig()?.hub_url ?? PRODUCTION_HUB_URL).replace(/\/$/, '');
   const hubUrl = configuredHubUrl;
   const base = `${hubUrl}/_dsh/dsh-crew/providers`;
   const action = args[0] ?? 'list';

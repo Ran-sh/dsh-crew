@@ -773,10 +773,9 @@ test('inspect prints the machine-readable extension contract from the isolated H
   const result = await npxInspect({
     log: (line) => lines.push(line),
     readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }),
-    fetchImpl: async (url) => ({
-      ok: true,
-      json: async () => ({ ok: true, extension: { schema_version: 1, kind: 'dsh-crew-extension', source: url } }),
-    }),
+    fetchImpl: async (url) => url.endsWith('/runtime')
+      ? { ok: true, json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['extension-contract', 'evidence', 'runtime-provenance-v1'] }) }
+      : { ok: true, json: async () => ({ ok: true, extension: { schema_version: 1, kind: 'dsh-crew-extension', source: url } }) },
   });
   assert.equal(result.ok, true);
   assert.match(lines.join('\n'), /"kind": "dsh-crew-extension"/);
@@ -787,6 +786,7 @@ test('jobs CLI projects list, contract watch, cancel and JSON request submission
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push([url, init]);
+    if (url.endsWith('/runtime')) return { ok: true, json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['jobs', 'jobs-wait', 'jobs-cancel', 'roles', 'attempt-index', 'model-policy'] }) };
     return { ok: true, json: async () => ({ ok: true, job: { id: 'hub-1' }, jobs: [] }) };
   };
   const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
@@ -961,7 +961,7 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
     if (url.endsWith('/runtime')) return {
       ok: true,
       status: 200,
-      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
         capabilities: ['provider-inventory', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1'] }),
     };
     return { ok: true, json: async () => ({ ok: true, records: [], plan: { plan_id: 'plan-1' } }) };
@@ -1005,6 +1005,7 @@ test('providers CLI fails closed before mutation when the 3210 capability handsh
         execution_plane: 'hub-3210',
         profile: 'dsh-crew',
         listen_port: 3210,
+        runtime_id: 'runtime-1',
         capabilities: ['provider-inventory'],
       }),
     };
@@ -1029,7 +1030,7 @@ test('providers CLI completes the deferred delete through the owned 3080 supervi
     if (url.endsWith('/runtime')) return {
       ok: true,
       status: 200,
-      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
         capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
     };
     if (url.endsWith('/providers/opencode-go')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, result: { state: 'RESTART_PENDING', transaction_id: 'plan-1' } }) };
@@ -1053,7 +1054,7 @@ test('providers CLI completes the deferred rollback through the owned 3080 super
     if (url.endsWith('/runtime')) return {
       ok: true,
       status: 200,
-      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1',
         capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
     };
     if (url.endsWith('/providers/opencode-go/rollback')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, state: 'ROLLBACK_PENDING', transaction_id: 'plan-1' }) };
