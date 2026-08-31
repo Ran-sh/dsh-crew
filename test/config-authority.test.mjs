@@ -22,18 +22,45 @@ function disk(file) {
   return JSON.parse(readFileSync(file, 'utf8'));
 }
 
-test('fresh config exposes schema-v3 canonical authority without writing a file', (t) => {
+test('fresh config exposes schema-v4 canonical authority without writing a file', (t) => {
   const file = fixture(t);
   const config = readGlobalConfig({ configFile: file });
-  assert.equal(GLOBAL_CONFIG_SCHEMA_VERSION, 3);
-  assert.equal(GLOBAL_CONFIG_DEFAULTS.config_schema_version, 3);
-  assert.equal(config.config_schema_version, 3);
+  assert.equal(GLOBAL_CONFIG_SCHEMA_VERSION, 4);
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.config_schema_version, 4);
+  assert.equal(config.config_schema_version, 4);
   assert.equal(config.config_authority, 'canonical');
   assert.equal(config.config_migration_required, false);
   assert.equal(config.execution.max_parallel, 3);
   assert.equal(config.execution.transport, 'hub-3210');
+  assert.equal(config.worker.model_policy.ordering, 'manual');
+  assert.equal(config.worker.model_policy.health_gate, 'hard-failures');
+  assert.equal(config.review.model_policy.ordering, 'manual');
+  assert.equal(config.review.model_policy.health_gate, 'hard-failures');
+  assert.equal(config.review.gate, 'required');
   assert.equal(config.worker.state, 'auto');
   assert.equal(config.review.state, 'disabled');
+});
+
+test('schema-v3 canonical config migrates read-only into the v4 role-first view', (t) => {
+  const file = fixture(t);
+  writeFileSync(file, JSON.stringify({
+    config_schema_version: 3,
+    subagents_enabled: true,
+    execution: { enabled: true, mode: 'auto', max_parallel: 2, isolation: 'worktree' },
+    worker: { state: 'auto', provider_mode: 'follow-dsh', model_policy: { strategy: 'balanced', priority: [{ provider: 'p', model: 'm' }], priorityConfigured: true, escalation_priority: [], escalation: { enabled: false, max_attempts: 2 } } },
+    review: { state: 'manual', auto_review: false, provider_mode: 'follow-dsh', model_policy: { strategy: 'strong', priority: [], priorityConfigured: true } },
+    legacy: { collaboration_mode: 'custom', flash_state: 'auto', pro_state: 'auto', tier_policy: 'auto' },
+  }));
+  const read = readGlobalConfig({ configFile: file });
+  assert.equal(read.config_schema_version, 3, 'read remains non-mutating and reports source schema');
+  assert.equal(read.config_authority, 'canonical');
+  assert.equal(read.config_migration_required, true);
+  assert.deepEqual(read.worker.model_policy.priority, [{ provider: 'p', model: 'm' }]);
+  assert.equal(read.worker.model_policy.ordering, 'manual');
+  assert.equal(read.review.gate, 'required');
+  const saved = writeGlobalConfig({}, { configFile: file });
+  assert.equal(saved.config_schema_version, 4);
+  assert.equal(disk(file).config_schema_version, 4);
 });
 
 test('execution transport defaults to 3210 and only accepts the explicit legacy escape hatch', (t) => {
@@ -75,14 +102,14 @@ test('first explicit save upgrades a legacy file and recompiles flat settings in
     flash_model_priority: [{ provider: 'opencode-go', model: 'mimo-v2.5' }],
   }, { configFile: file });
 
-  assert.equal(saved.config_schema_version, 3);
+  assert.equal(saved.config_schema_version, 4);
   assert.equal(saved.config_authority, 'canonical');
   assert.equal(saved.execution.max_parallel, 5);
   assert.equal(saved.review.auto_review, true);
   assert.deepEqual(saved.worker.model_policy.priority, [{ provider: 'opencode-go', model: 'mimo-v2.5' }]);
 
   const stored = disk(file);
-  assert.equal(stored.config_schema_version, 3);
+  assert.equal(stored.config_schema_version, 4);
   assert.equal(stored.max_parallel, 5);
   assert.equal(stored.execution.max_parallel, 5);
   assert.equal(stored.tier_policy, 'auto');
@@ -228,7 +255,7 @@ test('cache-busted config imports still resolve the v0.3 authority facade', asyn
   const moduleUrl = new URL('../src/install/install.mjs', import.meta.url);
   moduleUrl.searchParams.set('route-contract', `${Date.now()}-${Math.random()}`);
   const fresh = await import(moduleUrl.href);
-  assert.equal(fresh.GLOBAL_CONFIG_SCHEMA_VERSION, 3);
+  assert.equal(fresh.GLOBAL_CONFIG_SCHEMA_VERSION, 4);
   assert.equal(typeof fresh.readGlobalConfig, 'function');
   assert.equal(typeof fresh.writeGlobalConfig, 'function');
 

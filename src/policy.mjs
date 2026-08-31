@@ -11,7 +11,8 @@ import * as legacy from './policy-legacy.mjs';
 import { normalizeAdaptiveRouting } from './adaptive-routing.mjs';
 
 export { normalizeAdaptiveRouting };
-export const CONFIG_SCHEMA_VERSION = 3;
+export const CONFIG_SCHEMA_VERSION = 4;
+const MIN_CANONICAL_SCHEMA_VERSION = 3;
 
 function validObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -24,7 +25,7 @@ function normalizeExecutionTransport(value) {
 }
 
 function hasCanonicalAuthority(raw) {
-  return Number(raw?.config_schema_version) >= CONFIG_SCHEMA_VERSION
+  return Number(raw?.config_schema_version) >= MIN_CANONICAL_SCHEMA_VERSION
     && validObject(raw?.worker)
     && validObject(raw?.review)
     && validObject(raw?.execution);
@@ -74,6 +75,8 @@ function modelPolicyWithAdaptive(basePolicy, rawPolicy) {
   return {
     ...basePolicy,
     adaptive: normalizeAdaptiveRouting(rawPolicy?.adaptive),
+    ordering: rawPolicy?.ordering === 'health-aware' ? 'health-aware' : 'manual',
+    health_gate: rawPolicy?.health_gate === 'off' ? 'off' : 'hard-failures',
   };
 }
 
@@ -96,6 +99,7 @@ function normalizeCanonical(raw) {
     },
     review: {
       ...base.review,
+      gate: ['required', 'optional', 'off'].includes(raw?.review?.gate) ? raw.review.gate : 'required',
       // v0.3 still exposes one Worker Provider selector. Until per-role
       // provider modes become first-class, keep both roles aligned.
       provider_mode: providerMode,

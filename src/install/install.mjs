@@ -98,7 +98,7 @@ function attachReadMetadata(config, { version, canonical }) {
     ...config,
     config_schema_version: version,
     config_authority: canonical ? 'canonical' : 'legacy-import',
-    config_migration_required: !canonical,
+    config_migration_required: !canonical || version < CONFIG_SCHEMA_VERSION,
     config_activation: runtimeActivationMetadata(),
   };
 }
