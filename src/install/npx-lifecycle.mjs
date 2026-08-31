@@ -1112,6 +1112,7 @@ Commands:
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
+  providers   3210 provider lifecycle API: list|delete-plan|delete
   update      resolve the newest permitted package from the configured npm registry (or
               --candidate), stage and validate it, then activate; idempotent when current
   uninstall   remove the Crew-managed payload, registration, and integrations (config kept)
@@ -1121,6 +1122,10 @@ Options:
   --after <sequence>  with jobs watch/get: return canonical events after this cursor
   --detail <mode>     with jobs get/watch: compact (default) or full
   --request <path>    with jobs submit: JSON Job Request document
+  --plan <id>         with providers delete: approved plan id
+  --expected-revision <sha256>  with providers delete: profile revision from delete-plan
+  --replacement-default <id>   with providers delete-plan: replacement Harness Default provider
+  --confirm           with providers delete: confirm the destructive mutation
   --purge             with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
   --help              show this help
 
@@ -1179,12 +1184,81 @@ export async function npxJobs({
   return { ok: true, body };
 }
 
+/**
+ * Call the isolated 3210 provider lifecycle API. The CLI never parses or
+ * edits Harness YAML itself; the Hub remains the sole mutation authority.
+ */
+export async function npxProviders({
+  args = [],
+  planId,
+  expectedRevision,
+  replacementDefault,
+  confirm = false,
+  purgeOrphanCredentials = false,
+  log = console.log,
+  fetchImpl = globalThis.fetch,
+  readConfig = realInstaller.readGlobalConfig,
+} = {}) {
+  const configuredHubUrl = String(readConfig()?.hub_url ?? 'http://127.0.0.1:3210').replace(/\/$/, '');
+  if (configuredHubUrl !== 'http://127.0.0.1:3210') throw new Error('providers CLI requires the isolated 3210 Crew Hub');
+  const hubUrl = configuredHubUrl;
+  const base = `${hubUrl}/_dsh/dsh-crew/providers`;
+  const action = args[0] ?? 'list';
+  const id = args[1];
+  const options = new Map();
+  for (let index = 2; index < args.length; index += 1) {
+    const value = args[index];
+    if (!value?.startsWith('--')) continue;
+    const [name, inline] = value.split('=', 2);
+    if (name === '--confirm' || name === '--purge-orphan-credentials') options.set(name === '--confirm' ? 'confirm' : name, true);
+    else if (inline !== undefined) options.set(name, inline);
+    else if (args[index + 1] !== undefined) options.set(name, args[++index]);
+  }
+  const resolvedPlan = planId ?? options.get('--plan');
+  const resolvedRevision = expectedRevision ?? options.get('--expected-revision');
+  const resolvedReplacement = replacementDefault ?? options.get('--replacement-default');
+  const resolvedConfirm = confirm === true || options.get('confirm') === true;
+  if (purgeOrphanCredentials === true || options.get('--purge-orphan-credentials') === true) {
+    throw new Error('credential purge requires a separate explicit confirmation flow');
+  }
+  let url = base;
+  let init = { headers: { accept: 'application/json' } };
+  if (action === 'list') {
+    // keep defaults
+  } else if (action === 'delete-plan') {
+    if (!id) throw new Error('providers delete-plan requires a provider id');
+    url = `${base}/${encodeURIComponent(id)}/delete-plan`;
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ ...(resolvedReplacement ? { replacement_default: resolvedReplacement } : {}) }) };
+  } else if (action === 'delete') {
+    if (!id) throw new Error('providers delete requires a provider id');
+    if (!resolvedPlan || !resolvedRevision || !resolvedConfirm) throw new Error('providers delete requires --plan, --expected-revision and --confirm');
+    url = `${base}/${encodeURIComponent(id)}`;
+    init = {
+      method: 'DELETE',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ plan_id: resolvedPlan, expected_revision: resolvedRevision, confirm: true }),
+    };
+  } else {
+    throw new Error(`unknown providers action: ${action}`);
+  }
+  const response = await fetchImpl(url, init);
+  const body = await response.json();
+  if (!response.ok || body?.ok === false) throw new Error(body?.code ?? body?.error ?? 'Crew provider API unavailable');
+  log(JSON.stringify(body, null, 2));
+  return { ok: true, body };
+}
+
 function normalizeCommand(argv) {
   const flags = argv.slice(1);
   let candidate;
   let after = 0;
   let detail = 'compact';
   let request;
+  let planId;
+  let expectedRevision;
+  let replacementDefault;
+  let confirm = false;
+  let purgeOrphanCredentials = false;
   for (let index = 0; index < flags.length; index += 1) {
     if (flags[index] === '--candidate') {
       candidate = flags[index + 1];
@@ -1208,6 +1282,23 @@ function normalizeCommand(argv) {
       detail = flags[index].slice('--detail='.length); flags.splice(index, 1); index -= 1;
     } else if (flags[index]?.startsWith('--request=')) {
       request = flags[index].slice('--request='.length); flags.splice(index, 1); index -= 1;
+    } else if (flags[index] === '--plan' || flags[index] === '--expected-revision' || flags[index] === '--replacement-default') {
+      const name = flags[index];
+      const value = flags[index + 1];
+      if (name === '--plan') planId = value;
+      if (name === '--expected-revision') expectedRevision = value;
+      if (name === '--replacement-default') replacementDefault = value;
+      flags.splice(index, 2); index -= 1;
+    } else if (flags[index]?.startsWith('--plan=')) {
+      planId = flags[index].slice('--plan='.length); flags.splice(index, 1); index -= 1;
+    } else if (flags[index]?.startsWith('--expected-revision=')) {
+      expectedRevision = flags[index].slice('--expected-revision='.length); flags.splice(index, 1); index -= 1;
+    } else if (flags[index]?.startsWith('--replacement-default=')) {
+      replacementDefault = flags[index].slice('--replacement-default='.length); flags.splice(index, 1); index -= 1;
+    } else if (flags[index] === '--confirm') {
+      confirm = true; flags.splice(index, 1); index -= 1;
+    } else if (flags[index] === '--purge-orphan-credentials') {
+      purgeOrphanCredentials = true; flags.splice(index, 1); index -= 1;
     }
   }
   const knownFlags = new Set(['--purge']);
@@ -1215,7 +1306,7 @@ function normalizeCommand(argv) {
   const args = flags.filter((f) => !f.startsWith('--'));
   if (!Number.isInteger(after) || after < 0) unknown.push('--after');
   if (!['compact', 'full'].includes(detail)) unknown.push('--detail');
-  return { command: argv[0], purge: flags.includes('--purge'), candidate, after, detail, request, args, unknown };
+  return { command: argv[0], purge: flags.includes('--purge'), candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, args, unknown };
 }
 
 /**
@@ -1227,7 +1318,7 @@ export async function runNpxCli({
   error = console.error,
   commands = {},
 } = {}) {
-  const { command, purge, candidate, after, detail, request, args, unknown } = normalizeCommand(argv);
+  const { command, purge, candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, args, unknown } = normalizeCommand(argv);
   if (command === '--help' || command === '-h' || command === 'help') {
     log(USAGE);
     return 0;
@@ -1236,7 +1327,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -1248,6 +1339,7 @@ export async function runNpxCli({
       status: commands.status ?? npxStatus,
       inspect: commands.inspect ?? npxInspect,
       jobs: commands.jobs ?? npxJobs,
+      providers: commands.providers ?? npxProviders,
       update: commands.update ?? npxUpdate,
       uninstall: commands.uninstall ?? npxUninstall,
     };
@@ -1255,6 +1347,7 @@ export async function runNpxCli({
     if (command === 'uninstall') result = await actions.uninstall({ purge, log });
     else if (command === 'update') result = await actions.update({ candidate, log });
     else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
+    else if (command === 'providers') result = await actions.providers({ args, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, log });
     else result = await actions[command]({ log });
     return result?.ok === false ? 1 : 0;
   } catch (err) {

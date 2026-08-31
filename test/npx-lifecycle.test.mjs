@@ -41,6 +41,7 @@ import {
   npxUninstall,
   npxInspect,
   npxJobs,
+  npxProviders,
   runNpxCli,
   USAGE,
   compareVersions,
@@ -749,6 +750,22 @@ await test('CLI dispatch routes commands and forwards flags', async () => {
   assert.match(throwing.err, /boom/);
 });
 
+test('CLI dispatch forwards provider lifecycle flags without interpreting them as positional args', async () => {
+  let received;
+  const result = await cli([
+    'providers', 'delete', 'opencode-go', '--plan', 'plan-1', '--expected-revision', 'a'.repeat(64), '--confirm',
+  ], {
+    commands: {
+      providers: async (options) => { received = options; return { ok: true }; },
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.deepEqual(received.args, ['delete', 'opencode-go']);
+  assert.equal(received.planId, 'plan-1');
+  assert.equal(received.expectedRevision, 'a'.repeat(64));
+  assert.equal(received.confirm, true);
+});
+
 test('inspect prints the machine-readable extension contract from the isolated Hub', async () => {
   const lines = [];
   const result = await npxInspect({
@@ -784,6 +801,32 @@ test('jobs CLI projects list, contract watch, cancel and JSON request submission
     assert.equal(calls.at(-1)[1].method, 'POST');
     assert.match(calls.at(-1)[1].body, /"objective":"test"/);
   } finally { home.cleanup(); }
+});
+
+test('providers CLI stays on the 3210 lifecycle API and binds destructive flags', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    return { ok: true, json: async () => ({ ok: true, records: [], plan: { plan_id: 'plan-1' } }) };
+  };
+  const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
+  await npxProviders({ ...common, args: ['list'] });
+  assert.equal(calls.at(-1)[0], 'http://127.0.0.1:3210/_dsh/dsh-crew/providers');
+  await npxProviders({ ...common, args: ['delete-plan', 'opencode-go'], replacementDefault: 'openrouter' });
+  assert.equal(calls.at(-1)[1].method, 'POST');
+  assert.match(calls.at(-1)[1].body, /"replacement_default":"openrouter"/);
+  await npxProviders({ ...common, args: ['delete', 'opencode-go'], planId: 'plan-1', expectedRevision: 'a'.repeat(64), confirm: true });
+  assert.equal(calls.at(-1)[1].method, 'DELETE');
+  assert.match(calls.at(-1)[1].body, /"confirm":true/);
+  assert.match(calls.at(-1)[0], /providers\/opencode-go$/);
+  await assert.rejects(
+    () => npxProviders({ ...common, readConfig: () => ({ hub_url: 'http://127.0.0.1:3080' }), args: ['list'] }),
+    /isolated 3210 Crew Hub/,
+  );
+  await assert.rejects(
+    () => npxProviders({ ...common, args: ['delete', 'opencode-go'], planId: 'plan-1', expectedRevision: 'a'.repeat(64), confirm: true, purgeOrphanCredentials: true }),
+    /separate explicit confirmation/,
+  );
 });
 
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
