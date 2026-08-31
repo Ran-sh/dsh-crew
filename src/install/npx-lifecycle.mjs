@@ -52,6 +52,7 @@ export const RELEASES_DIRNAME = 'releases';
 export const CURRENT_POINTER_FILENAME = 'current.json';
 export const KEEP_RELEASES = 2;
 export const INCOMPLETE_MARKER = '.dsh-crew-incomplete';
+const CREW_ROUTE_BASE = '/_dsh/dsh-crew';
 
 export function npmCliInvocation(args, {
   platform = process.platform,
@@ -1278,6 +1279,36 @@ export async function npxJobs({
   return { ok: true, body };
 }
 
+const PROVIDER_CAPABILITY_REQUIREMENTS = Object.freeze({
+  list: Object.freeze(['provider-inventory']),
+  'delete-plan': Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
+  delete: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
+  rollback: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
+  probe: Object.freeze(['provider-inventory', 'provider-health-v1', 'provider-probe-stream-v1']),
+});
+
+/**
+ * Confirm the target is the live isolated Hub and advertises the lifecycle
+ * surface before sending a provider request. This prevents a same-port stale
+ * Hub from turning a later 404 into an ambiguous destructive failure.
+ */
+export async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl = globalThis.fetch } = {}) {
+  const required = PROVIDER_CAPABILITY_REQUIREMENTS[action] ?? PROVIDER_CAPABILITY_REQUIREMENTS.list;
+  const response = await fetchImpl(`${hubUrl}${CREW_ROUTE_BASE}/runtime`, { headers: { accept: 'application/json' } });
+  let body;
+  try { body = await response.json(); } catch { body = null; }
+  const validIdentity = response.ok && body?.ok === true
+    && body?.service === 'dsh-crew-hub'
+    && body?.execution_plane === 'hub-3210'
+    && body?.profile === 'dsh-crew'
+    && Number(body?.listen_port) === 3210;
+  if (!validIdentity) throw new Error('providers CLI requires a compatible isolated 3210 Crew Hub');
+  const advertised = new Set(Array.isArray(body.capabilities) ? body.capabilities.filter((value) => typeof value === 'string') : []);
+  const missing = required.filter((capability) => !advertised.has(capability));
+  if (missing.length > 0) throw new Error(`missing provider lifecycle capability: ${missing.join(', ')}`);
+  return { ok: true, capabilities: [...advertised] };
+}
+
 /**
  * Call the isolated 3210 provider lifecycle API. The CLI never parses or
  * edits Harness YAML itself; the Hub remains the sole mutation authority.
@@ -1315,6 +1346,7 @@ export async function npxProviders({
   if (purgeOrphanCredentials === true || options.get('--purge-orphan-credentials') === true) {
     throw new Error('credential purge requires a separate explicit confirmation flow');
   }
+  await assertProviderHubCapabilities({ hubUrl, action, fetchImpl });
   let url = base;
   let init = { headers: { accept: 'application/json' } };
   if (action === 'list') {

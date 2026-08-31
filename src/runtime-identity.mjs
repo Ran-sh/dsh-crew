@@ -41,6 +41,7 @@ export const HUB_CAPABILITIES = Object.freeze([
   'provider-health-v1',
   'provider-probe-stream-v1',
   'credential-reference-inventory-v1',
+  'runtime-provenance-v1',
 ]);
 
 // Capabilities the current MCP workflow depends on for full Hub execution.

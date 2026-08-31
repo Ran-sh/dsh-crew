@@ -865,6 +865,12 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push([url, init]);
+    if (url.endsWith('/runtime')) return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+        capabilities: ['provider-inventory', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1'] }),
+    };
     return { ok: true, json: async () => ({ ok: true, records: [], plan: { plan_id: 'plan-1' } }) };
   };
   const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
@@ -927,6 +933,12 @@ test('providers CLI completes the deferred delete through the owned 3080 supervi
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push([url, init]);
+    if (url.endsWith('/runtime')) return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+        capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
+    };
     if (url.endsWith('/providers/opencode-go')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, result: { state: 'RESTART_PENDING', transaction_id: 'plan-1' } }) };
     if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true, mode: 'official-3080-isolated-3210', execution_plane: 'hub-3210', listen_port: 3210 }) };
     return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED' }) };
@@ -936,15 +948,21 @@ test('providers CLI completes the deferred delete through the owned 3080 supervi
     log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
   });
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 3);
-  assert.match(calls[1][0], /127\.0\.0\.1:3080\/\_dsh\/dsh-crew\/supervisor\/restart/);
-  assert.match(calls[2][0], /providers\/opencode-go\/verify-delete/);
+  assert.equal(calls.length, 4);
+  assert.match(calls[2][0], /127\.0\.0\.1:3080\/\_dsh\/dsh-crew\/supervisor\/restart/);
+  assert.match(calls[3][0], /providers\/opencode-go\/verify-delete/);
 });
 
 test('providers CLI completes the deferred rollback through the owned 3080 supervisor', async () => {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push([url, init]);
+    if (url.endsWith('/runtime')) return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+        capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
+    };
     if (url.endsWith('/providers/opencode-go/rollback')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, state: 'ROLLBACK_PENDING', transaction_id: 'plan-1' }) };
     if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true }) };
     return { ok: true, status: 200, json: async () => ({ ok: true, state: 'ROLLED_BACK' }) };
@@ -954,8 +972,8 @@ test('providers CLI completes the deferred rollback through the owned 3080 super
     log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
   });
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 3);
-  assert.match(calls[2][0], /providers\/opencode-go\/verify-rollback/);
+  assert.equal(calls.length, 4);
+  assert.match(calls[3][0], /providers\/opencode-go\/verify-rollback/);
 });
 
 test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
