@@ -73,6 +73,8 @@ test('task status uses the compact table layout instead of stacked list cards', 
 
 test('provider lifecycle UI distinguishes Harness providers from multimodal adapters', () => {
   assert.match(panelSource, /get\('\/providers'\)/);
+  assert.match(panelSource, /credential-references/);
+  assert.match(panelSource, /credentialRefs/);
   assert.match(panelSource, /sectionId=["']harnessProviders["']/);
   assert.match(panelSource, /delete-plan/);
   assert.match(panelSource, /supervisor\/restart/);

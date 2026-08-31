@@ -109,6 +109,8 @@ const COPY = {
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
+    credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
+    credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`,
     customProviders: '自定义 Provider', addProvider: '＋ 添加 Provider',
     noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
     providerName: '名称', modelsField: '模型列表（逗号分隔）',
@@ -246,6 +248,8 @@ const COPY = {
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
+    credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
+    credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`,
     customProviders: 'Custom providers', addProvider: '＋ Add provider',
     noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
     providerName: 'Name', modelsField: 'Models (comma-separated)',
@@ -526,6 +530,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
   const [providerInventory, setProviderInventory] = useState<any>(null);
   const [providerHealth, setProviderHealth] = useState<any[]>([]);
+  const [credentialRefs, setCredentialRefs] = useState<any[]>([]);
   const [providerInventoryError, setProviderInventoryError] = useState('');
   const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
@@ -609,9 +614,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [j, s, c, pr, pi, ph] = await Promise.all([
+      const [j, s, c, pr, pi, ph, cr] = await Promise.all([
         get('/jobs'), get('/install/status'), get('/config'), get('/presets'),
-        get('/providers').catch(() => null), get('/provider-health').catch(() => null),
+        get('/providers').catch(() => null), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null),
       ]);
       if (j.ok) setJobs(j.jobs ?? []);
       if (s.ok) setStatus(s.status);
@@ -622,6 +627,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       ]);
       if (pi?.ok) setProviderInventory(pi);
       if (ph?.ok) setProviderHealth(ph.health ?? []);
+      if (cr?.ok) setCredentialRefs(cr.records ?? []);
     } catch { /* instance restarting */ }
   }, [get]);
 
@@ -654,10 +660,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const refreshProviderInventory = useCallback(async () => {
     setProviderInventoryError('');
     try {
-      const [result, health] = await Promise.all([get('/providers'), get('/provider-health').catch(() => null)]);
+      const [result, health, refs] = await Promise.all([get('/providers'), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null)]);
       if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
       setProviderInventory(result);
       if (health?.ok) setProviderHealth(health.health ?? []);
+      if (refs?.ok) setCredentialRefs(refs.records ?? []);
     } catch (error: any) {
       setProviderInventoryError(error?.message ?? copy.providerNoInventory);
     }
@@ -1401,6 +1408,19 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               </div>
             );
           })}
+          {credentialRefs.length > 0 && (
+            <div style={{ marginTop: 10, borderTop: '1px solid rgba(128,128,128,0.16)', paddingTop: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 12.5 }}>{copy.credentialReferences}</div>
+              <div style={{ fontSize: 11, opacity: 0.6, margin: '3px 0 7px' }}>{copy.credentialReferenceHint}</div>
+              {credentialRefs.map((ref: any) => (
+                <div key={ref.reference_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, flexWrap: 'wrap' as const }}>
+                  <span style={S.mono}>{ref.reference_id}</span>
+                  <span style={{ opacity: 0.65 }}>{ref.ownership}</span>
+                  <span style={{ color: ref.orphan ? '#c98735' : undefined }}>{ref.orphan ? copy.credentialOrphan : copy.credentialInUse(ref.consumer_count ?? 0)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </CollapsibleSection>
 
         <CollapsibleSection sectionId="providers" title={copy.sectionNames.providers}

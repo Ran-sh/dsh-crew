@@ -508,6 +508,10 @@ const COPY = {
 		providerDeleteBlocked: "当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。",
 		providerLifecycleError: "Provider 生命周期操作失败",
 		providerNoInventory: "暂时无法读取 3210 Provider inventory。",
+		credentialReferences: "Credential 引用",
+		credentialReferenceHint: "仅显示引用名、归属和孤儿状态；不会读取或删除密钥。",
+		credentialOrphan: "孤儿 · 可单独申请清理",
+		credentialInUse: (count) => `使用中 · ${count} 个 Provider`,
 		customProviders: "自定义 Provider",
 		addProvider: "＋ 添加 Provider",
 		noCustomProviders: "暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。",
@@ -819,6 +823,10 @@ const COPY = {
 		providerDeleteBlocked: "This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).",
 		providerLifecycleError: "Provider lifecycle operation failed",
 		providerNoInventory: "3210 Provider inventory is temporarily unavailable.",
+		credentialReferences: "Credential references",
+		credentialReferenceHint: "Names, ownership, and orphan status only; values are never read or deleted.",
+		credentialOrphan: "orphan · separate purge approval required",
+		credentialInUse: (count) => `in use · ${count} provider(s)`,
 		customProviders: "Custom providers",
 		addProvider: "＋ Add provider",
 		noCustomProviders: "None yet. Added providers appear in the vision / image-gen selects above.",
@@ -1406,6 +1414,7 @@ function WorkersPanel({ ctx }) {
 	const [modelCatalogBusy, setModelCatalogBusy] = (0, react.useState)(false);
 	const [providerInventory, setProviderInventory] = (0, react.useState)(null);
 	const [providerHealth, setProviderHealth] = (0, react.useState)([]);
+	const [credentialRefs, setCredentialRefs] = (0, react.useState)([]);
 	const [providerInventoryError, setProviderInventoryError] = (0, react.useState)("");
 	const [providerLifecycleBusy, setProviderLifecycleBusy] = (0, react.useState)(null);
 	const [modelPickerTier, setModelPickerTier] = (0, react.useState)(null);
@@ -1494,13 +1503,14 @@ function WorkersPanel({ ctx }) {
 	}, [detectSurface]);
 	const refreshAll = (0, react.useCallback)(async () => {
 		try {
-			const [j, s, c, pr, pi, ph] = await Promise.all([
+			const [j, s, c, pr, pi, ph, cr] = await Promise.all([
 				get("/jobs"),
 				get("/install/status"),
 				get("/config"),
 				get("/presets"),
 				get("/providers").catch(() => null),
-				get("/provider-health").catch(() => null)
+				get("/provider-health").catch(() => null),
+				get("/credential-references").catch(() => null)
 			]);
 			if (j.ok) setJobs(j.jobs ?? []);
 			if (s.ok) setStatus(s.status);
@@ -1514,6 +1524,7 @@ function WorkersPanel({ ctx }) {
 			}))]);
 			if (pi?.ok) setProviderInventory(pi);
 			if (ph?.ok) setProviderHealth(ph.health ?? []);
+			if (cr?.ok) setCredentialRefs(cr.records ?? []);
 		} catch {}
 	}, [get]);
 	(0, react.useEffect)(() => {
@@ -1547,10 +1558,15 @@ function WorkersPanel({ ctx }) {
 	const refreshProviderInventory = (0, react.useCallback)(async () => {
 		setProviderInventoryError("");
 		try {
-			const [result, health] = await Promise.all([get("/providers"), get("/provider-health").catch(() => null)]);
+			const [result, health, refs] = await Promise.all([
+				get("/providers"),
+				get("/provider-health").catch(() => null),
+				get("/credential-references").catch(() => null)
+			]);
 			if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
 			setProviderInventory(result);
 			if (health?.ok) setProviderHealth(health.health ?? []);
+			if (refs?.ok) setCredentialRefs(refs.records ?? []);
 		} catch (error) {
 			setProviderInventoryError(error?.message ?? copy.providerNoInventory);
 		}
@@ -3510,6 +3526,53 @@ function WorkersPanel({ ctx }) {
 									})
 								]
 							}, record.id);
+						}),
+						credentialRefs.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								marginTop: 10,
+								borderTop: "1px solid rgba(128,128,128,0.16)",
+								paddingTop: 8
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									style: {
+										fontWeight: 600,
+										fontSize: 12.5
+									},
+									children: copy.credentialReferences
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									style: {
+										fontSize: 11,
+										opacity: .6,
+										margin: "3px 0 7px"
+									},
+									children: copy.credentialReferenceHint
+								}),
+								credentialRefs.map((ref) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: {
+										display: "flex",
+										alignItems: "center",
+										gap: 8,
+										fontSize: 11.5,
+										flexWrap: "wrap"
+									},
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											style: S.mono,
+											children: ref.reference_id
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											style: { opacity: .65 },
+											children: ref.ownership
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											style: { color: ref.orphan ? "#c98735" : void 0 },
+											children: ref.orphan ? copy.credentialOrphan : copy.credentialInUse(ref.consumer_count ?? 0)
+										})
+									]
+								}, ref.reference_id))
+							]
 						})
 					]
 				}),

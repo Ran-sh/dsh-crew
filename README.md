@@ -49,6 +49,8 @@ dsh-crew providers probe <provider-id>
 curl http://127.0.0.1:3210/_dsh/dsh-crew/credential-references  # references/orphans only
 dsh-crew providers delete-plan <provider-id> --replacement-default <provider-id>
 dsh-crew providers delete <provider-id> --plan <plan-id> --expected-revision <sha256> --confirm
+dsh-crew releases list     # retained validated payloads
+dsh-crew rollback <version> # switch payload and verify the 3210 runtime
 dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```

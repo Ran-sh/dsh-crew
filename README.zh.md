@@ -45,6 +45,8 @@ dsh-crew providers probe <provider-id>
 curl http://127.0.0.1:3210/_dsh/dsh-crew/credential-references  # 仅查看引用/孤儿报告
 dsh-crew providers delete-plan <provider-id> --replacement-default <provider-id>
 dsh-crew providers delete <provider-id> --plan <plan-id> --expected-revision <sha256> --confirm
+dsh-crew releases list     # 查看保留且已验证的版本
+dsh-crew rollback <version> # 切换版本并验证 3210 runtime
 dsh-crew update           # 更新并修复已启用集成
 dsh-crew uninstall        # 移除受管文件，保留配置/备份
 ```
