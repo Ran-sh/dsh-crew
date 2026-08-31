@@ -205,6 +205,44 @@ test('Crew registration reconciles tombstoned provider declarations before profi
   } finally { t.cleanup(); }
 });
 
+test('tombstoned providers stay absent across repeated restarts and update repair activation', () => {
+  const t = tempHome();
+  try {
+    const root = pluginRoot(t.dir);
+    const first = ensureCrewPluginRegistration({ home: t.dir, root });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const patchFile = join(first.profileRoot, 'cordis.patch.yml');
+    const declared = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n        apiKeyEnv: OPENCODE_GO_API_KEY\n      openrouter:\n        displayName: openrouter\n`;
+    writeFileSync(patchFile, declared);
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'provider-lifecycle.json'), JSON.stringify({
+      schema_version: 1, tombstones: { 'opencode-go': 'absent' }, transactions: {}, last_verified_revision: {},
+    }));
+
+    const assertAbsent = () => {
+      const text = readFileSync(patchFile, 'utf8');
+      assert.equal(text.includes('opencode-go:'), false);
+      assert.equal(text.includes('openrouter:'), true);
+      const lifecycle = JSON.parse(readFileSync(join(t.dir, '.config', 'dsh-crew', 'provider-lifecycle.json'), 'utf8'));
+      assert.equal(lifecycle.tombstones['opencode-go'], 'absent');
+    };
+
+    // Restart #1: the registration path must reconcile before the profile is used.
+    assert.equal(ensureCrewPluginRegistration({ home: t.dir, root }).ok, true);
+    assertAbsent();
+    // Restart #2: absence and tombstone must remain stable.
+    assert.equal(ensureCrewPluginRegistration({ home: t.dir, root }).ok, true);
+    assertAbsent();
+    // Update/repair activation may reintroduce shipped declarations; reconciliation
+    // must remove the tombstoned provider again without touching retained providers.
+    writeFileSync(patchFile, declared);
+    assert.equal(ensureCrewPluginRegistration({ home: t.dir, root }).ok, true);
+    assertAbsent();
+    writeFileSync(patchFile, declared);
+    assert.equal(ensureCrewPluginRegistration({ home: t.dir, root }).ok, true);
+    assertAbsent();
+  } finally { t.cleanup(); }
+});
+
 test('offline Crew registration fails closed on malformed metadata and link conflicts', () => {
   const malformed = tempHome();
   try {
