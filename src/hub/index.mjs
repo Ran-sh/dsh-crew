@@ -4,6 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -32,6 +33,9 @@ import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
 import { buildHubExecutionRows } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
+import { buildProviderInventory } from '../provider-inventory.mjs';
+import { readProviderDeclarations } from '../provider-profile-store.mjs';
+import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -93,6 +97,54 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 // the profile realm): a valid dispatch role set.
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
+
+function readProviderLifecycleState() {
+  try {
+    return normalizeProviderLifecycleState(JSON.parse(readFileSync(join(CONFIG_DIR, 'provider-lifecycle.json'), 'utf8')));
+  } catch {
+    return normalizeProviderLifecycleState();
+  }
+}
+
+function providerInventoryPolicy(config) {
+  return {
+    worker: config?.worker?.model_policy ?? {
+      priority: config?.flash_model_priority,
+      escalation_priority: config?.pro_model_priority,
+    },
+    reviewer: config?.review?.model_policy ?? {
+      priority: config?.pro_model_priority,
+      escalation_priority: [],
+    },
+  };
+}
+
+async function readProviderInventorySnapshot(hub, ctx, config) {
+  let catalog = { providers: [], harness_default: null };
+  try {
+    catalog = await readHarnessModelCatalog({
+      llm: ctx.llm ?? ctx.get('llm'),
+      getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
+    });
+  } catch {}
+  const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
+  let declarations = [];
+  try {
+    if (existsSync(profileFile)) {
+      const source = readFileSync(profileFile, 'utf8');
+      const parsed = readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
+      if (parsed.ok) declarations = parsed.declarations;
+    }
+  } catch {}
+  const lifecycle = readProviderLifecycleState();
+  return buildProviderInventory({
+    catalog,
+    declarations,
+    policy: providerInventoryPolicy(config),
+    tombstones: lifecycle.tombstones,
+    activeJobs: hub.list(),
+  });
+}
 
 export function hubCanonicalEvents(job = {}) {
   if (!job.id) return [];
@@ -1011,6 +1063,28 @@ export async function apply(ctx) {
           });
         } catch (err) {
           return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE', error: 'Unable to resolve Harness worker models.' });
+        }
+      },
+    }));
+
+    // Secret-free Harness provider inventory. This is deliberately separate
+    // from /models (catalog) and /provider (effective routing): it reports
+    // declaration provenance, ownership, lifecycle state and policy refs.
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/providers`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+          const inventory = await readProviderInventorySnapshot(hub, ctx, config);
+          return sendJson(res, 200, {
+            ok: true,
+            ...inventory,
+            runtime: getHubRuntimeIdentity(),
+          });
+        } catch {
+          return sendJson(res, 503, { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE', error: 'Unable to read Harness provider inventory.' });
         }
       },
     }));
