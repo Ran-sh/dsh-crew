@@ -123,6 +123,26 @@ test('incomplete review contract (missing Verdict) fails the workflow', async ()
   assert.equal(v.error_code, 'REVIEW_INCONCLUSIVE');
 });
 
+test('optional review records request_changes without blocking an otherwise verified worker', async () => {
+  const a = makeAdapter({
+    reviews: [{ status: 'done', result: REVIEW_REQUEST_CHANGES, stopReason: 'completed' }],
+    getConfigPatch: {
+      config_schema_version: 4,
+      subagents_enabled: true,
+      execution: { enabled: true, transport: 'hub-3210', mode: 'auto', max_parallel: 3, isolation: 'worktree' },
+      worker: { state: 'auto', provider_mode: 'follow-dsh', model_policy: { priority: [], escalation_priority: [], escalation: { enabled: false, max_attempts: 2 } } },
+      review: { state: 'auto', auto_review: true, gate: 'optional', provider_mode: 'follow-dsh', model_policy: { priority: [] } },
+    },
+  });
+  const rt = createWorkflowRuntime(a, { idFactory });
+  const job = rt.start({ role: 'worker', task: 'do it', cwd: '/repo', source: 'test' });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'done');
+  assert.equal(v.review.verdict, 'request_changes');
+  assert.equal(v.review_gate, 'optional');
+});
+
 // ---------- P1-2: hub cancel/timeout vs pending agents.create() ----------
 
 function makeRegistry({ create, presets } = {}) {

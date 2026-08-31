@@ -198,6 +198,16 @@ export function resolveModelPolicy(config = {}, role = 'worker', context = {}) {
   };
 }
 
+/** Automatic review respects the v4 reviewer gate; session opt-out remains authoritative. */
+export function shouldAutoReview(config = {}, session = {}) {
+  const normalized = normalizeGlobalConfig(config);
+  const gate = ['required', 'optional', 'off'].includes(config?.review?.gate)
+    ? config.review.gate
+    : normalized.review?.gate;
+  if (gate === 'off') return false;
+  return legacy.shouldAutoReview(normalized, session);
+}
+
 /** Explicit legacy-import normalizer for the persistence layer. */
 export function normalizeLegacyGlobalConfig(raw = {}) {
   return legacy.normalizeGlobalConfig(raw);

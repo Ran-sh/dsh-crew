@@ -169,6 +169,13 @@ test('session auto_review override wins', () => {
   assert.equal(shouldAutoReview(CANON('auto', 'auto', { review: { state: 'auto', auto_review: false } }), { auto_review: true }), true);
 });
 
+test('review gate off disables automatic review while required and optional preserve opt-in', () => {
+  const base = CANON('auto', 'auto', { review: { state: 'auto', auto_review: true, gate: 'required' } });
+  assert.equal(shouldAutoReview(base), true);
+  assert.equal(shouldAutoReview({ ...base, review: { ...base.review, gate: 'optional' } }), true);
+  assert.equal(shouldAutoReview({ ...base, review: { ...base.review, gate: 'off' } }), false);
+});
+
 // ---------- evaluateAttempt (PR2 evidence rules, shared pure function) ----------
 
 test('clean verified worker accept', () => {

@@ -300,6 +300,7 @@ export function createWorkflowRuntime(adapters, {
 
     try {
       config = adapters.getConfig?.() ?? {};
+      job.review_gate = ['required', 'optional', 'off'].includes(config?.review?.gate) ? config.review.gate : 'required';
       const alloc = await adapters.allocateWorkspace?.(job);
       if (alloc && alloc.ok === false) {
         failJob(job, Object.assign(new Error(alloc.error ?? alloc.reason), { code: alloc.reason }));
@@ -475,7 +476,7 @@ export function createWorkflowRuntime(adapters, {
           const reviewApproved = review.status === 'done'
             && review.delivery_complete === true
             && review.verdict === 'approve';
-          if (!reviewApproved) {
+          if (!reviewApproved && job.review_gate === 'required') {
             const code = review.verdict === 'request_changes'
               ? 'REVIEW_CHANGES_REQUESTED'
               : 'REVIEW_INCONCLUSIVE';
@@ -654,6 +655,7 @@ export function createWorkflowRuntime(adapters, {
       decision: job.decision,
       candidate_available: !!job.candidate,
       review_status: job.review ? job.review.status ?? null : null,
+      review_gate: job.review_gate ?? 'required',
       event_cursor: job.canonical_events.at(-1)?.sequence ?? 0,
     };
     if (withResult) {
