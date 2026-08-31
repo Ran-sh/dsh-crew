@@ -893,6 +893,36 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   );
 });
 
+test('providers CLI fails closed before mutation when the 3210 capability handshake is incomplete', async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        service: 'dsh-crew-hub',
+        execution_plane: 'hub-3210',
+        profile: 'dsh-crew',
+        listen_port: 3210,
+        capabilities: ['provider-inventory'],
+      }),
+    };
+  };
+  await assert.rejects(
+    () => npxProviders({
+      args: ['delete-plan', 'opencode-go'],
+      log: () => {},
+      readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }),
+      fetchImpl,
+    }),
+    /missing provider lifecycle capability/i,
+  );
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /127\.0\.0\.1:3210\/_dsh\/dsh-crew\/runtime$/);
+});
+
 test('providers CLI completes the deferred delete through the owned 3080 supervisor and 3210 verify', async () => {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
