@@ -72,3 +72,14 @@ test('credential purge execution rechecks the reference revision before purging'
   assert.equal(result.code, 'CREDENTIAL_REFERENCE_CHANGED');
   assert.equal(called, false);
 });
+
+test('credential purge execution requires a fresh recheck before any irreversible adapter call', async () => {
+  const plan = { plan_id: 'tx-1', reference_id: 'crew-store:ref-1', ownership: 'crew-owned', purge_capability: 'eligible', irreversible: true, state: 'PLANNED', expected_revision: 'a'.repeat(64) };
+  let called = false;
+  const result = await executeCredentialPurge(plan, {
+    purge: async () => { called = true; }, verify: async () => ({ ok: true }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CREDENTIAL_REFERENCE_RECHECK_REQUIRED');
+  assert.equal(called, false);
+});
