@@ -617,6 +617,22 @@ test('reopening a backup fails closed when its config projection digest is tampe
   }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
 });
 
+test('reopening a backup fails closed when a consumed plan field is tampered', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  manifest.plan.expected_revision = 'b'.repeat(64);
+  writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
 test('reopening a backup fails closed when rollback existence semantics are tampered', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
@@ -697,6 +713,34 @@ test('transaction-owned absent files are created exclusively and removed on roll
   const result = await executeProviderDelete(plan, hooks);
   assert.equal(result.state, 'FAILED');
   assert.equal(existsSync(paths.configFile), false);
+});
+
+test('rollback preserves an external same-content replacement of a transaction-created file', async () => {
+  const paths = fixture();
+  rmSync(paths.configFile);
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir: join(paths.dir, 'backups'),
+    restart: async () => {
+      writeFileSync(paths.configFile, '{}\n');
+      return { ok: false, code: 'CREW_BACKEND_START_TIMEOUT' };
+    },
+  });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(existsSync(paths.configFile), true);
+  assert.equal(readFileSync(paths.configFile, 'utf8'), '{}\n');
+});
+
+test('a declared authority file missing at backup fails closed', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  rmSync(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
 test('owner metadata write failure cleans up the half-created lock', async () => {
