@@ -247,6 +247,33 @@ test('provider lease remains active until a cancelled handle is disposed', async
   assert.equal(reg.hasProviderLease('opencode-go'), false);
 });
 
+test('provider lease survives cancellation until a late-created handle is disposed', async () => {
+  let resolveCreate;
+  let resolveDispose;
+  let disposeStarted;
+  const createGate = new Promise((resolve) => { resolveCreate = resolve; });
+  const disposeGate = new Promise((resolve) => { resolveDispose = resolve; });
+  const disposeObserved = new Promise((resolve) => { disposeStarted = resolve; });
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = { create: async () => createGate };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'late-handle', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await reg.cancel(job.id);
+  await job.promise;
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+
+  resolveCreate({
+    agent: { session: {}, whenIdle: async () => {}, followup() {} },
+    dispose: async () => { disposeStarted(); await disposeGate; },
+  });
+  await disposeObserved;
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  resolveDispose();
+  const deadline = Date.now() + 2_000;
+  while (reg.hasProviderLease('opencode-go') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(reg.hasProviderLease('opencode-go'), false);
+});
+
 test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {
   const reg = makeRegistry(undefined, 'follow-dsh');
   const created = captureAgentOptions(reg);
