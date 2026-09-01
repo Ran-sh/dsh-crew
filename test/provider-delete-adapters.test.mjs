@@ -702,7 +702,7 @@ test('an external lifecycle create after an absent snapshot is rejected and pres
   const result = await executeProviderDelete(plan, hooks);
   assert.equal(result.state, 'FAILED');
   assert.equal(existsSync(paths.lifecycleFile), true);
-  assert.match(readFileSync(paths.lifecycleFile, 'utf8'), /"tombstones": \{\}/);
+  assert.deepEqual(JSON.parse(readFileSync(paths.lifecycleFile, 'utf8')).tombstones, {});
 });
 
 test('transaction-owned absent files are created exclusively and removed on rollback', async () => {
