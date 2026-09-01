@@ -350,7 +350,7 @@ export function createProviderDeleteFileHooks({
         if (error?.code !== 'EEXIST') throw Object.assign(new Error('provider delete lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
         let reclaimOwner = null;
         try { reclaimOwner = readJson(reclaimPath, null); } catch {}
-        if (ownerIsAlive(reclaimOwner) !== false) throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
+        if (reclaimOwner && ownerIsAlive(reclaimOwner) !== false) throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
         const stalePath = `${reclaimPath}.${randomUUID()}.stale`;
         try { renameSync(reclaimPath, stalePath); } catch { throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' }); }
         try {
@@ -383,7 +383,7 @@ export function createProviderDeleteFileHooks({
         if (error?.code !== 'EEXIST') throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
         let owner = null;
         try { owner = readJson(ownerPath, null); } catch {}
-        if (ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
+        if (owner && ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
         fs.rmSync(lockPath, { recursive: true, force: true });
         fs.mkdirSync(lockPath);
         createdLock = true;
