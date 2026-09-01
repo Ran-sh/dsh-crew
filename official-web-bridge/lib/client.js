@@ -522,6 +522,7 @@ const COPY = {
 		providerDeleteBlocked: "当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。",
 		providerLifecycleError: "Provider 生命周期操作失败",
 		providerDeletePending: "配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。",
+		providerRollbackContinue: "继续回滚验证",
 		providerNoInventory: "暂时无法读取 3210 Provider inventory。",
 		credentialReferences: "Credential 引用",
 		credentialReferenceHint: "仅显示引用名、归属和孤儿状态；不会读取或删除密钥。",
@@ -848,6 +849,7 @@ const COPY = {
 		providerDeleteBlocked: "This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).",
 		providerLifecycleError: "Provider lifecycle operation failed",
 		providerDeletePending: "Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.",
+		providerRollbackContinue: "Continue rollback verification",
 		providerNoInventory: "3210 Provider inventory is temporarily unavailable.",
 		credentialReferences: "Credential references",
 		credentialReferenceHint: "Names, ownership, and orphan status only; values are never read or deleted.",
@@ -2020,8 +2022,9 @@ function WorkersPanel({ ctx }) {
 			setProviderLifecycleBusy(null);
 		}
 	};
-	const rollbackHarnessProvider = async (record, transactionId) => {
-		if (!record || !transactionId || record.desired_state !== "absent") {
+	const rollbackHarnessProvider = async (record, transactionId, transactionState = "VERIFIED") => {
+		const continuing = transactionState === "ROLLBACK_PENDING";
+		if (!record || !transactionId || !continuing && record.desired_state !== "absent") {
 			setNotice(copy.providerRollbackUnavailable);
 			return;
 		}
@@ -2030,7 +2033,11 @@ function WorkersPanel({ ctx }) {
 		setNotice(copy.working);
 		try {
 			const encoded = encodeURIComponent(record.id);
-			const result = await post(`/providers/${encoded}/rollback`, {
+			const result = continuing ? {
+				ok: true,
+				restart_required: true,
+				state: "ROLLBACK_PENDING"
+			} : await post(`/providers/${encoded}/rollback`, {
 				transaction_id: transactionId,
 				confirm: true
 			});
@@ -3604,7 +3611,11 @@ function WorkersPanel({ ctx }) {
 							const unresolved = record.delete_capability === "source-unresolved";
 							const blocked = immutable || unresolved || record.desired_state === "absent" || Number(record.references?.active_jobs ?? 0) > 0;
 							const lifecycle = record.desired_state === "absent" ? "absent" : record.lifecycle?.enabled === false ? "disabled" : record.lifecycle?.catalogued ? "catalogued" : "configured";
-							const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).find((entry) => entry.provider_id === record.id && ["VERIFIED", "RESTART_PENDING"].includes(entry.state));
+							const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).filter((entry) => entry.provider_id === record.id && [
+								"VERIFIED",
+								"RESTART_PENDING",
+								"ROLLBACK_PENDING"
+							].includes(entry.state)).at(-1);
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
 									display: "flex",
@@ -3658,7 +3669,7 @@ function WorkersPanel({ ctx }) {
 										},
 										children: providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan
 									}),
-									record.desired_state === "absent" && rollbackTransaction && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									(record.desired_state === "absent" || rollbackTransaction?.state === "ROLLBACK_PENDING") && rollbackTransaction && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										style: {
 											...S.btn,
@@ -3666,9 +3677,9 @@ function WorkersPanel({ ctx }) {
 										},
 										disabled: providerLifecycleBusy !== null,
 										onClick: () => {
-											rollbackHarnessProvider(record, rollbackTransaction.transaction_id);
+											rollbackHarnessProvider(record, rollbackTransaction.transaction_id, rollbackTransaction.state);
 										},
-										children: providerLifecycleBusy === `rollback:${record.id}` ? copy.working : copy.providerRollback
+										children: providerLifecycleBusy === `rollback:${record.id}` ? copy.working : rollbackTransaction.state === "ROLLBACK_PENDING" ? copy.providerRollbackContinue : copy.providerRollback
 									})
 								]
 							}, record.id);

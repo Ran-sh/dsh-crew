@@ -108,7 +108,7 @@ const COPY = {
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
-    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。',
+    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
     credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
@@ -248,7 +248,7 @@ const COPY = {
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
-    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.',
+    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
     credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
@@ -925,8 +925,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     }
   };
 
-  const rollbackHarnessProvider = async (record: any, transactionId: string) => {
-    if (!record || !transactionId || record.desired_state !== 'absent') {
+  const rollbackHarnessProvider = async (record: any, transactionId: string, transactionState: string = 'VERIFIED') => {
+    const continuing = transactionState === 'ROLLBACK_PENDING';
+    if (!record || !transactionId || (!continuing && record.desired_state !== 'absent')) {
       setNotice(copy.providerRollbackUnavailable);
       return;
     }
@@ -935,7 +936,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     setNotice(copy.working);
     try {
       const encoded = encodeURIComponent(record.id);
-      const result = await post(`/providers/${encoded}/rollback`, { transaction_id: transactionId, confirm: true });
+      const result = continuing
+        ? { ok: true, restart_required: true, state: 'ROLLBACK_PENDING' }
+        : await post(`/providers/${encoded}/rollback`, { transaction_id: transactionId, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true && result.state === 'ROLLBACK_PENDING') {
         const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
@@ -1460,7 +1463,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             const unresolved = record.delete_capability === 'source-unresolved';
             const blocked = immutable || unresolved || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
             const lifecycle = record.desired_state === 'absent' ? 'absent' : record.lifecycle?.enabled === false ? 'disabled' : record.lifecycle?.catalogued ? 'catalogued' : 'configured';
-            const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).find((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING'].includes(entry.state));
+            const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING'].includes(entry.state)).at(-1);
             return (
               <div key={record.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' as const }}>
                 <span style={{ fontWeight: 600 }}>{record.display_name || record.id}</span>
@@ -1477,10 +1480,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                     {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}
                   </button>
                 )}
-                {record.desired_state === 'absent' && rollbackTransaction && (
+                {(record.desired_state === 'absent' || rollbackTransaction?.state === 'ROLLBACK_PENDING') && rollbackTransaction && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
-                    onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id); }}>
-                    {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : copy.providerRollback}
+                    onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id, rollbackTransaction.state); }}>
+                    {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : rollbackTransaction.state === 'ROLLBACK_PENDING' ? copy.providerRollbackContinue : copy.providerRollback}
                   </button>
                 )}
               </div>

@@ -1490,7 +1490,7 @@ export async function apply(ctx) {
                 live.harness_default?.provider === plan.replacement_default
                 && live.harness_default?.model === plan.replacement_default_model
               );
-              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.delete_runtime_id_before_restart, getHubRuntimeIdentity().runtime_id);
               if (verification?.providerAbsent !== true || !hasCompleteProviderCatalogEvidence(verification?.catalog_evidence) || verification?.catalogAbsent !== true || verification?.harnessDefault !== true || verification?.runtimeRestarted !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
                 return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
               }
@@ -1517,8 +1517,10 @@ export async function apply(ctx) {
               const plan = hooks.backupPlan();
               if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
               await hooks.rollback(plan);
+              await hooks.setRuntimeBaseline(getHubRuntimeIdentity().runtime_id, 'rollback');
+              const rollbackPlan = hooks.backupPlan() ?? plan;
               try {
-                await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLBACK_PENDING' }, plan);
+                await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLBACK_PENDING' }, rollbackPlan);
               } catch (error) {
                 return sendJson(res, 409, { ok: false, code: boundedMachineCodeFromError(error) ?? 'PROVIDER_LIFECYCLE_RECORD_FAILED' });
               }
@@ -1552,7 +1554,7 @@ export async function apply(ctx) {
                 live.harness_default?.provider === plan.harness_default_before?.provider
                 && live.harness_default?.model === plan.harness_default_before?.model
               );
-              verified.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              verified.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before_restart, getHubRuntimeIdentity().runtime_id);
               if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
@@ -1607,6 +1609,7 @@ export async function apply(ctx) {
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
+              runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
             });
             providerDeletePlans.delete(body.plan_id);
             const { executeProviderDelete } = await import('../provider-lifecycle.mjs');

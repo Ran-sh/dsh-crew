@@ -18,12 +18,13 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
-import { readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
+import { hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
 import {
   readProviderSettingsDeclarations,
   removeProviderSettings,
   readHarnessDefault,
   mutateProviderSettings,
+  hasInlineProviderCredentials as hasInlineSettingsCredentials,
 } from './provider-settings-store.mjs';
 import { scrubProviderReferences } from './provider-config-scrub.mjs';
 import {
@@ -202,7 +203,9 @@ export function createProviderDeleteFileHooks({
   backupDir,
   readConfig = () => defaultReadConfig(configFile),
   writeConfig = (config) => defaultWriteConfig(configFile, config),
+  writeSettings = (content) => atomicWrite(settingsFile, content),
   restart,
+  runtimeIdProvider = null,
   existingBackupId = null,
   expectedProviderId = null,
   fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync },
@@ -268,6 +271,7 @@ export function createProviderDeleteFileHooks({
           locator: typeof plan.harness_default_authority.locator === 'string' ? plan.harness_default_authority.locator.trim() : 'unknown',
         } } : {}),
         ...(typeof plan.runtime_id_before === 'string' && plan.runtime_id_before.trim() ? { runtime_id_before: plan.runtime_id_before.trim().slice(0, 128) } : {}),
+        ...(typeof plan.delete_runtime_id_before_restart === 'string' && plan.delete_runtime_id_before_restart.trim() ? { delete_runtime_id_before_restart: plan.delete_runtime_id_before_restart.trim().slice(0, 128) } : {}),
         declaration_authorities: (Array.isArray(plan.declaration_authorities) ? plan.declaration_authorities : []).map((authority) => ({
           kind: typeof authority?.kind === 'string' ? authority.kind.trim() : 'unknown',
           locator: typeof authority?.locator === 'string' ? authority.locator.trim() : 'unknown',
@@ -293,6 +297,12 @@ export function createProviderDeleteFileHooks({
       const managed = key !== 'profile' || authorityKinds.has('crew-profile');
       manifest.files[key] = { existed, managed };
       if (existed && key !== 'config' && managed) {
+        if (key === 'profile') {
+          const sourceText = fs.readFileSync(source, 'utf8');
+          const credentials = hasInlineProfileCredentials(sourceText, { providerIds: [plan.provider_id] });
+          if (credentials.ok !== true) throw Object.assign(new Error('provider profile credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
+          if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
+        }
         const target = join(root, `${key}.backup`);
         fs.copyFileSync(source, target);
       }
@@ -302,7 +312,13 @@ export function createProviderDeleteFileHooks({
       const existed = fs.existsSync(settingsFile);
       const managed = authorityKinds.has('harness-settings') || managesHarnessDefault;
       manifest.files.settings = { existed, managed };
-      if (existed && managed) fs.copyFileSync(settingsFile, join(root, 'settings.backup'));
+      if (existed && managed) {
+        const sourceText = fs.readFileSync(settingsFile, 'utf8');
+        const credentials = hasInlineSettingsCredentials(sourceText, { providerIds: [plan.provider_id] });
+        if (credentials.ok !== true) throw Object.assign(new Error('provider settings credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
+        if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
+        fs.copyFileSync(settingsFile, join(root, 'settings.backup'));
+      }
     }
     const config = await readConfig();
     const lifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
@@ -365,13 +381,16 @@ export function createProviderDeleteFileHooks({
       };
     }
     await writeConfig(scrubbed.config);
-    if (settingsMutation) {
-      atomicWrite(settingsFile, settingsMutation.text);
-      if (activeBackup) activeBackup.manifest.applied_settings_revision = settingsMutation.revision;
-    }
     if (activeBackup) {
       activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(scrubbed.config));
       persistManifest();
+    }
+    if (settingsMutation) {
+      await writeSettings(settingsMutation.text);
+      if (activeBackup) {
+        activeBackup.manifest.applied_settings_revision = settingsMutation.revision;
+        persistManifest();
+      }
     }
   };
 
@@ -421,6 +440,21 @@ export function createProviderDeleteFileHooks({
   };
 
   const backupPlan = () => (activeBackup?.manifest?.plan ? { ...activeBackup.manifest.plan } : null);
+
+  const setRuntimeBaseline = async (runtimeId, phase) => {
+    if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
+    if (typeof runtimeId !== 'string' || runtimeId.trim() === '') throw Object.assign(new Error('runtime identity is required'), { code: 'PROVIDER_RUNTIME_ID_MISSING' });
+    const key = phase === 'rollback' ? 'rollback_runtime_id_before_restart' : phase === 'delete' ? 'delete_runtime_id_before_restart' : null;
+    if (!key) throw Object.assign(new Error('runtime baseline phase is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+    activeBackup.manifest.plan[key] = runtimeId.trim().slice(0, 128);
+    persistManifest();
+    return { ok: true, phase, runtime_id: activeBackup.manifest.plan[key] };
+  };
+
+  const captureRuntimeBaseline = async (_plan, phase) => {
+    if (typeof runtimeIdProvider !== 'function') return { ok: false, code: 'PROVIDER_RUNTIME_ID_PROVIDER_UNAVAILABLE' };
+    return setRuntimeBaseline(runtimeIdProvider(), phase);
+  };
 
   const verify = async (plan) => {
     const authorityKinds = authorityKindsFor(plan);
@@ -564,6 +598,8 @@ export function createProviderDeleteFileHooks({
     backup,
     acquireLock,
     checkpointApplied,
+    setRuntimeBaseline,
+    ...(typeof runtimeIdProvider === 'function' ? { captureRuntimeBaseline } : {}),
     backupPlan,
     markTombstone,
     scrubReferences,

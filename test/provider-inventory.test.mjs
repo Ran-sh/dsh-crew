@@ -148,3 +148,11 @@ test('malformed authority alongside a valid declaration fails closed for the who
   ] });
   assert.equal(result.records[0].delete_capability, 'source-unresolved');
 });
+
+test('provider credential references aggregate across every declaration authority', () => {
+  const result = buildProviderInventory({ declarations: [
+    { id: 'dual', credential_ref: 'PROFILE_DUAL_KEY', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.dual' } },
+    { id: 'dual', credential_ref: 'SETTINGS_DUAL_KEY', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.dual' } },
+  ] });
+  assert.deepEqual(result.records[0].credential_refs.map((ref) => ref.name_or_handle), ['PROFILE_DUAL_KEY', 'SETTINGS_DUAL_KEY']);
+});

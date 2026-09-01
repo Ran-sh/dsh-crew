@@ -31,6 +31,9 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /catalog_evidence/);
   assert.match(hubSource, /catalogPresent/);
   assert.match(hubSource, /runtime_id_before/);
+  assert.match(hubSource, /delete_runtime_id_before_restart/);
+  assert.match(hubSource, /rollback_runtime_id_before_restart/);
+  assert.match(hubSource, /setRuntimeBaseline/);
   assert.match(hubSource, /runtimeRestarted/);
   assert.match(hubSource, /PROVIDER_CATALOG_INCOMPLETE/);
   assert.match(hubSource, /readHarnessDefault/);

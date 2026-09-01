@@ -17,22 +17,25 @@ function normalizeProviderId(value) {
   return text(value);
 }
 
-function normalizeCredentialRefs(declaration) {
-  const raw = declaration?.credential_refs ?? declaration?.credential_ref;
-  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+function normalizeCredentialRefs(declarations) {
+  const entries = Array.isArray(declarations) ? declarations : [declarations];
   const seen = new Set();
   const refs = [];
-  for (const candidate of values) {
-    const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
-    const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
-    refs.push({
-      kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
-      name_or_handle: name,
-      ownership: ['crew', 'user', 'external', 'unknown'].includes(ownership) ? ownership : 'unknown',
-    });
+  for (const declaration of entries) {
+    const raw = declaration?.credential_refs ?? declaration?.credential_ref;
+    const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    for (const candidate of values) {
+      const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
+      const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
+      refs.push({
+        kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
+        name_or_handle: name,
+        ownership: ['crew', 'user', 'external', 'unknown'].includes(ownership) ? ownership : 'unknown',
+      });
+    }
   }
   return refs;
 }
@@ -139,7 +142,7 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         enabled: !tombstoned && declaration?.enabled !== false,
         catalogued,
       },
-      credential_refs: normalizeCredentialRefs(declaration),
+      credential_refs: normalizeCredentialRefs(providerDeclarations),
       references: {
         harness_default: harnessDefault === id,
         ...(harnessDefault === id && normalizeAuthority(catalog?.harness_default_authority) ? { harness_default_authority: normalizeAuthority(catalog.harness_default_authority) } : {}),

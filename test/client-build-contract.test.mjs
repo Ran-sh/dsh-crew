@@ -84,6 +84,8 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /deepseek-official/);
   assert.match(panelSource, /providerDeletePending/);
   assert.match(panelSource, /await refreshProviderInventory\(\)/);
+  assert.match(panelSource, /ROLLBACK_PENDING/);
+  assert.match(panelSource, /filter\(\(entry: any\) => entry\.provider_id === record\.id/);
   assert.match(panelSource, /Harness Providers|Harness Provider/);
   assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });

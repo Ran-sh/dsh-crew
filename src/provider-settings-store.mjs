@@ -78,6 +78,16 @@ function parseProviderMap(source) {
   return { ok: true, lines, llmStart, blockEnd, providersLine, providersBlockEnd, entries };
 }
 
+const INLINE_CREDENTIAL_FIELD = /^\s+(?:apiKey|api_key|token|accessToken|refreshToken|secret|password):\s*\S.*$/iu;
+
+export function hasInlineProviderCredentials(source, { providerIds = [] } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const requested = providerIds.length > 0 ? new Set(providerIds) : null;
+  const providers = parsed.entries.filter((entry) => !requested || requested.has(entry.id));
+  return { ok: true, inline: providers.some((entry) => parsed.lines.slice(entry.start, entry.end).some((line) => INLINE_CREDENTIAL_FIELD.test(line))) };
+}
+
 export function inspectProviderSettings(source) {
   const revision = typeof source === 'string' ? sha256(source) : null;
   const parsed = parseProviderMap(source);

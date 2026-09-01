@@ -179,6 +179,10 @@ export async function executeProviderDelete(plan, hooks = {}, { deferRestart = f
     await hooks.markTombstone(plan.provider_id, 'absent', plan);
     await hooks.scrubReferences(plan);
     await hooks.removeDeclarations(plan);
+    if (typeof hooks.captureRuntimeBaseline === 'function') {
+      const captured = await hooks.captureRuntimeBaseline(plan, 'delete');
+      if (captured?.ok === false) throw Object.assign(new Error('provider runtime baseline unavailable'), { code: captured.code });
+    }
     transition('APPLIED');
     transition('RESTART_PENDING');
     if (!deferRestart) {

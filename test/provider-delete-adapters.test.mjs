@@ -163,9 +163,10 @@ test('deferred delete audit remains rollbackable after reopening the transaction
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
   const plan = planFor(paths.profileFile);
-  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, runtimeIdProvider: () => 'runtime-delete-after-mutation', restart: async () => ({ ok: true }) });
   const applied = await executeProviderDelete(plan, first, { deferRestart: true });
   assert.equal(applied.state, 'RESTART_PENDING');
+  assert.equal(first.backupPlan().delete_runtime_id_before_restart, 'runtime-delete-after-mutation');
   const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id, restart: async () => ({ ok: true }) });
   await reopened.acquireLock();
   const reopenedPlan = reopened.backupPlan();
@@ -173,6 +174,54 @@ test('deferred delete audit remains rollbackable after reopening the transaction
   const verified = await reopened.verifyRollback(reopenedPlan);
   await reopened.release();
   assert.equal(verified.ok, true);
+});
+
+test('provider source backups fail closed on inline credential values', async () => {
+  const paths = fixture();
+  const unsafeProfile = PROFILE.replace('apiKeyEnv: OPENCODE_GO_API_KEY', 'apiKey: PROFILE_SECRET');
+  writeFileSync(paths.profileFile, unsafeProfile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('PROFILE_SECRET'), true);
+});
+
+test('transaction stores an independent rollback runtime baseline', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const plan = { ...planFor(paths.profileFile), delete_runtime_id_before_restart: 'runtime-delete-before' };
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await hooks.backup(plan);
+  await hooks.setRuntimeBaseline('runtime-rollback-before', 'rollback');
+  assert.equal(hooks.backupPlan().rollback_runtime_id_before_restart, 'runtime-rollback-before');
+  await hooks.release();
+});
+
+test('cross-file write failure checkpoints config before compensating rollback', async () => {
+  const paths = fixture();
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
+  const originalConfig = readFileSync(paths.configFile, 'utf8');
+  const originalSettings = readFileSync(paths.settingsFile, 'utf8');
+  const inventory = structuredClone(INVENTORY);
+  inventory.records[0].references.harness_default = true;
+  inventory.records[0].declaration_authorities = [
+    { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+    { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' },
+  ];
+  inventory.records[1].references.harness_default = false;
+  inventory.harness_default = { provider: 'opencode-go', model: 'mimo-v2.5' };
+  const expectedProfile = inspectProviderProfile(PROFILE).revision;
+  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision: expectedProfile, expectedRevisions: { profile: expectedProfile, settings: expectedSettings } }).plan;
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), writeSettings: () => { throw Object.assign(new Error('settings write failed'), { code: 'PROVIDER_SETTINGS_WRITE_FAILED' }); }, restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.rollback_attempted, true);
+  assert.equal(readFileSync(paths.configFile, 'utf8'), originalConfig);
+  assert.equal(readFileSync(paths.settingsFile, 'utf8'), originalSettings);
+  assert.deepEqual(JSON.parse(readFileSync(paths.lifecycleFile, 'utf8')).tombstones, {});
 });
 
 test('file adapters fail closed on malformed managed JSON', async () => {

@@ -104,6 +104,16 @@ function scalarField(lines, entry, field) {
   return null;
 }
 
+const INLINE_CREDENTIAL_FIELD = /^\s+(?:apiKey|api_key|token|accessToken|refreshToken|secret|password):\s*\S.*$/iu;
+
+export function hasInlineProviderCredentials(source, { providerIds = [] } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const requested = providerIds.length > 0 ? new Set(providerIds) : null;
+  const providers = parsed.entries.filter((entry) => !requested || requested.has(entry.id));
+  return { ok: true, inline: providers.some((entry) => parsed.lines.slice(entry.start, entry.end).some((line) => INLINE_CREDENTIAL_FIELD.test(line))) };
+}
+
 /** Return profile provider provenance and credential reference names only. */
 export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) {
   const parsed = parseProviderMap(source);
