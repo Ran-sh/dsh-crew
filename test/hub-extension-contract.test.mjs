@@ -10,7 +10,7 @@ import { join } from 'node:path';
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
 
 test('Hub advertises the extension, profile, context, evidence and event surfaces', () => {
-  for (const capability of ['canonical-events', 'evidence', 'profiles', 'workspace-context', 'extension-contract', 'provider-inventory', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1', 'credential-reference-inventory-v1', 'credential-purge-v1', 'runtime-provenance-v1']) {
+  for (const capability of ['canonical-events', 'evidence', 'profiles', 'workspace-context', 'extension-contract', 'provider-inventory', 'provider-layer-migration-v1', 'provider-lifecycle-v1', 'provider-health-v1', 'provider-probe-stream-v1', 'credential-reference-inventory-v1', 'credential-purge-v1', 'runtime-provenance-v1']) {
     assert.ok(HUB_CAPABILITIES.includes(capability), capability);
   }
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/extension`/);
@@ -18,6 +18,9 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/workspaces`/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/providers`/);
   assert.match(hubSource, /migration-status/);
+  assert.match(hubSource, /migrate-plan/);
+  assert.match(hubSource, /verify-migration/);
+  assert.match(hubSource, /executeProviderLayerMigration/);
   assert.match(hubSource, /buildProviderLayerMigrationPlan/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/credential-references`/);
   assert.match(hubSource, /purge-plan/);

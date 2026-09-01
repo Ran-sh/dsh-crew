@@ -17,7 +17,7 @@ function scalarField(lines, entry, field) {
     if (!match) continue;
     const value = match[1].trim();
     if (!value) return null;
-    return value.replace(/^(?:"([\\s\\S]*)"|'([\\s\\S]*)')$/u, '$1$2');
+    return value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, '$1$2');
   }
   return null;
 }
@@ -137,6 +137,54 @@ export function readHarnessDefault(source) {
   const parsed = parseDefaultModel(source);
   if (!parsed.ok) return { ok: false, code: parsed.code };
   return { ok: true, provider: parsed.provider, model: parsed.model, locator: 'agent-default-model' };
+}
+
+function yamlScalar(value, max = 2048) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\r\n]/u.test(value)) return null;
+  return JSON.stringify(value.trim());
+}
+
+/**
+ * Add one already-sanitized provider projection to the Harness user layer.
+ * The operation is pure and revision-bound; callers perform the atomic write.
+ */
+export function addProviderSettings(source, { provider, expectedRevision } = {}) {
+  const currentRevision = typeof source === 'string' ? sha256(source) : null;
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) return { ok: false, code: 'PROVIDER_SETTINGS_CHANGED', revision: currentRevision };
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider) || typeof provider.id !== 'string' || !PROVIDER_ID.test(provider.id)) {
+    return { ok: false, code: 'PROVIDER_MATERIALIZATION_INVALID', revision: currentRevision };
+  }
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code, revision: currentRevision };
+  if (parsed.entries.some((entry) => entry.id === provider.id)) return { ok: false, code: 'PROVIDER_SETTINGS_PROVIDER_EXISTS', revision: currentRevision };
+  const displayName = yamlScalar(provider.display_name ?? provider.id, 256);
+  if (!displayName) return { ok: false, code: 'PROVIDER_MATERIALIZATION_INVALID', revision: currentRevision };
+  const lines = [`    ${provider.id}:`, `      displayName: ${displayName}`];
+  const api = yamlScalar(provider.api, 128);
+  const baseUrl = yamlScalar(provider.base_url, 2048);
+  const credential = provider.credential_ref ? classifyCredentialReference(provider.credential_ref, { kind: 'env' }).value : null;
+  if (provider.credential_ref && !credential) return { ok: false, code: 'PROVIDER_CREDENTIAL_REFERENCE_UNSAFE', revision: currentRevision };
+  if (api) lines.push(`      api: ${api}`);
+  if (baseUrl) lines.push(`      baseURL: ${baseUrl}`);
+  if (credential) lines.push(`      apiKeyEnv: ${credential}`);
+  const models = Array.isArray(provider.models) ? provider.models.filter((model) => model && typeof model.id === 'string' && model.id.trim() && model.id.length <= 256).slice(0, 256) : [];
+  if (models.length > 0) {
+    lines.push('      models:');
+    for (const model of models) {
+      const id = yamlScalar(model.id, 256);
+      if (!id) continue;
+      lines.push(`        - id: ${id}`);
+      const name = yamlScalar(model.name, 256);
+      if (name) lines.push(`          name: ${name}`);
+    }
+  }
+  const nextLines = [...parsed.lines];
+  const insertAt = parsed.blockEnd;
+  if (/^ {2}providers:\s*\{\s*\}\s*$/u.test(nextLines[parsed.providersLine])) nextLines[parsed.providersLine] = '  providers:';
+  nextLines.splice(insertAt, 0, ...lines);
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = nextLines.join(newline);
+  return { ok: true, text, added: provider.id, revision: sha256(text) };
 }
 
 export function replaceHarnessDefault(source, { provider, model, expectedRevision } = {}) {

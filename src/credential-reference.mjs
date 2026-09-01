@@ -24,7 +24,7 @@ export function classifyCredentialReference(value, { kind = 'env' } = {}) {
   if (!raw) return { present: false, value: null, redacted: false };
   const normalizedKind = typeof kind === 'string' ? kind.trim().toLowerCase() : 'env';
   const valid = normalizedKind === 'env'
-    ? ENV_REFERENCE.test(raw)
+    ? ENV_REFERENCE.test(raw) && !SECRET_LIKE.test(raw) && !EMBEDDED_SECRET.test(raw)
     : HANDLE_REFERENCE.test(raw) && !SECRET_LIKE.test(raw) && !EMBEDDED_SECRET.test(raw);
   return { present: true, value: valid ? raw : null, redacted: !valid };
 }

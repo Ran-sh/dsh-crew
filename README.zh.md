@@ -45,6 +45,9 @@ dsh-crew inspect          # 实时能力与就绪度
 dsh-crew jobs list        # 任务与 Result Contract
 dsh-crew providers list   # 3210 Harness Provider 清单（不含密钥）
 dsh-crew providers migration-status # 检查旧 profile Provider，不会自动迁移
+dsh-crew providers migrate-plan <provider>
+dsh-crew providers migrate <provider> --plan <id> --confirm # 写入用户层，重启 3210 并验证
+dsh-crew providers rollback-migration <provider> --plan <id> --confirm
 dsh-crew providers probe <provider-id>
 curl http://127.0.0.1:3210/_dsh/dsh-crew/credential-references  # 仅查看引用/孤儿报告
 dsh-crew credentials list  # 不含密钥值的引用清单

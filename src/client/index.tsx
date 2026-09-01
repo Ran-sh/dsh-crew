@@ -106,7 +106,7 @@ const COPY = {
     harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
-    providerLayerMigration: '检测到旧版 profile Provider', providerLayerMigrationHint: '这些 Provider 仍在 Crew profile/base 层，所以 3210 原生页面不会显示删除。请先按迁移计划提升到 Harness 用户设置层；不会复制密钥。', providerLayerMigrationPlan: '迁移计划',
+    providerLayerMigration: '检测到旧版 profile Provider', providerLayerMigrationHint: '这些 Provider 仍在 Crew profile/base 层，所以 3210 原生页面不会显示删除。请先按迁移计划提升到 Harness 用户设置层；不会复制密钥。', providerLayerMigrationPlan: '迁移计划', providerLayerMigrate: '迁移到用户层', providerLayerMigrating: '迁移中…', providerLayerMigrationConfirm: '确认把这个 Provider 移到 Harness 用户设置层？会先保存可回滚快照，不会复制密钥值。', providerLayerRollback: '回滚迁移',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证', recoveryUnresolved: '发现不可自动恢复的事务', recoveryStorage: '存储项', recoveryQuarantine: '隔离', recoveryQuarantineConfirm: '该事务清单无法安全恢复。将其移入隔离区并阻止自动使用，继续？',
@@ -247,7 +247,7 @@ const COPY = {
     harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
-    providerLayerMigration: 'Legacy profile Providers detected', providerLayerMigrationHint: 'These Providers still exist in the Crew profile/base layer, so the native 3210 page cannot show Delete. Promote them to Harness user settings with an explicit plan; keys are never copied.', providerLayerMigrationPlan: 'Migration plan',
+    providerLayerMigration: 'Legacy profile Providers detected', providerLayerMigrationHint: 'These Providers still exist in the Crew profile/base layer, so the native 3210 page cannot show Delete. Promote them to Harness user settings with an explicit plan; keys are never copied.', providerLayerMigrationPlan: 'Migration plan', providerLayerMigrate: 'Migrate to user layer', providerLayerMigrating: 'Migrating…', providerLayerMigrationConfirm: 'Move this Provider into Harness user settings? A rollback snapshot is saved first; credential values are never copied.', providerLayerRollback: 'Rollback migration',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification', recoveryUnresolved: 'An unrecoverable recovery transaction is blocking deletion', recoveryStorage: 'storage entry', recoveryQuarantine: 'Quarantine', recoveryQuarantineConfirm: 'This recovery manifest cannot be safely reopened. Move it into the quarantine area and keep it out of automatic recovery?',
@@ -927,6 +927,65 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     }
   };
 
+  const migrateHarnessProvider = async (entry: any) => {
+    if (!entry || !['promote-existing-user', 'materialize-user'].includes(entry.action)) {
+      setNotice(entry?.blocked_reason ?? copy.providerLayerMigrationHint);
+      return;
+    }
+    if (!window.confirm(copy.providerLayerMigrationConfirm)) return;
+    const id = String(entry.provider_id ?? '');
+    if (!id) return;
+    setProviderLifecycleBusy(`migrate:${id}`);
+    setNotice(copy.providerLayerMigrating);
+    try {
+      const encoded = encodeURIComponent(id);
+      const planned = await post(`/providers/${encoded}/migrate-plan`, {});
+      if (!planned.ok || !planned.plan) throw new Error(planned.code ?? copy.providerLifecycleError);
+      if (!window.confirm(`${copy.providerLayerMigrationConfirm}\n\n${id}`)) return;
+      const result = await post(`/providers/${encoded}/migrate`, { plan_id: planned.plan.plan_id, confirm: true });
+      if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      if (result.restart_required === true && result.result?.state === 'RESTART_PENDING') {
+        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
+        const restarted = await readJson(await fetch(restartPath, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
+        }), restartPath);
+        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        const verified = await post(`/providers/${encoded}/verify-migration`, { transaction_id: planned.plan.plan_id, confirm: true });
+        if (!verified.ok || verified.state !== 'VERIFIED') throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
+      }
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      try { await refreshProviderInventory(); } catch { /* preserve the original migration error */ }
+      setNotice(String(error?.message ?? error));
+    } finally {
+      setProviderLifecycleBusy(null);
+    }
+  };
+
+  const rollbackHarnessMigration = async (record: any, transactionId: string) => {
+    if (!record?.id || !transactionId || !window.confirm(copy.providerRollbackConfirm)) return;
+    setProviderLifecycleBusy(`rollback-migrate:${record.id}`);
+    setNotice(copy.working);
+    try {
+      const encoded = encodeURIComponent(record.id);
+      const result = await post(`/providers/${encoded}/rollback-migration`, { transaction_id: transactionId, confirm: true });
+      if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      if (result.restart_required === true) {
+        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
+        const restarted = await readJson(await fetch(restartPath, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
+        }), restartPath);
+        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+      }
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      setNotice(String(error?.message ?? error));
+      try { await refreshProviderInventory(); } catch { /* preserve the original rollback error */ }
+    } finally { setProviderLifecycleBusy(null); }
+  };
+
   const rollbackHarnessProvider = async (record: any, transactionId: string, transactionState: string = 'VERIFIED') => {
     const continuing = ['ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING'].includes(transactionState);
     const recoverable = ['PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_APPLYING', 'ROLLBACK_RESTORED'].includes(transactionState);
@@ -1483,8 +1542,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               <div style={{ fontSize: 11.5, opacity: 0.7, marginTop: 3 }}>{copy.providerLayerMigrationHint}</div>
               <div style={{ fontSize: 11, marginTop: 6, fontFamily: 'monospace' }}>
                 {(providerInventory.migration.providers ?? []).map((entry: any) => (
-                  <div key={entry.provider_id}>
+                  <div key={entry.provider_id} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
                     {entry.provider_id} · {entry.action}{entry.harness_default ? ' · Harness Default' : ''}
+                    <span style={{ flex: 1 }} />
+                    {['promote-existing-user', 'materialize-user'].includes(entry.action) && <button type="button" style={{ ...S.btn, padding: '2px 7px' }} disabled={providerLifecycleBusy !== null}
+                      onClick={() => { void migrateHarnessProvider(entry); }}>
+                      {providerLifecycleBusy === `migrate:${entry.provider_id}` ? copy.providerLayerMigrating : copy.providerLayerMigrate}
+                    </button>}
                   </div>
                 ))}
               </div>
@@ -1504,7 +1568,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             const lifecycleTransactions = providerInventory?.lifecycle_transactions ?? [];
             const recoveryTransactions = (providerInventory?.recovery_transactions ?? []).map((entry: any) => ({ ...entry, state: entry.phase }));
             const rollbackTransaction = [...lifecycleTransactions, ...recoveryTransactions]
-              .filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING', 'PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(entry.state))
+              .filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING', 'PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING', 'PREPARED', 'USER_MATERIALIZED', 'BASE_REMOVED'].includes(entry.state))
               .sort((a: any, b: any) => String(a.updated_at ?? '').localeCompare(String(b.updated_at ?? ''))).at(-1);
             return (
               <div key={record.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' as const }}>
@@ -1522,10 +1586,16 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                     {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}
                   </button>
                 )}
-                {(record.desired_state === 'absent' || ['PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(rollbackTransaction?.state)) && rollbackTransaction && (
+                {(record.desired_state === 'absent' || ['PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(rollbackTransaction?.state)) && rollbackTransaction && rollbackTransaction.source !== 'provider-layer-migration' && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
                     onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id, rollbackTransaction.state); }}>
                     {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : rollbackTransaction.state === 'ROLLBACK_PENDING' ? copy.providerRollbackContinue : copy.providerRollback}
+                  </button>
+                )}
+                {rollbackTransaction?.source === 'provider-layer-migration' && rollbackTransaction.transaction_id && (
+                  <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
+                    onClick={() => { void rollbackHarnessMigration(record, rollbackTransaction.transaction_id); }}>
+                    {providerLifecycleBusy === `rollback-migrate:${record.id}` ? copy.working : copy.providerLayerRollback}
                   </button>
                 )}
               </div>

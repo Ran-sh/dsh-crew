@@ -45,12 +45,14 @@ test('readProviderDeclarations returns provenance and credential references only
 });
 
 test('profile credential values are redacted while presence remains visible', () => {
-  const source = PROFILE.replace('apiKeyEnv: OPENCODE_GO_API_KEY', 'apiKeyEnv: sk-live-secret');
-  const result = readProviderDeclarations(source);
-  const declaration = result.declarations.find((entry) => entry.id === 'opencode-go');
-  assert.equal(declaration.credential_ref, undefined);
-  assert.equal(declaration.credential_status, 'present-redacted');
-  assert.equal(JSON.stringify(result).includes('sk-live-secret'), false);
+  for (const value of ['sk-live-secret', 'secret_LIVE123', 'token_ABC123', 'sk_live_ABC123']) {
+    const source = PROFILE.replace('apiKeyEnv: OPENCODE_GO_API_KEY', `apiKeyEnv: ${value}`);
+    const result = readProviderDeclarations(source);
+    const declaration = result.declarations.find((entry) => entry.id === 'opencode-go');
+    assert.equal(declaration.credential_ref, undefined, value);
+    assert.equal(declaration.credential_status, 'present-redacted', value);
+    assert.equal(JSON.stringify(result).includes(value), false, value);
+  }
 });
 
 test('provider declarations carry an explicit mutation authority locator', () => {

@@ -996,6 +996,25 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   );
 });
 
+test('providers CLI exposes explicit layer migration actions on 3210', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push([url, init]);
+    if (url.endsWith('/runtime')) return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['provider-inventory', 'provider-layer-migration-v1'] }),
+    };
+    return { ok: true, json: async () => ({ ok: true, plan: { plan_id: 'migration-1' }, restart_required: true, result: { state: 'RESTART_PENDING' } }) };
+  };
+  const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
+  await npxProviders({ ...common, args: ['migrate-plan', 'custom'] });
+  assert.match(calls.at(-1)[0], /providers\/custom\/migrate-plan$/);
+  await npxProviders({ ...common, args: ['migrate', 'custom'], planId: 'migration-1', confirm: true });
+  assert.equal(calls.some(([url]) => url.endsWith('/providers/custom/migrate')), true);
+  assert.equal(calls.some(([url]) => url.includes('3080/_dsh/dsh-crew/supervisor/restart')), true);
+});
+
 test('providers CLI fails closed before mutation when the 3210 capability handshake is incomplete', async () => {
   const calls = [];
   const fetchImpl = async (url) => {

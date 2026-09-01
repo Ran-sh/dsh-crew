@@ -79,6 +79,9 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /delete-plan/);
   assert.match(panelSource, /supervisor\/restart/);
   assert.match(panelSource, /verify-delete/);
+  assert.match(panelSource, /migrate-plan/);
+  assert.match(panelSource, /verify-migration/);
+  assert.match(panelSource, /rollback-migration/);
   assert.match(panelSource, /delete_capability/);
   assert.doesNotMatch(panelSource, /ownership === ['"]harness['"]|ownership !== ['"]harness['"]/);
   assert.match(panelSource, /deepseek-official/);
@@ -101,6 +104,7 @@ test('provider lifecycle UI exposes rollback from backend transaction state', ()
   assert.match(panelSource, /lifecycle_transactions/);
   assert.match(panelSource, /verify-rollback/);
   assert.match(panelSource, /providerRollback|rollbackProvider/);
+  assert.match(panelSource, /rollbackHarnessMigration/);
 });
 
 test('credential lifecycle UI keeps purge separate from provider deletion', () => {

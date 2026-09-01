@@ -37,6 +37,7 @@ export const HUB_CAPABILITIES = Object.freeze([
   'workspace-context',
   'extension-contract',
   'provider-inventory',
+  'provider-layer-migration-v1',
   'provider-lifecycle-v1',
   'provider-health-v1',
   'provider-probe-stream-v1',

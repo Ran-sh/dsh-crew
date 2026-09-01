@@ -99,7 +99,7 @@ function scalarField(lines, entry, field) {
     if (!match) continue;
     const value = match[1].trim();
     if (!value) return null;
-    return value.replace(/^(?:"([\\s\\S]*)"|'([\\s\\S]*)')$/, '$1$2');
+    return value.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, '$1$2');
   }
   return null;
 }
@@ -147,6 +147,124 @@ export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) 
     };
   });
   return { ok: true, declarations };
+}
+
+function unquoteScalar(value) {
+  return typeof value === 'string'
+    ? value.trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, '$1$2')
+    : null;
+}
+
+function providerModels(lines, entry) {
+  const modelsLine = lines.findIndex((line, index) => index >= entry.start && index < entry.end && /^\s+models:\s*$/u.test(line));
+  if (modelsLine < 0) return [];
+  const modelsIndent = (lines[modelsLine].match(/^\s*/u) ?? [''])[0].length;
+  const models = [];
+  for (let index = modelsLine + 1; index < entry.end; index += 1) {
+    const line = lines[index];
+    if (!nonBlank(line)) continue;
+    const indent = indentOf(line);
+    if (indent <= modelsIndent) break;
+    const match = line.match(/^\s*-\s+id:\s*(.*?)\s*$/u);
+    if (!match) continue;
+    const id = unquoteScalar(match[1]);
+    if (!id || id.length > 256 || /[\r\n]/u.test(id)) continue;
+    let name = null;
+    for (let child = index + 1; child < entry.end; child += 1) {
+      const childLine = lines[child];
+      if (!nonBlank(childLine)) continue;
+      const childIndent = indentOf(childLine);
+      if (childIndent <= modelsIndent || /^\s*-\s+id:\s*/u.test(childLine)) break;
+      const nameMatch = childLine.match(/^\s+name:\s*(.*?)\s*$/u);
+      if (nameMatch) { name = unquoteScalar(nameMatch[1]); break; }
+    }
+    models.push({ id, ...(name && name.length <= 256 && !/[\r\n]/u.test(name) ? { name } : {}) });
+  }
+  return models.slice(0, 256);
+}
+
+/**
+ * Return the bounded, non-secret fields needed to materialize one profile
+ * provider in Harness settings. This is read-only and intentionally separate
+ * from readProviderDeclarations so existing provenance consumers stay stable.
+ */
+export function readProviderMaterialization(source, { providerId, file = 'profile.yml' } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const entry = parsed.entries.find((candidate) => candidate.id === providerId);
+  if (!entry) return { ok: false, code: 'PROVIDER_NOT_FOUND' };
+  const credentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+  const credential = classifyCredentialReference(credentialRef, { kind: 'env' });
+  if (credential.redacted) return { ok: false, code: 'PROVIDER_CREDENTIAL_REFERENCE_UNSAFE' };
+  const readBounded = (field, max = 2048) => {
+    const value = scalarField(parsed.lines, entry, field);
+    return value && value.length <= max && !/[\r\n]/u.test(value) ? value : null;
+  };
+  const baseUrl = readBounded('baseURL');
+  if (baseUrl) {
+    try {
+      const parsedUrl = new URL(baseUrl);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash || /[?#]/u.test(baseUrl) || !parsedUrl.hostname) {
+        return { ok: false, code: 'PROVIDER_BASE_URL_UNSAFE' };
+      }
+    } catch { return { ok: false, code: 'PROVIDER_BASE_URL_UNSAFE' }; }
+  }
+  const provider = {
+    id: entry.id,
+    display_name: readBounded('displayName', 256) ?? entry.id,
+    ...(credential.value ? { credential_ref: credential.value } : {}),
+    ...(readBounded('api', 128) ? { api: readBounded('api', 128) } : {}),
+    ...(baseUrl ? { base_url: baseUrl } : {}),
+    models: providerModels(parsed.lines, entry),
+    source_file: file,
+  };
+  return { ok: true, provider };
+}
+
+function yamlScalar(value, max = 2048) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\r\n]/u.test(value)) return null;
+  return JSON.stringify(value.trim());
+}
+
+/** Re-add one safe provider projection during an explicit migration rollback. */
+export function addProviderDeclaration(source, { provider, expectedRevision } = {}) {
+  const currentRevision = typeof source === 'string' ? sha256(source) : null;
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) return { ok: false, code: 'PROVIDER_PROFILE_CHANGED', revision: currentRevision };
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider) || !PROVIDER_ID.test(provider.id ?? '')) return { ok: false, code: 'PROVIDER_MATERIALIZATION_INVALID', revision: currentRevision };
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code, revision: currentRevision };
+  if (parsed.entries.some((entry) => entry.id === provider.id)) return { ok: false, code: 'PROVIDER_PROFILE_PROVIDER_EXISTS', revision: currentRevision };
+  const displayName = yamlScalar(provider.display_name ?? provider.id, 256);
+  if (!displayName) return { ok: false, code: 'PROVIDER_MATERIALIZATION_INVALID', revision: currentRevision };
+  const providerIndent = indentOf(parsed.lines[parsed.providersLine]) + 2;
+  const fieldIndent = providerIndent + 2;
+  const lines = [`${' '.repeat(providerIndent)}${provider.id}:`, `${' '.repeat(fieldIndent)}displayName: ${displayName}`];
+  const api = yamlScalar(provider.api, 128);
+  const baseUrl = yamlScalar(provider.base_url, 2048);
+  const credential = provider.credential_ref ? classifyCredentialReference(provider.credential_ref, { kind: 'env' }).value : null;
+  if (provider.credential_ref && !credential) return { ok: false, code: 'PROVIDER_CREDENTIAL_REFERENCE_UNSAFE', revision: currentRevision };
+  if (api) lines.push(`${' '.repeat(fieldIndent)}api: ${api}`);
+  if (baseUrl) lines.push(`${' '.repeat(fieldIndent)}baseURL: ${baseUrl}`);
+  if (credential) lines.push(`${' '.repeat(fieldIndent)}apiKeyEnv: ${credential}`);
+  const models = Array.isArray(provider.models) ? provider.models.filter((model) => model && typeof model.id === 'string' && model.id.trim() && model.id.length <= 256).slice(0, 256) : [];
+  if (models.length > 0) {
+    lines.push(`${' '.repeat(fieldIndent)}models:`);
+    for (const model of models) {
+      const id = yamlScalar(model.id, 256);
+      if (!id) continue;
+      lines.push(`${' '.repeat(fieldIndent + 2)}- id: ${id}`);
+      const name = yamlScalar(model.name, 256);
+      if (name) lines.push(`${' '.repeat(fieldIndent + 4)}name: ${name}`);
+    }
+  }
+  const nextLines = [...parsed.lines];
+  if (/^\s+providers:\s*\{\s*\}\s*$/u.test(nextLines[parsed.providersLine])) {
+    nextLines[parsed.providersLine] = `${' '.repeat(indentOf(nextLines[parsed.providersLine]))}providers:`;
+  }
+  nextLines.splice(parsed.blockEnd, 0, ...lines);
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = nextLines.join(newline);
+  return { ok: true, text, added: provider.id, revision: sha256(text) };
 }
 
 /**

@@ -34,8 +34,8 @@ import { buildHubExecutionRows } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
-import { buildProviderLayerMigrationPlan } from '../provider-layer-migration.mjs';
-import { inspectProviderProfile, readProviderDeclarations } from '../provider-profile-store.mjs';
+import { buildProviderLayerMigrationPlan, executeProviderLayerMigration } from '../provider-layer-migration.mjs';
+import { inspectProviderProfile, readProviderDeclarations, readProviderMaterialization } from '../provider-profile-store.mjs';
 import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
@@ -46,6 +46,7 @@ import { executeCredentialPurge, planCredentialPurge } from '../credential-lifec
 import { createCredentialPurgeFileHooks } from '../credential-purge-adapters.mjs';
 import { normalizeCredentialPurgeState, recordCredentialPurgeOutcome } from '../credential-purge-state.mjs';
 import { buildRuntimeReadinessSnapshot } from '../runtime-readiness-snapshot.mjs';
+import { createProviderLayerMigrationFileHooks, readProviderLayerMigrationTransactions } from '../provider-layer-migration-adapters.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
 // here is safe for the profile-realm discipline: it never pulls in package
@@ -332,7 +333,10 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   }
   const lifecycleEvidence = readProviderLifecycleStateStatus();
   const lifecycle = lifecycleEvidence.state;
-  const recoveryTransactions = readProviderRecoveryTransactions();
+  const recoveryTransactions = [
+    ...readProviderRecoveryTransactions(),
+    ...readProviderLayerMigrationTransactions(join(CONFIG_DIR, 'provider-migration-backups')),
+  ];
   const credentialPurge = readCredentialPurgeState();
   const inventory = buildProviderInventory({
     catalog,
@@ -361,6 +365,9 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     routingReferences,
     tombstones: lifecycle.tombstones,
     recoveryTransactions,
+    catalogEvidence,
+    declarationEvidence,
+    lifecycleEvidence,
   });
   return {
     ...inventory,
@@ -1227,10 +1234,16 @@ export async function apply(ctx) {
   const disposers = [];
   const PROVIDER_DELETE_PLAN_TTL_MS = 10 * 60 * 1000;
   const providerDeletePlans = new Map();
+  const providerMigrationPlans = new Map();
+  const providerMigrationOwners = new Map();
   const credentialPurgePlans = new Map();
   const rememberProviderDeletePlan = (plan) => {
     providerDeletePlans.set(plan.plan_id, { plan, created_at: Date.now() });
     while (providerDeletePlans.size > 32) providerDeletePlans.delete(providerDeletePlans.keys().next().value);
+  };
+  const rememberProviderMigrationPlan = (plan) => {
+    providerMigrationPlans.set(plan.plan_id, { plan, created_at: Date.now() });
+    while (providerMigrationPlans.size > 32) providerMigrationPlans.delete(providerMigrationPlans.keys().next().value);
   };
   const rememberCredentialPurgePlan = (plan) => {
     credentialPurgePlans.set(plan.plan_id, { plan, created_at: Date.now() });
@@ -1662,10 +1675,27 @@ export async function apply(ctx) {
             const actionId = typeof body?.action_id === 'string' && RECOVERY_ACTION_PATTERN.test(body.action_id)
               ? body.action_id : null;
             if (!actionId) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_PLAN_INVALID' });
-            const recovery = readProviderRecoveryTransactions().find((entry) => entry.action_id === actionId);
+            const recovery = [
+              ...readProviderRecoveryTransactions(),
+              ...readProviderLayerMigrationTransactions(join(CONFIG_DIR, 'provider-migration-backups')),
+            ].find((entry) => entry.action_id === actionId);
             if (!recovery) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
             if (recovery.recoverable === true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_RECOVERABLE' });
             if (typeof recovery.storage_id !== 'string') return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED' });
+            if (recovery.source === 'provider-layer-migration') {
+              try {
+                const migrationHooks = createProviderLayerMigrationFileHooks({
+                  profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+                  settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+                  backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+                });
+                const quarantined = await migrationHooks.quarantine(actionId);
+                return sendJson(res, 200, { ...quarantined, transaction_id: recovery.transaction_id ?? null });
+              } catch (error) {
+                const code = boundedMachineCodeFromError(error) ?? 'PROVIDER_MIGRATION_RECOVERY_QUARANTINE_FAILED';
+                return sendJson(res, 409, { ok: false, code });
+              }
+            }
             try {
               const hooks = createProviderDeleteFileHooks({
                 profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
@@ -1689,6 +1719,148 @@ export async function apply(ctx) {
           }
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'migrate-plan') {
+            if (!hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
+            if (!hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_SOURCE_UNRESOLVED' });
+            if (!hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
+            if (hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+            const entry = inventory.migration.providers.find((candidate) => candidate.provider_id === providerId);
+            if (!entry) return sendJson(res, 404, { ok: false, code: 'PROVIDER_MIGRATION_NOT_REQUIRED' });
+            if (entry.action === 'blocked' || entry.action === 'collision-review') return sendJson(res, 409, { ok: false, code: entry.blocked_reason ?? 'PROVIDER_MIGRATION_BLOCKED' });
+            const revisions = readProviderSourceRevisions();
+            if (!revisions.profile.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? 'PROVIDER_PROFILE_CHANGED' });
+            if (entry.action === 'promote-existing-user' && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.settings.code ?? 'PROVIDER_SETTINGS_CHANGED' });
+            const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
+            const parsedMaterialization = readProviderMaterialization(readFileSync(profileFile, 'utf8'), { providerId, file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
+            if (!parsedMaterialization.ok) return sendJson(res, 409, { ok: false, code: parsedMaterialization.code });
+            const materialization = parsedMaterialization.provider;
+            const plan = {
+              schema_version: 1,
+              kind: 'provider-layer-migration',
+              plan_id: randomUUID(),
+              provider_id: providerId,
+              action: entry.action,
+              source: entry.source,
+              materialization: { provider: materialization },
+              expected_revisions: {
+                profile: revisions.profile.revision,
+                settings: revisions.settings.ok ? revisions.settings.revision : null,
+              },
+              runtime_id_before: getHubRuntimeIdentity().runtime_id,
+              restart_required: true,
+            };
+            rememberProviderMigrationPlan(plan);
+            return sendJson(res, 200, { ok: true, plan });
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'migrate') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_MIGRATION_CONFIRM_REQUIRED' });
+            const stored = providerMigrationPlans.get(body?.plan_id);
+            if (!stored || Date.now() - stored.created_at > PROVIDER_DELETE_PLAN_TTL_MS || stored.plan.provider_id !== providerId) {
+              providerMigrationPlans.delete(body?.plan_id);
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_EXPIRED' });
+            }
+            const entry = inventory.migration.providers.find((candidate) => candidate.provider_id === providerId);
+            if (!entry || entry.action !== stored.plan.action || entry.action === 'blocked' || entry.action === 'collision-review') return sendJson(res, 409, { ok: false, code: entry?.blocked_reason ?? 'PROVIDER_MIGRATION_PLAN_CHANGED' });
+            const revisions = readProviderSourceRevisions();
+            const expected = stored.plan.expected_revisions ?? {};
+            if (revisions.profile.revision !== expected.profile || (revisions.settings.ok ? revisions.settings.revision : null) !== expected.settings) {
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_SOURCE_CHANGED' });
+            }
+            const hooks = createProviderLayerMigrationFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+            });
+            let result;
+            if (hub.hasProviderLease(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_IN_USE' });
+            if (!hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+            let retainProviderMutation = false;
+            try {
+              await hooks.acquireLock();
+              if (hub.hasProviderLease(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_IN_USE' });
+              if (hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+              result = await executeProviderLayerMigration(stored.plan, hooks, { confirm: true, deferRestart: true });
+              providerMigrationPlans.delete(body.plan_id);
+              retainProviderMutation = result.state === 'RESTART_PENDING';
+              if (retainProviderMutation) providerMigrationOwners.set(providerId, stored.plan.plan_id);
+              return sendJson(res, result.ok ? 202 : 409, { ok: result.ok, restart_required: result.restart_required === true, result });
+            } finally {
+              await hooks.release();
+              if (!retainProviderMutation) hub.endProviderMutation(providerId);
+            }
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-migration') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_CONFIRM_REQUIRED' });
+            const transactionId = body?.transaction_id;
+            const hooks = createProviderLayerMigrationFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+              existingMigrationId: transactionId,
+            });
+            let acquiredMigrationFence = false;
+            try {
+              await hooks.acquireLock();
+              await hooks.backup({});
+              const plan = hooks.backupPlan();
+              if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
+              const owner = providerMigrationOwners.get(providerId);
+              if (owner !== plan.plan_id) {
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerMigrationOwners.set(providerId, plan.plan_id);
+                acquiredMigrationFence = true;
+              }
+              const verification = await hooks.verify(plan);
+              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              if (verification.nativeRemovable !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_FAILED', verification });
+              await hooks.finalizeVerified();
+              if (providerMigrationOwners.get(providerId) === plan.plan_id) {
+                providerMigrationOwners.delete(providerId);
+                hub.endProviderMutation(providerId);
+              }
+              return sendJson(res, 200, { ok: true, state: 'VERIFIED', transaction_id: plan.plan_id, provider_id: providerId, verification });
+            } finally {
+              await hooks.release();
+              if (acquiredMigrationFence && providerMigrationOwners.get(providerId) === transactionId) {
+                providerMigrationOwners.delete(providerId);
+                hub.endProviderMutation(providerId);
+              }
+            }
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'rollback-migration') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_CONFIRM_REQUIRED' });
+            const hooks = createProviderLayerMigrationFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+              existingMigrationId: body?.transaction_id,
+            });
+            let acquiredMigrationFence = false;
+            try {
+              await hooks.acquireLock();
+              await hooks.backup({});
+              const plan = hooks.backupPlan();
+              if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
+              const owner = providerMigrationOwners.get(providerId);
+              if (owner !== plan.plan_id) {
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerMigrationOwners.set(providerId, plan.plan_id);
+                acquiredMigrationFence = true;
+              }
+              const rollback = await hooks.rollback();
+              if (providerMigrationOwners.get(providerId) === plan.plan_id) {
+                providerMigrationOwners.delete(providerId);
+                hub.endProviderMutation(providerId);
+              }
+              return sendJson(res, 202, { ok: true, restart_required: true, transaction_id: plan.plan_id, provider_id: providerId, state: rollback.state });
+            } finally {
+              await hooks.release();
+              if (acquiredMigrationFence && providerMigrationOwners.get(providerId) === body?.transaction_id) {
+                providerMigrationOwners.delete(providerId);
+                hub.endProviderMutation(providerId);
+              }
+            }
+          }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
             if (providerId !== 'deepseek-official' && hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
