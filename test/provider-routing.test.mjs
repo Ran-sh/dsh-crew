@@ -212,11 +212,37 @@ test('Hub rechecks the deletion gate after asynchronous spawn preparation', asyn
   const spawning = reg.spawn({ task: 'racing', tier: 'flash', effort: 'off', cwd: '/tmp' });
   await presetObserved;
   reg.beginProviderMutation('opencode-go');
+  reg.endProviderMutation('opencode-go');
   releasePreset();
   await assert.rejects(spawning, (error) => error.code === 'PROVIDER_DELETE_BUSY');
   assert.equal(created.length, 0);
   assert.equal(reg.jobs.size, 0);
-  reg.endProviderMutation('opencode-go');
+});
+
+test('provider lease remains active until a cancelled handle is disposed', async () => {
+  let releaseDispose;
+  const disposeGate = new Promise((resolve) => { releaseDispose = resolve; });
+  const idle = new Promise(() => {});
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = {
+    create: async () => ({
+      agent: { session: {}, whenIdle: async () => idle, followup() {} },
+      dispose: async () => disposeGate,
+    }),
+  };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'lease', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  const deadline = Date.now() + 2_000;
+  while (!job.handle && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(job.handle);
+  const cancelling = reg.cancel(job.id);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(job.status, 'cancelled');
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  releaseDispose();
+  await cancelling;
+  await job.promise;
+  assert.equal(reg.hasProviderLease('opencode-go'), false);
 });
 
 test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {

@@ -433,6 +433,19 @@ test('mutation writes fail closed when their on-disk lock token is fenced', asyn
   assert.equal(JSON.parse(readFileSync(paths.lifecycleFile, 'utf8')).tombstones[plan.provider_id], undefined);
 });
 
+test('manifest-only mutations are fenced by the on-disk lock token', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const plan = planFor(paths.profileFile);
+  await hooks.backup(plan);
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const before = readFileSync(manifestFile, 'utf8');
+  writeFileSync(join(backupDir, '.delete.lock'), JSON.stringify({ pid: process.pid, token: 'fenced-owner' }));
+  await assert.rejects(() => hooks.setRuntimeBaseline('runtime-after-fence', 'delete'), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
+  assert.equal(readFileSync(manifestFile, 'utf8'), before);
+});
+
 test('offline recovery does not steal an active stale-lock reclaim claim', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
@@ -870,6 +883,37 @@ test('absent lifecycle ownership remains rollbackable after a crash during witne
   assert.equal(existsSync(paths.lifecycleFile), false);
 });
 
+test('absent lifecycle ownership remains reopenable after a crash before publication', async () => {
+  const paths = fixture();
+  rmSync(paths.lifecycleFile);
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  let injected = false;
+  const hooks = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    restart: async () => ({ ok: true }),
+    afterMutationJournaled: (key) => {
+      if (key === 'lifecycle' && !injected) {
+        injected = true;
+        throw Object.assign(new Error('simulated crash before publish'), { code: 'SIMULATED_CRASH' });
+      }
+    },
+  });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(result.audit_recorded, false);
+  assert.equal(injected, true);
+  const manifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
+  assert.equal(existsSync(manifest.mutation_journal.lifecycle.witness), true);
+
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
+  await reopened.acquireLock();
+  await reopened.rollback(reopened.backupPlan());
+  await reopened.release();
+  assert.equal(existsSync(paths.lifecycleFile), false);
+});
+
 test('rollback preserves an external same-content replacement of a transaction-created file', async () => {
   const paths = fixture();
   rmSync(paths.configFile);
@@ -970,6 +1014,17 @@ test('non-directory recovery entries can be quarantined without following them',
   assert.equal(result.ok, true);
   assert.equal(existsSync(entry), false);
   assert.equal(readdirSync(join(backupDir, '.quarantine')).length, 1);
+});
+
+test('recovery entry validation does not reject POSIX control characters after opaque-id resolution', () => {
+  assert.doesNotMatch(ADAPTER_SOURCE, /\\u0000-\\u001f/);
+});
+
+test('ownership identity and pinned manifest reads use exact descriptor metadata', () => {
+  assert.match(ADAPTER_SOURCE, /lstatSync\(file, \{ bigint: true \}\)/);
+  assert.match(ADAPTER_SOURCE, /openSync\(file, 'r'\)/);
+  assert.match(ADAPTER_SOURCE, /fstatSync\(fd, \{ bigint: true \}\)/);
+  assert.match(ADAPTER_SOURCE, /readFileSync\(fd\)/);
 });
 
 test('reopening rejects a symlinked manifest before reading it', async (t) => {
