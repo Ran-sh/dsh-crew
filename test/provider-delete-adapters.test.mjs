@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
@@ -218,6 +218,43 @@ test('provider delete adapters reject managed paths outside the backup Crew root
     configFile: join(paths.dir, '..', 'outside-config.json'),
     backupDir: join(paths.dir, 'backups'),
   }), (error) => error.code === 'PROVIDER_DELETE_UNSAFE_PATH');
+});
+
+test('a crashed owner lock can be reclaimed when its recorded process is dead', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const lockPath = join(backupDir, '.delete.lock');
+  mkdirSync(lockPath, { recursive: true });
+  writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ pid: 999999, created_at: new Date().toISOString() }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await hooks.backup(planFor(paths.profileFile));
+  await hooks.release();
+  assert.equal(existsSync(lockPath), false);
+});
+
+test('provider verification fails closed when a managed profile is malformed', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  await hooks.backup(plan);
+  writeFileSync(paths.profileFile, `- id: llm-pi-ai\n  config:\n    providers:\n      broken: [\n`);
+  const verification = await hooks.verify(plan);
+  await hooks.release();
+  assert.equal(verification.providerAbsent, false);
+});
+
+test('rollback keeps the transaction record durable before ROLLBACK_PENDING audit', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await hooks.backup(plan);
+  await hooks.markTombstone(plan.provider_id);
+  await hooks.recordTransaction({ transaction_id: plan.plan_id, provider_id: plan.provider_id, state: 'VERIFIED' }, plan);
+  await hooks.rollback(plan);
+  const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
+  await hooks.release();
+  assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
 });
 
 test('transaction stores an independent rollback runtime baseline', async () => {

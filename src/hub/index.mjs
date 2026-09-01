@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -108,16 +108,39 @@ const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
 
-function readProviderLifecycleState() {
+function readProviderLifecycleStateStatus() {
+  const file = join(CONFIG_DIR, 'provider-lifecycle.json');
+  if (!existsSync(file)) return { ok: true, state: normalizeProviderLifecycleState() };
   try {
-    return normalizeProviderLifecycleState(JSON.parse(readFileSync(join(CONFIG_DIR, 'provider-lifecycle.json'), 'utf8')));
+    return { ok: true, state: normalizeProviderLifecycleState(JSON.parse(readFileSync(file, 'utf8'))) };
   } catch {
-    return normalizeProviderLifecycleState();
+    return { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE', state: normalizeProviderLifecycleState() };
   }
+}
+
+function readProviderLifecycleState() {
+  return readProviderLifecycleStateStatus().state;
 }
 
 function readCredentialPurgeState() {
   try { return normalizeCredentialPurgeState(JSON.parse(readFileSync(CREDENTIAL_PURGE_STATE_FILE, 'utf8'))); } catch { return normalizeCredentialPurgeState(); }
+}
+
+function readProviderRecoveryTransactions() {
+  const root = join(CONFIG_DIR, 'provider-backups');
+  if (!existsSync(root)) return [];
+  try {
+    return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(-64).flatMap((entry) => {
+      try {
+        const manifest = JSON.parse(readFileSync(join(root, entry.name, 'manifest.json'), 'utf8'));
+        const transactionId = typeof manifest?.plan?.plan_id === 'string' ? manifest.plan.plan_id : null;
+        const providerId = typeof manifest?.provider_id === 'string' ? manifest.provider_id : null;
+        const phase = typeof manifest?.phase_journal?.phase === 'string' ? manifest.phase_journal.phase : null;
+        if (!transactionId || !providerId || !phase || ['ROLLED_BACK', 'VERIFIED'].includes(phase)) return [];
+        return [{ transaction_id: transactionId, provider_id: providerId, phase }];
+      } catch { return []; }
+    });
+  } catch { return []; }
 }
 
 function writeCredentialPurgeState(state) {
@@ -152,6 +175,10 @@ export function hasCompleteProviderCatalogEvidence(evidence) {
 export function hasCompleteProviderDeclarationEvidence(evidence) {
   return evidence?.ok === true
     && Object.values(evidence.sources ?? {}).every((source) => source?.present !== true || !source.code);
+}
+
+export function hasAvailableProviderLifecycleEvidence(evidence) {
+  return evidence?.ok === true;
 }
 
 export function hasProviderRuntimeRestartEvidence(beforeRuntimeId, currentRuntimeId) {
@@ -206,7 +233,8 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     && settingsDefault.model === catalog.harness_default.model) {
     catalog = { ...catalog, harness_default_authority: { kind: 'harness-settings', locator: settingsDefault.locator } };
   }
-  const lifecycle = readProviderLifecycleState();
+  const lifecycleEvidence = readProviderLifecycleStateStatus();
+  const lifecycle = lifecycleEvidence.state;
   const credentialPurge = readCredentialPurgeState();
   const inventory = buildProviderInventory({
     catalog,
@@ -219,6 +247,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     ...inventory,
     catalog_evidence: catalogEvidence,
     declaration_evidence: declarationEvidence,
+    lifecycle_evidence: lifecycleEvidence.ok ? { ok: true } : { ok: false, code: lifecycleEvidence.code },
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
     credential_purged_refs: Object.keys(credentialPurge.purged),
@@ -233,6 +262,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       state: transaction.state,
       ...(transaction.expected_revision ? { expected_revision: transaction.expected_revision } : {}),
     })),
+    recovery_transactions: readProviderRecoveryTransactions(),
   };
 }
 
@@ -1417,6 +1447,7 @@ export async function apply(ctx) {
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
+            if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
             const revisions = readProviderSourceRevisions();
             if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
             const expectedRevision = (revisions.profile.ok ? revisions.profile.revision : null) ?? revisions.settings.revision;
@@ -1576,6 +1607,7 @@ export async function apply(ctx) {
             if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
+            if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
             const storedExpected = stored.plan.expected_revisions;
             const revisionsMatch = storedExpected
               ? (storedExpected.profile === (revisions.profile.ok ? revisions.profile.revision : null)

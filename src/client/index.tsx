@@ -926,7 +926,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
 
   const rollbackHarnessProvider = async (record: any, transactionId: string, transactionState: string = 'VERIFIED') => {
-    const continuing = transactionState === 'ROLLBACK_PENDING';
+    const continuing = ['ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING'].includes(transactionState);
     if (!record || !transactionId || (!continuing && record.desired_state !== 'absent')) {
       setNotice(copy.providerRollbackUnavailable);
       return;
@@ -1463,7 +1463,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             const unresolved = record.delete_capability === 'source-unresolved';
             const blocked = immutable || unresolved || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
             const lifecycle = record.desired_state === 'absent' ? 'absent' : record.lifecycle?.enabled === false ? 'disabled' : record.lifecycle?.catalogued ? 'catalogued' : 'configured';
-            const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING'].includes(entry.state)).at(-1);
+            const lifecycleTransactions = providerInventory?.lifecycle_transactions ?? [];
+            const recoveryTransactions = (providerInventory?.recovery_transactions ?? []).map((entry: any) => ({ ...entry, state: entry.phase }));
+            const rollbackTransaction = [...lifecycleTransactions, ...recoveryTransactions]
+              .filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING', 'DELETE_RESTART_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(entry.state)).at(-1);
             return (
               <div key={record.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' as const }}>
                 <span style={{ fontWeight: 600 }}>{record.display_name || record.id}</span>
@@ -1480,7 +1483,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                     {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}
                   </button>
                 )}
-                {(record.desired_state === 'absent' || rollbackTransaction?.state === 'ROLLBACK_PENDING') && rollbackTransaction && (
+                {(record.desired_state === 'absent' || ['ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(rollbackTransaction?.state)) && rollbackTransaction && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
                     onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id, rollbackTransaction.state); }}>
                     {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : rollbackTransaction.state === 'ROLLBACK_PENDING' ? copy.providerRollbackContinue : copy.providerRollback}

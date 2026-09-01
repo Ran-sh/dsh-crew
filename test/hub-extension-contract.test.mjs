@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
@@ -37,6 +37,10 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /runtimeRestarted/);
   assert.match(hubSource, /PROVIDER_CATALOG_INCOMPLETE/);
   assert.match(hubSource, /readHarnessDefault/);
+  assert.match(hubSource, /lifecycle_evidence/);
+  assert.match(hubSource, /PROVIDER_LIFECYCLE_UNAVAILABLE/);
+  assert.match(hubSource, /recovery_transactions/);
+  assert.match(hubSource, /readProviderRecoveryTransactions/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -92,6 +96,11 @@ test('provider lifecycle accepts only a changed 3210 runtime identity as restart
 test('provider lifecycle fails closed when any existing declaration source is malformed', () => {
   assert.equal(hasCompleteProviderDeclarationEvidence({ ok: true, sources: { profile: { present: true }, settings: { present: false } } }), true);
   assert.equal(hasCompleteProviderDeclarationEvidence({ ok: false, sources: { settings: { present: true, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' } } }), false);
+});
+
+test('provider lifecycle does not treat corrupted lifecycle state as available evidence', () => {
+  assert.equal(hasAvailableProviderLifecycleEvidence({ ok: true }), true);
+  assert.equal(hasAvailableProviderLifecycleEvidence({ ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' }), false);
 });
 
 test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
