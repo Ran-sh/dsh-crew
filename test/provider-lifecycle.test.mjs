@@ -20,7 +20,7 @@ const records = [
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
     references: {
-      harness_default: true, worker_priority: 0, worker_escalation: null,
+      harness_default: true, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' }, worker_priority: 0, worker_escalation: null,
       reviewer_priority: 0, active_jobs: 0, multimodal_refs: 0,
     },
     desired_state: 'present',

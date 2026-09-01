@@ -28,7 +28,7 @@ const INVENTORY = {
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
       models: ['mimo-v2.5'],
       lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
-      references: { harness_default: false, active_jobs: 0 },
+      references: { harness_default: false, active_jobs: 0, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' } },
     },
     {
       id: 'openrouter', display_name: 'openrouter', ownership: 'crew-managed-profile', origin: 'profile-managed',
@@ -37,7 +37,7 @@ const INVENTORY = {
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
       models: ['minimax/minimax-m3:free'],
       lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
-      references: { harness_default: true, active_jobs: 0 },
+      references: { harness_default: true, active_jobs: 0, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' } },
     },
   ],
 };
@@ -166,6 +166,8 @@ test('file adapters fail closed on malformed managed JSON', async () => {
 
 test('file adapters apply a valid replacement Harness Default', async () => {
   const paths = fixture();
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
   let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')), harness_default: { provider: 'opencode-go', model: 'mimo-v2.5' } };
   writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
   const hooks = createProviderDeleteFileHooks({
@@ -177,14 +179,23 @@ test('file adapters apply a valid replacement Harness Default', async () => {
   });
   const inventory = structuredClone(INVENTORY);
   inventory.records.find((record) => record.id === 'opencode-go').references.harness_default = true;
+  inventory.records.find((record) => record.id === 'opencode-go').declaration_authorities = [
+    { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+    { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' },
+  ];
   inventory.records.find((record) => record.id === 'openrouter').references.harness_default = false;
+  inventory.harness_default = { provider: 'opencode-go', model: 'mimo-v2.5' };
   const expectedRevision = inspectProviderProfile(PROFILE).revision;
+  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
   const plan = planProviderDelete({
     providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision,
+    expectedRevisions: { profile: expectedRevision, settings: expectedSettings },
   }).plan;
   const result = await executeProviderDelete(plan, hooks);
   assert.equal(result.state, 'VERIFIED');
   assert.deepEqual(config.harness_default, { provider: 'openrouter', model: 'minimax/minimax-m3:free' });
+  assert.match(readFileSync(paths.settingsFile, 'utf8'), /agent-default-model:\n  provider: openrouter\n  model: minimax\/minimax-m3:free/);
+  assert.doesNotMatch(readFileSync(paths.settingsFile, 'utf8'), /    opencode-go:/);
 });
 
 test('file adapters serialize concurrent transactions with a managed lock', async () => {

@@ -521,6 +521,7 @@ const COPY = {
 		providerDeleteConfirm: "确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。",
 		providerDeleteBlocked: "当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。",
 		providerLifecycleError: "Provider 生命周期操作失败",
+		providerDeletePending: "配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。",
 		providerNoInventory: "暂时无法读取 3210 Provider inventory。",
 		credentialReferences: "Credential 引用",
 		credentialReferenceHint: "仅显示引用名、归属和孤儿状态；不会读取或删除密钥。",
@@ -846,6 +847,7 @@ const COPY = {
 		providerDeleteConfirm: "Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.",
 		providerDeleteBlocked: "This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).",
 		providerLifecycleError: "Provider lifecycle operation failed",
+		providerDeletePending: "Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.",
 		providerNoInventory: "3210 Provider inventory is temporarily unavailable.",
 		credentialReferences: "Credential references",
 		credentialReferenceHint: "Names, ownership, and orphan status only; values are never read or deleted.",
@@ -2010,7 +2012,10 @@ function WorkersPanel({ ctx }) {
 			setNotice(copy.saved);
 			await refreshProviderInventory();
 		} catch (error) {
-			setNotice(String(error?.message ?? error));
+			try {
+				await refreshProviderInventory();
+			} catch {}
+			setNotice(`${String(error?.message ?? error)} · ${copy.providerDeletePending}`);
 		} finally {
 			setProviderLifecycleBusy(null);
 		}
@@ -2047,7 +2052,10 @@ function WorkersPanel({ ctx }) {
 			setNotice(copy.saved);
 			await refreshProviderInventory();
 		} catch (error) {
-			setNotice(String(error?.message ?? error));
+			try {
+				await refreshProviderInventory();
+			} catch {}
+			setNotice(`${String(error?.message ?? error)} · ${copy.providerDeletePending}`);
 		} finally {
 			setProviderLifecycleBusy(null);
 		}

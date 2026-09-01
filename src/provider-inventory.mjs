@@ -111,7 +111,10 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     const uniqueAuthorities = [...new Map(authorities.map((authority) => [`${authority.kind}:${authority.locator}`, authority])).values()];
     const mutableAuthorities = uniqueAuthorities.filter((authority) => MUTABLE_AUTHORITY_KINDS.has(authority.kind));
     const immutable = IMMUTABLE_HARNESS_PROVIDER_IDS.includes(id);
-    const deleteCapability = immutable ? 'immutable-builtin' : mutableAuthorities.length > 0 ? 'supported' : 'source-unresolved';
+    const allAuthoritiesKnown = providerDeclarations.length > 0
+      && uniqueAuthorities.length === providerDeclarations.length
+      && uniqueAuthorities.every((authority) => MUTABLE_AUTHORITY_KINDS.has(authority.kind));
+    const deleteCapability = immutable ? 'immutable-builtin' : allAuthoritiesKnown && mutableAuthorities.length > 0 ? 'supported' : 'source-unresolved';
     const deleteBlocker = immutable ? 'PROVIDER_BUILTIN_IMMUTABLE' : deleteCapability === 'supported' ? null : 'PROVIDER_DELETE_SOURCE_UNRESOLVED';
     const origin = normalizeOrigin(declaration?.origin ?? (immutable ? 'builtin' : declared ? 'profile-managed' : 'unknown'));
     const ownership = normalizeOwnership(declaration?.ownership ?? (immutable ? 'harness' : declared ? 'crew-managed-profile' : 'unknown'));
@@ -139,6 +142,7 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
       credential_refs: normalizeCredentialRefs(declaration),
       references: {
         harness_default: harnessDefault === id,
+        ...(harnessDefault === id && normalizeAuthority(catalog?.harness_default_authority) ? { harness_default_authority: normalizeAuthority(catalog.harness_default_authority) } : {}),
         worker_priority: findPriorityIndex(policy?.worker, 'priority', id),
         worker_escalation: findPriorityIndex(policy?.worker, 'escalation_priority', id),
         reviewer_priority: findPriorityIndex(policy?.reviewer ?? policy?.review, 'priority', id),
@@ -151,5 +155,5 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     };
   });
 
-  return { schema_version: 1, records };
+  return { schema_version: 1, records, harness_default: catalog?.harness_default ?? null };
 }

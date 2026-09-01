@@ -140,3 +140,11 @@ test('unknown declaration authority does not advertise a destructive capability'
   assert.equal(result.records[0].delete_capability, 'source-unresolved');
   assert.equal(result.records[0].delete_blocker, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
+
+test('malformed authority alongside a valid declaration fails closed for the whole provider', () => {
+  const result = buildProviderInventory({ declarations: [
+    { id: 'mixed', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.mixed' } },
+    { id: 'mixed', declaration_authority: { kind: 'crew-profile' } },
+  ] });
+  assert.equal(result.records[0].delete_capability, 'source-unresolved');
+});

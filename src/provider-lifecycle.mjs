@@ -24,6 +24,10 @@ const TRANSITIONS = Object.freeze({
 });
 
 const CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/;
+const AUTHORITY_LOCATORS = Object.freeze({
+  'crew-profile': (id) => `llm-pi-ai.config.providers.${id}`,
+  'harness-settings': (id) => `llm-pi-ai.providers.${id}`,
+});
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -41,6 +45,13 @@ function fail(code) {
 function recordById(inventory, providerId) {
   const records = Array.isArray(inventory?.records) ? inventory.records : [];
   return records.find((record) => record?.id === providerId) ?? null;
+}
+
+function hasCanonicalAuthorities(record, providerId) {
+  const authorities = Array.isArray(record?.declaration_authorities) ? record.declaration_authorities : [];
+  if (authorities.length === 0) return false;
+  return authorities.every((authority) => typeof AUTHORITY_LOCATORS[authority?.kind] === 'function'
+    && authority.locator === AUTHORITY_LOCATORS[authority.kind](providerId));
 }
 
 function activeJobCount(record, activeJobs) {
@@ -73,17 +84,22 @@ export function canTransitionProviderDelete(from, to) {
 export function planProviderDelete({ providerId, inventory, activeJobs = [], replacementDefault = null, expectedRevision, expectedRevisions = null } = {}) {
   const id = text(providerId);
   if (!id) return fail('PROVIDER_NOT_FOUND');
+  if (id === 'deepseek-official') return fail('PROVIDER_BUILTIN_IMMUTABLE');
   const record = recordById(inventory, id);
   if (!record) return fail('PROVIDER_NOT_FOUND');
-  if (record.delete_capability === 'immutable-builtin' || id === 'deepseek-official') return fail('PROVIDER_BUILTIN_IMMUTABLE');
+  if (record.delete_capability === 'immutable-builtin') return fail('PROVIDER_BUILTIN_IMMUTABLE');
+  if (inventory?.catalog_evidence && inventory.catalog_evidence.ok !== true) return fail('PROVIDER_CATALOG_UNAVAILABLE');
   if (record.delete_capability !== 'supported') return fail(text(record.delete_blocker) ?? 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
-  if (!Array.isArray(record.declaration_authorities) || record.declaration_authorities.length === 0) return fail('PROVIDER_DELETE_SOURCE_UNRESOLVED');
+  if (!hasCanonicalAuthorities(record, id)) return fail('PROVIDER_DELETE_SOURCE_UNRESOLVED');
   if (record.desired_state === 'absent') return fail('PROVIDER_ALREADY_ABSENT');
   if (activeJobCount(record, activeJobs) > 0) return fail('PROVIDER_IN_USE');
 
   const replacement = text(replacementDefault);
   const replacementRecord = replacement ? recordById(inventory, replacement) : null;
   if (record.references?.harness_default) {
+    if (!record.references.harness_default_authority || record.references.harness_default_authority.kind !== 'harness-settings' || record.references.harness_default_authority.locator !== 'agent-default-model') {
+      return fail('PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE');
+    }
     if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent' || replacementRecord.lifecycle?.catalogued !== true) {
       return fail('PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
     }
@@ -105,6 +121,10 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
       ...(expectedRevisions && typeof expectedRevisions === 'object' ? { expected_revisions: { ...expectedRevisions } } : {}),
       replacement_default: replacement,
       was_harness_default: record.references?.harness_default === true,
+      ...(record.references?.harness_default === true ? {
+        harness_default_before: inventory?.harness_default ?? null,
+        harness_default_authority: record.references.harness_default_authority,
+      } : {}),
       ...(replacement
         ? { replacement_default_model: text(replacementRecord?.models?.[0]) }
         : {}),

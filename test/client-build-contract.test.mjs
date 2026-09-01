@@ -82,6 +82,8 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /delete_capability/);
   assert.doesNotMatch(panelSource, /ownership === ['"]harness['"]|ownership !== ['"]harness['"]/);
   assert.match(panelSource, /deepseek-official/);
+  assert.match(panelSource, /providerDeletePending/);
+  assert.match(panelSource, /await refreshProviderInventory\(\)/);
   assert.match(panelSource, /Harness Providers|Harness Provider/);
   assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });

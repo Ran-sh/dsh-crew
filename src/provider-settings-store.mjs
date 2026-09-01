@@ -21,6 +21,23 @@ function scalarField(lines, entry, field) {
   return null;
 }
 
+function parseDefaultModel(source) {
+  if (typeof source !== 'string') return { ok: false, code: 'PROVIDER_SETTINGS_DEFAULT_UNSUPPORTED' };
+  const lines = source.split(/\r?\n/u);
+  const start = lines.findIndex((line) => /^agent-default-model:\s*$/u.test(line));
+  if (start < 0) return { ok: false, code: 'PROVIDER_SETTINGS_DEFAULT_UNSUPPORTED' };
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (indentOf(lines[index]) === 0 && nonBlank(lines[index])) { end = index; break; }
+  }
+  const providerLine = lines.findIndex((line, index) => index > start && index < end && /^ {2}provider:\s*\S.*$/u.test(line));
+  const modelLine = lines.findIndex((line, index) => index > start && index < end && /^ {2}model:\s*\S.*$/u.test(line));
+  const provider = providerLine >= 0 ? lines[providerLine].replace(/^ {2}provider:\s*/u, '').trim() : null;
+  const model = modelLine >= 0 ? lines[modelLine].replace(/^ {2}model:\s*/u, '').trim() : null;
+  if (!provider || !model) return { ok: false, code: 'PROVIDER_SETTINGS_DEFAULT_UNSUPPORTED' };
+  return { ok: true, lines, start, end, providerLine, modelLine, provider, model };
+}
+
 function parseProviderMap(source) {
   if (typeof source !== 'string') return { ok: false, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' };
   const lines = source.split(/\r?\n/u);
@@ -30,8 +47,12 @@ function parseProviderMap(source) {
   for (let index = llmStart + 1; index < lines.length; index += 1) {
     if (indentOf(lines[index]) === 0 && nonBlank(lines[index])) { blockEnd = index; break; }
   }
-  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^ {2}providers:\s*$/u.test(line));
+  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^ {2}providers:\s*(?:\{\s*\})?\s*$/u.test(line));
   if (providersLine < 0) return { ok: false, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' };
+  let providersBlockEnd = blockEnd;
+  for (let index = providersLine + 1; index < blockEnd; index += 1) {
+    if (nonBlank(lines[index]) && indentOf(lines[index]) <= 2) { providersBlockEnd = index; break; }
+  }
   const providerIndent = 4;
   const entries = [];
   for (let index = providersLine + 1; index < blockEnd; index += 1) {
@@ -54,8 +75,7 @@ function parseProviderMap(source) {
     entries.push({ id: match[1], start: index, end });
     index = end - 1;
   }
-  if (entries.length === 0) return { ok: false, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' };
-  return { ok: true, lines, llmStart, blockEnd, providersLine, entries };
+  return { ok: true, lines, llmStart, blockEnd, providersLine, providersBlockEnd, entries };
 }
 
 export function inspectProviderSettings(source) {
@@ -85,20 +105,88 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
   };
 }
 
+export function readHarnessDefault(source) {
+  const parsed = parseDefaultModel(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  return { ok: true, provider: parsed.provider, model: parsed.model, locator: 'agent-default-model' };
+}
+
+export function replaceHarnessDefault(source, { provider, model, expectedRevision } = {}) {
+  const currentRevision = typeof source === 'string' ? sha256(source) : null;
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) return { ok: false, code: 'PROVIDER_SETTINGS_CHANGED', revision: currentRevision };
+  if (typeof provider !== 'string' || !PROVIDER_ID.test(provider) || typeof model !== 'string' || !model.trim()) return { ok: false, code: 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED', revision: currentRevision };
+  const parsed = parseDefaultModel(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code, revision: currentRevision };
+  const lines = [...parsed.lines];
+  lines[parsed.providerLine] = `  provider: ${provider.trim()}`;
+  lines[parsed.modelLine] = `  model: ${model.trim()}`;
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = lines.join(newline);
+  return { ok: true, text, previous: { provider: parsed.provider, model: parsed.model }, revision: sha256(text) };
+}
+
+/**
+ * Apply all Harness settings mutations needed by one provider-delete plan in
+ * memory, then return one revision-bound text result for a single atomic write.
+ * This prevents replacing agent-default-model and removing its provider from
+ * racing each other on the same settings revision.
+ */
+export function mutateProviderSettings(source, {
+  providerId = null,
+  removeProvider = false,
+  replacementDefault = null,
+  replacementModel = null,
+  expectedRevision,
+} = {}) {
+  const currentRevision = typeof source === 'string' ? sha256(source) : null;
+  if (expectedRevision !== undefined && expectedRevision !== currentRevision) return { ok: false, code: 'PROVIDER_SETTINGS_CHANGED', revision: currentRevision };
+  const parsed = removeProvider ? parseProviderMap(source) : { ok: true, lines: typeof source === 'string' ? source.split(/\r?\n/u) : [] };
+  if (!parsed.ok) return { ok: false, code: parsed.code, revision: currentRevision };
+  let providerEntry = null;
+  if (removeProvider) {
+    if (typeof providerId !== 'string' || !PROVIDER_ID.test(providerId)) return { ok: false, code: 'PROVIDER_NOT_FOUND', revision: currentRevision };
+    providerEntry = parsed.entries.find((entry) => entry.id === providerId) ?? null;
+    if (!providerEntry) return { ok: false, code: 'PROVIDER_NOT_FOUND', revision: currentRevision };
+  }
+  let defaultParsed = null;
+  if (replacementDefault !== null || replacementModel !== null) {
+    if (typeof replacementDefault !== 'string' || !PROVIDER_ID.test(replacementDefault) || typeof replacementModel !== 'string' || !replacementModel.trim()) return { ok: false, code: 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED', revision: currentRevision };
+    defaultParsed = parseDefaultModel(source);
+    if (!defaultParsed.ok) return { ok: false, code: defaultParsed.code, revision: currentRevision };
+    if (providerId && defaultParsed.provider !== providerId) return { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_CHANGED', revision: currentRevision };
+  }
+  const ranges = providerEntry ? [[providerEntry.start, providerEntry.end]] : [];
+  const finalProvider = providerEntry && parsed.entries.length === 1;
+  const nextLines = parsed.lines.map((line, index) => {
+    if (ranges.some(([start, end]) => index >= start && index < end)) return null;
+    if (finalProvider && index === parsed.providersLine) return '  providers: {}';
+    if (defaultParsed?.providerLine === index) return `  provider: ${replacementDefault.trim()}`;
+    if (defaultParsed?.modelLine === index) return `  model: ${replacementModel.trim()}`;
+    return line;
+  }).filter((line) => line !== null);
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const text = nextLines.join(newline);
+  return {
+    ok: true,
+    text,
+    ...(providerEntry ? { removed: [providerId], remaining: parsed.entries.filter((entry) => entry.id !== providerId).map((entry) => entry.id) } : { removed: [], remaining: parsed.entries?.map((entry) => entry.id) ?? [] }),
+    ...(defaultParsed ? { previous_default: { provider: defaultParsed.provider, model: defaultParsed.model } } : {}),
+    revision: sha256(text),
+  };
+}
+
 export function removeProviderSettings(source, { providerIds = [], expectedRevision } = {}) {
   const currentRevision = typeof source === 'string' ? sha256(source) : null;
   if (expectedRevision !== undefined && expectedRevision !== currentRevision) return { ok: false, code: 'PROVIDER_SETTINGS_CHANGED', revision: currentRevision };
   const requested = [...new Set(providerIds.filter((id) => typeof id === 'string' && PROVIDER_ID.test(id)))];
   if (requested.length === 0 || requested.length !== providerIds.length) return { ok: false, code: 'PROVIDER_NOT_FOUND', revision: currentRevision };
-  const parsed = parseProviderMap(source);
-  if (!parsed.ok) return { ok: false, code: parsed.code, revision: currentRevision };
-  const byId = new Map(parsed.entries.map((entry) => [entry.id, entry]));
-  if (requested.some((id) => !byId.has(id))) return { ok: false, code: 'PROVIDER_NOT_FOUND', revision: currentRevision };
-  const removedSet = new Set(requested);
-  const remaining = parsed.entries.filter((entry) => !removedSet.has(entry.id)).map((entry) => entry.id);
-  const ranges = requested.map((id) => { const entry = byId.get(id); return [entry.start, entry.end]; });
-  const lines = parsed.lines.filter((_line, index) => !ranges.some(([start, end]) => index >= start && index < end));
-  const newline = source.includes('\r\n') ? '\r\n' : '\n';
-  const text = lines.join(newline);
-  return { ok: true, text, removed: requested, remaining, revision: sha256(text) };
+  let next = source;
+  const results = [];
+  for (const id of requested) {
+    const result = mutateProviderSettings(next, { providerId: id, removeProvider: true });
+    if (!result.ok) return { ...result, revision: currentRevision };
+    next = result.text;
+    results.push(result);
+  }
+  return { ok: true, text: next, removed: requested, remaining: results.at(-1)?.remaining ?? [], revision: sha256(next) };
 }

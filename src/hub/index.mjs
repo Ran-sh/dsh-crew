@@ -35,7 +35,7 @@ import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
 import { inspectProviderProfile, readProviderDeclarations } from '../provider-profile-store.mjs';
-import { inspectProviderSettings, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
+import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
@@ -145,6 +145,21 @@ function providerInventoryPolicy(config) {
   };
 }
 
+export function hasCompleteProviderCatalogEvidence(evidence) {
+  return evidence?.ok === true && evidence.partial !== true;
+}
+
+export function hasCompleteProviderDeclarationEvidence(evidence) {
+  return evidence?.ok === true
+    && Object.values(evidence.sources ?? {}).every((source) => source?.present !== true || !source.code);
+}
+
+export function hasProviderRuntimeRestartEvidence(beforeRuntimeId, currentRuntimeId) {
+  return typeof beforeRuntimeId === 'string' && beforeRuntimeId.trim() !== ''
+    && typeof currentRuntimeId === 'string' && currentRuntimeId.trim() !== ''
+    && beforeRuntimeId !== currentRuntimeId;
+}
+
 async function readProviderInventorySnapshot(hub, ctx, config) {
   let catalog = { providers: [], harness_default: null };
   let catalogEvidence = { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' };
@@ -154,7 +169,8 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
     });
     catalogEvidence = {
-      ok: true,
+      ok: catalog.partial !== true,
+      ...(catalog.partial === true ? { code: 'PROVIDER_CATALOG_INCOMPLETE' } : {}),
       provider_count: Number.isInteger(catalog.provider_count) ? catalog.provider_count : catalog.providers.length,
       refreshed_at: typeof catalog.refreshed_at === 'string' ? catalog.refreshed_at : null,
       partial: catalog.partial === true,
@@ -162,21 +178,34 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   } catch {}
   const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
   let declarations = [];
+  const declarationEvidence = { ok: true, sources: {} };
   try {
+    declarationEvidence.sources.profile = { present: existsSync(profileFile) };
     if (existsSync(profileFile)) {
       const source = readFileSync(profileFile, 'utf8');
       const parsed = readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
       if (parsed.ok) declarations = parsed.declarations;
+      else { declarationEvidence.ok = false; declarationEvidence.sources.profile.code = parsed.code; }
     }
-  } catch {}
+  } catch { declarationEvidence.ok = false; declarationEvidence.sources.profile = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
   const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
+  let settingsDefault = null;
   try {
+    declarationEvidence.sources.settings = { present: existsSync(settingsFile) };
     if (existsSync(settingsFile)) {
       const source = readFileSync(settingsFile, 'utf8');
       const parsed = readProviderSettingsDeclarations(source, { file: 'harness/settings.yaml' });
       if (parsed.ok) declarations = [...declarations, ...parsed.declarations];
+      else { declarationEvidence.ok = false; declarationEvidence.sources.settings.code = parsed.code; }
+      const parsedDefault = readHarnessDefault(source);
+      if (parsedDefault.ok) settingsDefault = parsedDefault;
     }
-  } catch {}
+  } catch { declarationEvidence.ok = false; declarationEvidence.sources.settings = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
+  if (catalog.harness_default && settingsDefault
+    && settingsDefault.provider === catalog.harness_default.provider
+    && settingsDefault.model === catalog.harness_default.model) {
+    catalog = { ...catalog, harness_default_authority: { kind: 'harness-settings', locator: settingsDefault.locator } };
+  }
   const lifecycle = readProviderLifecycleState();
   const credentialPurge = readCredentialPurgeState();
   const inventory = buildProviderInventory({
@@ -189,6 +218,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   return {
     ...inventory,
     catalog_evidence: catalogEvidence,
+    declaration_evidence: declarationEvidence,
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
     credential_purged_refs: Object.keys(credentialPurge.purged),
@@ -1385,6 +1415,8 @@ export async function apply(ctx) {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
+            if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
+            if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
             const revisions = readProviderSourceRevisions();
             if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
             const expectedRevision = (revisions.profile.ok ? revisions.profile.revision : null) ?? revisions.settings.revision;
@@ -1400,8 +1432,9 @@ export async function apply(ctx) {
               },
             });
             if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
-            rememberProviderDeletePlan(planned.plan);
-            return sendJson(res, 200, { ok: true, profile_revision: expectedRevision, plan: planned.plan });
+            const plan = { ...planned.plan, runtime_id_before: getHubRuntimeIdentity().runtime_id };
+            rememberProviderDeletePlan(plan);
+            return sendJson(res, 200, { ok: true, profile_revision: expectedRevision, plan });
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'probe') {
             const record = inventory.records.find((entry) => entry.id === providerId);
@@ -1451,9 +1484,14 @@ export async function apply(ctx) {
               const verification = await hooks.verify(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verification.catalog_evidence = live.catalog_evidence;
-              verification.catalogAbsent = live.catalog_evidence?.ok === true
+              verification.catalogAbsent = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && !live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
-              if (verification?.providerAbsent !== true || verification?.catalog_evidence?.ok !== true || verification?.catalogAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
+              verification.harnessDefault = plan.was_harness_default !== true || (
+                live.harness_default?.provider === plan.replacement_default
+                && live.harness_default?.model === plan.replacement_default_model
+              );
+              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              if (verification?.providerAbsent !== true || !hasCompleteProviderCatalogEvidence(verification?.catalog_evidence) || verification?.catalogAbsent !== true || verification?.harnessDefault !== true || verification?.runtimeRestarted !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
                 return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
               }
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
@@ -1508,9 +1546,14 @@ export async function apply(ctx) {
               const verified = await hooks.verifyRollback(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verified.catalog_evidence = live.catalog_evidence;
-              verified.catalogPresent = live.catalog_evidence?.ok === true
+              verified.catalogPresent = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
-              if (verified?.ok !== true || verified?.catalog_evidence?.ok !== true || verified?.catalogPresent !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
+              verified.harnessDefaultRestored = plan.was_harness_default !== true || (
+                live.harness_default?.provider === plan.harness_default_before?.provider
+                && live.harness_default?.model === plan.harness_default_before?.model
+              );
+              verified.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
@@ -1529,6 +1572,8 @@ export async function apply(ctx) {
             }
             const revisions = readProviderSourceRevisions();
             if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
+            if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
+            if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
             const storedExpected = stored.plan.expected_revisions;
             const revisionsMatch = storedExpected
               ? (storedExpected.profile === (revisions.profile.ok ? revisions.profile.revision : null)
@@ -1554,6 +1599,7 @@ export async function apply(ctx) {
               plan_id: stored.plan.plan_id,
               expected_revision: stored.plan.expected_revision,
               expected_revisions: stored.plan.expected_revisions,
+              runtime_id_before: stored.plan.runtime_id_before,
             };
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),

@@ -22,6 +22,8 @@ import { readProviderDeclarations, removeProviderDeclarations } from './provider
 import {
   readProviderSettingsDeclarations,
   removeProviderSettings,
+  readHarnessDefault,
+  mutateProviderSettings,
 } from './provider-settings-store.mjs';
 import { scrubProviderReferences } from './provider-config-scrub.mjs';
 import {
@@ -166,6 +168,24 @@ function validatePaths(paths) {
   }
 }
 
+function validatePlanAuthorities(plan) {
+  const providerId = typeof plan?.provider_id === 'string' ? plan.provider_id : '';
+  const authorities = Array.isArray(plan?.declaration_authorities) ? plan.declaration_authorities : [];
+  if (!providerId || authorities.length === 0) throw Object.assign(new Error('provider declaration authority is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
+  const expected = {
+    'crew-profile': `llm-pi-ai.config.providers.${providerId}`,
+    'harness-settings': `llm-pi-ai.providers.${providerId}`,
+  };
+  for (const authority of authorities) {
+    if (typeof expected[authority?.kind] !== 'string' || authority.locator !== expected[authority.kind]) {
+      throw Object.assign(new Error('provider declaration authority locator is invalid'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
+    }
+  }
+  if (plan.was_harness_default === true && (plan.harness_default_authority?.kind !== 'harness-settings' || plan.harness_default_authority.locator !== 'agent-default-model')) {
+    throw Object.assign(new Error('Harness Default authority is unavailable'), { code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
+  }
+}
+
 /**
  * Build explicit adapters for executeProviderDelete.
  *
@@ -225,6 +245,7 @@ export function createProviderDeleteFileHooks({
   const backup = async (plan) => {
     const planId = safePlanId(plan?.plan_id);
     if (!planId) throw Object.assign(new Error('provider delete plan id is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+    validatePlanAuthorities(plan);
     await acquireLock();
     const root = join(backupDir, planId);
     fs.mkdirSync(root, { recursive: true });
@@ -238,6 +259,15 @@ export function createProviderDeleteFileHooks({
         replacement_default: plan.replacement_default ?? null,
         was_harness_default: plan.was_harness_default === true,
         replacement_default_model: plan.replacement_default_model ?? null,
+        ...(plan.harness_default_before && typeof plan.harness_default_before === 'object' ? { harness_default_before: {
+          provider: typeof plan.harness_default_before.provider === 'string' ? plan.harness_default_before.provider.trim() : null,
+          model: typeof plan.harness_default_before.model === 'string' ? plan.harness_default_before.model.trim() : null,
+        } } : {}),
+        ...(plan.harness_default_authority && typeof plan.harness_default_authority === 'object' ? { harness_default_authority: {
+          kind: typeof plan.harness_default_authority.kind === 'string' ? plan.harness_default_authority.kind.trim() : 'unknown',
+          locator: typeof plan.harness_default_authority.locator === 'string' ? plan.harness_default_authority.locator.trim() : 'unknown',
+        } } : {}),
+        ...(typeof plan.runtime_id_before === 'string' && plan.runtime_id_before.trim() ? { runtime_id_before: plan.runtime_id_before.trim().slice(0, 128) } : {}),
         declaration_authorities: (Array.isArray(plan.declaration_authorities) ? plan.declaration_authorities : []).map((authority) => ({
           kind: typeof authority?.kind === 'string' ? authority.kind.trim() : 'unknown',
           locator: typeof authority?.locator === 'string' ? authority.locator.trim() : 'unknown',
@@ -255,6 +285,7 @@ export function createProviderDeleteFileHooks({
       files: {},
     };
     const authorityKinds = new Set((Array.isArray(plan?.declaration_authorities) ? plan.declaration_authorities : []).map((authority) => authority?.kind));
+    const managesHarnessDefault = plan?.was_harness_default === true && plan?.harness_default_authority?.kind === 'harness-settings';
     for (const key of FILE_KEYS) {
       const source = paths[key];
       assertManagedPath(source);
@@ -269,7 +300,7 @@ export function createProviderDeleteFileHooks({
     if (typeof settingsFile === 'string' && settingsFile.trim()) {
       assertManagedPath(settingsFile);
       const existed = fs.existsSync(settingsFile);
-      const managed = authorityKinds.has('harness-settings');
+      const managed = authorityKinds.has('harness-settings') || managesHarnessDefault;
       manifest.files.settings = { existed, managed };
       if (existed && managed) fs.copyFileSync(settingsFile, join(root, 'settings.backup'));
     }
@@ -281,7 +312,7 @@ export function createProviderDeleteFileHooks({
     manifest.routing_projection_digest = sha256(JSON.stringify(manifest.config_projection));
     manifest.lifecycle_projection_digest = sha256(JSON.stringify(lifecycleProjection(lifecycle)));
     if (authorityKinds.has('crew-profile') && fs.existsSync(profileFile)) manifest.profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
-    if (authorityKinds.has('harness-settings') && typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)) {
+    if ((authorityKinds.has('harness-settings') || managesHarnessDefault) && typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)) {
       manifest.settings_revision = sha256(fs.readFileSync(settingsFile, 'utf8'));
     }
     activeBackup = { root, manifest };
@@ -310,16 +341,34 @@ export function createProviderDeleteFileHooks({
       throw Object.assign(new Error('provider config changed'), { code: 'PROVIDER_CONFIG_CHANGED' });
     }
     const scrubbed = scrubProviderReferences(config, [plan.provider_id]);
+    let settingsMutation = null;
+    const authorityKinds = authorityKindsFor(plan);
     if (plan.was_harness_default === true) {
       if (!validProviderId(plan.replacement_default) || typeof plan.replacement_default_model !== 'string' || !plan.replacement_default_model.trim()) {
         throw Object.assign(new Error('replacement Harness Default model is required'), { code: 'PROVIDER_DEFAULT_REPLACEMENT_MODEL_REQUIRED' });
       }
+      if (plan.harness_default_authority?.kind !== 'harness-settings' || plan.harness_default_authority.locator !== 'agent-default-model' || typeof settingsFile !== 'string' || !settingsFile.trim() || !fs.existsSync(settingsFile)) {
+        throw Object.assign(new Error('Harness Default authority is unavailable'), { code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
+      }
+      const source = fs.readFileSync(settingsFile, 'utf8');
+      settingsMutation = mutateProviderSettings(source, {
+        providerId: authorityKinds.has('harness-settings') ? plan.provider_id : null,
+        removeProvider: authorityKinds.has('harness-settings'),
+        replacementDefault: plan.replacement_default,
+        replacementModel: plan.replacement_default_model.trim(),
+        expectedRevision: plan.expected_revisions?.settings ?? activeBackup?.manifest?.settings_revision,
+      });
+      if (!settingsMutation.ok) throw Object.assign(new Error('Harness Default settings changed'), { code: settingsMutation.code });
       scrubbed.config.harness_default = {
         provider: plan.replacement_default,
         model: plan.replacement_default_model.trim(),
       };
     }
     await writeConfig(scrubbed.config);
+    if (settingsMutation) {
+      atomicWrite(settingsFile, settingsMutation.text);
+      if (activeBackup) activeBackup.manifest.applied_settings_revision = settingsMutation.revision;
+    }
     if (activeBackup) {
       activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(scrubbed.config));
       persistManifest();
@@ -330,7 +379,7 @@ export function createProviderDeleteFileHooks({
 
   const removeDeclarations = async (plan) => {
     const authorityKinds = authorityKindsFor(plan);
-    let removed = 0;
+    let removed = plan.was_harness_default === true && authorityKinds.has('harness-settings') ? 1 : 0;
     if (authorityKinds.has('crew-profile')) {
       assertManagedPath(profileFile);
       const source = fs.readFileSync(profileFile, 'utf8');
@@ -343,7 +392,7 @@ export function createProviderDeleteFileHooks({
       removed += result.removed.length;
       if (activeBackup) activeBackup.manifest.applied_profile_revision = result.revision;
     }
-    if (authorityKinds.has('harness-settings')) {
+    if (authorityKinds.has('harness-settings') && !(plan.was_harness_default === true)) {
       if (typeof settingsFile !== 'string' || !settingsFile.trim()) throw Object.assign(new Error('provider settings path is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
       assertManagedPath(settingsFile);
       const source = fs.readFileSync(settingsFile, 'utf8');
@@ -396,10 +445,14 @@ export function createProviderDeleteFileHooks({
       config?.harness_default?.provider === plan.replacement_default
       && config?.harness_default?.model === plan.replacement_default_model
     );
+    const harnessDefaultApplied = plan.was_harness_default !== true || (
+      typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)
+      && (() => { const parsed = readHarnessDefault(fs.readFileSync(settingsFile, 'utf8')); return parsed.ok && parsed.provider === plan.replacement_default && parsed.model === plan.replacement_default_model; })()
+    );
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     return {
       providerAbsent,
-      routingClear: routingClear && replacementApplied,
+      routingClear: routingClear && replacementApplied && harnessDefaultApplied,
       tombstonePresent: state.tombstones[plan.provider_id] === 'absent',
     };
   };
@@ -501,6 +554,10 @@ export function createProviderDeleteFileHooks({
       next.last_verified_revision[plan.provider_id] = sha256(`${profileRevision}:${settingsRevision}`);
     }
     atomicWrite(lifecycleFile, JSON.stringify(next, null, 2) + '\n');
+    if (activeBackup) {
+      activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(next));
+      persistManifest();
+    }
   };
 
   return {

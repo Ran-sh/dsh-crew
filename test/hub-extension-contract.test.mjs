@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
@@ -30,6 +30,10 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /catalogAbsent/);
   assert.match(hubSource, /catalog_evidence/);
   assert.match(hubSource, /catalogPresent/);
+  assert.match(hubSource, /runtime_id_before/);
+  assert.match(hubSource, /runtimeRestarted/);
+  assert.match(hubSource, /PROVIDER_CATALOG_INCOMPLETE/);
+  assert.match(hubSource, /readHarnessDefault/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -68,6 +72,23 @@ test('Hub mutation surface rejects cross-site browser requests', () => {
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
   assert.equal(isLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3210', origin: 'http://[::1]:3080', 'sec-fetch-site': 'same-origin' } }), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
+});
+
+test('destructive provider lifecycle requires complete catalog evidence', () => {
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: true, partial: false }), true);
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: true, partial: true }), false);
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: false, partial: false }), false);
+});
+
+test('provider lifecycle accepts only a changed 3210 runtime identity as restart evidence', () => {
+  assert.equal(hasProviderRuntimeRestartEvidence('before', 'after'), true);
+  assert.equal(hasProviderRuntimeRestartEvidence('same', 'same'), false);
+  assert.equal(hasProviderRuntimeRestartEvidence(null, 'after'), false);
+});
+
+test('provider lifecycle fails closed when any existing declaration source is malformed', () => {
+  assert.equal(hasCompleteProviderDeclarationEvidence({ ok: true, sources: { profile: { present: true }, settings: { present: false } } }), true);
+  assert.equal(hasCompleteProviderDeclarationEvidence({ ok: false, sources: { settings: { present: true, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' } } }), false);
 });
 
 test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
