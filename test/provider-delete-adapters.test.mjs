@@ -359,6 +359,19 @@ test('offline recovery clears a stale reclaim guard only when no live owner rema
   assert.equal(existsSync(join(backupDir, '.delete.lock.dead.active')), false);
 });
 
+test('offline recovery also clears a malformed main lock without a reclaim guard', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const lockPath = join(backupDir, '.delete.lock');
+  mkdirSync(lockPath, { recursive: true });
+  writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ token: 'orphan-owner' }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const recovered = await hooks.recoverLock();
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.recovered, true);
+  assert.equal(existsSync(lockPath), false);
+});
+
 test('provider verification fails closed when a managed profile is malformed', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
@@ -579,6 +592,22 @@ test('reopening a backup fails closed when its config projection digest is tampe
   const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
   manifest.config_projection.fields = { tampered: 'must-not-restore' };
+  writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
+test('reopening a backup fails closed when rollback existence semantics are tampered', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  manifest.files.profile.existed = false;
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
   assert.throws(() => createProviderDeleteFileHooks({
     ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
