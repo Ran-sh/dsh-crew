@@ -749,7 +749,6 @@ export function createProviderDeleteFileHooks({
   const commitMutation = (key, nextRevision) => {
     if (!activeBackup || typeof nextRevision !== 'string') return;
     const pending = activeBackup.manifest.mutation_journal?.[key];
-    activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
     if (pending?.created === true) {
       const target = key === 'settings' ? settingsFile : paths[key];
       const witness = pending.witness;
@@ -770,6 +769,7 @@ export function createProviderDeleteFileHooks({
       activeBackup.manifest[`created_${key}`] = true;
       activeBackup.manifest[`created_${key}_identity`] = targetIdentity;
     }
+    activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
     const witness = pending?.witness;
     if (activeBackup.manifest.mutation_journal) delete activeBackup.manifest.mutation_journal[key];
     persistManifest();
