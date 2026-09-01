@@ -375,6 +375,7 @@ export function createProviderDeleteFileHooks({
     };
     const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
     assertManagedPath(backupDir, managedRoot);
+    for (const path of [guardPath, canonicalPath, recoveryPath]) assertManagedPath(path, managedRoot);
     const recoveryToken = randomUUID();
     let recoveryOwned = false;
     const recoveryOwner = () => ({ pid: process.pid, token: recoveryToken, created_at: new Date().toISOString() });
@@ -447,6 +448,7 @@ export function createProviderDeleteFileHooks({
     const retiredPath = join(backupDir, `.delete.lock.${ownerToken}.retired`);
     const reclaimGuardPath = join(backupDir, '.delete.reclaim.lock');
     let guardOwned = false;
+    for (const path of [canonicalPath, activePath, stagingPath, retiredPath, reclaimGuardPath]) assertManagedPath(path, managedRoot);
     try {
       fs.writeFileSync(reclaimGuardPath, JSON.stringify({ pid: process.pid, token: ownerToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
       guardOwned = true;
@@ -777,6 +779,7 @@ export function createProviderDeleteFileHooks({
   };
 
   const scrubReferences = async (plan) => {
+    assertManagedPath(configFile, managedRoot);
     const config = await readConfigFn();
     if (sha256(JSON.stringify(config)) !== activeBackup?.manifest?.config_revision) {
       throw Object.assign(new Error('provider config changed'), { code: 'PROVIDER_CONFIG_CHANGED' });
@@ -862,6 +865,10 @@ export function createProviderDeleteFileHooks({
 
   const checkpointApplied = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
+    assertManagedPath(configFile, managedRoot);
+    assertManagedPath(lifecycleFile, managedRoot);
+    assertManagedPath(profileFile, managedRoot);
+    if (settingsFile) assertManagedPath(settingsFile, managedRoot);
     const config = await readConfigFn();
     const lifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(config));
@@ -892,8 +899,10 @@ export function createProviderDeleteFileHooks({
 
   const verify = async (plan) => {
     const authorityKinds = authorityKindsFor(plan);
+    assertManagedPath(configFile, managedRoot);
     assertManagedPath(profileFile, managedRoot);
     assertManagedPath(lifecycleFile, managedRoot);
+    if (settingsFile) assertManagedPath(settingsFile, managedRoot);
     let providerAbsent = true;
     if (authorityKinds.has('crew-profile')) {
       const source = fs.readFileSync(profileFile, 'utf8');
@@ -929,6 +938,10 @@ export function createProviderDeleteFileHooks({
   const rollback = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_ROLLBACK_UNAVAILABLE' });
     ensureMutationLock();
+    assertManagedPath(configFile, managedRoot);
+    assertManagedPath(profileFile, managedRoot);
+    assertManagedPath(lifecycleFile, managedRoot);
+    if (settingsFile) assertManagedPath(settingsFile, managedRoot);
     const allowedRevision = (current, original, applied, key) => current === original
       || (typeof applied === 'string' && current === applied)
       || (typeof activeBackup.manifest.mutation_journal?.[key]?.next_revision === 'string' && current === activeBackup.manifest.mutation_journal[key].next_revision);
@@ -1031,8 +1044,10 @@ export function createProviderDeleteFileHooks({
 
   const verifyRollback = async (plan) => {
     const authorityKinds = authorityKindsFor(plan);
+    assertManagedPath(configFile, managedRoot);
     assertManagedPath(profileFile, managedRoot);
     assertManagedPath(lifecycleFile, managedRoot);
+    if (settingsFile) assertManagedPath(settingsFile, managedRoot);
     const source = fs.existsSync(profileFile) ? fs.readFileSync(profileFile, 'utf8') : null;
     const parsed = source === null ? { ok: false } : readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
     const legacyPlan = authorityKinds.size === 0;
@@ -1064,7 +1079,10 @@ export function createProviderDeleteFileHooks({
 
   const recordTransaction = async (result, plan) => {
     ensureMutationLock();
+    assertManagedPath(configFile, managedRoot);
+    assertManagedPath(profileFile, managedRoot);
     assertManagedPath(lifecycleFile, managedRoot);
+    if (settingsFile) assertManagedPath(settingsFile, managedRoot);
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     const initialRevision = sha256(JSON.stringify(state));
     const next = recordProviderTransaction(state, {
