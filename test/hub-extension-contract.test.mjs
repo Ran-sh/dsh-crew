@@ -50,6 +50,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED/);
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED/);
   assert.match(hubSource, /hooks\.quarantine/);
+  assert.match(hubSource, /afterLockAcquired/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -153,6 +154,20 @@ test('provider recovery surfaces malformed manifests as unresolved blockers', ()
   assert.equal(transactions[0].phase, 'RECOVERY_UNRESOLVED');
   assert.equal(transactions[0].storage_id, '22222222-2222-4222-8222-222222222222');
   assert.equal(transactions[0].recoverable, false);
+  assert.equal(transactions[0].unresolved, true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
+});
+
+test('provider recovery does not hide structurally incomplete or terminal-invalid manifests', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-incomplete-'));
+  const entry = join(root, '.partial');
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), JSON.stringify({ schema_version: 1, phase_journal: { phase: 'VERIFIED' } }));
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, '.partial');
+  assert.equal(transactions[0].transaction_id, '.partial');
+  assert.equal(transactions[0].phase, 'VERIFIED');
   assert.equal(transactions[0].unresolved, true);
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
 });

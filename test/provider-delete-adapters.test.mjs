@@ -541,6 +541,23 @@ test('file adapters serialize concurrent transactions with a managed lock', asyn
   await second.release();
 });
 
+test('provider deletion rechecks recovery state after acquiring its mutation lock', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  let checked = 0;
+  const hooks = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    afterLockAcquired: () => {
+      checked += 1;
+      throw Object.assign(new Error('recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+    },
+  });
+  await assert.rejects(() => hooks.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_RECOVERY_PENDING');
+  assert.equal(checked, 1);
+  assert.equal(existsSync(join(backupDir, '.delete.lock')), false);
+});
+
 test('a persisted transaction backup can be reopened for an explicit rollback', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);

@@ -144,21 +144,20 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
         const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
         const transactionId = typeof manifest?.plan?.plan_id === 'string' ? manifest.plan.plan_id : null;
         const providerId = typeof manifest?.provider_id === 'string' ? manifest.provider_id : null;
-        if (!transactionId || !providerId) return [];
         const phase = typeof manifest?.phase_journal?.phase === 'string' && manifest.phase_journal.phase.trim()
           ? manifest.phase_journal.phase.trim() : 'RECOVERY_INCOMPLETE';
         const updatedAt = typeof manifest?.phase_journal?.updated_at === 'string' && manifest.phase_journal.updated_at.trim()
           ? manifest.phase_journal.updated_at : statSync(manifestFile).mtime.toISOString();
         const hasPendingMutation = manifest?.mutation_journal && typeof manifest.mutation_journal === 'object'
           && Object.keys(manifest.mutation_journal).length > 0;
-        if (['ROLLED_BACK', 'VERIFIED'].includes(phase) && !hasPendingMutation) return [];
-        const recoverable = isRecoverableProviderDeleteBackup(manifest, {
+        const recoverable = transactionId != null && providerId != null && isRecoverableProviderDeleteBackup(manifest, {
           root: transactionRoot,
           managedRoot,
           paths,
           expectedProviderId: providerId,
-        });
-        return [{ storage_id: entry.name, transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt, recoverable, unresolved: recoverable !== true }];
+        }) === true;
+        if (['ROLLED_BACK', 'VERIFIED'].includes(phase) && !hasPendingMutation && recoverable) return [];
+        return [{ storage_id: entry.name, transaction_id: transactionId ?? entry.name, provider_id: providerId, phase, updated_at: updatedAt, recoverable, unresolved: recoverable !== true }];
       } catch {
         let updatedAt;
         try { updatedAt = statSync(transactionRoot).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
@@ -1750,6 +1749,11 @@ export async function apply(ctx) {
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
               runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
+              afterLockAcquired: () => {
+                if (readProviderRecoveryTransactions().length > 0) {
+                  throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+                }
+              },
             });
             providerDeletePlans.delete(body.plan_id);
             const { executeProviderDelete } = await import('../provider-lifecycle.mjs');

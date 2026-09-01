@@ -108,7 +108,7 @@ const COPY = {
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
-    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证',
+    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证', recoveryUnresolved: '发现不可自动恢复的事务', recoveryStorage: '存储项', recoveryQuarantine: '隔离', recoveryQuarantineConfirm: '该事务清单无法安全恢复。将其移入隔离区并阻止自动使用，继续？',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
     credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
@@ -248,7 +248,7 @@ const COPY = {
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
-    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification',
+    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification', recoveryUnresolved: 'An unrecoverable recovery transaction is blocking deletion', recoveryStorage: 'storage entry', recoveryQuarantine: 'Quarantine', recoveryQuarantineConfirm: 'This recovery manifest cannot be safely reopened. Move it into the quarantine area and keep it out of automatic recovery?',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
     credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
@@ -962,6 +962,25 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     }
   };
 
+  const quarantineRecoveryTransaction = async (entry: any) => {
+    const storageId = typeof entry?.storage_id === 'string' ? entry.storage_id : '';
+    if (!storageId || entry?.recoverable === true) return;
+    if (!window.confirm(copy.recoveryQuarantineConfirm)) return;
+    setProviderLifecycleBusy(`quarantine:${storageId}`);
+    setNotice(copy.working);
+    try {
+      const result = await post('/providers/_recovery/quarantine', { transaction_id: storageId, confirm: true });
+      if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      try { await refreshProviderInventory(); } catch { /* preserve the original recovery error */ }
+      setNotice(String(error?.message ?? error));
+    } finally {
+      setProviderLifecycleBusy(null);
+    }
+  };
+
   /** Card: title + one-line description header, then its fields. */
   const block = (text: { t: string; d: string }, fields: any, gridded = true) => (
     <div style={S.block}>
@@ -1494,6 +1513,18 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               </div>
             );
           })}
+          {(providerInventory?.recovery_transactions ?? []).filter((entry: any) => entry?.unresolved === true || !entry?.provider_id).map((entry: any) => (
+            <div key={`recovery:${entry.storage_id ?? entry.transaction_id ?? 'unknown'}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' as const, color: '#c98735', marginTop: 6 }}>
+              <span style={{ fontWeight: 600 }}>{copy.recoveryUnresolved}</span>
+              <span style={S.mono}>{entry.storage_id ?? entry.transaction_id ?? 'unknown'}</span>
+              <span style={{ opacity: 0.7 }}>{entry.phase}</span>
+              <span style={{ flex: 1 }} />
+              {entry.storage_id && <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
+                onClick={() => { void quarantineRecoveryTransaction(entry); }}>
+                {providerLifecycleBusy === `quarantine:${entry.storage_id}` ? copy.working : copy.recoveryQuarantine}
+              </button>}
+            </div>
+          ))}
           {(credentialRefs.length > 0 || credentialUnverified.length > 0) && (
             <div style={{ marginTop: 10, borderTop: '1px solid rgba(128,128,128,0.16)', paddingTop: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 12.5 }}>{copy.credentialReferences}</div>

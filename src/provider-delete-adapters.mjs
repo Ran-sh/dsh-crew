@@ -495,6 +495,7 @@ export function createProviderDeleteFileHooks({
   runtimeIdProvider = null,
   existingBackupId = null,
   expectedProviderId = null,
+  afterLockAcquired = null,
   fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync },
 } = {}) {
   if (typeof backupDir !== 'string' || !backupDir.trim()) throw new TypeError('provider delete backup directory is required');
@@ -723,6 +724,7 @@ export function createProviderDeleteFileHooks({
         // malformed input can fail fast. Refresh once ownership is acquired
         // so a stale in-memory manifest cannot overwrite newer recovery state.
         refreshActiveBackup();
+        if (typeof afterLockAcquired === 'function') afterLockAcquired(activeBackup?.manifest ?? null);
       } catch (error) {
         cleanup(path);
         lockOwned = false;
@@ -744,6 +746,7 @@ export function createProviderDeleteFileHooks({
           } catch (error) {
             cleanup(stagingPath);
             if (error?.code === 'EEXIST' || error?.code === 'ENOENT') continue;
+            if (error?.code === 'PROVIDER_DELETE_RECOVERY_PENDING') throw error;
             throw Object.assign(new Error('provider deletion lock unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
           }
         }
@@ -761,6 +764,7 @@ export function createProviderDeleteFileHooks({
           } catch (error) {
             cleanup(stagingPath);
             if (error?.code === 'ENOENT' || error?.code === 'EEXIST') { raced = true; break; }
+            if (error?.code === 'PROVIDER_DELETE_RECOVERY_PENDING') throw error;
             throw Object.assign(new Error('provider deletion lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
           }
         }
