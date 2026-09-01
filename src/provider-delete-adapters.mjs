@@ -328,7 +328,19 @@ export function createProviderDeleteFileHooks({
     fs.mkdirSync(backupDir, { recursive: true });
     assertManagedPath(backupDir, managedRoot);
     const ownerToken = randomUUID();
+    const canonicalPath = join(backupDir, '.delete.lock');
     const activePath = join(backupDir, `.delete.lock.${ownerToken}.active`);
+    const stagingPath = join(backupDir, `.delete.lock.${ownerToken}.staging`);
+    const retiredPath = join(backupDir, `.delete.lock.${ownerToken}.retired`);
+    const reclaimGuardPath = join(backupDir, '.delete.reclaim.lock');
+    let guardOwned = false;
+    try {
+      fs.writeFileSync(reclaimGuardPath, JSON.stringify({ pid: process.pid, token: ownerToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
+      guardOwned = true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
+      throw Object.assign(new Error('provider delete lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+    }
     const ownerIsAlive = (owner) => {
       if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
       try { process.kill(owner.pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
@@ -336,55 +348,75 @@ export function createProviderDeleteFileHooks({
     const lockCandidates = () => {
       try {
         return readdirSync(backupDir, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory() && (entry.name === '.delete.lock' || /^\.delete\.lock\.[0-9a-f-]+\.active$/iu.test(entry.name)))
+          .filter((entry) => entry.name === '.delete.lock' || /^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging)$/iu.test(entry.name))
           .map((entry) => join(backupDir, entry.name));
       } catch { return []; }
     };
-    const writeOwner = (path) => {
-      const ownerPath = join(path, 'owner.json');
-      fs.writeFileSync(ownerPath, JSON.stringify({
+    const ownerPathFor = (path) => {
+      try { return lstatSync(path).isDirectory() ? join(path, 'owner.json') : path; } catch { return path; }
+    };
+    const ownerRecord = () => JSON.stringify({
         pid: process.pid,
         token: ownerToken,
         ...(typeof runtimeIdProvider === 'function' ? { runtime_id: runtimeIdProvider() } : {}),
         created_at: new Date().toISOString(),
-      }) + '\n');
-      const owner = readJson(ownerPath, null);
+      }) + '\n';
+    const readOwner = (path) => {
+      try { return readJson(ownerPathFor(path), null); } catch { return null; }
+    };
+    const writeStagingOwner = () => {
+      fs.writeFileSync(stagingPath, ownerRecord(), { flag: 'wx' });
+      const owner = readOwner(stagingPath);
       if (owner?.token !== ownerToken) throw Object.assign(new Error('provider delete owner metadata was not persisted'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
     };
-    const adopt = (path) => {
+    const adoptPrepared = (path) => {
       assertManagedPath(path, managedRoot);
-      writeOwner(path);
+      const owner = readOwner(path);
+      if (owner?.token !== ownerToken) throw Object.assign(new Error('provider delete owner metadata was not persisted'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
       lockPath = path;
       lockOwnerToken = ownerToken;
       lockOwned = true;
     };
-    let createdPath = null;
+    const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
     try {
-      for (const candidate of lockCandidates()) {
-        const ownerPath = join(candidate, 'owner.json');
-        let owner = null;
-        try { owner = readJson(ownerPath, null); } catch {}
-        if (owner && ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
-        try {
-          renameSync(candidate, activePath);
-          createdPath = activePath;
-          adopt(activePath);
-          return;
-        } catch (error) {
-          if (error?.code !== 'ENOENT' && error?.code !== 'EEXIST') throw Object.assign(new Error('provider deletion lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+      while (true) {
+        const candidates = lockCandidates();
+        if (candidates.length === 0) {
+          try {
+            writeStagingOwner();
+            renameSync(stagingPath, canonicalPath);
+            adoptPrepared(canonicalPath);
+            return;
+          } catch (error) {
+            cleanup(stagingPath);
+            if (error?.code === 'EEXIST' || error?.code === 'ENOENT') continue;
+            throw Object.assign(new Error('provider deletion lock unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+          }
         }
-      }
-      try {
-        fs.mkdirSync(activePath);
-        createdPath = activePath;
-        adopt(activePath);
-      } catch (error) {
-        if (error?.code === 'EEXIST') throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
-        throw Object.assign(new Error('provider deletion lock unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+        let raced = false;
+        for (const candidate of candidates) {
+          const owner = readOwner(candidate);
+          if (owner && ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
+          try {
+            writeStagingOwner();
+            renameSync(candidate, retiredPath);
+            renameSync(stagingPath, activePath);
+            cleanup(retiredPath);
+            adoptPrepared(activePath);
+            return;
+          } catch (error) {
+            cleanup(stagingPath);
+            if (error?.code === 'ENOENT' || error?.code === 'EEXIST') { raced = true; break; }
+            throw Object.assign(new Error('provider deletion lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+          }
+        }
+        if (!raced) continue;
       }
     } catch (error) {
-      if (!lockOwned && createdPath) try { fs.rmSync(createdPath, { recursive: true, force: true }); } catch {}
+      cleanup(stagingPath);
       throw error;
+    } finally {
+      if (guardOwned) cleanup(reclaimGuardPath);
     }
   };
 
@@ -526,15 +558,15 @@ export function createProviderDeleteFileHooks({
       const managed = key !== 'profile' || authorityKinds.has('crew-profile');
       manifest.files[key] = { existed, managed };
       if (existed && key !== 'config' && managed) {
+        const sourceText = fs.readFileSync(source, 'utf8');
         if (key === 'profile') {
-          const sourceText = fs.readFileSync(source, 'utf8');
           const credentials = hasInlineProfileCredentials(sourceText);
           if (credentials.ok !== true) throw Object.assign(new Error('provider profile credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
           if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
         }
         const target = join(root, `${key}.backup`);
-      assertManagedPath(target, managedRoot);
-      fs.copyFileSync(source, target);
+        assertManagedPath(target, managedRoot);
+        atomicWrite(target, sourceText, managedRoot);
       }
     }
     if (typeof settingsFile === 'string' && settingsFile.trim()) {
@@ -549,7 +581,7 @@ export function createProviderDeleteFileHooks({
         if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
         const target = join(root, 'settings.backup');
         assertManagedPath(target, managedRoot);
-        fs.copyFileSync(settingsFile, target);
+        atomicWrite(target, sourceText, managedRoot);
       }
     }
     const config = await readConfig();
@@ -814,7 +846,9 @@ export function createProviderDeleteFileHooks({
     if (!lockOwned || !lockPath) return;
     try {
       let owner = null;
-      try { owner = readJson(join(lockPath, 'owner.json'), null); } catch {}
+      let ownerPath = lockPath;
+      try { if (lstatSync(lockPath).isDirectory()) ownerPath = join(lockPath, 'owner.json'); } catch {}
+      try { owner = readJson(ownerPath, null); } catch {}
       if (owner?.token === lockOwnerToken) fs.rmSync(lockPath, { recursive: true, force: true });
     } finally { lockOwned = false; lockPath = null; lockOwnerToken = null; }
   };

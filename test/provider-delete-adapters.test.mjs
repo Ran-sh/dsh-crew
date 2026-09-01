@@ -304,14 +304,15 @@ test('two processes reclaiming the same stale lock yield exactly one owner', asy
     writeFileSync(${JSON.stringify(readyFile)}, 'ready');
     while (!existsSync(payload.start)) await new Promise((resolve) => setTimeout(resolve, 5));
     const hooks = createProviderDeleteFileHooks({ ...payload.paths, backupDir: payload.backupDir });
-    try { await hooks.backup(payload.plan); console.log('WON'); await new Promise((resolve) => setTimeout(resolve, 500)); }
+    try { await hooks.backup(payload.plan); console.log('WON:' + process.pid); await new Promise((resolve) => setTimeout(resolve, 500)); }
     catch (error) { console.log(error.code ?? 'UNKNOWN'); }
     finally { await hooks.release(); }
   `;
-  const children = ready.map((readyFile) => spawn(process.execPath, ['--input-type=module', '-e', childSource(readyFile)], { cwd: process.cwd() }));
+  const children = ready.map((readyFile) => spawn(process.execPath, ['--input-type=module', '-e', childSource(readyFile)], { cwd: process.cwd(), env: { ...process.env, DSH_DEBUG_LOCK: '1' } }));
   const output = children.map((child) => new Promise((resolve) => {
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
     child.on('close', () => resolve(text.trim()));
   }));
   const deadline = Date.now() + 5_000;
@@ -319,8 +320,9 @@ test('two processes reclaiming the same stale lock yield exactly one owner', asy
   assert.deepEqual(ready.map((file) => existsSync(file)), [true, true]);
   writeFileSync(start, 'go');
   const results = await Promise.all(output);
-  assert.equal(results.filter((value) => value === 'WON').length, 1);
-  assert.equal(results.filter((value) => value === 'PROVIDER_DELETE_BUSY').length, 1);
+  const normalized = results.map((value) => value.includes('WON:') ? 'WON' : value.includes('PROVIDER_DELETE_BUSY') ? 'PROVIDER_DELETE_BUSY' : value);
+  assert.equal(normalized.filter((value) => value === 'WON').length, 1);
+  assert.equal(normalized.filter((value) => value === 'PROVIDER_DELETE_BUSY').length, 1);
 });
 
 test('provider verification fails closed when a managed profile is malformed', async () => {
@@ -506,7 +508,7 @@ test('owner metadata write failure cleans up the half-created lock', async () =>
     readFileSync,
     rmSync,
     writeFileSync(file, content, options) {
-      if (String(file).endsWith('owner.json')) {
+      if (String(file).includes('.staging')) {
         const error = new Error('owner metadata write denied');
         error.code = 'EACCES';
         throw error;
