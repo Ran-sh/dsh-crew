@@ -36,7 +36,7 @@ function safeProjection(declaration) {
  * declarations to Harness user settings. The caller supplies declarations
  * already obtained from the two authoritative stores.
  */
-export function buildProviderLayerMigrationPlan({ declarations = [], catalogProviders = [], harnessDefault = null, routingReferences = [], tombstones = {}, recoveryTransactions = [], catalogEvidence = { ok: true, partial: false }, declarationEvidence = { ok: true }, lifecycleEvidence = { ok: true } } = {}) {
+export function buildProviderLayerMigrationPlan({ declarations = [], catalogProviders = [], harnessDefault = null, routingReferences = [], tombstones = {}, recoveryTransactions = [], catalogEvidence = { ok: true, partial: false }, declarationEvidence = { ok: true }, lifecycleEvidence = { ok: true }, defaultEvidence = { ok: true } } = {}) {
   const entries = Array.isArray(declarations) ? declarations : [];
   const base = entries.filter((entry) => authorityKind(entry) === 'crew-profile' && providerId(entry));
   const user = entries.filter((entry) => authorityKind(entry) === 'harness-settings' && providerId(entry));
@@ -51,6 +51,7 @@ export function buildProviderLayerMigrationPlan({ declarations = [], catalogProv
   const catalogUnavailable = catalogEvidence?.ok !== true || catalogEvidence?.partial === true;
   const declarationUnavailable = declarationEvidence?.ok !== true;
   const lifecycleUnavailable = lifecycleEvidence?.ok !== true;
+  const defaultUnavailable = defaultEvidence?.ok !== true;
   const providers = [...new Set([...byBase.keys(), ...byUser.keys()])]
     .filter((id) => !BUILTIN_PROVIDER_IDS.has(id))
     .map((id) => {
@@ -69,9 +70,11 @@ export function buildProviderLayerMigrationPlan({ declarations = [], catalogProv
         ? 'PROVIDER_LIFECYCLE_UNAVAILABLE'
         : catalogUnavailable
           ? 'MODEL_CATALOG_UNAVAILABLE'
-          : declarationUnavailable
-            ? 'PROVIDER_SOURCE_UNRESOLVED'
-            : unresolvedRecovery
+            : declarationUnavailable
+              ? 'PROVIDER_SOURCE_UNRESOLVED'
+              : defaultUnavailable
+                ? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE'
+                : unresolvedRecovery
               ? 'PROVIDER_DELETE_RECOVERY_UNRESOLVED'
               : pendingRecovery
                 ? 'PROVIDER_DELETE_RECOVERY_PENDING'

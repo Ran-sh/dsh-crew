@@ -368,6 +368,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     catalogEvidence,
     declarationEvidence,
     lifecycleEvidence,
+    defaultEvidence,
   });
   return {
     ...inventory,
@@ -1676,9 +1677,17 @@ export async function apply(ctx) {
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
+              sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
             });
             const recovered = await hooks.recoverLock({ force: body?.force === true });
-            return sendJson(res, recovered.ok ? 200 : 409, recovered);
+            const migrationHooks = createProviderLayerMigrationFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+            });
+            const migrationRecovered = await migrationHooks.recoverLock({ confirm: true });
+            const ok = recovered.ok === true && migrationRecovered.ok === true;
+            return sendJson(res, ok ? 200 : 409, { ok, delete_lock: recovered, migration_lock: migrationRecovered });
           }
           if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'quarantine' && parts.length === 2) {
             if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED' });
@@ -1713,6 +1722,7 @@ export async function apply(ctx) {
                 configFile: join(CONFIG_DIR, 'config.json'),
                 lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
                 backupDir: join(CONFIG_DIR, 'provider-backups'),
+                sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
                 afterLockAcquired: () => {
                   const current = readProviderRecoveryTransactions().find((entry) => entry.action_id === actionId);
                   if (!current || current.recoverable === true || current.storage_id !== recovery.storage_id) {
@@ -1733,13 +1743,14 @@ export async function apply(ctx) {
             if (!hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (!hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_SOURCE_UNRESOLVED' });
             if (!hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
+            if (inventory.default_evidence?.ok !== true) return sendJson(res, 409, { ok: false, code: inventory.default_evidence?.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
             if (hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
             const entry = inventory.migration.providers.find((candidate) => candidate.provider_id === providerId);
             if (!entry) return sendJson(res, 404, { ok: false, code: 'PROVIDER_MIGRATION_NOT_REQUIRED' });
             if (entry.action === 'blocked' || entry.action === 'collision-review') return sendJson(res, 409, { ok: false, code: entry.blocked_reason ?? 'PROVIDER_MIGRATION_BLOCKED' });
             const revisions = readProviderSourceRevisions();
             if (!revisions.profile.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? 'PROVIDER_PROFILE_CHANGED' });
-            if (entry.action === 'promote-existing-user' && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.settings.code ?? 'PROVIDER_SETTINGS_CHANGED' });
+            if ((entry.action === 'promote-existing-user' || entry.harness_default) && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.settings.code ?? 'PROVIDER_SETTINGS_CHANGED' });
             const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
             const parsedMaterialization = readProviderMaterialization(readFileSync(profileFile, 'utf8'), { providerId, file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
             if (!parsedMaterialization.ok) return sendJson(res, 409, { ok: false, code: parsedMaterialization.code });
@@ -1756,6 +1767,7 @@ export async function apply(ctx) {
                 profile: revisions.profile.revision,
                 settings: revisions.settings.ok ? revisions.settings.revision : null,
               },
+              harness_default_before: inventory.harness_default ?? null,
               runtime_id_before: getHubRuntimeIdentity().runtime_id,
               restart_required: true,
             };
@@ -1771,6 +1783,7 @@ export async function apply(ctx) {
             }
             const entry = inventory.migration.providers.find((candidate) => candidate.provider_id === providerId);
             if (!entry || entry.action !== stored.plan.action || entry.action === 'blocked' || entry.action === 'collision-review') return sendJson(res, 409, { ok: false, code: entry?.blocked_reason ?? 'PROVIDER_MIGRATION_PLAN_CHANGED' });
+            if (inventory.default_evidence?.ok !== true) return sendJson(res, 409, { ok: false, code: inventory.default_evidence?.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
             const revisions = readProviderSourceRevisions();
             const expected = stored.plan.expected_revisions ?? {};
             if (revisions.profile.revision !== expected.profile || (revisions.settings.ok ? revisions.settings.revision : null) !== expected.settings) {
@@ -1819,6 +1832,7 @@ export async function apply(ctx) {
               backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
               existingMigrationId: transactionId,
             });
+            let acquiredStoreFence = false;
             try {
               await hooks.acquireLock();
               await hooks.backup({});
@@ -1828,18 +1842,25 @@ export async function apply(ctx) {
               if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
                 if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerStoreMutationOwners.set(plan.plan_id, providerId);
+                acquiredStoreFence = true;
               }
               if (owner !== plan.plan_id) {
-                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) {
+                  if (acquiredStoreFence && providerStoreMutationOwners.get(plan.plan_id) === providerId) { providerStoreMutationOwners.delete(plan.plan_id); hub.endProviderStoreMutation(); }
+                  return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                }
                 providerMigrationOwners.set(providerId, plan.plan_id);
               }
               const verification = await hooks.verify(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verification.catalogEvidence = live.catalog_evidence;
+              verification.defaultEvidence = live.default_evidence;
+              verification.defaultPreserved = live.default_evidence?.ok === true
+                && JSON.stringify(live.harness_default ?? null) === JSON.stringify(plan.harness_default_before ?? null);
               verification.liveNativeRemovable = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && live.records.some((record) => record.id === providerId && record.lifecycle?.catalogued === true && record.native_removable === true);
               verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before_restart ?? plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
-              if (verification.nativeRemovable !== true || verification.liveNativeRemovable !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_FAILED', verification });
+              if (verification.nativeRemovable !== true || verification.liveNativeRemovable !== true || verification.defaultPreserved !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_FAILED', verification });
               await hooks.finalizeVerified();
               if (providerMigrationOwners.get(providerId) === plan.plan_id) {
                 providerMigrationOwners.delete(providerId);
@@ -1867,6 +1888,7 @@ export async function apply(ctx) {
             });
             let acquiredMigrationFence = false;
             let retainProviderMutation = false;
+            let acquiredStoreFence = false;
             try {
               await hooks.acquireLock();
               await hooks.backup({});
@@ -1876,9 +1898,13 @@ export async function apply(ctx) {
               if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
                 if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerStoreMutationOwners.set(plan.plan_id, providerId);
+                acquiredStoreFence = true;
               }
               if (owner !== plan.plan_id) {
-                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) {
+                  if (acquiredStoreFence && providerStoreMutationOwners.get(plan.plan_id) === providerId) { providerStoreMutationOwners.delete(plan.plan_id); hub.endProviderStoreMutation(); }
+                  return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                }
                 providerMigrationOwners.set(providerId, plan.plan_id);
                 acquiredMigrationFence = true;
                 retainProviderMutation = true;
@@ -1905,6 +1931,7 @@ export async function apply(ctx) {
               backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
               existingMigrationId: transactionId,
             });
+            let acquiredStoreFence = false;
             try {
               await hooks.acquireLock();
               await hooks.backup({});
@@ -1914,18 +1941,25 @@ export async function apply(ctx) {
               if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
                 if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerStoreMutationOwners.set(plan.plan_id, providerId);
+                acquiredStoreFence = true;
               }
               if (owner !== plan.plan_id) {
-                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) {
+                  if (acquiredStoreFence && providerStoreMutationOwners.get(plan.plan_id) === providerId) { providerStoreMutationOwners.delete(plan.plan_id); hub.endProviderStoreMutation(); }
+                  return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                }
                 providerMigrationOwners.set(providerId, plan.plan_id);
               }
               const verification = await hooks.verifyRollback(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verification.catalogEvidence = live.catalog_evidence;
+              verification.defaultEvidence = live.default_evidence;
+              verification.defaultPreserved = live.default_evidence?.ok === true
+                && JSON.stringify(live.harness_default ?? null) === JSON.stringify(plan.harness_default_before ?? null);
               verification.liveRestored = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && live.records.some((record) => record.id === providerId && record.lifecycle?.catalogued === true && record.native_removable === false);
               verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before, getHubRuntimeIdentity().runtime_id);
-              if (verification.ok !== true || verification.liveRestored !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_FAILED', verification });
+              if (verification.ok !== true || verification.liveRestored !== true || verification.defaultPreserved !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_FAILED', verification });
               await hooks.finalizeRollback();
               if (providerMigrationOwners.get(providerId) === plan.plan_id) {
                 providerMigrationOwners.delete(providerId);
@@ -2001,6 +2035,7 @@ export async function apply(ctx) {
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
+              sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
               existingBackupId: transactionId,
               expectedProviderId: providerId,
             });
@@ -2008,6 +2043,10 @@ export async function apply(ctx) {
             if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
             await hooks.acquireLock();
             try {
+              if (providerStoreMutationOwners.get(transactionId) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+                providerStoreMutationOwners.set(transactionId, providerId);
+              }
               const verification = await hooks.verify(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verification.catalog_evidence = live.catalog_evidence;
@@ -2042,6 +2081,7 @@ export async function apply(ctx) {
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
+              sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
               existingBackupId: transactionId,
               expectedProviderId: providerId,
             });
@@ -2083,6 +2123,7 @@ export async function apply(ctx) {
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
+              sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
               existingBackupId: transactionId,
               expectedProviderId: providerId,
             });
@@ -2090,6 +2131,10 @@ export async function apply(ctx) {
             if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
             await hooks.acquireLock();
             try {
+              if (providerStoreMutationOwners.get(transactionId) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+                providerStoreMutationOwners.set(transactionId, providerId);
+              }
               const verified = await hooks.verifyRollback(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verified.catalog_evidence = live.catalog_evidence;
@@ -2171,6 +2216,7 @@ export async function apply(ctx) {
                 configFile: join(CONFIG_DIR, 'config.json'),
                 lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
                 backupDir: join(CONFIG_DIR, 'provider-backups'),
+                sharedLockFile: join(CONFIG_DIR, 'provider-store.lock'),
                 runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
                 afterLockAcquired: () => {
                   const pendingRecovery = [

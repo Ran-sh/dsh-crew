@@ -38,6 +38,7 @@ import {
   normalizeProviderLifecycleState,
   recordProviderTransaction,
 } from './provider-lifecycle-state.mjs';
+import { acquireProviderStoreLock } from './provider-store-lock.mjs';
 
 const FILE_KEYS = Object.freeze(['profile', 'config', 'lifecycle']);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -575,16 +576,19 @@ export function createProviderDeleteFileHooks({
   afterLockAcquired = null,
   afterOwnedReplacePublished = null,
   afterMutationJournaled = null,
+  sharedLockFile = null,
   fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, lstatSync },
 } = {}) {
   if (typeof backupDir !== 'string' || !backupDir.trim()) throw new TypeError('provider delete backup directory is required');
   const paths = fileMap({ profileFile, settingsFile, configFile, lifecycleFile });
   validatePaths(paths);
   const managedRoot = dirname(resolvePath(backupDir));
+  const providerStoreLockFile = sharedLockFile ? resolvePath(sharedLockFile) : null;
   for (const key of [...FILE_KEYS, ...(settingsFile ? ['settings'] : [])]) {
     if (paths[key]) assertManagedPath(paths[key], managedRoot);
   }
   assertManagedPath(backupDir, managedRoot);
+  if (providerStoreLockFile) assertManagedPath(providerStoreLockFile, managedRoot);
   let activeBackup = null;
   let lockPath = null;
   let lockOwned = false;
@@ -637,7 +641,7 @@ export function createProviderDeleteFileHooks({
     }
   };
 
-  const recoverLock = async ({ force = false } = {}) => {
+  const recoverDeleteLock = async ({ force = false } = {}) => {
     const guardPath = join(backupDir, '.delete.reclaim.lock');
     const canonicalPath = join(backupDir, '.delete.lock');
     const recoveryPath = join(backupDir, '.delete.recovery.lock');
@@ -778,7 +782,7 @@ export function createProviderDeleteFileHooks({
     }
   };
 
-  const acquireLock = async () => {
+  const acquireDeleteLock = async () => {
     if (lockOwned) return;
     assertManagedPath(backupDir, managedRoot);
     const backupParent = dirname(backupDir);
@@ -1623,7 +1627,7 @@ export function createProviderDeleteFileHooks({
     setPhase('ROLLBACK_RESTORED');
   };
 
-  const release = async () => {
+  const releaseDeleteLock = async () => {
     if (!lockOwned || !lockPath) return;
     try {
       let owner = null;
@@ -1632,6 +1636,28 @@ export function createProviderDeleteFileHooks({
       try { owner = readJson(ownerPath, null); } catch {}
       if (owner?.token === lockOwnerToken) fs.rmSync(lockPath, { recursive: true, force: true });
     } finally { lockOwned = false; lockPath = null; lockOwnerToken = null; }
+  };
+
+  let sharedStoreLock = null;
+  const acquireLock = async () => {
+    if (lockOwned) return;
+    if (!providerStoreLockFile) return acquireDeleteLock();
+    sharedStoreLock = await acquireProviderStoreLock(providerStoreLockFile);
+    try { return await acquireDeleteLock(); }
+    catch (error) {
+      if (sharedStoreLock) { await sharedStoreLock.release(); sharedStoreLock = null; }
+      throw error;
+    }
+  };
+  const release = async () => {
+    await releaseDeleteLock();
+    if (sharedStoreLock) { await sharedStoreLock.release(); sharedStoreLock = null; }
+  };
+  const recoverLock = async (options = {}) => {
+    if (!providerStoreLockFile) return recoverDeleteLock(options);
+    const shared = await acquireProviderStoreLock(providerStoreLockFile);
+    try { return await recoverDeleteLock(options); }
+    finally { await shared.release(); }
   };
 
   const quarantine = async (entryName) => {

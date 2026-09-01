@@ -266,11 +266,13 @@ export function readProviderMaterialization(source, { providerId, file = 'profil
       }
     } catch { return { ok: false, code: 'PROVIDER_BASE_URL_UNSAFE' }; }
   }
+  const api = readBounded('api', 128);
+  if (api && !/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(api) || /^(?:sk|pk|rk|token|secret)[_-]/iu.test(api ?? '')) return { ok: false, code: 'PROVIDER_API_SCHEMA_UNSUPPORTED' };
   const provider = {
     id: entry.id,
     display_name: readBounded('displayName', 256) ?? entry.id,
     ...(credential.value ? { credential_ref: credential.value } : {}),
-    ...(readBounded('api', 128) ? { api: readBounded('api', 128) } : {}),
+    ...(api ? { api } : {}),
     ...(baseUrl ? { base_url: baseUrl } : {}),
     models: providerModels(parsed.lines, entry),
     source_file: file,

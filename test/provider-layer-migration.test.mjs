@@ -128,6 +128,7 @@ test('catalog and lifecycle evidence failures never produce migration actions', 
     { catalogEvidence: { ok: true, partial: true }, expected: 'MODEL_CATALOG_UNAVAILABLE' },
     { lifecycleEvidence: { ok: false }, expected: 'PROVIDER_LIFECYCLE_UNAVAILABLE' },
     { declarationEvidence: { ok: false }, expected: 'PROVIDER_SOURCE_UNRESOLVED' },
+    { defaultEvidence: { ok: false }, expected: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' },
   ]) {
     const plan = buildProviderLayerMigrationPlan({ declarations, catalogProviders: [{ id: 'candidate', adapter_owned: false }], ...evidence });
     assert.equal(plan.providers[0].action, 'blocked', evidence.expected);

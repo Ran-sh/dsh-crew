@@ -8,6 +8,7 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { addProviderDeclaration, hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
 import { addProviderSettings, hasInlineProviderCredentials as hasInlineSettingsCredentials, readProviderSettingsDeclarations, removeProviderSettings } from './provider-settings-store.mjs';
 import { classifyCredentialReference } from './credential-reference.mjs';
+import { acquireProviderStoreLock, recoverProviderStoreLock } from './provider-store-lock.mjs';
 
 function text(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function sha256(value) { return createHash('sha256').update(value, 'utf8').digest('hex'); }
@@ -17,6 +18,8 @@ function safeMaterialization(provider) {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider) || !safeId(provider.id)) return null;
   const credential = provider.credential_ref ? classifyCredentialReference(provider.credential_ref, { kind: 'env' }).value : null;
   if (provider.credential_ref && !credential) return null;
+  const api = safeValue(provider.api, 128);
+  if (api && (!/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(api) || /^(?:sk|pk|rk|token|secret)[_-]/iu.test(api))) return null;
   let baseUrl = safeValue(provider.base_url);
   if (baseUrl) {
     try {
@@ -28,7 +31,7 @@ function safeMaterialization(provider) {
     id: provider.id,
     display_name: safeValue(provider.display_name, 256) ?? provider.id,
     ...(credential ? { credential_ref: credential } : {}),
-    ...(safeValue(provider.api, 128) ? { api: safeValue(provider.api, 128) } : {}),
+    ...(api ? { api } : {}),
     ...(baseUrl ? { base_url: baseUrl } : {}),
     models: (Array.isArray(provider.models) ? provider.models : []).map((model) => ({
       id: safeValue(model?.id, 256),
@@ -62,6 +65,8 @@ function safePlan(plan) {
     action: plan.action,
     expected_revisions: revisions,
     materialization: { provider: materialization },
+    ...(plan.harness_default_before && typeof plan.harness_default_before === 'object' && safeId(plan.harness_default_before.provider) && safeValue(plan.harness_default_before.model, 256)
+      ? { harness_default_before: { provider: plan.harness_default_before.provider, model: safeValue(plan.harness_default_before.model, 256) } } : {}),
     ...(safeValue(plan.runtime_id_before, 128) ? { runtime_id_before: safeValue(plan.runtime_id_before, 128) } : {}),
   };
 }
@@ -154,11 +159,12 @@ function quarantineUnderRoot(root, actionId, managedRoot) {
   assertManagedPath(root, managedRoot);
   if (typeof actionId !== 'string' || !/^[a-f0-9]{32}$/u.test(actionId)) throw Object.assign(new Error('provider migration action id is invalid'), { code: 'PROVIDER_MIGRATION_PLAN_INVALID' });
   if (!existsSync(root)) throw Object.assign(new Error('provider migration transaction was not found'), { code: 'PROVIDER_MIGRATION_RECOVERY_NOT_FOUND' });
-  const entry = readdirSync(root, { withFileTypes: true }).find((candidate) => candidate.isDirectory() && !candidate.isSymbolicLink() && sha256(candidate.name).slice(0, 32) === actionId);
+  const entry = readdirSync(root, { withFileTypes: true }).find((candidate) => candidate.name !== '.quarantine' && sha256(candidate.name).slice(0, 32) === actionId);
   if (!entry) throw Object.assign(new Error('provider migration transaction was not found'), { code: 'PROVIDER_MIGRATION_RECOVERY_NOT_FOUND' });
   const source = join(root, entry.name);
   const quarantineRoot = join(root, '.quarantine');
-  assertManagedPath(source, managedRoot);
+  const sourceStat = lstatSync(source);
+  if (!sourceStat.isSymbolicLink()) assertManagedPath(source, managedRoot);
   assertManagedPath(quarantineRoot, managedRoot);
   mkdirSync(quarantineRoot, { recursive: true });
   assertManagedPath(quarantineRoot, managedRoot);
@@ -174,6 +180,7 @@ export function createProviderLayerMigrationFileHooks({
   backupDir,
   existingMigrationId = null,
   restart = null,
+  sharedLockFile = null,
 } = {}) {
   if (![profileFile, settingsFile, backupDir].every((value) => typeof value === 'string' && value.trim())) throw new TypeError('provider migration paths are required');
   const managedRoot = dirname(resolvePath(backupDir));
@@ -182,6 +189,7 @@ export function createProviderLayerMigrationFileHooks({
   const lockFile = join(backupDir, '.migration.lock');
   let lockOwned = false;
   let lockToken = null;
+  let sharedStoreLock = null;
   let active = null;
   const ensureLock = () => {
     if (!lockOwned || !lockToken) throw Object.assign(new Error('provider migration lock is unavailable'), { code: 'PROVIDER_MIGRATION_LOCK_UNAVAILABLE' });
@@ -203,6 +211,7 @@ export function createProviderLayerMigrationFileHooks({
 
   const acquireLock = async () => {
     if (lockOwned) return { ok: true };
+    sharedStoreLock = await acquireProviderStoreLock(sharedLockFile ?? join(managedRoot, 'provider-store.lock'));
     try {
       writeLock();
       return { ok: true };
@@ -232,6 +241,8 @@ export function createProviderLayerMigrationFileHooks({
         throw Object.assign(new Error('provider migration is busy'), { code: 'PROVIDER_MIGRATION_BUSY' });
       }
       throw Object.assign(new Error('provider migration lock is unavailable'), { code: 'PROVIDER_MIGRATION_LOCK_UNAVAILABLE' });
+    } finally {
+      if (!lockOwned && sharedStoreLock) { await sharedStoreLock.release(); sharedStoreLock = null; }
     }
   };
   const release = async () => {
@@ -241,6 +252,20 @@ export function createProviderLayerMigrationFileHooks({
     if (owned) rmSync(lockFile, { force: true });
     lockOwned = false;
     lockToken = null;
+    if (sharedStoreLock) { await sharedStoreLock.release(); sharedStoreLock = null; }
+  };
+  const recoverLock = async ({ confirm = false } = {}) => {
+    const shared = await recoverProviderStoreLock(sharedLockFile ?? join(managedRoot, 'provider-store.lock'), { confirm });
+    if (shared.ok !== true || confirm !== true) return shared;
+    if (!existsSync(lockFile)) return shared;
+    try {
+      const owner = JSON.parse(readFileSync(lockFile, 'utf8'));
+      if (owner && typeof owner === 'object' && !Array.isArray(owner) && Number.isInteger(owner.pid) && owner.pid > 0 && safeValue(owner.token, 128)) {
+        try { process.kill(owner.pid, 0); return { ok: false, code: 'PROVIDER_MIGRATION_BUSY' }; } catch (error) { if (error?.code === 'EPERM') return { ok: false, code: 'PROVIDER_MIGRATION_BUSY' }; }
+      }
+    } catch {}
+    rmSync(lockFile, { force: true });
+    return { ...shared, recovered: true };
   };
   const manifestFile = (root) => join(root, 'manifest.json');
   const persist = () => {
@@ -389,6 +414,10 @@ export function createProviderLayerMigrationFileHooks({
 
   const removeBase = async (plan) => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
+    const settingsExpected = active.manifest.plan.action === 'materialize-user'
+      ? active.manifest.applied_revisions.settings
+      : active.manifest.files.settings.revision;
+    if (settingsExpected !== undefined && revision(readText(settingsFile)) !== settingsExpected) throw Object.assign(new Error('provider settings changed before base removal'), { code: 'PROVIDER_SETTINGS_CHANGED' });
     const expected = active.manifest.files.profile.revision;
     const current = assertExpected(profileFile, expected, 'PROVIDER_PROFILE_CHANGED');
     if (current === null) throw Object.assign(new Error('provider profile source is missing'), { code: 'PROVIDER_PROFILE_CHANGED' });
@@ -510,7 +539,7 @@ export function createProviderLayerMigrationFileHooks({
   };
 
   return {
-    acquireLock, release, backup, materialize, removeBase, rollback, verify, verifyRollback, finalizeVerified, finalizeRollback, setRollbackRuntimeBaseline, setRestartRuntimeBaseline, quarantine,
+    acquireLock, release, recoverLock, backup, materialize, removeBase, rollback, verify, verifyRollback, finalizeVerified, finalizeRollback, setRollbackRuntimeBaseline, setRestartRuntimeBaseline, quarantine,
     backupPlan: () => active?.manifest?.plan ? JSON.parse(JSON.stringify(active.manifest.plan)) : null,
     backupManifest: () => active?.manifest ? JSON.parse(JSON.stringify(active.manifest)) : null,
     restart,
@@ -522,9 +551,10 @@ export function readProviderLayerMigrationTransactions(root) {
   if (typeof root !== 'string' || !existsSync(root)) return [];
   try { if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) return [{ storage_id: null, action_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: new Date(0).toISOString(), recoverable: false, unresolved: true, source: 'provider-layer-migration' }]; } catch { return [{ storage_id: null, action_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: new Date(0).toISOString(), recoverable: false, unresolved: true, source: 'provider-layer-migration' }]; }
   try {
-    return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name !== '.quarantine').flatMap((entry) => {
+    return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.name !== '.quarantine' && !/^\.migration\.lock(?:\.reclaim)?$/u.test(entry.name)).flatMap((entry) => {
       const file = join(root, entry.name, 'manifest.json');
       const actionId = sha256(entry.name).slice(0, 32);
+      if (!entry.isDirectory() || entry.isSymbolicLink()) return [{ storage_id: entry.name, action_id: actionId, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: new Date(0).toISOString(), recoverable: false, unresolved: true, source: 'provider-layer-migration' }];
       try {
         if (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile()) throw new Error('invalid migration manifest path');
         const manifest = JSON.parse(readFileSync(file, 'utf8'));

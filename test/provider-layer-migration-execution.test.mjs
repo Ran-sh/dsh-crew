@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { executeProviderLayerMigration } from '../src/provider-layer-migration.mjs';
@@ -164,6 +164,17 @@ test('migration scanner marks incomplete manifests unresolved with an opaque act
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('migration scanner surfaces non-directory recovery artifacts instead of dropping them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-artifact-'));
+  try {
+    writeFileSync(join(root, 'unexpected'), 'not a transaction', 'utf8');
+    const records = readProviderLayerMigrationTransactions(root);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].unresolved, true);
+    assert.match(records[0].action_id, /^[a-f0-9]{32}$/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migration lock refuses malformed owner metadata', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-lock-'));
   try {
@@ -172,6 +183,22 @@ test('migration lock refuses malformed owner metadata', async () => {
     writeFileSync(join(backupDir, '.migration.lock'), 'null', 'utf8');
     const hooks = createProviderLayerMigrationFileHooks({ profileFile: join(root, 'profile.yml'), settingsFile: join(root, 'settings.yaml'), backupDir });
     await assert.rejects(() => hooks.acquireLock(), (error) => error.code === 'PROVIDER_MIGRATION_BUSY');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migration lock recovery is explicit and repairs malformed shared ownership', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-recover-'));
+  try {
+    const backupDir = join(root, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(join(root, 'provider-store.lock'), 'null', 'utf8');
+    writeFileSync(join(backupDir, '.migration.lock'), 'null', 'utf8');
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile: join(root, 'profile.yml'), settingsFile: join(root, 'settings.yaml'), backupDir });
+    assert.deepEqual(await hooks.recoverLock(), { ok: false, code: 'PROVIDER_STORE_LOCK_CONFIRM_REQUIRED' });
+    const recovered = await hooks.recoverLock({ confirm: true });
+    assert.equal(recovered.ok, true);
+    assert.equal(existsSync(join(root, 'provider-store.lock')), false);
+    assert.equal(existsSync(join(backupDir, '.migration.lock')), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -228,4 +255,9 @@ test('provider materialization rejects credential-bearing base URLs', () => {
 test('provider materialization rejects unknown provider fields instead of losing them on rollback', () => {
   const source = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        timeoutMs: 30\n`;
   assert.deepEqual(readProviderMaterialization(source, { providerId: 'custom' }), { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' });
+});
+
+test('provider materialization rejects secret-shaped API adapter values', () => {
+  const source = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        api: sk-live-secret\n`;
+  assert.deepEqual(readProviderMaterialization(source, { providerId: 'custom' }), { ok: false, code: 'PROVIDER_API_SCHEMA_UNSUPPORTED' });
 });
