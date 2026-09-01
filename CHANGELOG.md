@@ -4,6 +4,12 @@
 
 Future changes go here.
 
+## 1.0.1 — 2026-09-01
+
+- Preserves every structured Worker/Reviewer execution row in the Hub
+  extension readiness snapshot so an approved complete Reviewer run is not
+  mistaken for the Worker primary row.
+
 ## 1.0.0 — 2026-09-01
 
 - Hardens Provider lifecycle recovery with semantic rollback verification,
