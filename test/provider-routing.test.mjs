@@ -222,7 +222,8 @@ test('Hub rechecks the deletion gate after asynchronous spawn preparation', asyn
 test('provider lease remains active until a cancelled handle is disposed', async () => {
   let releaseDispose;
   const disposeGate = new Promise((resolve) => { releaseDispose = resolve; });
-  const idle = new Promise(() => {});
+  let resolveIdle;
+  const idle = new Promise((resolve) => { resolveIdle = resolve; });
   const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
   reg.ctx.agents = {
     create: async () => ({
@@ -240,6 +241,7 @@ test('provider lease remains active until a cancelled handle is disposed', async
   assert.equal(job.status, 'cancelled');
   assert.equal(reg.hasProviderLease('opencode-go'), true);
   releaseDispose();
+  resolveIdle();
   await cancelling;
   await job.promise;
   assert.equal(reg.hasProviderLease('opencode-go'), false);

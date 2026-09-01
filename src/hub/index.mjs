@@ -479,6 +479,8 @@ export class WorkerRegistry {  constructor(ctx) {
     this.ctx = ctx;
     this.jobs = new Map();
     this.providerMutations = new Set();
+    this.providerMutationEpochs = new Map();
+    this.providerLeases = new Map();
     this.nextId = 1;
     this.shard = createShardWriter('hub');
     this.healthStore = createProviderHealthStore();
@@ -530,6 +532,7 @@ export class WorkerRegistry {  constructor(ctx) {
 
   beginProviderMutation(providerId) {
     if (typeof providerId !== 'string' || !providerId.trim() || this.providerMutations.has(providerId)) return false;
+    this.providerMutationEpochs.set(providerId, (this.providerMutationEpochs.get(providerId) ?? 0) + 1);
     this.providerMutations.add(providerId);
     return true;
   }
@@ -538,10 +541,29 @@ export class WorkerRegistry {  constructor(ctx) {
     this.providerMutations.delete(providerId);
   }
 
-  assertProviderNotMutating(providerId) {
-    if (this.providerMutations.has(providerId)) {
+  getProviderMutationEpoch(providerId) {
+    return this.providerMutationEpochs.get(providerId) ?? 0;
+  }
+
+  assertProviderNotMutating(providerId, expectedEpoch = undefined) {
+    if (this.providerMutations.has(providerId)
+      || (expectedEpoch !== undefined && this.getProviderMutationEpoch(providerId) !== expectedEpoch)) {
       throw Object.assign(new Error('provider mutation is active'), { code: 'PROVIDER_DELETE_BUSY' });
     }
+  }
+
+  acquireProviderLease(providerId) {
+    this.providerLeases.set(providerId, (this.providerLeases.get(providerId) ?? 0) + 1);
+  }
+
+  releaseProviderLease(providerId) {
+    const count = this.providerLeases.get(providerId) ?? 0;
+    if (count <= 1) this.providerLeases.delete(providerId);
+    else this.providerLeases.set(providerId, count - 1);
+  }
+
+  hasProviderLease(providerId) {
+    return (this.providerLeases.get(providerId) ?? 0) > 0;
   }
 
   publish() {
@@ -652,7 +674,8 @@ export class WorkerRegistry {  constructor(ctx) {
       }
       if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
     }
-    this.assertProviderNotMutating(selection.provider);
+    const providerMutationEpoch = this.getProviderMutationEpoch(selection.provider);
+    this.assertProviderNotMutating(selection.provider, providerMutationEpoch);
 
     // The worker always gets the auditable Delivery Contract appended (unless
     // it already carries one), so its final message follows ## Diff / ## Tests
@@ -733,7 +756,9 @@ export class WorkerRegistry {  constructor(ctx) {
     // degrade to { kind:'no-git' } instead of failing the job.
     job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     try {
-      this.assertProviderNotMutating(selection.provider);
+      this.assertProviderNotMutating(selection.provider, providerMutationEpoch);
+      this.acquireProviderLease(selection.provider);
+      job.providerLease = true;
     } catch (error) {
       if (isolatedWorkspace) await cleanupIsolatedWorkspace({ repoRoot: isolatedWorkspace.repoRoot, worktreePath: isolatedWorkspace.worktreePath }).catch(() => {});
       throw error;
@@ -866,6 +891,10 @@ export class WorkerRegistry {  constructor(ctx) {
         let handleCleanupWarning = job.cleanup_warning ?? null;
         try { await disposeJobHandle(); } catch (error) {
           handleCleanupWarning = `agent cleanup failed: ${error?.message ?? String(error)}`;
+        }
+        if (job.providerLease) {
+          this.releaseProviderLease(job.provider);
+          job.providerLease = false;
         }
         // Delivery completeness is separate from execution status: a job can
         // be done yet fail to report Diff/Tests/Risks (or Review sections for
@@ -1682,6 +1711,7 @@ export async function apply(ctx) {
                 return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
               }
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
+              hub.endProviderMutation(providerId);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED', verification });
             } finally {
               await hooks.release();
@@ -1745,6 +1775,7 @@ export async function apply(ctx) {
               verified.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before_restart, getHubRuntimeIdentity().runtime_id);
               if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.default_evidence?.ok !== true || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
+              hub.endProviderMutation(providerId);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
               await hooks.release();
@@ -1795,6 +1826,7 @@ export async function apply(ctx) {
               runtime_id_before: stored.plan.runtime_id_before,
             };
             if (!hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+            let retainProviderMutation = false;
             try {
               const hooks = createProviderDeleteFileHooks({
                 profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
@@ -1807,7 +1839,7 @@ export async function apply(ctx) {
                   if (readProviderRecoveryTransactions().length > 0) {
                     throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
                   }
-                  if (hub.list().some((job) => job.status === 'running' && job.provider === providerId)) {
+                  if (hub.hasProviderLease(providerId)) {
                     throw Object.assign(new Error('provider is in use'), { code: 'PROVIDER_IN_USE' });
                   }
                 },
@@ -1815,9 +1847,10 @@ export async function apply(ctx) {
               providerDeletePlans.delete(body.plan_id);
               const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
               const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
+              retainProviderMutation = result.state === 'RESTART_PENDING';
               return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
             } finally {
-              hub.endProviderMutation(providerId);
+              if (!retainProviderMutation) hub.endProviderMutation(providerId);
             }
           }
           return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });

@@ -53,7 +53,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /afterLockAcquired/);
   assert.match(hubSource, /beginProviderMutation/);
   assert.match(hubSource, /endProviderMutation/);
-  assert.match(hubSource, /job\.status === 'running' && job\.provider === providerId/);
+  assert.match(hubSource, /hasProviderLease\(providerId\)/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);

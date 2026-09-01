@@ -900,12 +900,12 @@ test('absent lifecycle ownership remains reopenable after a crash before publica
       }
     },
   });
-  const result = await executeProviderDelete(plan, hooks);
-  assert.equal(result.state, 'VERIFIED');
-  assert.equal(result.audit_recorded, false);
+  await hooks.backup(plan);
+  await assert.rejects(() => hooks.markTombstone(plan.provider_id), (error) => error.code === 'SIMULATED_CRASH');
   assert.equal(injected, true);
   const manifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
   assert.equal(existsSync(manifest.mutation_journal.lifecycle.witness), true);
+  await hooks.release();
 
   const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
   await reopened.acquireLock();
