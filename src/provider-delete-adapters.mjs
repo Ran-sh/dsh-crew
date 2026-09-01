@@ -758,10 +758,11 @@ export function createProviderDeleteFileHooks({
       config?.harness_default?.provider === plan.replacement_default
       && config?.harness_default?.model === plan.replacement_default_model
     );
-    const harnessDefaultApplied = plan.was_harness_default !== true || (
-      typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)
-      && (() => { const parsed = readHarnessDefault(fs.readFileSync(settingsFile, 'utf8')); return parsed.ok && parsed.provider === plan.replacement_default && parsed.model === plan.replacement_default_model; })()
-    );
+    const persistedDefault = typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)
+      ? readHarnessDefault(fs.readFileSync(settingsFile, 'utf8')) : { ok: false };
+    const harnessDefaultApplied = plan.was_harness_default === true
+      ? persistedDefault.ok && persistedDefault.provider === plan.replacement_default && persistedDefault.model === plan.replacement_default_model
+      : !persistedDefault.ok || persistedDefault.provider !== plan.provider_id;
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     return {
       providerAbsent,

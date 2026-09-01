@@ -113,7 +113,7 @@ test('file adapters apply a deletion and verify absence without touching credent
 test('file adapters remove a provider from both profile and Harness settings authorities', async () => {
   const paths = fixture();
   paths.settingsFile = join(paths.dir, 'settings.yaml');
-  writeFileSync(paths.settingsFile, SETTINGS);
+  writeFileSync(paths.settingsFile, SETTINGS.replace('  provider: opencode-go\n', '  provider: openrouter\n'));
   const plan = settingsPlanFor(paths);
   const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
   const result = await executeProviderDelete(plan, hooks);
@@ -127,8 +127,8 @@ test('settings-only authority remains deletable when the Crew profile file is ab
   const paths = fixture();
   rmSync(paths.profileFile);
   paths.settingsFile = join(paths.dir, 'settings.yaml');
-  writeFileSync(paths.settingsFile, SETTINGS);
-  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  writeFileSync(paths.settingsFile, SETTINGS.replace('  provider: opencode-go\n', '  provider: openrouter\n'));
+  const expectedSettings = inspectProviderSettings(readFileSync(paths.settingsFile, 'utf8')).revision;
   const plan = planProviderDelete({
     providerId: 'opencode-go', inventory: {
       records: [{ ...INVENTORY.records[0], declaration_authorities: [{ kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }] }],
@@ -145,7 +145,7 @@ test('settings-only active Harness Default is replaced and removed in one transa
   rmSync(paths.profileFile);
   paths.settingsFile = join(paths.dir, 'settings.yaml');
   writeFileSync(paths.settingsFile, SETTINGS);
-  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const expectedSettings = inspectProviderSettings(readFileSync(paths.settingsFile, 'utf8')).revision;
   const inventory = {
     harness_default: { provider: 'opencode-go', model: 'mimo-v2.5' },
     records: [
@@ -376,7 +376,7 @@ test('cross-file write failure checkpoints config before compensating rollback',
   inventory.records[1].references.harness_default = false;
   inventory.harness_default = { provider: 'opencode-go', model: 'mimo-v2.5' };
   const expectedProfile = inspectProviderProfile(PROFILE).revision;
-  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const expectedSettings = inspectProviderSettings(readFileSync(paths.settingsFile, 'utf8')).revision;
   const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision: expectedProfile, expectedRevisions: { profile: expectedProfile, settings: expectedSettings } }).plan;
   const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), writeSettings: () => { throw Object.assign(new Error('settings write failed'), { code: 'PROVIDER_SETTINGS_WRITE_FAILED' }); }, restart: async () => ({ ok: true }) });
   const result = await executeProviderDelete(plan, hooks);
