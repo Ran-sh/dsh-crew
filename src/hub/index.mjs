@@ -1471,6 +1471,18 @@ export async function apply(ctx) {
         try {
           const providerId = decodeURIComponent(parts[0]);
           const body = await readBody(req);
+          if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'lock' && parts.length === 2) {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_CONFIRM_REQUIRED' });
+            const hooks = createProviderDeleteFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              configFile: join(CONFIG_DIR, 'config.json'),
+              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+              backupDir: join(CONFIG_DIR, 'provider-backups'),
+            });
+            const recovered = await hooks.recoverLock();
+            return sendJson(res, recovered.ok ? 200 : 409, recovered);
+          }
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {

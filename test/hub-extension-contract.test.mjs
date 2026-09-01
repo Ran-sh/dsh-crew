@@ -63,6 +63,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-rollback'/);
   assert.match(hubSource, /deferRestart: true/);
   assert.match(hubSource, /existingBackupId/);
+  assert.match(hubSource, /recoverLock/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_CONFIRM_REQUIRED/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);
   assert.match(hubSource, /buildCredentialReferenceInventory/);

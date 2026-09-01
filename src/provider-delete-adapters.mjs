@@ -337,6 +337,42 @@ export function createProviderDeleteFileHooks({
     }
   };
 
+  const recoverLock = async () => {
+    const guardPath = join(backupDir, '.delete.reclaim.lock');
+    const canonicalPath = join(backupDir, '.delete.lock');
+    const recoveryPath = join(backupDir, '.delete.recovery.lock');
+    const alive = (owner) => {
+      if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
+      try { process.kill(owner.pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+    };
+    const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
+    assertManagedPath(backupDir, managedRoot);
+    try {
+      fs.writeFileSync(recoveryPath, JSON.stringify({ pid: process.pid, token: randomUUID(), created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
+    } catch (error) {
+      return { ok: false, code: error?.code === 'EEXIST' ? 'PROVIDER_DELETE_BUSY' : 'PROVIDER_DELETE_LOCK_UNAVAILABLE' };
+    }
+    try {
+      if (!existsSync(guardPath)) return { ok: true, recovered: false };
+      let guardOwner = null;
+      try { guardOwner = readJson(guardPath, null); } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
+      if (alive(guardOwner) !== false) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+      if (existsSync(canonicalPath)) {
+        let mainOwner = null;
+        try {
+          mainOwner = lstatSync(canonicalPath).isDirectory()
+            ? readJson(join(canonicalPath, 'owner.json'), null) : readJson(canonicalPath, null);
+        } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
+        if (mainOwner && alive(mainOwner) !== false) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+        cleanup(canonicalPath);
+      }
+      cleanup(guardPath);
+      return { ok: true, recovered: true };
+    } finally {
+      cleanup(recoveryPath);
+    }
+  };
+
   const acquireLock = async () => {
     if (lockOwned) return;
     assertManagedPath(backupDir, managedRoot);
@@ -970,6 +1006,7 @@ export function createProviderDeleteFileHooks({
   return {
     backup,
     acquireLock,
+    recoverLock,
     checkpointApplied,
     setRuntimeBaseline,
     ...(typeof runtimeIdProvider === 'function' ? { captureRuntimeBaseline } : {}),
