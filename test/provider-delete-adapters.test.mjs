@@ -211,6 +211,25 @@ test('Harness settings backups reject inline credentials belonging to a retained
   assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('RETAINED_SETTINGS_SECRET'), true);
 });
 
+test('provider backups reject credential-shaped aliases and authorization values', async () => {
+  const paths = fixture();
+  const unsafeProfile = PROFILE.replace('apiKeyEnv: OPENROUTER_API_KEY', '"clientSecret": RETAINED_CLIENT_SECRET\n        authorization: Bearer RETAINED_AUTH_SECRET');
+  writeFileSync(paths.profileFile, unsafeProfile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+
+  const settingsPaths = fixture();
+  settingsPaths.settingsFile = join(settingsPaths.dir, 'settings.yaml');
+  const unsafeSettings = SETTINGS.replace('apiKeyEnv: OPENROUTER_API_KEY', 'client-secret: RETAINED_SETTINGS_SECRET\n      authorization: Bearer RETAINED_SETTINGS_AUTH');
+  writeFileSync(settingsPaths.settingsFile, unsafeSettings);
+  const settingsHooks = createProviderDeleteFileHooks({ ...settingsPaths, backupDir: join(settingsPaths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const settingsResult = await executeProviderDelete(settingsPlanFor(settingsPaths), settingsHooks);
+  assert.equal(settingsResult.state, 'FAILED');
+  assert.equal(settingsResult.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+});
+
 test('provider delete adapters reject managed paths outside the backup Crew root', () => {
   const paths = fixture();
   assert.throws(() => createProviderDeleteFileHooks({
