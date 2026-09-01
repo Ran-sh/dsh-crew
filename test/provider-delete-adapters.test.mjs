@@ -657,6 +657,38 @@ test('active-default rollback removes a config mirror that was originally absent
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.configFile, 'utf8')), 'harness_default'), false);
 });
 
+test('an external config create after an absent snapshot is rejected and preserved', async () => {
+  const paths = fixture();
+  rmSync(paths.configFile);
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const originalMark = hooks.markTombstone;
+  hooks.markTombstone = async (...args) => {
+    writeFileSync(paths.configFile, '{}\n');
+    return originalMark(...args);
+  };
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(existsSync(paths.configFile), true);
+  assert.equal(readFileSync(paths.configFile, 'utf8'), '{}\n');
+});
+
+test('an external lifecycle create after an absent snapshot is rejected and preserved', async () => {
+  const paths = fixture();
+  rmSync(paths.lifecycleFile);
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const originalMark = hooks.markTombstone;
+  hooks.markTombstone = async (...args) => {
+    writeFileSync(paths.lifecycleFile, JSON.stringify({ schema_version: 1, tombstones: {}, transactions: {}, last_verified_revision: {} }) + '\n');
+    return originalMark(...args);
+  };
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(existsSync(paths.lifecycleFile), true);
+  assert.match(readFileSync(paths.lifecycleFile, 'utf8'), /"tombstones": \{\}/);
+});
+
 test('owner metadata write failure cleans up the half-created lock', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
