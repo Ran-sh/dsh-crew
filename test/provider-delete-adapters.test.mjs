@@ -350,11 +350,13 @@ test('offline recovery clears a stale reclaim guard only when no live owner rema
   writeFileSync(guardPath, '{}');
   mkdirSync(join(backupDir, '.delete.lock'));
   writeFileSync(join(backupDir, '.delete.lock', 'owner.json'), JSON.stringify({ token: 'malformed-owner' }));
+  writeFileSync(join(backupDir, '.delete.lock.dead.active'), JSON.stringify({ pid: 999999, token: 'stale-active' }));
   const malformedRecovered = await hooks.recoverLock();
   assert.equal(malformedRecovered.ok, true);
   assert.equal(existsSync(guardPath), false);
   assert.equal(existsSync(join(backupDir, '.delete.recovery.lock')), false);
   assert.equal(existsSync(join(backupDir, '.delete.lock')), false);
+  assert.equal(existsSync(join(backupDir, '.delete.lock.dead.active')), false);
 });
 
 test('provider verification fails closed when a managed profile is malformed', async () => {

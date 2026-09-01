@@ -402,15 +402,22 @@ export function createProviderDeleteFileHooks({
       let guardOwner = null;
       try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
       if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
-      if (existsSync(canonicalPath)) {
+      const candidates = [canonicalPath];
+      try {
+        for (const entry of readdirSync(backupDir, { withFileTypes: true })) {
+          if (/^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging)$/iu.test(entry.name)) candidates.push(join(backupDir, entry.name));
+        }
+      } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
+      for (const candidate of [...new Set(candidates)]) {
+        if (!existsSync(candidate)) continue;
         let mainOwner = null;
         try {
-          mainOwner = lstatSync(canonicalPath).isDirectory()
-            ? readJson(join(canonicalPath, 'owner.json'), null) : readJson(canonicalPath, null);
+          mainOwner = lstatSync(candidate).isDirectory()
+            ? readJson(join(candidate, 'owner.json'), null) : readJson(candidate, null);
         } catch { mainOwner = null; }
         if (alive(mainOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
-        cleanup(canonicalPath);
       }
+      for (const candidate of [...new Set(candidates)]) if (existsSync(candidate)) cleanup(candidate);
       cleanup(guardPath);
       return { ok: true, recovered: true };
     } finally {
