@@ -18,6 +18,7 @@ const CONFIG = {
 };
 
 const SETTINGS = `llm-pi-ai:\n  providers:\n    opencode-go:\n      models:\n        - id: mimo-v2.5\n      apiKeyEnv: OPENCODE_GO_API_KEY\n    openrouter:\n      models:\n        - id: minimax/minimax-m3:free\n      apiKeyEnv: OPENROUTER_API_KEY\nagent-default-model:\n  provider: opencode-go\n  model: mimo-v2.5\n`;
+const ADAPTER_SOURCE = readFileSync(new URL('../src/provider-delete-adapters.mjs', import.meta.url), 'utf8');
 
 const INVENTORY = {
   records: [
@@ -228,6 +229,29 @@ test('provider backups reject credential-shaped aliases and authorization values
   const settingsResult = await executeProviderDelete(settingsPlanFor(settingsPaths), settingsHooks);
   assert.equal(settingsResult.state, 'FAILED');
   assert.equal(settingsResult.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+});
+
+test('provider backups reject nested flow-map credential values', async () => {
+  const paths = fixture();
+  const unsafeProfile = PROFILE.replace('apiKeyEnv: OPENROUTER_API_KEY', 'headers: { bearer: RETAINED_BEARER_SECRET }\n        metadata: { token: RETAINED_TOKEN_SECRET }');
+  writeFileSync(paths.profileFile, unsafeProfile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+
+  const settingsPaths = fixture();
+  settingsPaths.settingsFile = join(settingsPaths.dir, 'settings.yaml');
+  const unsafeSettings = SETTINGS.replace('apiKeyEnv: OPENROUTER_API_KEY', 'headers: { bearer: RETAINED_SETTINGS_BEARER }\n      metadata: { token: RETAINED_SETTINGS_TOKEN }');
+  writeFileSync(settingsPaths.settingsFile, unsafeSettings);
+  const settingsHooks = createProviderDeleteFileHooks({ ...settingsPaths, backupDir: join(settingsPaths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const settingsResult = await executeProviderDelete(settingsPlanFor(settingsPaths), settingsHooks);
+  assert.equal(settingsResult.state, 'FAILED');
+  assert.equal(settingsResult.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+});
+
+test('default settings writer carries managed-root containment through atomic rename', () => {
+  assert.match(ADAPTER_SOURCE, /atomicWrite\(settingsFile, content, managedRoot\)/);
 });
 
 test('provider delete adapters reject managed paths outside the backup Crew root', () => {

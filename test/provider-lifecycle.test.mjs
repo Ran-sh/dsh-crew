@@ -112,6 +112,19 @@ test('destructive planning fails closed when live catalog evidence is unavailabl
   assert.equal(result.code, 'PROVIDER_CATALOG_UNAVAILABLE');
 });
 
+test('destructive planning fails closed when persisted and live Harness Defaults disagree', () => {
+  const result = planProviderDelete({
+    providerId: 'openrouter',
+    inventory: {
+      default_evidence: { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' },
+      records: records.map((record) => ({ ...record, references: { ...record.references, harness_default: record.id === 'openrouter' } })),
+    },
+    replacementDefault: 'opencode-go',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH');
+});
+
 test('mixed known and unknown declaration authority is not deletable', () => {
   const result = planProviderDelete({
     providerId: 'opencode-go', inventory: { records: [{
