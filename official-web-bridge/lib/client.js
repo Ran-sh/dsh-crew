@@ -2023,7 +2023,7 @@ function WorkersPanel({ ctx }) {
 		}
 	};
 	const rollbackHarnessProvider = async (record, transactionId, transactionState = "VERIFIED") => {
-		const continuing = transactionState === "ROLLBACK_PENDING";
+		const continuing = ["ROLLBACK_PENDING", "ROLLBACK_RESTART_PENDING"].includes(transactionState);
 		if (!record || !transactionId || !continuing && record.desired_state !== "absent") {
 			setNotice(copy.providerRollbackUnavailable);
 			return;
@@ -3611,10 +3611,19 @@ function WorkersPanel({ ctx }) {
 							const unresolved = record.delete_capability === "source-unresolved";
 							const blocked = immutable || unresolved || record.desired_state === "absent" || Number(record.references?.active_jobs ?? 0) > 0;
 							const lifecycle = record.desired_state === "absent" ? "absent" : record.lifecycle?.enabled === false ? "disabled" : record.lifecycle?.catalogued ? "catalogued" : "configured";
-							const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).filter((entry) => entry.provider_id === record.id && [
+							const lifecycleTransactions = providerInventory?.lifecycle_transactions ?? [];
+							const recoveryTransactions = (providerInventory?.recovery_transactions ?? []).map((entry) => ({
+								...entry,
+								state: entry.phase
+							}));
+							const rollbackTransaction = [...lifecycleTransactions, ...recoveryTransactions].filter((entry) => entry.provider_id === record.id && [
 								"VERIFIED",
 								"RESTART_PENDING",
-								"ROLLBACK_PENDING"
+								"ROLLBACK_PENDING",
+								"DELETE_RESTART_PENDING",
+								"ROLLBACK_RESTART_PENDING",
+								"ROLLBACK_RESTORED",
+								"ROLLBACK_APPLYING"
 							].includes(entry.state)).at(-1);
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
@@ -3669,7 +3678,12 @@ function WorkersPanel({ ctx }) {
 										},
 										children: providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan
 									}),
-									(record.desired_state === "absent" || rollbackTransaction?.state === "ROLLBACK_PENDING") && rollbackTransaction && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									(record.desired_state === "absent" || [
+										"ROLLBACK_PENDING",
+										"ROLLBACK_RESTART_PENDING",
+										"ROLLBACK_RESTORED",
+										"ROLLBACK_APPLYING"
+									].includes(rollbackTransaction?.state)) && rollbackTransaction && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										style: {
 											...S.btn,
