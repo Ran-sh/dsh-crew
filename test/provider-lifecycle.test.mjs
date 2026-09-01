@@ -102,6 +102,41 @@ test('source-unresolved non-official providers fail with a specific lifecycle co
   assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
+test('destructive planning fails closed when live catalog evidence is unavailable', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: {
+      catalog_evidence: { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' }, records,
+    }, replacementDefault: 'openrouter',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_CATALOG_UNAVAILABLE');
+});
+
+test('mixed known and unknown declaration authority is not deletable', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records: [{
+      ...records[0], references: { ...records[0].references, harness_default: false },
+      declaration_authorities: [
+        { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+        { kind: 'future-store', locator: 'future.providers.opencode-go' },
+      ],
+    }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+});
+
+test('declaration authority locator must bind to the selected provider id', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records: [{
+      ...records[0], references: { ...records[0].references, harness_default: false },
+      declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.some-other-provider' }],
+    }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+});
+
 test('delete plan records impact and sanitized credential references', () => {
   const result = planProviderDelete({
     providerId: 'opencode-go',

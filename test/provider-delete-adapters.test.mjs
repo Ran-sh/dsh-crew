@@ -138,6 +138,22 @@ test('settings-only authority remains deletable when the Crew profile file is ab
   assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('    opencode-go:'), false);
 });
 
+test('deferred delete audit remains rollbackable after reopening the transaction', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  const applied = await executeProviderDelete(plan, first, { deferRestart: true });
+  assert.equal(applied.state, 'RESTART_PENDING');
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id, restart: async () => ({ ok: true }) });
+  await reopened.acquireLock();
+  const reopenedPlan = reopened.backupPlan();
+  await reopened.rollback(reopenedPlan);
+  const verified = await reopened.verifyRollback(reopenedPlan);
+  await reopened.release();
+  assert.equal(verified.ok, true);
+});
+
 test('file adapters fail closed on malformed managed JSON', async () => {
   const paths = fixture();
   writeFileSync(paths.configFile, '{ malformed');
