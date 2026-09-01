@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync, symlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
@@ -379,6 +379,38 @@ test('a successful reclaim leaves a live owner that fences a second acquisition 
   await first.release();
   await second.acquireLock();
   await second.release();
+});
+
+test('lock acquisition fails closed when candidate enumeration is unavailable', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const live = join(backupDir, '.delete.lock.44444444-4444-4444-4444-444444444444.active');
+  writeFileSync(live, JSON.stringify({ pid: process.pid, token: 'live-owner' }));
+  const fsLike = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync,
+    readdirSync() { const error = new Error('directory enumeration denied'); error.code = 'EACCES'; throw error; } };
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, fs: fsLike });
+  await assert.rejects(() => hooks.acquireLock(), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
+  assert.equal(existsSync(join(backupDir, '.delete.lock')), false, 'enumeration failure must not create canonical ownership');
+  assert.equal(existsSync(live), true);
+});
+
+test('lock acquisition fails closed when candidate metadata inspection is unavailable', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const stale = join(backupDir, '.delete.lock.55555555-5555-5555-5555-555555555555.active');
+  const live = join(backupDir, '.delete.lock.66666666-6666-6666-6666-666666666666.active');
+  writeFileSync(stale, JSON.stringify({ pid: 999999, token: 'stale-owner' }));
+  writeFileSync(live, JSON.stringify({ pid: process.pid, token: 'live-owner' }));
+  const fsLike = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, lstatSync(file, options) {
+    if (String(file) === stale) { const error = new Error('metadata inspection denied'); error.code = 'EACCES'; throw error; }
+    return lstatSync(file, options);
+  } };
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, fs: fsLike });
+  await assert.rejects(() => hooks.acquireLock(), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
+  assert.equal(existsSync(stale), true, 'inspection failure must not reclaim stale residue');
+  assert.equal(existsSync(live), true);
 });
 
 test('offline recovery clears a stale reclaim guard only when no live owner remains', async () => {

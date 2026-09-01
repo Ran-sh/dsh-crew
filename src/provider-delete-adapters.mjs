@@ -575,7 +575,7 @@ export function createProviderDeleteFileHooks({
   afterLockAcquired = null,
   afterOwnedReplacePublished = null,
   afterMutationJournaled = null,
-  fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync },
+  fs = { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, lstatSync },
 } = {}) {
   if (typeof backupDir !== 'string' || !backupDir.trim()) throw new TypeError('provider delete backup directory is required');
   const paths = fileMap({ profileFile, settingsFile, configFile, lifecycleFile });
@@ -779,15 +779,16 @@ export function createProviderDeleteFileHooks({
       if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
       try { process.kill(owner.pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
     };
+    const lockUnavailable = () => Object.assign(new Error('provider deletion lock metadata is unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+    const fsReaddirSync = typeof fs.readdirSync === 'function' ? fs.readdirSync : readdirSync;
+    const fsLstatSync = typeof fs.lstatSync === 'function' ? fs.lstatSync : lstatSync;
+    const fsReadFileSync = typeof fs.readFileSync === 'function' ? fs.readFileSync : readFileSync;
     const lockCandidates = () => {
       try {
-        return readdirSync(backupDir, { withFileTypes: true })
+        return fsReaddirSync(backupDir, { withFileTypes: true })
           .filter((entry) => entry.name === '.delete.lock' || /^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging)$/iu.test(entry.name))
           .map((entry) => join(backupDir, entry.name));
-      } catch { return []; }
-    };
-    const ownerPathFor = (path) => {
-      try { return lstatSync(path).isDirectory() ? join(path, 'owner.json') : path; } catch { return path; }
+      } catch { throw lockUnavailable(); }
     };
     const ownerRecord = () => JSON.stringify({
         pid: process.pid,
@@ -795,12 +796,39 @@ export function createProviderDeleteFileHooks({
         ...(typeof runtimeIdProvider === 'function' ? { runtime_id: runtimeIdProvider() } : {}),
         created_at: new Date().toISOString(),
       }) + '\n';
-    const readOwner = (path) => {
-      try { return readJson(ownerPathFor(path), null); }
-      // A present but malformed owner record is not an orphan. Normal
-      // acquisition must fail closed; only explicit offline recovery may
-      // reclaim malformed metadata.
-      catch { return { invalid: true }; }
+    const readOwner = (path, knownStat = null) => {
+      let stat = knownStat;
+      if (!stat) {
+        try { stat = fsLstatSync(path); }
+        catch (error) {
+          if (error?.code === 'ENOENT') return null;
+          throw lockUnavailable();
+        }
+      }
+      if (stat.isSymbolicLink?.()) throw lockUnavailable();
+      const ownerPath = stat.isDirectory() ? join(path, 'owner.json') : path;
+      let raw;
+      try { raw = fsReadFileSync(ownerPath, 'utf8'); }
+      catch (error) {
+        if (error?.code === 'ENOENT') return null;
+        throw lockUnavailable();
+      }
+      try { return JSON.parse(raw); }
+      catch {
+        // A present but malformed owner record is not an orphan. Normal
+        // acquisition must fail closed; only explicit offline recovery may
+        // reclaim malformed metadata.
+        return { invalid: true };
+      }
+    };
+    const inspectCandidate = (path) => {
+      let stat;
+      try { stat = fsLstatSync(path); }
+      catch (error) {
+        if (error?.code === 'ENOENT') return { exists: false, owner: null };
+        throw lockUnavailable();
+      }
+      return { exists: true, owner: readOwner(path, stat) };
     };
     const writeStagingOwner = () => {
       fs.writeFileSync(stagingPath, ownerRecord(), { flag: 'wx' });
@@ -851,15 +879,18 @@ export function createProviderDeleteFileHooks({
         // directory order; reclaiming it first would otherwise admit a second
         // owner while the live candidate remains untouched.
         for (const candidate of uniqueCandidates) {
-          if (!existsSync(candidate)) continue;
-          const owner = readOwner(candidate);
+          const inspected = inspectCandidate(candidate);
+          if (!inspected.exists) continue;
+          const owner = inspected.owner;
           if (owner && ownerIsAlive(owner) !== false) {
             throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
           }
         }
         let raced = false;
         for (const candidate of uniqueCandidates) {
-          const owner = readOwner(candidate);
+          const inspected = inspectCandidate(candidate);
+          if (!inspected.exists) continue;
+          const owner = inspected.owner;
           if (owner && ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
           try {
             writeStagingOwner();
