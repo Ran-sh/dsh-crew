@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -107,7 +107,7 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
-const RECOVERY_ENTRY_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const RECOVERY_ENTRY_PATTERN = /^(?!\.{1,2}$)[^\\/\u0000-\u001f]{1,128}$/u;
 
 function readProviderLifecycleStateStatus() {
   const file = join(CONFIG_DIR, 'provider-lifecycle.json');
@@ -1518,7 +1518,7 @@ export async function apply(ctx) {
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
             });
-            const recovered = await hooks.recoverLock();
+            const recovered = await hooks.recoverLock({ force: body?.force === true });
             return sendJson(res, recovered.ok ? 200 : 409, recovered);
           }
           if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'quarantine' && parts.length === 2) {
@@ -1529,18 +1529,19 @@ export async function apply(ctx) {
             const recovery = readProviderRecoveryTransactions().find((entry) => entry.transaction_id === transactionId || entry.storage_id === transactionId);
             if (!recovery) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
             if (recovery.recoverable === true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_RECOVERABLE' });
-            const recoveryRoot = join(CONFIG_DIR, 'provider-backups');
-            const source = join(recoveryRoot, recovery.storage_id ?? transactionId);
-            const quarantineRoot = join(recoveryRoot, '.quarantine');
             try {
-              if (!existsSync(source) || !lstatSync(source).isDirectory()) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
-              if (existsSync(quarantineRoot) && !lstatSync(quarantineRoot).isDirectory()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_UNSAFE_PATH' });
-              mkdirSync(quarantineRoot, { recursive: true });
-              const target = join(quarantineRoot, `${transactionId}.${Date.now()}.${randomUUID().slice(0, 8)}`);
-              renameSync(source, target);
-              return sendJson(res, 200, { ok: true, transaction_id: recovery.transaction_id ?? transactionId, state: 'QUARANTINED' });
-            } catch {
-              return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED' });
+              const hooks = createProviderDeleteFileHooks({
+                profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+                settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+                configFile: join(CONFIG_DIR, 'config.json'),
+                lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+                backupDir: join(CONFIG_DIR, 'provider-backups'),
+              });
+              const quarantined = await hooks.quarantine(recovery.storage_id ?? transactionId);
+              return sendJson(res, 200, { ...quarantined, transaction_id: recovery.transaction_id ?? transactionId });
+            } catch (error) {
+              const code = boundedMachineCodeFromError(error) ?? 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED';
+              return sendJson(res, 409, { ok: false, code });
             }
           }
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});

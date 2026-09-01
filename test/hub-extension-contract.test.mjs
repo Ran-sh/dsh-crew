@@ -49,6 +49,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_PENDING/);
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED/);
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED/);
+  assert.match(hubSource, /hooks\.quarantine/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);

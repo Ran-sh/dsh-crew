@@ -391,6 +391,39 @@ test('offline recovery also clears a malformed main lock without a reclaim guard
   assert.equal(existsSync(lockPath), false);
 });
 
+test('offline recovery supports an explicit force override for a reused live PID', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const recoveryPath = join(backupDir, '.delete.recovery.lock');
+  writeFileSync(recoveryPath, JSON.stringify({ pid: process.pid, token: 'reused-pid' }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const blocked = await hooks.recoverLock();
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'PROVIDER_DELETE_BUSY');
+  const forced = await hooks.recoverLock({ force: true });
+  assert.equal(forced.ok, true);
+  assert.equal(existsSync(recoveryPath), false);
+});
+
+test('offline recovery does not steal an active stale-lock reclaim claim', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const recoveryPath = join(backupDir, '.delete.recovery.lock');
+  const claimPath = `${recoveryPath}.claim`;
+  writeFileSync(recoveryPath, JSON.stringify({ pid: 999999, token: 'stale-recovery' }));
+  writeFileSync(claimPath, JSON.stringify({ pid: process.pid, token: 'active-reclaimer', observed_token: 'stale-recovery' }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const blocked = await hooks.recoverLock();
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'PROVIDER_DELETE_BUSY');
+  assert.equal(existsSync(recoveryPath), true);
+  assert.equal(existsSync(claimPath), true);
+  rmSync(claimPath, { force: true });
+  rmSync(recoveryPath, { force: true });
+});
+
 test('provider verification fails closed when a managed profile is malformed', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
@@ -527,6 +560,25 @@ test('a persisted transaction backup can be reopened for an explicit rollback', 
   await reopened.release();
   assert.equal(verified.ok, true);
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
+});
+
+test('reopening a transaction refreshes its manifest after lock acquisition', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir });
+  await first.backup(plan);
+  await first.release();
+
+  const stale = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
+  const writer = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
+  await writer.acquireLock();
+  await writer.setRuntimeBaseline('runtime-written-by-other-owner', 'delete');
+  await writer.release();
+
+  await stale.acquireLock();
+  assert.equal(stale.backupPlan().delete_runtime_id_before_restart, 'runtime-written-by-other-owner');
+  await stale.release();
 });
 
 test('reopening a backup fails closed when its manifest omits a managed file entry', async () => {
@@ -726,6 +778,9 @@ test('an absent lifecycle file remains auditable after the transaction creates i
   assert.equal(result.audit_recorded, true);
   const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
   assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
+  const manifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.ownership_witnesses.lifecycle, 'lifecycle.ownership.witness');
+  assert.equal(existsSync(join(backupDir, plan.plan_id, 'lifecycle.ownership.witness')), true);
 
   const reopened = createProviderDeleteFileHooks({
     ...paths,
@@ -800,6 +855,19 @@ test('malformed owner metadata fails closed instead of being reclaimed automatic
   await assert.rejects(() => hooks.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_BUSY');
   assert.equal(existsSync(lockPath), true);
   rmSync(lockPath, { recursive: true, force: true });
+});
+
+test('invalid recovery entries can be quarantined under the owned backup root', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const entry = join(backupDir, '.partial');
+  mkdirSync(entry, { recursive: true });
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const result = await hooks.quarantine('.partial');
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(entry), false);
+  const quarantineRoot = join(backupDir, '.quarantine');
+  assert.equal(readdirSync(quarantineRoot).length, 1);
 });
 
 test('persisted provider delete backup retains sanitized credential references for final audit', async () => {

@@ -63,6 +63,11 @@ function safePlanId(value) {
   return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
 }
 
+function safeRecoveryEntryName(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128
+    && value !== '.' && value !== '..' && !/[\\/\u0000-\u001f]/u.test(value) ? value : null;
+}
+
 function atomicWrite(file, content, managedRoot = null, { replace = true } = {}) {
   if (managedRoot) assertManagedPath(file, managedRoot);
   const dir = dirname(file);
@@ -321,6 +326,7 @@ function recoveryDescriptor(manifest) {
       config: manifest?.created_config_identity ?? null,
       lifecycle: manifest?.created_lifecycle_identity ?? null,
     },
+    ownership_witnesses: manifest?.ownership_witnesses ?? null,
     mutation_journal: manifest?.mutation_journal ?? null,
     phase_journal: manifest?.phase_journal ?? null,
   };
@@ -418,6 +424,27 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   }
   if (manifest.mutation_journal !== undefined && (typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal))) throw backupInvalid();
   if (manifest.phase_journal !== undefined && (typeof manifest.phase_journal !== 'object' || Array.isArray(manifest.phase_journal))) throw backupInvalid();
+  if (manifest.ownership_witnesses !== undefined && (typeof manifest.ownership_witnesses !== 'object' || Array.isArray(manifest.ownership_witnesses))) throw backupInvalid();
+  for (const key of ['profile', 'settings', 'config', 'lifecycle']) {
+    const witnessName = manifest.ownership_witnesses?.[key];
+    if (witnessName !== undefined) {
+      if (witnessName !== `${key}.ownership.witness`) throw backupInvalid();
+      const witnessFile = join(root, witnessName);
+      assertManagedPath(witnessFile, managedRoot);
+      if (!fs.existsSync(witnessFile) || lstatSync(witnessFile).isSymbolicLink()) throw backupInvalid();
+      const identity = manifest[`created_${key}_identity`];
+      if (manifest[`created_${key}`] !== true || !identity) throw backupInvalid();
+      try {
+        const witnessIdentity = fileIdentity(witnessFile);
+        if (witnessIdentity.dev !== identity.dev || witnessIdentity.ino !== identity.ino) throw backupInvalid();
+      } catch (error) {
+        if (error?.code === 'PROVIDER_DELETE_BACKUP_INVALID') throw error;
+        throw backupInvalid();
+      }
+    } else if (manifest[`created_${key}`] === true) {
+      throw backupInvalid();
+    }
+  }
   for (const [key, mutation] of Object.entries(manifest.mutation_journal ?? {})) {
     if (!['profile', 'settings', 'config', 'lifecycle'].includes(key) || !mutation || typeof mutation !== 'object'
       || !/^[a-f0-9]{64}$/i.test(mutation.next_revision) || typeof mutation.created !== 'boolean') throw backupInvalid();
@@ -514,21 +541,36 @@ export function createProviderDeleteFileHooks({
     }
   };
 
-  const recoverLock = async () => {
+  const recoverLock = async ({ force = false } = {}) => {
     const guardPath = join(backupDir, '.delete.reclaim.lock');
     const canonicalPath = join(backupDir, '.delete.lock');
     const recoveryPath = join(backupDir, '.delete.recovery.lock');
+    const recoveryClaimPath = `${recoveryPath}.claim`;
     const alive = (owner) => {
       if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
       try { process.kill(owner.pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
     };
     const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
     assertManagedPath(backupDir, managedRoot);
-    for (const path of [guardPath, canonicalPath, recoveryPath]) assertManagedPath(path, managedRoot);
+    for (const path of [guardPath, canonicalPath, recoveryPath, recoveryClaimPath]) assertManagedPath(path, managedRoot);
     const recoveryToken = randomUUID();
     let recoveryOwned = false;
     const recoveryOwner = () => ({ pid: process.pid, token: recoveryToken, created_at: new Date().toISOString() });
     const recoveryAcquire = () => {
+      // A crashed reclaimer leaves a claim marker. Do not automatically steal
+      // it: only an explicit operator force can clear a dead claim, which
+      // keeps concurrent reclaimers from ABA-renaming a fresh recovery lock.
+      if (existsSync(recoveryClaimPath)) {
+        let claim = null;
+        try { claim = readJson(recoveryClaimPath, null); } catch {}
+        if (!force || alive(claim) === true) return false;
+        const claimToken = claim?.token ?? null;
+        let rereadClaim = null;
+        try { rereadClaim = readJson(recoveryClaimPath, null); } catch {}
+        if (claimToken !== (rereadClaim?.token ?? null)) return false;
+        cleanup(recoveryClaimPath);
+        if (existsSync(recoveryClaimPath)) return false;
+      }
       try {
         publishExclusiveFile(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', recoveryToken);
         recoveryOwned = true;
@@ -537,17 +579,28 @@ export function createProviderDeleteFileHooks({
         if (error?.code !== 'EEXIST') return false;
         let existing = null;
         try { existing = readJson(recoveryPath, null); } catch {}
-        if (existing && alive(existing) === true) return false;
+        if (existing && alive(existing) === true && !force) return false;
+        if (existsSync(recoveryClaimPath)) return false;
+        const claim = { pid: process.pid, token: recoveryToken, observed_token: existing?.token ?? null, created_at: new Date().toISOString() };
+        try {
+          publishExclusiveFile(recoveryClaimPath, JSON.stringify(claim) + '\n', recoveryToken);
+        } catch { return false; }
         let reread = null;
         try { reread = readJson(recoveryPath, null); } catch {}
-        if ((existing?.token ?? null) !== (reread?.token ?? null)) return false;
+        if ((existing?.token ?? null) !== (reread?.token ?? null)) {
+          cleanup(recoveryClaimPath);
+          return false;
+        }
         const stalePath = `${recoveryPath}.${recoveryToken}.stale`;
-        try { renameSync(recoveryPath, stalePath); } catch { return false; }
+        try { renameSync(recoveryPath, stalePath); } catch { cleanup(recoveryClaimPath); return false; }
         try {
           publishExclusiveFile(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', recoveryToken);
           recoveryOwned = true;
           return true;
-        } finally { cleanup(stalePath); }
+        } finally {
+          cleanup(stalePath);
+          cleanup(recoveryClaimPath);
+        }
       }
     };
     if (!recoveryAcquire()) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
@@ -603,10 +656,12 @@ export function createProviderDeleteFileHooks({
     const retiredPath = join(backupDir, `.delete.lock.${ownerToken}.retired`);
     const reclaimGuardPath = join(backupDir, '.delete.reclaim.lock');
     const recoveryPath = join(backupDir, '.delete.recovery.lock');
+    const recoveryClaimPath = `${recoveryPath}.claim`;
     let guardOwned = false;
     let coordinationOwned = false;
-    for (const path of [canonicalPath, activePath, stagingPath, retiredPath, reclaimGuardPath, recoveryPath]) assertManagedPath(path, managedRoot);
+    for (const path of [canonicalPath, activePath, stagingPath, retiredPath, reclaimGuardPath, recoveryPath, recoveryClaimPath]) assertManagedPath(path, managedRoot);
     try {
+      if (existsSync(recoveryClaimPath)) throw Object.assign(new Error('provider delete recovery reclaim is active'), { code: 'PROVIDER_DELETE_BUSY' });
       publishExclusiveFile(recoveryPath, JSON.stringify({ pid: process.pid, token: ownerToken, created_at: new Date().toISOString() }) + '\n', ownerToken);
       coordinationOwned = true;
     } catch (error) {
@@ -663,6 +718,18 @@ export function createProviderDeleteFileHooks({
       lockPath = path;
       lockOwnerToken = ownerToken;
       lockOwned = true;
+      try {
+        // Reopen transactions are inspected before lock acquisition so
+        // malformed input can fail fast. Refresh once ownership is acquired
+        // so a stale in-memory manifest cannot overwrite newer recovery state.
+        refreshActiveBackup();
+      } catch (error) {
+        cleanup(path);
+        lockOwned = false;
+        lockPath = null;
+        lockOwnerToken = null;
+        throw error;
+      }
     };
     const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
     try {
@@ -731,6 +798,14 @@ export function createProviderDeleteFileHooks({
     activeBackup = { root, manifest };
   }
 
+  const refreshActiveBackup = () => {
+    if (!activeBackup) return;
+    const manifestFile = join(activeBackup.root, 'manifest.json');
+    const latest = readJson(manifestFile, null);
+    validateBackupManifest(latest, { root: activeBackup.root, fs, paths, managedRoot, expectedProviderId });
+    activeBackup = { root: activeBackup.root, manifest: latest };
+  };
+
   const persistManifest = () => {
     if (!activeBackup) return;
     activeBackup.manifest.recovery_descriptor_digest = sha256(JSON.stringify(recoveryDescriptor(activeBackup.manifest)));
@@ -770,6 +845,35 @@ export function createProviderDeleteFileHooks({
     persistManifest();
   };
 
+  const durableWitnessPath = (key) => {
+    if (!activeBackup) throw backupInvalid();
+    const witness = join(activeBackup.root, `${key}.ownership.witness`);
+    assertManagedPath(witness, managedRoot);
+    return witness;
+  };
+
+  const retainOwnershipWitness = (key, source) => {
+    const witness = durableWitnessPath(key);
+    const staged = join(activeBackup.root, `.${key}.ownership.${randomUUID()}.stage`);
+    assertManagedPath(staged, managedRoot);
+    try {
+      linkSync(source, staged);
+      if (existsSync(witness)) rmSync(witness, { force: true });
+      renameSync(staged, witness);
+      const sourceIdentity = fileIdentity(source);
+      const witnessIdentity = fileIdentity(witness);
+      if (sourceIdentity.dev !== witnessIdentity.dev || sourceIdentity.ino !== witnessIdentity.ino) {
+        throw Object.assign(new Error('transaction-created file ownership witness changed'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+      }
+      activeBackup.manifest.ownership_witnesses ??= {};
+      activeBackup.manifest.ownership_witnesses[key] = `${key}.ownership.witness`;
+      return witnessIdentity;
+    } catch (error) {
+      try { rmSync(staged, { force: true }); } catch {}
+      throw error;
+    }
+  };
+
   const commitMutation = (key, nextRevision) => {
     if (!activeBackup || typeof nextRevision !== 'string') return;
     const pending = activeBackup.manifest.mutation_journal?.[key];
@@ -791,7 +895,7 @@ export function createProviderDeleteFileHooks({
         throw Object.assign(new Error('transaction-created file ownership changed'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       }
       activeBackup.manifest[`created_${key}`] = true;
-      activeBackup.manifest[`created_${key}_identity`] = targetIdentity;
+      activeBackup.manifest[`created_${key}_identity`] = retainOwnershipWitness(key, witness);
     }
     // A transaction-created file may be intentionally replaced by a later
     // audited mutation (for example, the lifecycle audit after tombstoning).
@@ -800,7 +904,7 @@ export function createProviderDeleteFileHooks({
     if (activeBackup.manifest[`created_${key}`] === true && pending?.created !== true) {
       const target = key === 'settings' ? settingsFile : paths[key];
       try {
-        activeBackup.manifest[`created_${key}_identity`] = fileIdentity(target);
+        activeBackup.manifest[`created_${key}_identity`] = retainOwnershipWitness(key, target);
       } catch {
         throw Object.assign(new Error('transaction-created file identity is unavailable'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       }
@@ -913,6 +1017,7 @@ export function createProviderDeleteFileHooks({
       },
       files: {},
       backup_digests: {},
+      ownership_witnesses: {},
       mutation_journal: {},
       phase_journal: { phase: 'PLANNED', updated_at: new Date().toISOString() },
     };
@@ -1222,11 +1327,17 @@ export function createProviderDeleteFileHooks({
       let created = activeBackup.manifest[`created_${key}`] === true;
       if (created) {
         const identity = activeBackup.manifest[`created_${key}_identity`];
-        if (!identity || !fs.existsSync(target)) created = false;
+        const witnessName = activeBackup.manifest.ownership_witnesses?.[key];
+        const witnessFile = witnessName === `${key}.ownership.witness` ? join(activeBackup.root, witnessName) : null;
+        if (!identity || !fs.existsSync(target) || !witnessFile || !fs.existsSync(witnessFile)) created = false;
         else {
           try {
             const currentIdentity = fileIdentity(target);
-            created = currentIdentity.dev === identity.dev && currentIdentity.ino === identity.ino;
+            const witnessIdentity = fileIdentity(witnessFile);
+            created = currentIdentity.dev === witnessIdentity.dev
+              && currentIdentity.ino === witnessIdentity.ino
+              && witnessIdentity.dev === identity.dev
+              && witnessIdentity.ino === identity.ino;
           } catch { created = false; }
         }
       }
@@ -1318,6 +1429,32 @@ export function createProviderDeleteFileHooks({
       try { owner = readJson(ownerPath, null); } catch {}
       if (owner?.token === lockOwnerToken) fs.rmSync(lockPath, { recursive: true, force: true });
     } finally { lockOwned = false; lockPath = null; lockOwnerToken = null; }
+  };
+
+  const quarantine = async (entryName) => {
+    const safeName = safeRecoveryEntryName(entryName);
+    if (!safeName) throw Object.assign(new Error('provider recovery entry name is invalid'), { code: 'PROVIDER_DELETE_PLAN_INVALID' });
+    await acquireLock();
+    try {
+      const source = join(backupDir, safeName);
+      const quarantineRoot = join(backupDir, '.quarantine');
+      assertManagedPath(source, managedRoot);
+      assertManagedPath(quarantineRoot, managedRoot);
+      if (!existsSync(source) || !lstatSync(source).isDirectory()) {
+        throw Object.assign(new Error('provider recovery transaction was not found'), { code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
+      }
+      if (existsSync(quarantineRoot) && !lstatSync(quarantineRoot).isDirectory()) {
+        throw Object.assign(new Error('provider recovery quarantine path is unsafe'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+      }
+      mkdirSync(quarantineRoot, { recursive: true });
+      assertManagedPath(quarantineRoot, managedRoot);
+      const target = join(quarantineRoot, `${safeName}.${Date.now()}.${randomUUID().slice(0, 8)}`);
+      assertManagedPath(target, managedRoot);
+      renameSync(source, target);
+      return { ok: true, storage_id: safeName, state: 'QUARANTINED' };
+    } finally {
+      await release();
+    }
   };
 
   const verifyRollback = async (plan) => {
@@ -1432,6 +1569,7 @@ export function createProviderDeleteFileHooks({
     verify,
     verifyRollback,
     recordTransaction,
+    quarantine,
     rollback,
     release,
   };
