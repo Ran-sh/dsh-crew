@@ -314,6 +314,12 @@ export function createProviderDeleteFileHooks({
   let lockOwned = false;
   let lockOwnerToken = null;
 
+  const ensureMutationLock = () => {
+    if (!lockOwned || !lockPath || !lockOwnerToken) {
+      throw Object.assign(new Error('provider deletion write lock is unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+    }
+  };
+
   const acquireLock = async () => {
     if (lockOwned) return;
     fs.mkdirSync(backupDir, { recursive: true });
@@ -440,6 +446,7 @@ export function createProviderDeleteFileHooks({
   // both the target boundary and the resulting revision. Custom writers are
   // accepted for the Hub's in-memory adapters, but cannot bypass these checks.
   const writeManagedConfig = async (config, expectedRevision) => {
+    ensureMutationLock();
     assertManagedPath(configFile, managedRoot);
     if (typeof expectedRevision === 'string') {
       const current = await readConfig();
@@ -456,6 +463,7 @@ export function createProviderDeleteFileHooks({
   };
 
   const writeManagedSettings = async (content, options = {}) => {
+    ensureMutationLock();
     if (typeof settingsFile !== 'string' || !settingsFile.trim()) {
       throw Object.assign(new Error('provider settings path is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
     }
@@ -577,6 +585,11 @@ export function createProviderDeleteFileHooks({
       throw Object.assign(new Error('provider lifecycle changed'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
     }
     const marked = markProviderTombstone(state, providerId);
+    ensureMutationLock();
+    const latestState = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    if (sha256(JSON.stringify(latestState)) !== sha256(JSON.stringify(state))) {
+      throw Object.assign(new Error('provider lifecycle changed during commit'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
+    }
     setPhase('TOMBSTONE_APPLYING');
     const nextRevision = sha256(JSON.stringify(marked));
     prepareMutation('lifecycle', nextRevision);
@@ -641,6 +654,11 @@ export function createProviderDeleteFileHooks({
         expectedRevision: plan.expected_revisions?.profile ?? plan.expected_revision,
       });
       if (!result.ok) throw Object.assign(new Error('provider profile changed'), { code: result.code });
+      ensureMutationLock();
+      const latestProfile = fs.readFileSync(profileFile, 'utf8');
+      if (sha256(latestProfile) !== (plan.expected_revisions?.profile ?? plan.expected_revision)) {
+        throw Object.assign(new Error('provider profile changed during commit'), { code: 'PROVIDER_PROFILE_CHANGED' });
+      }
       prepareMutation('profile', result.revision);
       atomicWrite(profileFile, result.text, managedRoot);
       removed += result.removed.length;
@@ -760,6 +778,11 @@ export function createProviderDeleteFileHooks({
           fs.rmSync(target, { force: true });
         }
       } else if (key === 'lifecycle' && entry?.existed === true) {
+        ensureMutationLock();
+        const latestLifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+        if (!allowedRevision(sha256(JSON.stringify(latestLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision, 'lifecycle')) {
+          throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+        }
         const savedLifecycle = normalizeProviderLifecycleState(readJson(backupFile, {}));
         const restoredLifecycle = { ...currentLifecycle, tombstones: { ...savedLifecycle.tombstones } };
         const restoredRevision = sha256(JSON.stringify(restoredLifecycle));
@@ -767,6 +790,11 @@ export function createProviderDeleteFileHooks({
         atomicWrite(target, JSON.stringify(restoredLifecycle, null, 2) + '\n', managedRoot);
         commitMutation('lifecycle', restoredRevision);
       } else if (entry?.existed === true) {
+        ensureMutationLock();
+        const latest = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+        if (latest === null || !allowedRevision(sha256(latest), activeBackup.manifest[`${key}_revision`], activeBackup.manifest[`applied_${key}_revision`], key)) {
+          throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+        }
         safeRestoreFile(backupFile, target, managedRoot);
       } else {
         fs.rmSync(target, { force: true });
@@ -774,10 +802,17 @@ export function createProviderDeleteFileHooks({
     }
     const settingsEntry = activeBackup.manifest.files.settings;
     if (settingsEntry?.managed === true && typeof settingsFile === 'string' && settingsFile.trim()) {
+      ensureMutationLock();
       assertManagedPath(settingsFile, managedRoot);
       const backupFile = join(activeBackup.root, 'settings.backup');
       assertManagedPath(backupFile, managedRoot);
-      if (settingsEntry?.existed === true) safeRestoreFile(backupFile, settingsFile, managedRoot);
+      if (settingsEntry?.existed === true) {
+        const latestSettings = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
+        if (latestSettings === null || !allowedRevision(sha256(latestSettings), activeBackup.manifest.settings_revision, activeBackup.manifest.applied_settings_revision, 'settings')) {
+          throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+        }
+        safeRestoreFile(backupFile, settingsFile, managedRoot);
+      }
       else fs.rmSync(settingsFile, { force: true });
     }
     activeBackup.manifest.mutation_journal = {};
@@ -827,8 +862,10 @@ export function createProviderDeleteFileHooks({
   };
 
   const recordTransaction = async (result, plan) => {
+    ensureMutationLock();
     assertManagedPath(lifecycleFile, managedRoot);
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    const initialRevision = sha256(JSON.stringify(state));
     const next = recordProviderTransaction(state, {
       transaction_id: result?.transaction_id ?? plan?.plan_id,
       provider_id: result?.provider_id ?? plan?.provider_id,
@@ -845,6 +882,10 @@ export function createProviderDeleteFileHooks({
       next.last_verified_revision[plan.provider_id] = sha256(`${profileRevision}:${settingsRevision}`);
     }
     const nextRevision = sha256(JSON.stringify(next));
+    const latestState = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
+    if (sha256(JSON.stringify(latestState)) !== initialRevision) {
+      throw Object.assign(new Error('provider lifecycle changed during audit'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
+    }
     prepareMutation('lifecycle', nextRevision);
     atomicWrite(lifecycleFile, JSON.stringify(next, null, 2) + '\n', managedRoot);
     commitMutation('lifecycle', nextRevision);
