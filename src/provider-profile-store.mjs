@@ -103,14 +103,25 @@ function scalarField(lines, entry, field) {
   return null;
 }
 
-const INLINE_CREDENTIAL_FIELD = /^\s+(?:apiKey|api_key|token|accessToken|refreshToken|secret|password):\s*\S.*$/iu;
+const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
+const REFERENCE_FIELD_SUFFIX = /(?:env|ref|name|handle|id|file|path)$/iu;
+
+function isInlineCredentialLine(line) {
+  const match = line.match(/^\s*["']?([A-Za-z][A-Za-z0-9_.-]*)["']?\s*:\s*(.*?)\s*$/u);
+  if (!match) return false;
+  const [, field, value] = match;
+  if (!value || /^(?:null|~|\{\}|\[\])$/u.test(value)) return false;
+  const normalized = field.replace(/[_.-]/gu, '');
+  if (SENSITIVE_CREDENTIAL_FIELD.test(field) && !REFERENCE_FIELD_SUFFIX.test(normalized)) return true;
+  return /(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key)\s*["']?\s*:/iu.test(value);
+}
 
 export function hasInlineProviderCredentials(source, { providerIds = [] } = {}) {
   const parsed = parseProviderMap(source);
   if (!parsed.ok) return { ok: false, code: parsed.code };
   const requested = providerIds.length > 0 ? new Set(providerIds) : null;
   const providers = parsed.entries.filter((entry) => !requested || requested.has(entry.id));
-  return { ok: true, inline: providers.some((entry) => parsed.lines.slice(entry.start, entry.end).some((line) => INLINE_CREDENTIAL_FIELD.test(line))) };
+  return { ok: true, inline: providers.some((entry) => parsed.lines.slice(entry.start, entry.end).some(isInlineCredentialLine)) };
 }
 
 /** Return profile provider provenance and credential reference names only. */
