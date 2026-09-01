@@ -43,7 +43,19 @@ function validProviderId(value) {
 }
 
 function sha256(value) {
-  return createHash('sha256').update(String(value), 'utf8').digest('hex');
+  const input = Buffer.isBuffer(value) || value instanceof Uint8Array ? value : String(value);
+  return createHash('sha256').update(input).digest('hex');
+}
+
+function decodeUtf8(value) {
+  if (typeof value === 'string') return value;
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(value); }
+  catch { throw Object.assign(new Error('managed provider file is not valid UTF-8'), { code: 'PROVIDER_DELETE_FILE_INVALID' }); }
+}
+
+function parseManagedJson(value) {
+  try { return JSON.parse(decodeUtf8(value)); }
+  catch { throw Object.assign(new Error('managed provider file is invalid'), { code: 'PROVIDER_DELETE_FILE_INVALID' }); }
 }
 
 function safePlanId(value) {
@@ -263,9 +275,11 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
       const backupFile = join(root, `${key}.backup`);
       assertManagedPath(backupFile, managedRoot);
       const digest = manifest.backup_digests[key];
-      if (!fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink() || !/^[a-f0-9]{64}$/i.test(digest)
-        || sha256(fs.readFileSync(backupFile, 'utf8')) !== digest) throw backupInvalid();
+      if (!fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink() || !/^[a-f0-9]{64}$/i.test(digest)) throw backupInvalid();
+      const backupBytes = fs.readFileSync(backupFile);
+      if (sha256(backupBytes) !== digest) throw backupInvalid();
       if (key === 'profile' && manifest.profile_revision !== digest) throw backupInvalid();
+      if (key === 'lifecycle' && sha256(JSON.stringify(normalizeProviderLifecycleState(parseManagedJson(backupBytes)))) !== manifest.lifecycle_revision) throw backupInvalid();
       if (key === 'settings' && manifest.settings_revision !== digest) throw backupInvalid();
     }
   }
@@ -277,8 +291,9 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
       const backupFile = join(root, 'settings.backup');
       assertManagedPath(backupFile, managedRoot);
       const digest = manifest.backup_digests.settings;
-      if (!fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink() || !/^[a-f0-9]{64}$/i.test(digest)
-        || sha256(fs.readFileSync(backupFile, 'utf8')) !== digest || manifest.settings_revision !== digest) throw backupInvalid();
+      if (!fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink() || !/^[a-f0-9]{64}$/i.test(digest)) throw backupInvalid();
+      const settingsBytes = fs.readFileSync(backupFile);
+      if (sha256(settingsBytes) !== digest || manifest.settings_revision !== digest) throw backupInvalid();
     }
   }
   if (manifest.profile_revision !== undefined && !/^[a-f0-9]{64}$/i.test(manifest.profile_revision)) throw backupInvalid();
@@ -347,11 +362,32 @@ export function createProviderDeleteFileHooks({
     };
     const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
     assertManagedPath(backupDir, managedRoot);
-    try {
-      fs.writeFileSync(recoveryPath, JSON.stringify({ pid: process.pid, token: randomUUID(), created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
-    } catch (error) {
-      return { ok: false, code: error?.code === 'EEXIST' ? 'PROVIDER_DELETE_BUSY' : 'PROVIDER_DELETE_LOCK_UNAVAILABLE' };
-    }
+    const recoveryToken = randomUUID();
+    let recoveryOwned = false;
+    const recoveryOwner = () => ({ pid: process.pid, token: recoveryToken, created_at: new Date().toISOString() });
+    const recoveryAcquire = () => {
+      try {
+        fs.writeFileSync(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', { flag: 'wx' });
+        recoveryOwned = true;
+        return true;
+      } catch (error) {
+        if (error?.code !== 'EEXIST') return false;
+        let existing = null;
+        try { existing = readJson(recoveryPath, null); } catch {}
+        if (existing && alive(existing) !== false) return false;
+        let reread = null;
+        try { reread = readJson(recoveryPath, null); } catch {}
+        if ((existing?.token ?? null) !== (reread?.token ?? null)) return false;
+        const stalePath = `${recoveryPath}.${recoveryToken}.stale`;
+        try { renameSync(recoveryPath, stalePath); } catch { return false; }
+        try {
+          fs.writeFileSync(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', { flag: 'wx' });
+          recoveryOwned = true;
+          return true;
+        } finally { cleanup(stalePath); }
+      }
+    };
+    if (!recoveryAcquire()) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
     try {
       if (!existsSync(guardPath)) return { ok: true, recovered: false };
       let guardOwner = null;
@@ -369,7 +405,11 @@ export function createProviderDeleteFileHooks({
       cleanup(guardPath);
       return { ok: true, recovered: true };
     } finally {
-      cleanup(recoveryPath);
+      if (recoveryOwned) {
+        let owner = null;
+        try { owner = readJson(recoveryPath, null); } catch {}
+        if (owner?.token === recoveryToken) cleanup(recoveryPath);
+      }
     }
   };
 
@@ -619,14 +659,26 @@ export function createProviderDeleteFileHooks({
     const authorityKinds = new Set((Array.isArray(plan?.declaration_authorities) ? plan.declaration_authorities : []).map((authority) => authority?.kind));
     const managesHarnessDefault = plan?.was_harness_default === true && plan?.harness_default_authority?.kind === 'harness-settings';
     const sourceRevisions = {};
+    let configBytes = null;
+    try { configBytes = fs.readFileSync(configFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    const configExisted = configBytes !== null;
+    const configSnapshot = configExisted ? parseManagedJson(configBytes) : {};
+    let lifecycleBytes = null;
+    try { lifecycleBytes = fs.readFileSync(lifecycleFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    const lifecycleExisted = lifecycleBytes !== null;
+    const lifecycleSnapshot = lifecycleExisted
+      ? normalizeProviderLifecycleState(parseManagedJson(lifecycleBytes))
+      : normalizeProviderLifecycleState({});
+    assertManagedPath(lifecycleFile, managedRoot);
     for (const key of FILE_KEYS) {
       const source = paths[key];
       assertManagedPath(source, managedRoot);
-      const existed = fs.existsSync(source);
+      const existed = key === 'config' ? configExisted : key === 'lifecycle' ? lifecycleExisted : fs.existsSync(source);
       const managed = key !== 'profile' || authorityKinds.has('crew-profile');
       manifest.files[key] = { existed, managed };
       if (existed && key !== 'config' && managed) {
-        const sourceText = fs.readFileSync(source, 'utf8');
+        const sourceBytes = key === 'lifecycle' ? lifecycleBytes : fs.readFileSync(source);
+        const sourceText = decodeUtf8(sourceBytes);
         // The backup contains this exact snapshot, never a second pathname
         // read after a possible ancestor/junction swap.
         assertManagedPath(source, managedRoot);
@@ -643,9 +695,9 @@ export function createProviderDeleteFileHooks({
         }
         const target = join(root, `${key}.backup`);
         assertManagedPath(target, managedRoot);
-        atomicWrite(target, sourceText, managedRoot);
-        manifest.backup_digests[key] = sha256(sourceText);
-        sourceRevisions[key] = sha256(sourceText);
+        atomicWrite(target, sourceBytes, managedRoot);
+        manifest.backup_digests[key] = sha256(sourceBytes);
+        sourceRevisions[key] = sha256(sourceBytes);
       }
     }
     if (typeof settingsFile === 'string' && settingsFile.trim()) {
@@ -654,7 +706,8 @@ export function createProviderDeleteFileHooks({
       const managed = authorityKinds.has('harness-settings') || managesHarnessDefault;
       manifest.files.settings = { existed, managed };
       if (existed && managed) {
-        const sourceText = fs.readFileSync(settingsFile, 'utf8');
+        const sourceBytes = fs.readFileSync(settingsFile);
+        const sourceText = decodeUtf8(sourceBytes);
         assertManagedPath(settingsFile, managedRoot);
         const expectedSettingsRevision = plan.expected_revisions?.settings ?? (!authorityKinds.has('crew-profile') ? plan.expected_revision : null);
         if (typeof expectedSettingsRevision === 'string' && sha256(sourceText) !== expectedSettingsRevision) {
@@ -665,18 +718,16 @@ export function createProviderDeleteFileHooks({
         if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
         const target = join(root, 'settings.backup');
         assertManagedPath(target, managedRoot);
-        atomicWrite(target, sourceText, managedRoot);
-        manifest.backup_digests.settings = sha256(sourceText);
-        sourceRevisions.settings = sha256(sourceText);
+        atomicWrite(target, sourceBytes, managedRoot);
+        manifest.backup_digests.settings = sha256(sourceBytes);
+        sourceRevisions.settings = sha256(sourceBytes);
       }
     }
-    const config = await readConfig();
-    const lifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
-    manifest.config_projection = configProjection(config);
-    manifest.config_revision = sha256(JSON.stringify(config));
-    manifest.lifecycle_revision = sha256(JSON.stringify(lifecycle));
+    manifest.config_projection = configProjection(configSnapshot);
+    manifest.config_revision = sha256(JSON.stringify(configSnapshot));
+    manifest.lifecycle_revision = sha256(JSON.stringify(lifecycleSnapshot));
     manifest.routing_projection_digest = sha256(JSON.stringify(manifest.config_projection));
-    manifest.lifecycle_projection_digest = sha256(JSON.stringify(lifecycleProjection(lifecycle)));
+    manifest.lifecycle_projection_digest = sha256(JSON.stringify(lifecycleProjection(lifecycleSnapshot)));
     if (authorityKinds.has('crew-profile') && sourceRevisions.profile) manifest.profile_revision = sourceRevisions.profile;
     if ((authorityKinds.has('harness-settings') || managesHarnessDefault) && sourceRevisions.settings) manifest.settings_revision = sourceRevisions.settings;
     activeBackup = { root, manifest };
@@ -857,6 +908,7 @@ export function createProviderDeleteFileHooks({
 
   const rollback = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_ROLLBACK_UNAVAILABLE' });
+    ensureMutationLock();
     const allowedRevision = (current, original, applied, key) => current === original
       || (typeof applied === 'string' && current === applied)
       || (typeof activeBackup.manifest.mutation_journal?.[key]?.next_revision === 'string' && current === activeBackup.manifest.mutation_journal[key].next_revision);
@@ -870,6 +922,22 @@ export function createProviderDeleteFileHooks({
       || (activeBackup.manifest.settings_revision && (!currentSettings || !allowedRevision(sha256(currentSettings), activeBackup.manifest.settings_revision, activeBackup.manifest.applied_settings_revision, 'settings')))) {
       throw Object.assign(new Error('managed provider state changed after the transaction'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
     }
+    const removeIfTransactionCreated = async (key, target) => {
+      ensureMutationLock();
+      assertManagedPath(target, managedRoot);
+      if (!fs.existsSync(target)) return;
+      const expected = activeBackup.manifest[`applied_${key}_revision`]
+        ?? activeBackup.manifest.mutation_journal?.[key]?.next_revision;
+      if (typeof expected !== 'string') throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+      let current;
+      if (key === 'config') current = sha256(JSON.stringify(await readConfig()));
+      else if (key === 'lifecycle') current = sha256(JSON.stringify(normalizeProviderLifecycleState(readJson(lifecycleFile, {}))));
+      else current = sha256(fs.readFileSync(target));
+      if (current !== expected) throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+      assertManagedPath(target, managedRoot);
+      fs.rmSync(target, { force: true });
+      assertManagedPath(target, managedRoot);
+    };
     setPhase('ROLLBACK_APPLYING');
     for (const key of FILE_KEYS) {
       const target = paths[key];
@@ -883,7 +951,7 @@ export function createProviderDeleteFileHooks({
           const restored = restoreConfigProjection(await readConfig(), activeBackup.manifest.config_projection);
           await writeManagedConfig(restored, sha256(JSON.stringify(currentConfig)));
         } else {
-          fs.rmSync(target, { force: true });
+          await removeIfTransactionCreated('config', target);
         }
       } else if (key === 'lifecycle' && entry?.existed === true) {
         ensureMutationLock();
@@ -892,7 +960,7 @@ export function createProviderDeleteFileHooks({
         if (!allowedRevision(sha256(JSON.stringify(latestLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision, 'lifecycle')) {
           throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
         }
-        const savedLifecycle = normalizeProviderLifecycleState(JSON.parse(verifiedLifecycle.toString('utf8')));
+        const savedLifecycle = normalizeProviderLifecycleState(parseManagedJson(verifiedLifecycle));
         const restoredLifecycle = { ...currentLifecycle, tombstones: { ...savedLifecycle.tombstones } };
         const restoredRevision = sha256(JSON.stringify(restoredLifecycle));
         prepareMutation('lifecycle', restoredRevision);
@@ -907,7 +975,7 @@ export function createProviderDeleteFileHooks({
         }
         safeRestoreFile(backupFile, target, managedRoot, verifiedContent);
       } else {
-        fs.rmSync(target, { force: true });
+        await removeIfTransactionCreated(key, target);
       }
     }
     const settingsEntry = activeBackup.manifest.files.settings;
@@ -924,7 +992,7 @@ export function createProviderDeleteFileHooks({
         }
         safeRestoreFile(backupFile, settingsFile, managedRoot, verifiedSettings);
       }
-      else fs.rmSync(settingsFile, { force: true });
+      else await removeIfTransactionCreated('settings', settingsFile);
     }
     activeBackup.manifest.mutation_journal = {};
     setPhase('ROLLBACK_RESTORED');

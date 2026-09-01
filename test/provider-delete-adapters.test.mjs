@@ -253,8 +253,9 @@ test('provider backups reject nested flow-map credential values', async () => {
 
 test('default settings writer carries managed-root containment through atomic rename', () => {
   assert.match(ADAPTER_SOURCE, /atomicWrite\(settingsFile, content, managedRoot\)/);
-  assert.match(ADAPTER_SOURCE, /atomicWrite\(target, sourceText, managedRoot\)/);
+  assert.match(ADAPTER_SOURCE, /atomicWrite\(target, sourceBytes, managedRoot\)/);
   assert.match(ADAPTER_SOURCE, /const tempRoot = managedRoot \? resolvePath\(managedRoot\)/);
+  assert.match(ADAPTER_SOURCE, /Buffer\.isBuffer\(value\)/);
 });
 
 test('provider delete adapters reject managed paths outside the backup Crew root', () => {
@@ -331,6 +332,7 @@ test('offline recovery clears a stale reclaim guard only when no live owner rema
   const backupDir = join(paths.dir, 'backups');
   mkdirSync(backupDir, { recursive: true });
   const guardPath = join(backupDir, '.delete.reclaim.lock');
+  writeFileSync(join(backupDir, '.delete.recovery.lock'), JSON.stringify({ pid: 999999, token: 'stale-recovery' }));
   writeFileSync(guardPath, JSON.stringify({ pid: 999999, token: 'stale-guard' }));
   const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
   const recovered = await hooks.recoverLock();
