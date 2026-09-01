@@ -713,9 +713,12 @@ export class WorkerRegistry {  constructor(ctx) {
             candidateSet: attempt > 0 ? 'escalation' : 'primary',
           },
         });
-      }
-      if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
     }
+    if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
+    }
+    const pendingLayerMigration = readProviderLayerMigrationTransactions(join(CONFIG_DIR, 'provider-migration-backups'))
+      .find((entry) => entry.unresolved === true || entry.provider_id === selection.provider);
+    if (pendingLayerMigration) throw Object.assign(new Error('provider layer migration is pending verification'), { code: 'PROVIDER_MIGRATION_PENDING' });
     const providerMutationEpoch = this.getProviderMutationEpoch(selection.provider);
     this.assertProviderNotMutating(selection.provider, providerMutationEpoch);
 
@@ -1798,7 +1801,6 @@ export async function apply(ctx) {
               backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
               existingMigrationId: transactionId,
             });
-            let acquiredMigrationFence = false;
             try {
               await hooks.acquireLock();
               await hooks.backup({});
@@ -1808,7 +1810,6 @@ export async function apply(ctx) {
               if (owner !== plan.plan_id) {
                 if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerMigrationOwners.set(providerId, plan.plan_id);
-                acquiredMigrationFence = true;
               }
               const verification = await hooks.verify(plan);
               verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
@@ -1821,10 +1822,9 @@ export async function apply(ctx) {
               return sendJson(res, 200, { ok: true, state: 'VERIFIED', transaction_id: plan.plan_id, provider_id: providerId, verification });
             } finally {
               await hooks.release();
-              if (acquiredMigrationFence && providerMigrationOwners.get(providerId) === transactionId) {
-                providerMigrationOwners.delete(providerId);
-                hub.endProviderMutation(providerId);
-              }
+              // Keep the transaction-owned fence on verification failure so
+              // an incomplete migration cannot race a new Worker; the caller
+              // must explicitly retry verification or roll it back.
             }
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'rollback-migration') {
@@ -1836,6 +1836,7 @@ export async function apply(ctx) {
               existingMigrationId: body?.transaction_id,
             });
             let acquiredMigrationFence = false;
+            let retainProviderMutation = false;
             try {
               await hooks.acquireLock();
               await hooks.backup({});
@@ -1846,20 +1847,50 @@ export async function apply(ctx) {
                 if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerMigrationOwners.set(providerId, plan.plan_id);
                 acquiredMigrationFence = true;
+                retainProviderMutation = true;
               }
               const rollback = await hooks.rollback();
-              if (providerMigrationOwners.get(providerId) === plan.plan_id) {
-                providerMigrationOwners.delete(providerId);
-                hub.endProviderMutation(providerId);
-              }
-              return sendJson(res, 202, { ok: true, restart_required: true, transaction_id: plan.plan_id, provider_id: providerId, state: rollback.state });
+              await hooks.setRollbackRuntimeBaseline(getHubRuntimeIdentity().runtime_id);
+              providerMigrationOwners.set(providerId, plan.plan_id);
+              retainProviderMutation = true;
+              return sendJson(res, 202, { ok: true, restart_required: true, transaction_id: plan.plan_id, provider_id: providerId, state: 'ROLLBACK_RESTART_PENDING' });
             } finally {
               await hooks.release();
-              if (acquiredMigrationFence && providerMigrationOwners.get(providerId) === body?.transaction_id) {
+              if (acquiredMigrationFence && !retainProviderMutation && providerMigrationOwners.get(providerId) === body?.transaction_id) {
                 providerMigrationOwners.delete(providerId);
                 hub.endProviderMutation(providerId);
               }
             }
+          }
+          if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-rollback-migration') {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_CONFIRM_REQUIRED' });
+            const transactionId = body?.transaction_id;
+            const hooks = createProviderLayerMigrationFileHooks({
+              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+              backupDir: join(CONFIG_DIR, 'provider-migration-backups'),
+              existingMigrationId: transactionId,
+            });
+            try {
+              await hooks.acquireLock();
+              await hooks.backup({});
+              const plan = hooks.backupPlan();
+              if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
+              const owner = providerMigrationOwners.get(providerId);
+              if (owner !== plan.plan_id) {
+                if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerMigrationOwners.set(providerId, plan.plan_id);
+              }
+              const verification = await hooks.verifyRollback(plan);
+              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              if (verification.ok !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_FAILED', verification });
+              await hooks.finalizeRollback();
+              if (providerMigrationOwners.get(providerId) === plan.plan_id) {
+                providerMigrationOwners.delete(providerId);
+                hub.endProviderMutation(providerId);
+              }
+              return sendJson(res, 200, { ok: true, state: 'ROLLED_BACK', transaction_id: plan.plan_id, provider_id: providerId, verification });
+            } finally { await hooks.release(); }
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
             if (providerId !== 'deepseek-official' && hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });

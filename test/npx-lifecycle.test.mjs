@@ -1005,7 +1005,9 @@ test('providers CLI exposes explicit layer migration actions on 3210', async () 
       status: 200,
       json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['provider-inventory', 'provider-layer-migration-v1'] }),
     };
-    return { ok: true, json: async () => ({ ok: true, plan: { plan_id: 'migration-1' }, restart_required: true, result: { state: 'RESTART_PENDING' } }) };
+    return { ok: true, json: async () => (url.includes('rollback-migration')
+      ? { ok: true, state: 'ROLLBACK_RESTART_PENDING', restart_required: true, plan: { plan_id: 'migration-1' } }
+      : { ok: true, plan: { plan_id: 'migration-1' }, restart_required: true, result: { state: 'RESTART_PENDING' } }) };
   };
   const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
   await npxProviders({ ...common, args: ['migrate-plan', 'custom'] });
@@ -1013,6 +1015,8 @@ test('providers CLI exposes explicit layer migration actions on 3210', async () 
   await npxProviders({ ...common, args: ['migrate', 'custom'], planId: 'migration-1', confirm: true });
   assert.equal(calls.some(([url]) => url.endsWith('/providers/custom/migrate')), true);
   assert.equal(calls.some(([url]) => url.includes('3080/_dsh/dsh-crew/supervisor/restart')), true);
+  await npxProviders({ ...common, args: ['rollback-migration', 'custom'], planId: 'migration-1', confirm: true });
+  assert.equal(calls.some(([url]) => url.endsWith('/providers/custom/verify-rollback-migration')), true);
 });
 
 test('providers CLI fails closed before mutation when the 3210 capability handshake is incomplete', async () => {

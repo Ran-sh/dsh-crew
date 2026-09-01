@@ -63,6 +63,11 @@ function safePlan(plan) {
 function assertManagedPath(file, root) {
   const resolvedRoot = resolvePath(root);
   const resolved = resolvePath(file);
+  try {
+    if (lstatSync(resolvedRoot).isSymbolicLink()) throw Object.assign(new Error('provider migration root uses a link'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
   const rel = relative(resolvedRoot, resolved);
   if (rel.startsWith('..') || rel === '..' || /^[A-Za-z]:/u.test(rel)) {
     throw Object.assign(new Error('provider migration path escapes managed root'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
@@ -101,6 +106,18 @@ function readText(file) {
 }
 
 function revision(source) { return source === null ? null : sha256(source); }
+function fileIdentity(file) {
+  const stat = lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw Object.assign(new Error('provider migration file identity is unsafe'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
+  return { dev: Number(stat.dev) || 0, ino: Number(stat.ino) || 0, size: Number(stat.size) || 0, mtimeMs: Number(stat.mtimeMs) || 0 };
+}
+function sameFileIdentity(left, right) {
+  return left && right && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+function validFileIdentity(value) {
+  return value && typeof value === 'object' && Number.isFinite(value.dev) && Number.isFinite(value.ino)
+    && Number.isFinite(value.size) && Number.isFinite(value.mtimeMs);
+}
 
 function manifestDigest(manifest) {
   const { checksum: _checksum, ...withoutChecksum } = manifest ?? {};
@@ -113,6 +130,7 @@ function validMigrationManifest(root, manifest) {
   if (!manifest.plan || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action) || !safeMaterialization(manifest.plan.materialization?.provider)) return false;
   const expected = manifest.plan.expected_revisions;
   if (!expected || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
+  if (manifest.files?.settings?.existed === false && manifest.phase !== 'PREPARED' && !validFileIdentity(manifest.created_settings_identity)) return false;
   if (typeof manifest.checksum !== 'string' || manifest.checksum !== manifestDigest(manifest)) return false;
   for (const key of ['profile', 'settings']) {
     const entry = manifest.files?.[key];
@@ -283,6 +301,7 @@ export function createProviderLayerMigrationFileHooks({
     ensureLock();
     atomicReplace(file, content, managedRoot);
     active.manifest.applied_revisions[key] = revision(content);
+    if (key === 'settings' && active.manifest.files.settings.existed === false) active.manifest.created_settings_identity = fileIdentity(file);
     active.manifest.phase = key === 'settings' ? 'USER_MATERIALIZED' : 'BASE_REMOVED';
     persist();
   };
@@ -335,12 +354,15 @@ export function createProviderLayerMigrationFileHooks({
           const removed = removeProviderSettings(current, { providerIds: [active.manifest.provider_id], expectedRevision: currentRevision });
           if (!removed.ok) throw Object.assign(new Error('provider migration settings restore failed'), { code: removed.code });
           atomicReplace(file, removed.text, managedRoot);
-        } else rmSync(file, { force: true });
+        } else if (current !== null) {
+          if (!sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
+          rmSync(file, { force: true });
+        }
       }
     }
-    active.manifest.phase = 'ROLLED_BACK';
+    active.manifest.phase = 'ROLLBACK_APPLIED';
     persist();
-    return { ok: true, state: 'ROLLED_BACK' };
+    return { ok: true, state: 'ROLLBACK_APPLIED' };
   };
 
   const verify = async (plan) => {
@@ -361,6 +383,34 @@ export function createProviderLayerMigrationFileHooks({
     return { ok: true, state: 'VERIFIED' };
   };
 
+  const setRollbackRuntimeBaseline = async (runtimeId) => {
+    if (!active || !safeValue(runtimeId, 128)) throw Object.assign(new Error('provider migration runtime identity is unavailable'), { code: 'PROVIDER_RUNTIME_ID_MISSING' });
+    ensureLock();
+    active.manifest.plan.rollback_runtime_id_before = safeValue(runtimeId, 128);
+    active.manifest.phase = 'ROLLBACK_RESTART_PENDING';
+    persist();
+    return { ok: true, runtime_id: active.manifest.plan.rollback_runtime_id_before };
+  };
+
+  const verifyRollback = async (plan) => {
+    const profile = readText(profileFile);
+    const settings = readText(settingsFile);
+    const profileParsed = profile === null ? { ok: false } : readProviderDeclarations(profile, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
+    const settingsParsed = settings === null ? { ok: false } : readProviderSettingsDeclarations(settings, { file: 'harness/settings.yaml' });
+    const basePresent = profileParsed.ok === true && profileParsed.declarations.some((entry) => entry.id === plan.provider_id);
+    const userPresent = settingsParsed.ok === true && settingsParsed.declarations.some((entry) => entry.id === plan.provider_id);
+    const expectedUser = plan.action === 'promote-existing-user';
+    return { ok: basePresent && userPresent === expectedUser, basePresent, userPresent, expectedUser };
+  };
+
+  const finalizeRollback = async () => {
+    if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
+    ensureLock();
+    active.manifest.phase = 'ROLLED_BACK';
+    persist();
+    return { ok: true, state: 'ROLLED_BACK' };
+  };
+
   const quarantine = async (actionId) => {
     await acquireLock();
     try { ensureLock(); return quarantineUnderRoot(backupDir, actionId, managedRoot); }
@@ -368,7 +418,7 @@ export function createProviderLayerMigrationFileHooks({
   };
 
   return {
-    acquireLock, release, backup, materialize, removeBase, rollback, verify, finalizeVerified, quarantine,
+    acquireLock, release, backup, materialize, removeBase, rollback, verify, verifyRollback, finalizeVerified, finalizeRollback, setRollbackRuntimeBaseline, quarantine,
     backupPlan: () => active?.manifest?.plan ? JSON.parse(JSON.stringify(active.manifest.plan)) : null,
     backupManifest: () => active?.manifest ? JSON.parse(JSON.stringify(active.manifest)) : null,
     restart,

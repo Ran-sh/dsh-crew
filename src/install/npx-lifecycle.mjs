@@ -1227,7 +1227,7 @@ Commands:
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
-  providers   3210 provider lifecycle API: list|migration-status|migrate-plan|migrate|verify-migration|rollback-migration|delete-plan|delete|rollback|probe
+  providers   3210 provider lifecycle API: list|migration-status|migrate-plan|migrate|verify-migration|rollback-migration|verify-rollback-migration|delete-plan|delete|rollback|probe
   credentials 3210 credential references: list|purge-plan|purge (separate confirmation)
   releases    list retained, validated Crew payload releases
   rollback    switch to a retained payload version and verify the 3210 runtime
@@ -1311,6 +1311,7 @@ const PROVIDER_CAPABILITY_REQUIREMENTS = Object.freeze({
   migrate: Object.freeze(['provider-inventory', 'provider-layer-migration-v1']),
   'verify-migration': Object.freeze(['provider-inventory', 'provider-layer-migration-v1']),
   'rollback-migration': Object.freeze(['provider-inventory', 'provider-layer-migration-v1']),
+  'verify-rollback-migration': Object.freeze(['provider-inventory', 'provider-layer-migration-v1']),
   'delete-plan': Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
   delete: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
   rollback: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
@@ -1425,6 +1426,11 @@ export async function npxProviders({
     if (!resolvedPlan || !resolvedConfirm) throw new Error('providers rollback-migration requires --plan and --confirm');
     url = `${base}/${encodeURIComponent(id)}/rollback-migration`;
     init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }) };
+  } else if (action === 'verify-rollback-migration') {
+    if (!id) throw new Error('providers verify-rollback-migration requires a provider id');
+    if (!resolvedPlan || !resolvedConfirm) throw new Error('providers verify-rollback-migration requires --plan and --confirm');
+    url = `${base}/${encodeURIComponent(id)}/verify-rollback-migration`;
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }) };
   } else if (action === 'delete-plan') {
     if (!id) throw new Error('providers delete-plan requires a provider id');
     url = `${base}/${encodeURIComponent(id)}/delete-plan`;
@@ -1484,13 +1490,18 @@ export async function npxProviders({
     if (!verifyResponse.ok || verifyBody?.ok !== true) throw new Error(verifyBody?.code ?? verifyBody?.error ?? 'Crew provider migration verification failed');
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
-  if (action === 'rollback-migration' && body?.restart_required === true && body?.state === 'ROLLED_BACK') {
+  if (action === 'rollback-migration' && body?.restart_required === true && body?.state === 'ROLLBACK_RESTART_PENDING') {
     const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
     });
     const restartBody = await restartResponse.json();
     if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
-    body = { ...body, restart: restartBody };
+    const verifyResponse = await fetchImpl(`${base}/${encodeURIComponent(id)}/verify-rollback-migration`, {
+      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
+    });
+    const verifyBody = await verifyResponse.json();
+    if (!verifyResponse.ok || verifyBody?.ok !== true) throw new Error(verifyBody?.code ?? verifyBody?.error ?? 'Crew provider migration rollback verification failed');
+    body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'rollback' && body?.restart_required === true && body?.state === 'ROLLBACK_PENDING') {
     const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {

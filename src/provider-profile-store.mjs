@@ -200,6 +200,13 @@ export function readProviderMaterialization(source, { providerId, file = 'profil
     const value = scalarField(parsed.lines, entry, field);
     return value && value.length <= max && !/[\r\n]/u.test(value) ? value : null;
   };
+  const providerIndent = indentOf(parsed.lines[entry.start]);
+  const knownFields = new Set(['displayName', 'apiKeyEnv', 'api', 'baseURL', 'models']);
+  const unknownFields = [...new Set(parsed.lines.slice(entry.start + 1, entry.end)
+    .filter((line) => nonBlank(line) && indentOf(line) === providerIndent + 2)
+    .map((line) => line.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):/u)?.[1])
+    .filter((field) => field && !knownFields.has(field)))];
+  if (unknownFields.length > 0) return { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' };
   const baseUrl = readBounded('baseURL');
   if (baseUrl) {
     try {

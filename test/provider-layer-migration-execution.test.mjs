@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { executeProviderLayerMigration } from '../src/provider-layer-migration.mjs';
@@ -186,9 +186,40 @@ test('migration quarantine uses the fenced adapter and moves unresolved entries'
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('rollback refuses an externally recreated settings file that matches content', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-ownership-'));
+  try {
+    const profileFile = join(root, 'profile.yml');
+    const settingsFile = join(root, 'settings.yaml');
+    const backupDir = join(root, 'backups');
+    const profile = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n- insert:\n    - id: dsh-crew-hub\n`;
+    writeFileSync(profileFile, profile, 'utf8');
+    const material = readProviderMaterialization(profile, { providerId: 'custom' });
+    const plan = { ...PLAN, expected_revisions: { profile: createHash('sha256').update(profile, 'utf8').digest('hex'), settings: null }, materialization: { provider: material.provider } };
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+    await hooks.acquireLock();
+    await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true });
+    await hooks.release();
+    const sameContent = readFileSync(settingsFile, 'utf8');
+    rmSync(settingsFile, { force: true });
+    writeFileSync(settingsFile, sameContent, 'utf8');
+    utimesSync(settingsFile, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    const rollbackHooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
+    await rollbackHooks.acquireLock();
+    await rollbackHooks.backup({});
+    await assert.rejects(() => rollbackHooks.rollback(), (error) => error.code === 'PROVIDER_MIGRATION_STATE_CHANGED');
+    await rollbackHooks.release();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('provider materialization rejects credential-bearing base URLs', () => {
   const source = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        baseURL: https://user:sk-live-secret@example.test/v1\n`;
   const result = readProviderMaterialization(source, { providerId: 'custom' });
   assert.deepEqual(result, { ok: false, code: 'PROVIDER_BASE_URL_UNSAFE' });
   assert.equal(JSON.stringify(result).includes('sk-live-secret'), false);
+});
+
+test('provider materialization rejects unknown provider fields instead of losing them on rollback', () => {
+  const source = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        timeoutMs: 30\n`;
+  assert.deepEqual(readProviderMaterialization(source, { providerId: 'custom' }), { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' });
 });

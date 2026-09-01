@@ -20,6 +20,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /migration-status/);
   assert.match(hubSource, /migrate-plan/);
   assert.match(hubSource, /verify-migration/);
+  assert.match(hubSource, /verify-rollback-migration/);
   assert.match(hubSource, /executeProviderLayerMigration/);
   assert.match(hubSource, /buildProviderLayerMigrationPlan/);
   assert.match(hubSource, /path: `\$\{ROUTE_BASE\}\/credential-references`/);
