@@ -23,8 +23,11 @@ const TRANSITIONS = Object.freeze({
   FAILED: Object.freeze([]),
 });
 
-const DELETEABLE_OWNERSHIPS = new Set(['crew-managed-profile', 'user-managed-profile', 'dynamic-user']);
 const CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/;
+const AUTHORITY_LOCATORS = Object.freeze({
+  'crew-profile': (id) => `llm-pi-ai.config.providers.${id}`,
+  'harness-settings': (id) => `llm-pi-ai.providers.${id}`,
+});
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -44,8 +47,21 @@ function recordById(inventory, providerId) {
   return records.find((record) => record?.id === providerId) ?? null;
 }
 
+function hasCanonicalAuthorities(record, providerId) {
+  const authorities = Array.isArray(record?.declaration_authorities) ? record.declaration_authorities : [];
+  if (authorities.length === 0) return false;
+  return authorities.every((authority) => typeof AUTHORITY_LOCATORS[authority?.kind] === 'function'
+    && authority.locator === AUTHORITY_LOCATORS[authority.kind](providerId));
+}
+
 function activeJobCount(record, activeJobs) {
-  if (Array.isArray(activeJobs)) return activeJobs.filter((job) => job?.provider === record.id).length;
+  if (Array.isArray(activeJobs)) return activeJobs.filter((job) => {
+    if (job?.provider !== record.id) return false;
+    // WorkerRegistry retains terminal jobs for readiness/audit history. Only
+    // non-terminal jobs fence destructive provider lifecycle operations;
+    // missing/unknown status remains conservative and is treated as active.
+    return !['done', 'failed', 'cancelled'].includes(job?.status);
+  }).length;
   return Number.isInteger(record?.references?.active_jobs) ? Math.max(0, record.references.active_jobs) : 0;
 }
 
@@ -69,21 +85,29 @@ export function canTransitionProviderDelete(from, to) {
 /**
  * Validate a provider deletion request and return a secret-free impact plan.
  * The caller must provide a replacement when deleting the active Harness
- * Default; running jobs and unknown ownership always fail closed.
+ * Default; running jobs and unknown declaration sources always fail closed.
  */
-export function planProviderDelete({ providerId, inventory, activeJobs = [], replacementDefault = null, expectedRevision } = {}) {
+export function planProviderDelete({ providerId, inventory, activeJobs = [], replacementDefault = null, expectedRevision, expectedRevisions = null } = {}) {
   const id = text(providerId);
   if (!id) return fail('PROVIDER_NOT_FOUND');
+  if (id === 'deepseek-official') return fail('PROVIDER_BUILTIN_IMMUTABLE');
   const record = recordById(inventory, id);
   if (!record) return fail('PROVIDER_NOT_FOUND');
-  if (!DELETEABLE_OWNERSHIPS.has(record.ownership)) return fail('PROVIDER_OWNERSHIP_AMBIGUOUS');
+  if (record.delete_capability === 'immutable-builtin') return fail('PROVIDER_BUILTIN_IMMUTABLE');
+  if (inventory?.catalog_evidence && inventory.catalog_evidence.ok !== true) return fail('PROVIDER_CATALOG_UNAVAILABLE');
+  if (inventory?.default_evidence && inventory.default_evidence.ok !== true) return fail(inventory.default_evidence.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE');
+  if (record.delete_capability !== 'supported') return fail(text(record.delete_blocker) ?? 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+  if (!hasCanonicalAuthorities(record, id)) return fail('PROVIDER_DELETE_SOURCE_UNRESOLVED');
   if (record.desired_state === 'absent') return fail('PROVIDER_ALREADY_ABSENT');
   if (activeJobCount(record, activeJobs) > 0) return fail('PROVIDER_IN_USE');
 
   const replacement = text(replacementDefault);
   const replacementRecord = replacement ? recordById(inventory, replacement) : null;
   if (record.references?.harness_default) {
-    if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent') {
+    if (!record.references.harness_default_authority || record.references.harness_default_authority.kind !== 'harness-settings' || record.references.harness_default_authority.locator !== 'agent-default-model') {
+      return fail('PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE');
+    }
+    if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent' || replacementRecord.lifecycle?.catalogued !== true) {
       return fail('PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
     }
     if (typeof replacementRecord.models?.[0] !== 'string' || replacementRecord.models[0].trim() === '') {
@@ -97,14 +121,24 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
       plan_id: randomUUID(),
       provider_id: id,
       provider: { id, display_name: text(record.display_name) ?? id },
+      declaration: record.declaration ?? { present: true },
+      declaration_authorities: record.declaration_authorities,
+      delete_capability: record.delete_capability,
       expected_revision: text(expectedRevision) ?? text(record.declaration?.revision),
+      ...(expectedRevisions && typeof expectedRevisions === 'object' ? { expected_revisions: { ...expectedRevisions } } : {}),
       replacement_default: replacement,
       was_harness_default: record.references?.harness_default === true,
+      ...(record.references?.harness_default === true ? {
+        harness_default_before: inventory?.harness_default ?? null,
+        harness_default_authority: record.references.harness_default_authority,
+      } : {}),
       ...(replacement
         ? { replacement_default_model: text(replacementRecord?.models?.[0]) }
         : {}),
       will_remove: [
-        'profile declaration', 'runtime desired registration',
+        ...(record.declaration_authorities.some((authority) => authority?.kind === 'crew-profile') ? ['profile declaration'] : []),
+        ...(record.declaration_authorities.some((authority) => authority?.kind === 'harness-settings') ? ['Harness settings declaration'] : []),
+        'runtime desired registration',
         'worker priority references', 'reviewer priority references',
         'Harness Default reference', 'cache/health state',
       ],
@@ -152,6 +186,10 @@ export async function executeProviderDelete(plan, hooks = {}, { deferRestart = f
     await hooks.markTombstone(plan.provider_id, 'absent', plan);
     await hooks.scrubReferences(plan);
     await hooks.removeDeclarations(plan);
+    if (typeof hooks.captureRuntimeBaseline === 'function') {
+      const captured = await hooks.captureRuntimeBaseline(plan, 'delete');
+      if (captured?.ok === false) throw Object.assign(new Error('provider runtime baseline unavailable'), { code: captured.code });
+    }
     transition('APPLIED');
     transition('RESTART_PENDING');
     if (!deferRestart) {

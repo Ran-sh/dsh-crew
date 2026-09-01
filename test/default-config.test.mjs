@@ -15,9 +15,13 @@ test('fresh defaults are the minimal Codex to Flash workflow', () => {
   assert.equal(GLOBAL_CONFIG_DEFAULTS.main_agent_mode, 'direct-allowed');
   assert.equal(GLOBAL_CONFIG_DEFAULTS.vision_enabled, false);
   assert.equal(GLOBAL_CONFIG_DEFAULTS.imagegen_enabled, false);
-  assert.equal(GLOBAL_CONFIG_DEFAULTS.worker_provider_mode, 'follow-dsh');
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.worker_provider_mode, 'deepseek-official');
   assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.flash_model_priority, []);
   assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.pro_model_priority, []);
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.vision_provider, 'off');
+  assert.equal(GLOBAL_CONFIG_DEFAULTS.imagegen_provider, 'off');
+  assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.custom_providers, []);
+  assert.deepEqual(GLOBAL_CONFIG_DEFAULTS.extra_models, {});
   assert.equal(GLOBAL_CONFIG_DEFAULTS.preset_flash, 'default');
 });
 
@@ -30,9 +34,13 @@ test('a missing config file reads and normalizes to the fresh runtime workflow',
   assert.equal(config.flash_state, 'auto');
   assert.equal(config.pro_state, 'disabled');
   assert.equal(config.main_agent_mode, 'direct-allowed');
-  assert.equal(config.worker_provider_mode, 'follow-dsh');
+  assert.equal(config.worker_provider_mode, 'deepseek-official');
   assert.equal(config.vision_enabled, false);
   assert.equal(config.imagegen_enabled, false);
+  assert.equal(config.vision_provider, 'off');
+  assert.equal(config.imagegen_provider, 'off');
+  assert.deepEqual(config.custom_providers, []);
+  assert.deepEqual(config.extra_models, {});
   assert.equal(config.flash_model_fallback, 'harness-default');
   assert.equal(config.pro_model_fallback, 'harness-default');
   assert.equal(config.preset_flash, 'default');

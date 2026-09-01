@@ -186,12 +186,11 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // this on; balanced/custom only when this flag is set).
   pro_reviews_flash: false,
   // Worker provider routing for HUB workers: which DSH provider backs each
-  // worker session. follow-dsh = use the provider selected in DSH Models
-  // (Flash/Pro still map to deepseek-v4-flash / deepseek-v4-pro);
-  // deepseek-official = always use the built-in provider (legacy behavior,
-  // kept the default so upgraded configs never silently switch providers).
+  // worker session. Fresh installs stay on the built-in DeepSeek provider;
+  // follow-dsh is an explicit opt-in that uses the provider selected in DSH
+  // Models (Flash/Pro still map to the selected Harness models).
   // Standalone mode always uses deepseek-official + DEEPSEEK_API_KEY.
-  worker_provider_mode: 'follow-dsh',
+  worker_provider_mode: 'deepseek-official',
   // Ordered Harness provider/model selections. The configured flags preserve
   // the distinction between a fresh recommendation and a user-cleared list.
   flash_model_priority: [],
@@ -208,9 +207,9 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   imagegen_enabled: false,
   // Multimodal bridge: which subscription CLI lends the text-only DS model
   // eyes (describe_image) and a brush (generate_image).
-  vision_provider: 'claude-code', // claude-code | codex | grok | agy | <custom id> | off
+  vision_provider: 'off', // claude-code | codex | grok | agy | <custom id> | off
   vision_model: 'haiku', // model passed to the vision CLI; free-form
-  imagegen_provider: 'codex', // codex | agy | grok | <custom id> | off
+  imagegen_provider: 'off', // codex | agy | grok | <custom id> | off
   // User-defined providers, each either an OpenAI-compatible HTTP endpoint or a
   // local command. Entry shape:
   //   { id, name, type: 'api' | 'cli', models: [],

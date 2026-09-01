@@ -6,6 +6,8 @@
 
 const LIFECYCLE_ORIGINS = new Set(['builtin', 'profile-managed', 'dynamic', 'unknown']);
 const OWNERSHIPS = new Set(['harness', 'crew-managed-profile', 'user-managed-profile', 'dynamic-user', 'unknown']);
+const MUTABLE_AUTHORITY_KINDS = new Set(['crew-profile', 'harness-settings']);
+export const IMMUTABLE_HARNESS_PROVIDER_IDS = Object.freeze(['deepseek-official']);
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -15,22 +17,32 @@ function normalizeProviderId(value) {
   return text(value);
 }
 
-function normalizeCredentialRefs(declaration) {
-  const raw = declaration?.credential_refs ?? declaration?.credential_ref;
-  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
-  const seen = new Set();
+function normalizeCredentialRefs(declarations) {
+  const entries = Array.isArray(declarations) ? declarations : [declarations];
+  const seen = new Map();
   const refs = [];
-  for (const candidate of values) {
-    const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
-    const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
-    refs.push({
-      kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
-      name_or_handle: name,
-      ownership: ['crew', 'user', 'external', 'unknown'].includes(ownership) ? ownership : 'unknown',
-    });
+  for (const declaration of entries) {
+    const raw = declaration?.credential_refs ?? declaration?.credential_ref;
+    const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    for (const candidate of values) {
+      const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
+      const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
+      const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
+      const normalized = {
+        kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
+        name_or_handle: name,
+        ownership: ['crew', 'user', 'external', 'unknown'].includes(ownership) ? ownership : 'unknown',
+      };
+      if (!name) continue;
+      const key = `${normalized.kind}:${normalized.name_or_handle}`;
+      const existing = seen.get(key);
+      if (existing) {
+        if (existing.ownership !== normalized.ownership) existing.ownership = 'unknown';
+      } else {
+        seen.set(key, normalized);
+        refs.push(normalized);
+      }
+    }
   }
   return refs;
 }
@@ -41,8 +53,15 @@ function findPriorityIndex(policy, key, providerId) {
   return index >= 0 ? index : null;
 }
 
-function declarationFor(declarations, id) {
-  return declarations.find((entry) => normalizeProviderId(entry?.id) === id) ?? null;
+function declarationsFor(declarations, id) {
+  return declarations.filter((entry) => normalizeProviderId(entry?.id) === id);
+}
+
+function normalizeAuthority(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const kind = text(value.kind);
+  const locator = text(value.locator);
+  return kind && locator ? { kind, locator } : null;
 }
 
 function catalogFor(providers, id) {
@@ -68,12 +87,12 @@ function modelIds(provider) {
  * Build a secret-free provider inventory from live Harness and Crew-owned
  * observations. No credential value is accepted or copied into the result.
  */
-export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], multimodalRefs = {} } = {}) {
+export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], multimodalRefs = {}, additionalProviderIds = [] } = {}) {
   const catalogProviders = Array.isArray(catalog?.providers) ? catalog.providers : [];
   const safeDeclarations = Array.isArray(declarations) ? declarations : [];
   const ids = [];
   const seen = new Set();
-  for (const source of [catalogProviders, safeDeclarations]) {
+  for (const source of [catalogProviders, safeDeclarations, Array.isArray(additionalProviderIds) ? additionalProviderIds.map((id) => ({ id })) : []]) {
     for (const entry of source) {
       const id = normalizeProviderId(entry?.id);
       if (!id || seen.has(id)) continue;
@@ -85,28 +104,45 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
   const harnessDefault = normalizeProviderId(catalog?.harness_default?.provider);
   const records = ids.map((id) => {
     const catalogEntry = catalogFor(catalogProviders, id);
-    const declaration = declarationFor(safeDeclarations, id);
+    const providerDeclarations = declarationsFor(safeDeclarations, id);
+    const declaration = providerDeclarations[0] ?? null;
     const declared = declaration !== null;
     const catalogued = catalogEntry !== null;
     const tombstoned = tombstones?.[id] === 'absent';
     const configured = declared;
     const active = Array.isArray(activeJobs)
-      ? activeJobs.filter((job) => normalizeProviderId(job?.provider) === id).length
+      ? activeJobs.filter((job) => normalizeProviderId(job?.provider) === id
+        && !['done', 'failed', 'cancelled'].includes(job?.status)).length
       : Number.isInteger(activeJobs?.[id]) ? Math.max(0, activeJobs[id]) : 0;
     const multimodal = Array.isArray(multimodalRefs?.[id]) ? multimodalRefs[id].length : Number.isInteger(multimodalRefs?.[id]) ? Math.max(0, multimodalRefs[id]) : 0;
     const declarationFile = text(declaration?.file);
     const locator = text(declaration?.locator);
 
+    const authorities = providerDeclarations.map((entry) => normalizeAuthority(entry.declaration_authority)).filter(Boolean);
+    const uniqueAuthorities = [...new Map(authorities.map((authority) => [`${authority.kind}:${authority.locator}`, authority])).values()];
+    const mutableAuthorities = uniqueAuthorities.filter((authority) => MUTABLE_AUTHORITY_KINDS.has(authority.kind));
+    const immutable = IMMUTABLE_HARNESS_PROVIDER_IDS.includes(id);
+    const allAuthoritiesKnown = providerDeclarations.length > 0
+      && uniqueAuthorities.length === providerDeclarations.length
+      && uniqueAuthorities.every((authority) => MUTABLE_AUTHORITY_KINDS.has(authority.kind));
+    const deleteCapability = immutable ? 'immutable-builtin' : allAuthoritiesKnown && mutableAuthorities.length > 0 ? 'supported' : 'source-unresolved';
+    const deleteBlocker = immutable ? 'PROVIDER_BUILTIN_IMMUTABLE' : deleteCapability === 'supported' ? null : 'PROVIDER_DELETE_SOURCE_UNRESOLVED';
+    const origin = normalizeOrigin(declaration?.origin ?? (immutable ? 'builtin' : declared ? 'profile-managed' : 'unknown'));
+    const ownership = normalizeOwnership(declaration?.ownership ?? (immutable ? 'harness' : declared ? 'crew-managed-profile' : 'unknown'));
     return {
       id,
       display_name: text(declaration?.display_name) ?? text(declaration?.name) ?? text(catalogEntry?.name) ?? id,
-      origin: normalizeOrigin(declaration?.origin ?? (declared ? 'profile-managed' : 'builtin')),
-      ownership: normalizeOwnership(declaration?.ownership ?? (declared ? 'crew-managed-profile' : 'harness')),
+      origin,
+      ownership,
       declaration: {
         ...(declarationFile ? { file: declarationFile } : {}),
         ...(locator ? { locator } : {}),
+        ...(normalizeAuthority(declaration?.declaration_authority) ? { authority: normalizeAuthority(declaration.declaration_authority) } : {}),
         present: declared,
       },
+      declaration_authorities: uniqueAuthorities,
+      delete_capability: deleteCapability,
+      ...(deleteBlocker ? { delete_blocker: deleteBlocker } : {}),
       models: modelIds(catalogEntry),
       lifecycle: {
         installed: declared || catalogued,
@@ -114,12 +150,14 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         enabled: !tombstoned && declaration?.enabled !== false,
         catalogued,
       },
-      credential_refs: normalizeCredentialRefs(declaration),
+      credential_refs: normalizeCredentialRefs(providerDeclarations),
       references: {
         harness_default: harnessDefault === id,
+        ...(harnessDefault === id && normalizeAuthority(catalog?.harness_default_authority) ? { harness_default_authority: normalizeAuthority(catalog.harness_default_authority) } : {}),
         worker_priority: findPriorityIndex(policy?.worker, 'priority', id),
         worker_escalation: findPriorityIndex(policy?.worker, 'escalation_priority', id),
         reviewer_priority: findPriorityIndex(policy?.reviewer ?? policy?.review, 'priority', id),
+        reviewer_escalation: findPriorityIndex(policy?.reviewer ?? policy?.review, 'escalation_priority', id),
         active_jobs: active,
         multimodal_refs: multimodal,
       },
@@ -128,5 +166,5 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     };
   });
 
-  return { schema_version: 1, records };
+  return { schema_version: 1, records, harness_default: catalog?.harness_default ?? null };
 }

@@ -182,6 +182,143 @@ test('Hub Case 4: provider changes between spawns → second worker uses the new
   assert.equal(created[1].agentOptions.provider, 'deepseek-official');
 });
 
+test('Hub blocks new jobs while their resolved provider is being deleted', async () => {
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  const created = captureAgentOptions(reg);
+  reg.beginProviderMutation('opencode-go');
+  await assert.rejects(
+    reg.spawn({ task: 'blocked', tier: 'flash', effort: 'off', cwd: '/tmp' }),
+    (error) => error.code === 'PROVIDER_DELETE_BUSY',
+  );
+  assert.equal(created.length, 0);
+  reg.endProviderMutation('opencode-go');
+  const job = await reg.spawn({ task: 'allowed', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  assert.equal(job.provider, 'opencode-go');
+});
+
+test('Hub rechecks the deletion gate after asynchronous spawn preparation', async () => {
+  let releasePreset;
+  let presetStarted;
+  const presetGate = new Promise((resolve) => { releasePreset = resolve; });
+  const presetObserved = new Promise((resolve) => { presetStarted = resolve; });
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.get = (key) => {
+    if (key === 'loader') return { await: async () => {} };
+    if (key === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'opencode-go', model: 'deepseek-v4-flash' }) };
+    if (key === 'agentPresets') return { resolve: async () => { presetStarted(); await presetGate; return { id: 'default' }; } };
+    return undefined;
+  };
+  const created = captureAgentOptions(reg);
+  const spawning = reg.spawn({ task: 'racing', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await presetObserved;
+  reg.beginProviderMutation('opencode-go');
+  reg.endProviderMutation('opencode-go');
+  releasePreset();
+  await assert.rejects(spawning, (error) => error.code === 'PROVIDER_DELETE_BUSY');
+  assert.equal(created.length, 0);
+  assert.equal(reg.jobs.size, 0);
+});
+
+test('provider lease remains active until a cancelled handle is disposed', async () => {
+  let releaseDispose;
+  const disposeGate = new Promise((resolve) => { releaseDispose = resolve; });
+  let resolveIdle;
+  const idle = new Promise((resolve) => { resolveIdle = resolve; });
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = {
+    create: async () => ({
+      agent: { session: {}, whenIdle: async () => idle, followup() {} },
+      dispose: async () => disposeGate,
+    }),
+  };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'lease', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  const deadline = Date.now() + 2_000;
+  while (!job.handle && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(job.handle);
+  const cancelling = reg.cancel(job.id);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(job.status, 'cancelled');
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  releaseDispose();
+  resolveIdle();
+  await cancelling;
+  await job.promise;
+  assert.equal(reg.hasProviderLease('opencode-go'), false);
+});
+
+test('provider lease survives cancellation until a late-created handle is disposed', async () => {
+  let resolveCreate;
+  let resolveDispose;
+  let disposeStarted;
+  const createGate = new Promise((resolve) => { resolveCreate = resolve; });
+  const disposeGate = new Promise((resolve) => { resolveDispose = resolve; });
+  const disposeObserved = new Promise((resolve) => { disposeStarted = resolve; });
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = { create: async () => createGate };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'late-handle', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await reg.cancel(job.id);
+  await job.promise;
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+
+  resolveCreate({
+    agent: { session: {}, whenIdle: async () => {}, followup() {} },
+    dispose: async () => { disposeStarted(); await disposeGate; },
+  });
+  await disposeObserved;
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  resolveDispose();
+  const deadline = Date.now() + 2_000;
+  while (reg.hasProviderLease('opencode-go') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(reg.hasProviderLease('opencode-go'), false);
+});
+
+test('failed disposal of an already-created handle keeps the provider lease fenced', async () => {
+  let resolveIdle;
+  const idle = new Promise((resolve) => { resolveIdle = resolve; });
+  let disposeCalls = 0;
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = {
+    create: async () => ({
+      agent: { session: {}, whenIdle: async () => idle, followup() {} },
+      dispose: async () => { disposeCalls += 1; throw new Error('dispose failed'); },
+    }),
+  };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'rejecting-dispose', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await reg.cancel(job.id);
+  resolveIdle();
+  await job.promise;
+  assert.equal(disposeCalls, 1, 'the underlying disposer is memoized');
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  assert.match(job.cleanup_warning ?? '', /dispose failed/);
+});
+
+test('timeout with a rejecting disposer keeps the provider lease fenced', async () => {
+  let resolveIdle;
+  const idle = new Promise((resolve) => { resolveIdle = resolve; });
+  let disposeCalls = 0;
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.agents = {
+    create: async () => ({
+      agent: { session: {}, whenIdle: async () => idle, followup() {} },
+      dispose: async () => { disposeCalls += 1; throw new Error('timeout dispose failed'); },
+    }),
+  };
+  reg.ctx.sessions = { flush: async () => {} };
+  const job = await reg.spawn({ task: 'timeout-rejecting-dispose', tier: 'flash', effort: 'off', cwd: '/tmp', timeout_seconds: 1 });
+  const deadline = Date.now() + 2_000;
+  while (job.status === 'running' && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(job.status, 'failed');
+  resolveIdle();
+  await job.promise;
+  assert.equal(disposeCalls, 1, 'the underlying disposer is memoized');
+  assert.equal(reg.hasProviderLease('opencode-go'), true);
+  assert.match(job.cleanup_warning ?? '', /timeout dispose failed/);
+});
+
 test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {
   const reg = makeRegistry(undefined, 'follow-dsh');
   const created = captureAgentOptions(reg);

@@ -14,11 +14,13 @@ const records = [
     origin: 'profile-managed',
     ownership: 'crew-managed-profile',
     declaration: { present: true, file: 'profiles/dsh-crew/cordis.patch.yml' },
+    delete_capability: 'supported',
+    declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' }],
     models: ['mimo-v2.5'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
     references: {
-      harness_default: true, worker_priority: 0, worker_escalation: null,
+      harness_default: true, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' }, worker_priority: 0, worker_escalation: null,
       reviewer_priority: 0, active_jobs: 0, multimodal_refs: 0,
     },
     desired_state: 'present',
@@ -30,6 +32,8 @@ const records = [
     origin: 'dynamic',
     ownership: 'dynamic-user',
     declaration: { present: true, file: 'settings.yaml' },
+    delete_capability: 'supported',
+    declaration_authorities: [{ kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }],
     models: ['minimax/minimax-m3:free'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
@@ -60,7 +64,7 @@ test('delete plan fails closed for built-in, in-use, and default providers', () 
     replacementDefault: 'openrouter',
   });
   assert.equal(builtin.ok, false);
-  assert.equal(builtin.code, 'PROVIDER_OWNERSHIP_AMBIGUOUS');
+  assert.equal(builtin.code, 'PROVIDER_BUILTIN_IMMUTABLE');
 
   const inUse = planProviderDelete({
     providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter' }],
@@ -73,6 +77,91 @@ test('delete plan fails closed for built-in, in-use, and default providers', () 
   });
   assert.equal(defaultWithoutReplacement.ok, false);
   assert.equal(defaultWithoutReplacement.code, 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
+});
+
+test('only deepseek-official is immutable and DeepSeek may replace a deleted default', () => {
+  const inventory = {
+    records: [
+      { ...records[0], id: 'deepseek-official', ownership: 'harness', origin: 'builtin', delete_capability: 'immutable-builtin', delete_blocker: 'PROVIDER_BUILTIN_IMMUTABLE', models: ['deepseek-v4-flash'], references: { harness_default: false, active_jobs: 0 } },
+      { ...records[0], id: 'opencode-go', references: { ...records[0].references, harness_default: true }, delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' }] },
+    ],
+  };
+  assert.equal(planProviderDelete({ providerId: 'deepseek-official', inventory, replacementDefault: 'opencode-go' }).code, 'PROVIDER_BUILTIN_IMMUTABLE');
+  const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'deepseek-official', expectedRevision: 'a'.repeat(64) });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.plan.replacement_default, 'deepseek-official');
+  assert.equal(plan.plan.replacement_default_model, 'deepseek-v4-flash');
+});
+
+test('source-unresolved non-official providers fail with a specific lifecycle code', () => {
+  const result = planProviderDelete({
+    providerId: 'openrouter',
+    inventory: { records: [{ ...records[1], id: 'openrouter', ownership: 'unknown', origin: 'unknown', delete_capability: 'source-unresolved', delete_blocker: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+});
+
+test('terminal historical jobs do not block provider deletion, while running jobs do', () => {
+  for (const status of ['done', 'cancelled', 'failed']) {
+    const result = planProviderDelete({
+      providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter', status }],
+    });
+    assert.equal(result.ok, true, status);
+  }
+  const running = planProviderDelete({
+    providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter', status: 'running' }],
+  });
+  assert.equal(running.ok, false);
+  assert.equal(running.code, 'PROVIDER_IN_USE');
+});
+
+test('destructive planning fails closed when live catalog evidence is unavailable', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: {
+      catalog_evidence: { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' }, records,
+    }, replacementDefault: 'openrouter',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_CATALOG_UNAVAILABLE');
+});
+
+test('destructive planning fails closed when persisted and live Harness Defaults disagree', () => {
+  const result = planProviderDelete({
+    providerId: 'openrouter',
+    inventory: {
+      default_evidence: { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' },
+      records: records.map((record) => ({ ...record, references: { ...record.references, harness_default: record.id === 'openrouter' } })),
+    },
+    replacementDefault: 'opencode-go',
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH');
+});
+
+test('mixed known and unknown declaration authority is not deletable', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records: [{
+      ...records[0], references: { ...records[0].references, harness_default: false },
+      declaration_authorities: [
+        { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+        { kind: 'future-store', locator: 'future.providers.opencode-go' },
+      ],
+    }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+});
+
+test('declaration authority locator must bind to the selected provider id', () => {
+  const result = planProviderDelete({
+    providerId: 'opencode-go', inventory: { records: [{
+      ...records[0], references: { ...records[0].references, harness_default: false },
+      declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.some-other-provider' }],
+    }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
 test('delete plan records impact and sanitized credential references', () => {
@@ -104,6 +193,13 @@ test('Harness Default deletion requires an advertised replacement model', () => 
   });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'PROVIDER_DEFAULT_REPLACEMENT_MODEL_REQUIRED');
+});
+
+test('Harness Default replacement must be present in the live catalog', () => {
+  const inventory = { records: records.map((record) => ({ ...record, lifecycle: { ...record.lifecycle, catalogued: record.id === 'opencode-go' } })) };
+  const result = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter' });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
 });
 
 test('delete transaction reaches VERIFIED only after restart and absence evidence', async () => {

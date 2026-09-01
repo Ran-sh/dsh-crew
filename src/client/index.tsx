@@ -105,9 +105,10 @@ const COPY = {
     visionProvider: '视觉 provider', visionModel: '视觉模型', imagegenProvider: '生图 provider',
     harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
+    providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
-    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
+    providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证', recoveryUnresolved: '发现不可自动恢复的事务', recoveryStorage: '存储项', recoveryQuarantine: '隔离', recoveryQuarantineConfirm: '该事务清单无法安全恢复。将其移入隔离区并阻止自动使用，继续？',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
     credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
@@ -244,9 +245,10 @@ const COPY = {
     visionProvider: 'Vision provider', visionModel: 'Vision model', imagegenProvider: 'Image-gen provider',
     harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
+    providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
-    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
+    providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification', recoveryUnresolved: 'An unrecoverable recovery transaction is blocking deletion', recoveryStorage: 'storage entry', recoveryQuarantine: 'Quarantine', recoveryQuarantineConfirm: 'This recovery manifest cannot be safely reopened. Move it into the quarantine area and keep it out of automatic recovery?',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
     credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
@@ -876,14 +878,16 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
 
   const deleteHarnessProvider = async (record: any) => {
-    if (!record || record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
+    if (!record || record.delete_capability !== 'supported' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
       setNotice(copy.providerDeleteBlocked);
       return;
     }
     let replacementDefault: string | undefined;
     if (record.references?.harness_default === true) {
-      const candidate = (providerInventory?.records ?? []).find((item: any) => item.id !== record.id
-        && item.desired_state !== 'absent' && item.ownership !== 'harness' && (item.models?.length ?? 0) > 0)?.id ?? '';
+      const candidate = (providerInventory?.records ?? []).find((item: any) => item.id === 'deepseek-official'
+        && item.id !== record.id && item.desired_state !== 'absent' && (item.models?.length ?? 0) > 0)?.id
+        ?? (providerInventory?.records ?? []).find((item: any) => item.id !== record.id
+          && item.desired_state !== 'absent' && item.delete_capability !== 'source-unresolved' && (item.models?.length ?? 0) > 0)?.id ?? '';
       const entered = window.prompt(copy.providerReplacement, candidate);
       if (!entered?.trim()) return;
       replacementDefault = entered.trim();
@@ -914,14 +918,17 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       setNotice(copy.saved);
       await refreshProviderInventory();
     } catch (error: any) {
-      setNotice(String(error?.message ?? error));
+      try { await refreshProviderInventory(); } catch { /* preserve the original lifecycle error */ }
+      setNotice(`${String(error?.message ?? error)} · ${copy.providerDeletePending}`);
     } finally {
       setProviderLifecycleBusy(null);
     }
   };
 
-  const rollbackHarnessProvider = async (record: any, transactionId: string) => {
-    if (!record || !transactionId || record.desired_state !== 'absent') {
+  const rollbackHarnessProvider = async (record: any, transactionId: string, transactionState: string = 'VERIFIED') => {
+    const continuing = ['ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING'].includes(transactionState);
+    const recoverable = ['PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_APPLYING', 'ROLLBACK_RESTORED'].includes(transactionState);
+    if (!record || !transactionId || (!continuing && !recoverable && record.desired_state !== 'absent')) {
       setNotice(copy.providerRollbackUnavailable);
       return;
     }
@@ -930,7 +937,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     setNotice(copy.working);
     try {
       const encoded = encodeURIComponent(record.id);
-      const result = await post(`/providers/${encoded}/rollback`, { transaction_id: transactionId, confirm: true });
+      const result = continuing
+        ? { ok: true, restart_required: true, state: 'ROLLBACK_PENDING' }
+        : await post(`/providers/${encoded}/rollback`, { transaction_id: transactionId, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true && result.state === 'ROLLBACK_PENDING') {
         const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
@@ -946,6 +955,26 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       setNotice(copy.saved);
       await refreshProviderInventory();
     } catch (error: any) {
+      try { await refreshProviderInventory(); } catch { /* preserve the original lifecycle error */ }
+      setNotice(`${String(error?.message ?? error)} · ${copy.providerDeletePending}`);
+    } finally {
+      setProviderLifecycleBusy(null);
+    }
+  };
+
+  const quarantineRecoveryTransaction = async (entry: any) => {
+    const actionId = typeof entry?.action_id === 'string' ? entry.action_id : '';
+    if (!actionId || entry?.recoverable === true) return;
+    if (!window.confirm(copy.recoveryQuarantineConfirm)) return;
+    setProviderLifecycleBusy(`quarantine:${actionId}`);
+    setNotice(copy.working);
+    try {
+      const result = await post('/providers/_recovery/quarantine', { action_id: actionId, confirm: true });
+      if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
+      setNotice(copy.saved);
+      await refreshProviderInventory();
+    } catch (error: any) {
+      try { await refreshProviderInventory(); } catch { /* preserve the original recovery error */ }
       setNotice(String(error?.message ?? error));
     } finally {
       setProviderLifecycleBusy(null);
@@ -1274,7 +1303,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   <CustomSelect value={mode} onChange={(v) => field('collaboration_mode', v)}
                     options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
                 <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
-                  <CustomSelect value={config.worker_provider_mode ?? 'follow-dsh'} onChange={(v) => field('worker_provider_mode', v)}
+                  <CustomSelect value={config.worker_provider_mode ?? 'deepseek-official'} onChange={(v) => field('worker_provider_mode', v)}
                     options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
               </>))}
               {block({ t: copy.workerModels, d: modelCatalog ? copy.modelPoolSummary(modelCatalog.provider_count ?? 0, modelCatalog.model_count ?? 0) : copy.catalogFailed }, (<>
@@ -1450,32 +1479,52 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <div style={{ fontSize: 12, opacity: 0.55 }}>{copy.providerNoInventory}</div>
           )}
           {(providerInventory?.records ?? []).map((record: any) => {
-            const blocked = record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
+            const immutable = record.delete_capability === 'immutable-builtin';
+            const unresolved = record.delete_capability === 'source-unresolved';
+            const blocked = immutable || unresolved || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
             const lifecycle = record.desired_state === 'absent' ? 'absent' : record.lifecycle?.enabled === false ? 'disabled' : record.lifecycle?.catalogued ? 'catalogued' : 'configured';
-            const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).find((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING'].includes(entry.state));
+            const lifecycleTransactions = providerInventory?.lifecycle_transactions ?? [];
+            const recoveryTransactions = (providerInventory?.recovery_transactions ?? []).map((entry: any) => ({ ...entry, state: entry.phase }));
+            const rollbackTransaction = [...lifecycleTransactions, ...recoveryTransactions]
+              .filter((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING', 'ROLLBACK_PENDING', 'PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(entry.state))
+              .sort((a: any, b: any) => String(a.updated_at ?? '').localeCompare(String(b.updated_at ?? ''))).at(-1);
             return (
               <div key={record.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, flexWrap: 'wrap' as const }}>
                 <span style={{ fontWeight: 600 }}>{record.display_name || record.id}</span>
                 <span style={{ ...S.chip(record.lifecycle?.enabled === true), ...S.mono }}>{record.id}</span>
                 <span style={{ opacity: 0.65 }}>{copy.providerState(lifecycle)}</span>
                 <span style={{ opacity: 0.65 }}>{copy.providerModels(record.models?.length ?? 0)}</span>
+                {immutable && <span style={{ opacity: 0.65 }}>{copy.providerOfficialBuiltin}</span>}
+                {unresolved && <span style={{ color: '#c98735' }}>{copy.providerSourceUnresolved}</span>}
                 {Number(record.references?.active_jobs ?? 0) > 0 && <span style={{ color: '#c98735' }}>{copy.providerJobs(record.references.active_jobs)}</span>}
                 <span style={{ flex: 1 }} />
-                {record.ownership !== 'harness' && record.desired_state !== 'absent' && (
+                {record.delete_capability === 'supported' && record.desired_state !== 'absent' && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={blocked || providerLifecycleBusy !== null}
                     onClick={() => { void deleteHarnessProvider(record); }}>
                     {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}
                   </button>
                 )}
-                {record.desired_state === 'absent' && rollbackTransaction && (
+                {(record.desired_state === 'absent' || ['PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED', 'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING', 'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'ROLLBACK_PENDING', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_RESTORED', 'ROLLBACK_APPLYING'].includes(rollbackTransaction?.state)) && rollbackTransaction && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
-                    onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id); }}>
-                    {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : copy.providerRollback}
+                    onClick={() => { void rollbackHarnessProvider(record, rollbackTransaction.transaction_id, rollbackTransaction.state); }}>
+                    {providerLifecycleBusy === `rollback:${record.id}` ? copy.working : rollbackTransaction.state === 'ROLLBACK_PENDING' ? copy.providerRollbackContinue : copy.providerRollback}
                   </button>
                 )}
               </div>
             );
           })}
+          {(providerInventory?.recovery_transactions ?? []).filter((entry: any) => entry?.unresolved === true || !entry?.provider_id).map((entry: any) => (
+            <div key={`recovery:${entry.storage_id ?? entry.transaction_id ?? 'unknown'}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' as const, color: '#c98735', marginTop: 6 }}>
+              <span style={{ fontWeight: 600 }}>{copy.recoveryUnresolved}</span>
+              <span style={S.mono}>{entry.storage_id ?? entry.transaction_id ?? 'unknown'}</span>
+              <span style={{ opacity: 0.7 }}>{entry.phase}</span>
+              <span style={{ flex: 1 }} />
+              {entry.action_id && <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
+                onClick={() => { void quarantineRecoveryTransaction(entry); }}>
+                {providerLifecycleBusy === `quarantine:${entry.action_id}` ? copy.working : copy.recoveryQuarantine}
+              </button>}
+            </div>
+          ))}
           {(credentialRefs.length > 0 || credentialUnverified.length > 0) && (
             <div style={{ marginTop: 10, borderTop: '1px solid rgba(128,128,128,0.16)', paddingTop: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 12.5 }}>{copy.credentialReferences}</div>

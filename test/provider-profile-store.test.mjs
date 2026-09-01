@@ -22,26 +22,33 @@ test('readProviderDeclarations returns provenance and credential references only
   assert.deepEqual(result.declarations, [
     {
       id: 'opencode-go', display_name: 'OpenCode Go', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
       credential_ref: 'OPENCODE_GO_API_KEY',
     },
     {
       id: 'opencode-alt', display_name: 'Opencode', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-alt' },
       credential_ref: 'OPENCODE_ALT_API_KEY',
     },
     {
       id: 'opencode-muse', display_name: 'opencode-go-muse', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-muse' },
       credential_ref: 'OPENCODE_MUSE_API_KEY',
     },
     {
       id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.openrouter' },
       credential_ref: 'OPENROUTER_API_KEY',
     },
   ]);
   assert.equal(JSON.stringify(result).includes('secret-value'), false);
+});
+
+test('provider declarations carry an explicit mutation authority locator', () => {
+  const result = readProviderDeclarations(PROFILE, { file: 'profiles/dsh-crew/cordis.patch.yml' });
+  assert.deepEqual(result.declarations[0].declaration_authority, {
+    kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go',
+  });
 });
 
 test('removeProviderDeclarations removes only selected providers and preserves the rest', () => {
@@ -82,7 +89,7 @@ test('unknown profile shape and missing provider fail closed', () => {
   assert.equal(missing.code, 'PROVIDER_NOT_FOUND');
 });
 
-test('removing the final provider removes the managed sequence item cleanly', () => {
+test('removing the final provider preserves the managed sequence and leaves an explicit empty map', () => {
   const source = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n- insert:\n    - id: dsh-crew-hub\n`;
   const inspected = inspectProviderProfile(source);
   const result = removeProviderDeclarations(source, {
@@ -92,7 +99,17 @@ test('removing the final provider removes the managed sequence item cleanly', ()
   assert.equal(result.ok, true);
   assert.deepEqual(result.remaining, []);
   assert.equal(result.text.includes('opencode-go:'), false);
+  assert.match(result.text, /providers: \{\}/);
+  assert.match(result.text, /- id: llm-pi-ai/);
   assert.equal(result.text.includes('dsh-crew-hub'), true);
+});
+
+test('removing the final provider preserves unrelated llm-pi-ai sibling fields', () => {
+  const source = `- id: llm-pi-ai\n  config:\n    timeout: 30000\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n- insert:\n    - id: dsh-crew-hub\n`;
+  const result = removeProviderDeclarations(source, { providerIds: ['opencode-go'], expectedRevision: inspectProviderProfile(source).revision });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /timeout: 30000/);
+  assert.match(result.text, /providers: \{\}/);
 });
 
 test('malformed nested sequence or unexpected dedent fails closed without partial deletion', () => {

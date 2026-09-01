@@ -4,6 +4,13 @@
 
 Future changes go here.
 
+## 1.0.2 — 2026-09-01
+
+- Fresh installs now contain only the built-in DeepSeek routing default. User
+  provider/model priorities and multimodal adapters remain opt-in local state.
+- Hardens provider recovery and mutation-lock ownership against unreadable or
+  malformed lock metadata and terminal-job cleanup races.
+
 ## 1.0.1 — 2026-09-01
 
 - Preserves every structured Worker/Reviewer execution row in the Hub

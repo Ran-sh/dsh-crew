@@ -36,7 +36,7 @@ function parseProviderMap(source) {
     }
   }
 
-  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^\s+providers:\s*$/.test(line));
+  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^\s+providers:\s*(?:\{\s*\})?\s*$/.test(line));
   if (providersLine < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
   const providersIndent = indentOf(lines[providersLine]);
   const providerIndent = providersIndent + 2;
@@ -75,7 +75,6 @@ function parseProviderMap(source) {
     entries.push({ id, start: index, end });
     index = end - 1;
   }
-  if (entries.length === 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
   return { ok: true, lines, llmStart, blockEnd, providersLine, providerIndent, entries };
 }
 
@@ -104,6 +103,29 @@ function scalarField(lines, entry, field) {
   return null;
 }
 
+const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
+const REFERENCE_FIELD_SUFFIX = /(?:env|ref|name|handle|id|file|path)$/iu;
+
+function isInlineCredentialLine(line) {
+  const inlineKeys = [...line.matchAll(/["']?([A-Za-z][A-Za-z0-9_.-]*)["']?\s*:/gu)].map((match) => match[1]);
+  if (inlineKeys.some((field) => SENSITIVE_CREDENTIAL_FIELD.test(field) && !REFERENCE_FIELD_SUFFIX.test(field.replace(/[_.-]/gu, '')))) return true;
+  const match = line.match(/^\s*["']?([A-Za-z][A-Za-z0-9_.-]*)["']?\s*:\s*(.*?)\s*$/u);
+  if (!match) return false;
+  const [, field, value] = match;
+  if (!value || /^(?:null|~|\{\}|\[\])$/u.test(value)) return false;
+  const normalized = field.replace(/[_.-]/gu, '');
+  if (SENSITIVE_CREDENTIAL_FIELD.test(field) && !REFERENCE_FIELD_SUFFIX.test(normalized)) return true;
+  return /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)\s*["']?\s*:/iu.test(value);
+}
+
+export function hasInlineProviderCredentials(source, { providerIds = [] } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const requested = providerIds.length > 0 ? new Set(providerIds) : null;
+  const providers = parsed.entries.filter((entry) => !requested || requested.has(entry.id));
+  return { ok: true, inline: providers.some((entry) => parsed.lines.slice(entry.start, entry.end).some(isInlineCredentialLine)) };
+}
+
 /** Return profile provider provenance and credential reference names only. */
 export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) {
   const parsed = parseProviderMap(source);
@@ -117,6 +139,7 @@ export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) 
       origin: 'profile-managed',
       ownership: 'crew-managed-profile',
       file,
+      declaration_authority: { kind: 'crew-profile', locator: `llm-pi-ai.config.providers.${entry.id}` },
       ...(credentialRef ? { credential_ref: credentialRef } : {}),
     };
   });
@@ -146,19 +169,14 @@ export function removeProviderDeclarations(source, { providerIds = [], expectedR
 
   const removedSet = new Set(requested);
   const remaining = parsed.entries.filter((entry) => !removedSet.has(entry.id)).map((entry) => entry.id);
-  const removeRanges = [];
-  if (remaining.length === 0) {
-    // Avoid leaving an empty `llm-pi-ai.config.providers` mapping that could
-    // fail the next profile parse. Remove the complete managed sequence item.
-    removeRanges.push([parsed.llmStart, parsed.blockEnd]);
-  } else {
-    for (const id of requested) {
-      const entry = byId.get(id);
-      removeRanges.push([entry.start, entry.end]);
-    }
-  }
+  const removeRanges = requested.map((id) => { const entry = byId.get(id); return [entry.start, entry.end]; });
   const shouldRemove = (index) => removeRanges.some(([start, end]) => index >= start && index < end);
   const lines = parsed.lines.filter((_line, index) => !shouldRemove(index));
+  if (remaining.length === 0) {
+    const providersIndex = parsed.providersLine - removeRanges.filter(([start]) => start < parsed.providersLine).length;
+    const providersIndent = indentOf(parsed.lines[parsed.providersLine]);
+    lines[providersIndex] = `${' '.repeat(providersIndent)}providers: {}`;
+  }
   const newline = source.includes('\r\n') ? '\r\n' : '\n';
   const text = lines.join(newline);
   return {

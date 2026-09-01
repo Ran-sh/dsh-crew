@@ -21,6 +21,10 @@ Open <http://127.0.0.1:3080> for the daily console. On Windows, installation
 also registers login startup for the 3080 console; its official bridge starts
 and owns the isolated 3210 Harness backend.
 
+Fresh installs contain only the built-in DeepSeek route. Add your own provider
+credentials, model priorities, and optional integrations in the local Settings;
+they are never bundled into this package.
+
 | Surface | Purpose |
 | --- | --- |
 | `3080` | Daily console, Crew settings, integrations, and jobs |

@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
 
@@ -24,6 +27,33 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(providerPreview, /tombstones: lifecycleState\.tombstones/);
   assert.match(hubSource, /delete-plan/);
   assert.match(hubSource, /createProviderDeleteFileHooks/);
+  assert.match(hubSource, /readProviderSettingsDeclarations/);
+  assert.match(hubSource, /settingsFile:/);
+  assert.match(hubSource, /readProviderSourceRevisions/);
+  assert.match(hubSource, /catalogAbsent/);
+  assert.match(hubSource, /catalog_evidence/);
+  assert.match(hubSource, /default_evidence/);
+  assert.match(hubSource, /PROVIDER_DEFAULT_AUTHORITY_MISMATCH/);
+  assert.match(hubSource, /catalogPresent/);
+  assert.match(hubSource, /runtime_id_before/);
+  assert.match(hubSource, /delete_runtime_id_before_restart/);
+  assert.match(hubSource, /rollback_runtime_id_before_restart/);
+  assert.match(hubSource, /setRuntimeBaseline/);
+  assert.match(hubSource, /runtimeRestarted/);
+  assert.match(hubSource, /PROVIDER_CATALOG_INCOMPLETE/);
+  assert.match(hubSource, /readHarnessDefault/);
+  assert.match(hubSource, /lifecycle_evidence/);
+  assert.match(hubSource, /PROVIDER_LIFECYCLE_UNAVAILABLE/);
+  assert.match(hubSource, /recovery_transactions/);
+  assert.match(hubSource, /readProviderRecoveryTransactions/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_PENDING/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED/);
+  assert.match(hubSource, /hooks\.quarantine/);
+  assert.match(hubSource, /afterLockAcquired/);
+  assert.match(hubSource, /beginProviderMutation/);
+  assert.match(hubSource, /endProviderMutation/);
+  assert.match(hubSource, /hasProviderLease\(providerId\)/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -41,6 +71,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'verify-rollback'/);
   assert.match(hubSource, /deferRestart: true/);
   assert.match(hubSource, /existingBackupId/);
+  assert.match(hubSource, /recoverLock/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_CONFIRM_REQUIRED/);
   assert.match(hubSource, /planProviderDelete/);
   assert.match(hubSource, /buildProviderInventory/);
   assert.match(hubSource, /buildCredentialReferenceInventory/);
@@ -62,6 +94,113 @@ test('Hub mutation surface rejects cross-site browser requests', () => {
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'http://127.0.0.1:3080', 'sec-fetch-site': 'same-origin' })), true);
   assert.equal(isLoopbackRequest({ socket: { remoteAddress: '::1' }, headers: { host: '[::1]:3210', origin: 'http://[::1]:3080', 'sec-fetch-site': 'same-origin' } }), true);
   assert.equal(isLoopbackRequest(request({ host: '127.0.0.1:3210', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' })), false);
+});
+
+test('destructive provider lifecycle requires complete catalog evidence', () => {
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: true, partial: false }), true);
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: true, partial: true }), false);
+  assert.equal(hasCompleteProviderCatalogEvidence({ ok: false, partial: false }), false);
+});
+
+test('provider lifecycle accepts only a changed 3210 runtime identity as restart evidence', () => {
+  assert.equal(hasProviderRuntimeRestartEvidence('before', 'after'), true);
+  assert.equal(hasProviderRuntimeRestartEvidence('same', 'same'), false);
+  assert.equal(hasProviderRuntimeRestartEvidence(null, 'after'), false);
+});
+
+test('provider lifecycle fails closed when any existing declaration source is malformed', () => {
+  assert.equal(hasCompleteProviderDeclarationEvidence({ ok: true, sources: { profile: { present: true }, settings: { present: false } } }), true);
+  assert.equal(hasCompleteProviderDeclarationEvidence({ ok: false, sources: { settings: { present: true, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' } } }), false);
+});
+
+test('provider lifecycle does not treat corrupted lifecycle state as available evidence', () => {
+  assert.equal(hasAvailableProviderLifecycleEvidence({ ok: true }), true);
+  assert.equal(hasAvailableProviderLifecycleEvidence({ ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' }), false);
+});
+
+test('provider deletion is blocked while a recovery transaction is pending', () => {
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: true }] }), true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: false }] }), true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [] }), false);
+  assert.equal(hasPendingProviderRecoveryTransactions({}), false);
+});
+
+test('provider recovery keeps manifests without phase timestamps visible using file mtime', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-'));
+  const id = '11111111-1111-4111-8111-111111111111';
+  const entry = join(root, id);
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), JSON.stringify({
+    schema_version: 1,
+    provider_id: 'opencode-go',
+    plan: { plan_id: id, provider_id: 'opencode-go' },
+    files: { profile: { existed: true, managed: true }, config: { existed: true, managed: true }, lifecycle: { existed: true, managed: true } },
+    phase_journal: { phase: 'DECLARATIONS_APPLYING' },
+  }) + '\n');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].provider_id, 'opencode-go');
+  assert.equal(transactions[0].storage_id, id);
+  assert.equal(transactions[0].phase, 'DECLARATIONS_APPLYING');
+  assert.equal(transactions[0].recoverable, false);
+  assert.equal(transactions[0].unresolved, true);
+  assert.equal(typeof transactions[0].updated_at, 'string');
+});
+
+test('provider recovery surfaces malformed manifests as unresolved blockers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-invalid-'));
+  const entry = join(root, '22222222-2222-4222-8222-222222222222');
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), '{ malformed');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].phase, 'RECOVERY_UNRESOLVED');
+  assert.equal(transactions[0].storage_id, '22222222-2222-4222-8222-222222222222');
+  assert.equal(transactions[0].recoverable, false);
+  assert.equal(transactions[0].unresolved, true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
+});
+
+test('provider recovery does not hide structurally incomplete or terminal-invalid manifests', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-incomplete-'));
+  const entry = join(root, '.partial');
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), JSON.stringify({ schema_version: 1, phase_journal: { phase: 'VERIFIED' } }));
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, '.partial');
+  assert.equal(transactions[0].transaction_id, '.partial');
+  assert.equal(transactions[0].phase, 'VERIFIED');
+  assert.equal(transactions[0].unresolved, true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
+});
+
+test('provider recovery surfaces non-directory entries with opaque action ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-file-'));
+  writeFileSync(join(root, 'unexpected-file'), 'not a transaction');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, 'unexpected-file');
+  assert.match(transactions[0].action_id, /^[a-f0-9]{32}$/);
+  assert.equal(transactions[0].unresolved, true);
+});
+
+test('provider recovery gives long malformed entries actionable opaque ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-long-'));
+  const name = `invalid-${'x'.repeat(160)}`;
+  mkdirSync(join(root, name));
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, name);
+  assert.match(transactions[0].action_id, /^[a-f0-9]{32}$/);
+});
+
+test('provider recovery ignores quarantined directories after explicit resolution', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-quarantine-'));
+  const quarantine = join(root, '.quarantine');
+  mkdirSync(quarantine);
+  mkdirSync(join(quarantine, '22222222-2222-4222-8222-222222222222.1'));
+  assert.deepEqual(readProviderRecoveryTransactions(root), []);
 });
 
 test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
