@@ -3,7 +3,7 @@
 // are never parsed, copied, or persisted in migration snapshots.
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import { addProviderDeclaration, hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
 import { addProviderSettings, hasInlineProviderCredentials as hasInlineSettingsCredentials, readProviderSettingsDeclarations, removeProviderSettings } from './provider-settings-store.mjs';
@@ -126,6 +126,10 @@ function validFileIdentity(value) {
   return value && typeof value === 'object' && Number.isFinite(value.dev) && Number.isFinite(value.ino)
     && Number.isFinite(value.size) && Number.isFinite(value.mtimeMs);
 }
+function validWitness(root, value) {
+  if (typeof value !== 'string' || resolvePath(value).startsWith(`${resolvePath(root)}${process.platform === 'win32' ? '\\' : '/'}`) !== true) return false;
+  try { const stat = lstatSync(value); return stat.isFile() && !stat.isSymbolicLink(); } catch { return false; }
+}
 
 function manifestDigest(manifest) {
   const { checksum: _checksum, ...withoutChecksum } = manifest ?? {};
@@ -134,22 +138,29 @@ function manifestDigest(manifest) {
 
 function validMigrationManifest(root, manifest) {
   if (!manifest || manifest.kind !== 'provider-layer-migration' || !safeId(manifest.plan_id) || !safeId(manifest.provider_id)) return false;
+  if (!['PREPARED', 'USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_APPLYING', 'VERIFIED', 'ROLLED_BACK'].includes(manifest.phase)) return false;
   try { if (!lstatSync(root).isDirectory()) return false; } catch { return false; }
   if (!manifest.plan || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action) || !safeMaterialization(manifest.plan.materialization?.provider)) return false;
   const expected = manifest.plan.expected_revisions;
   if (!expected || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
   if (!manifest.mutation_journal || typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal)) return false;
+  if (!manifest.applied_revisions || typeof manifest.applied_revisions !== 'object' || Array.isArray(manifest.applied_revisions)
+    || Object.values(manifest.applied_revisions).some((value) => !/^[a-f0-9]{64}$/u.test(value ?? ''))) return false;
+  if (manifest.rollback_revisions !== undefined && (!manifest.rollback_revisions || typeof manifest.rollback_revisions !== 'object' || Array.isArray(manifest.rollback_revisions)
+    || Object.values(manifest.rollback_revisions).some((value) => value !== null && !/^[a-f0-9]{64}$/u.test(value ?? '')))) return false;
   if (Object.entries(manifest.mutation_journal).some(([key, entry]) => !['profile', 'settings'].includes(key)
     || !entry || typeof entry !== 'object' || entry.phase !== 'WRITE_PENDING'
     || (entry.next_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.next_revision ?? ''))
     || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
     || typeof entry.created !== 'boolean'
-    || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction)))) return false;
-  if (manifest.files?.settings?.existed === false && manifest.phase !== 'PREPARED' && !validFileIdentity(manifest.created_settings_identity)) return false;
+    || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction))
+    || (entry.witness !== undefined && !validWitness(root, entry.witness)))) return false;
+  if (manifest.files?.settings?.existed === false && ['USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'VERIFIED'].includes(manifest.phase)
+    && (!validFileIdentity(manifest.created_settings_identity) || !validWitness(root, manifest.created_settings_witness))) return false;
   if (typeof manifest.checksum !== 'string' || manifest.checksum !== manifestDigest(manifest)) return false;
   for (const key of ['profile', 'settings']) {
     const entry = manifest.files?.[key];
-    if (!entry || typeof entry.existed !== 'boolean' || entry.revision !== expected[key] || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
+    if (!entry || typeof entry.existed !== 'boolean' || (key === 'profile' && entry.existed !== true) || (!entry.existed && entry.revision !== null) || entry.revision !== expected[key] || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
     if (entry.backup_digest !== undefined || existsSync(join(root, `${key}.backup`))) return false;
   }
   return true;
@@ -348,16 +359,29 @@ export function createProviderLayerMigrationFileHooks({
     ensureLock();
     const nextRevision = revision(content);
     const previousRevision = active.manifest.files[key]?.revision ?? null;
+    let witness = null;
+    if (key === 'settings' && active.manifest.files.settings.existed === false) {
+      witness = join(active.root, `settings.${randomUUID()}.ownership.witness`);
+      assertManagedPath(witness, managedRoot);
+      writeFileSync(witness, content, { flag: 'wx' });
+    }
     active.manifest.mutation_journal[key] = {
       next_revision: nextRevision,
       previous_revision: previousRevision,
       created: active.manifest.files[key]?.existed === false,
+      ...(witness ? { witness } : {}),
       phase: 'WRITE_PENDING',
     };
     persist();
-    atomicReplace(file, content, managedRoot);
+    if (witness) {
+      try { linkSync(witness, file); }
+      catch (error) { throw Object.assign(new Error('provider migration exclusive create failed'), { code: 'PROVIDER_MIGRATION_REPLACE_FAILED', cause: error }); }
+    } else atomicReplace(file, content, managedRoot);
     active.manifest.applied_revisions[key] = nextRevision;
-    if (key === 'settings' && active.manifest.files.settings.existed === false) active.manifest.created_settings_identity = fileIdentity(file);
+    if (key === 'settings' && active.manifest.files.settings.existed === false) {
+      active.manifest.created_settings_identity = fileIdentity(file);
+      active.manifest.created_settings_witness = witness;
+    }
     active.manifest.phase = key === 'settings' ? 'USER_MATERIALIZED' : 'BASE_REMOVED';
     delete active.manifest.mutation_journal[key];
     persist();
@@ -466,13 +490,16 @@ export function createProviderLayerMigrationFileHooks({
           if (!removed.ok) throw Object.assign(new Error('provider migration settings restore failed'), { code: removed.code });
           writeRollbackApplied('settings', file, removed.text);
         } else if (current !== null) {
-          const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity);
+          const witnessPath = active.manifest.created_settings_witness ?? pending?.witness;
+          const witnessIdentity = witnessPath && validWitness(active.root, witnessPath) ? fileIdentity(witnessPath) : null;
+          const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity) || sameFileIdentity(fileIdentity(file), witnessIdentity);
           if (!ownedByIdentity && !(pendingApplied && pending?.created === true)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
           writeRollbackDeleted('settings', file);
         }
       }
     }
     active.manifest.phase = 'ROLLBACK_APPLIED';
+    if (active.manifest.created_settings_witness) rmSync(active.manifest.created_settings_witness, { force: true });
     persist();
     return { ok: true, state: 'ROLLBACK_APPLIED' };
   };
@@ -528,6 +555,7 @@ export function createProviderLayerMigrationFileHooks({
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
     ensureLock();
     active.manifest.phase = 'ROLLED_BACK';
+    if (active.manifest.created_settings_witness) rmSync(active.manifest.created_settings_witness, { force: true });
     persist();
     return { ok: true, state: 'ROLLED_BACK' };
   };

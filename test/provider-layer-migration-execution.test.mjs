@@ -106,6 +106,7 @@ test('migration recovery scanner exposes only nonterminal, secret-free transacti
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
+      applied_revisions: {},
       mutation_journal: {},
     };
     const withoutChecksum = JSON.stringify(manifest);
@@ -119,6 +120,7 @@ test('migration recovery scanner exposes only nonterminal, secret-free transacti
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
+      applied_revisions: {},
       mutation_journal: {},
     };
     terminalManifest.checksum = createHash('sha256').update(JSON.stringify(terminalManifest), 'utf8').digest('hex');
