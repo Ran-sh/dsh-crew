@@ -10,6 +10,7 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   realpathSync,
   readFileSync,
@@ -62,7 +63,7 @@ function safePlanId(value) {
   return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
 }
 
-function atomicWrite(file, content, managedRoot = null) {
+function atomicWrite(file, content, managedRoot = null, { replace = true } = {}) {
   if (managedRoot) assertManagedPath(file, managedRoot);
   const dir = dirname(file);
   if (managedRoot) {
@@ -77,7 +78,11 @@ function atomicWrite(file, content, managedRoot = null) {
   try {
     writeFileSync(temp, content);
     if (managedRoot) assertManagedPath(file, managedRoot);
-    renameSync(temp, file);
+    if (replace) renameSync(temp, file);
+    else {
+      linkSync(temp, file);
+      rmSync(temp, { force: true });
+    }
   } catch (error) {
     try { rmSync(temp, { force: true }); } catch {}
     throw error;
@@ -98,8 +103,8 @@ function defaultReadConfig(configFile, managedRoot = null) {
   return readJson(configFile, {});
 }
 
-function defaultWriteConfig(configFile, config, managedRoot = null) {
-  atomicWrite(configFile, JSON.stringify(config, null, 2) + '\n', managedRoot);
+function defaultWriteConfig(configFile, config, managedRoot = null, replace = true) {
+  atomicWrite(configFile, JSON.stringify(config, null, 2) + '\n', managedRoot, { replace });
 }
 
 function fileMap({ profileFile, settingsFile, configFile, lifecycleFile }) {
@@ -359,7 +364,7 @@ export function createProviderDeleteFileHooks({
   lifecycleFile,
   backupDir,
   readConfig = null,
-  writeConfig = (config, { managedRoot: writeRoot } = {}) => defaultWriteConfig(configFile, config, writeRoot),
+  writeConfig = (config, { managedRoot: writeRoot, replace = true } = {}) => defaultWriteConfig(configFile, config, writeRoot, replace),
   writeSettings = null,
   restart,
   runtimeIdProvider = null,
@@ -639,6 +644,7 @@ export function createProviderDeleteFileHooks({
     activeBackup.manifest.mutation_journal ??= {};
     activeBackup.manifest.mutation_journal[key] = {
       next_revision: nextRevision,
+      created: activeBackup.manifest.files?.[key]?.existed === false,
       prepared_at: new Date().toISOString(),
     };
     persistManifest();
@@ -646,7 +652,9 @@ export function createProviderDeleteFileHooks({
 
   const commitMutation = (key, nextRevision) => {
     if (!activeBackup || typeof nextRevision !== 'string') return;
+    const pending = activeBackup.manifest.mutation_journal?.[key];
     activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
+    if (pending?.created === true) activeBackup.manifest[`created_${key}`] = true;
     if (activeBackup.manifest.mutation_journal) delete activeBackup.manifest.mutation_journal[key];
     persistManifest();
   };
@@ -663,13 +671,22 @@ export function createProviderDeleteFileHooks({
   const writeManagedConfig = async (config, expectedRevision) => {
     ensureMutationLock();
     assertManagedPath(configFile, managedRoot);
+    if (activeBackup?.manifest?.files?.config?.existed === false && fs.existsSync(configFile)) {
+      throw Object.assign(new Error('provider config was created before the transaction write'), { code: 'PROVIDER_CONFIG_CHANGED' });
+    }
     if (typeof expectedRevision === 'string') {
       const current = await readConfigFn();
       if (sha256(JSON.stringify(current)) !== expectedRevision) {
         throw Object.assign(new Error('provider config changed during commit'), { code: 'PROVIDER_CONFIG_CHANGED' });
       }
     }
-    await writeConfig(config, { expectedRevision, managedRoot });
+    const createOnly = activeBackup?.manifest?.files?.config?.existed === false && !fs.existsSync(configFile);
+    try {
+      await writeConfig(config, { expectedRevision, managedRoot, replace: !createOnly });
+    } catch (error) {
+      if (createOnly && error?.code === 'EEXIST') throw Object.assign(new Error('provider config was created before the transaction write'), { code: 'PROVIDER_CONFIG_CHANGED' });
+      throw error;
+    }
     assertManagedPath(configFile, managedRoot);
     const written = await readConfigFn();
     if (sha256(JSON.stringify(written)) !== sha256(JSON.stringify(config))) {
@@ -826,6 +843,9 @@ export function createProviderDeleteFileHooks({
   const markTombstone = async (providerId) => {
     if (!validProviderId(providerId)) throw Object.assign(new Error('provider id is invalid'), { code: 'PROVIDER_NOT_FOUND' });
     assertManagedPath(lifecycleFile, managedRoot);
+    if (activeBackup?.manifest?.files?.lifecycle?.existed === false && fs.existsSync(lifecycleFile)) {
+      throw Object.assign(new Error('provider lifecycle was created before the transaction write'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
+    }
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     if (activeBackup?.manifest?.lifecycle_revision && sha256(JSON.stringify(state)) !== activeBackup.manifest.lifecycle_revision) {
       throw Object.assign(new Error('provider lifecycle changed'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
@@ -839,7 +859,13 @@ export function createProviderDeleteFileHooks({
     setPhase('TOMBSTONE_APPLYING');
     const nextRevision = sha256(JSON.stringify(marked));
     prepareMutation('lifecycle', nextRevision);
-    atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n', managedRoot);
+    const createOnly = activeBackup?.manifest?.files?.lifecycle?.existed === false && !fs.existsSync(lifecycleFile);
+    try {
+      atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n', managedRoot, { replace: !createOnly });
+    } catch (error) {
+      if (createOnly && error?.code === 'EEXIST') throw Object.assign(new Error('provider lifecycle was created before the transaction write'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
+      throw error;
+    }
     commitMutation('lifecycle', nextRevision);
     setPhase('TOMBSTONE_APPLIED');
   };
@@ -1028,7 +1054,11 @@ export function createProviderDeleteFileHooks({
       if (!fs.existsSync(target)) return;
       const expected = activeBackup.manifest[`applied_${key}_revision`]
         ?? activeBackup.manifest.mutation_journal?.[key]?.next_revision;
-      if (typeof expected !== 'string') throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+      // A pending journal proves intent, not ownership: a crash can happen
+      // before the exclusive-create rename. Only the durable commit marker
+      // authorizes deleting an originally absent file during compensation.
+      const created = activeBackup.manifest[`created_${key}`] === true;
+      if (typeof expected !== 'string' || !created) throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       let current;
       if (key === 'config') current = sha256(JSON.stringify(await readConfigFn()));
       else if (key === 'lifecycle') current = sha256(JSON.stringify(normalizeProviderLifecycleState(readJson(lifecycleFile, {}))));

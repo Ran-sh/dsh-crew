@@ -329,7 +329,7 @@ test('two processes reclaiming the same stale lock yield exactly one owner', asy
     catch (error) { console.log(error.code ?? 'UNKNOWN'); }
     finally { await hooks.release(); }
   `;
-  const children = ready.map((readyFile) => spawn(process.execPath, ['--input-type=module', '-e', childSource(readyFile)], { cwd: process.cwd(), env: { ...process.env, DSH_DEBUG_LOCK: '1' } }));
+  const children = ready.map((readyFile) => spawn(process.execPath, ['--input-type=module', '-e', childSource(readyFile)], { cwd: process.cwd() }));
   const output = children.map((child) => new Promise((resolve) => {
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
