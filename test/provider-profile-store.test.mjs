@@ -89,7 +89,7 @@ test('unknown profile shape and missing provider fail closed', () => {
   assert.equal(missing.code, 'PROVIDER_NOT_FOUND');
 });
 
-test('removing the final provider removes the managed sequence item cleanly', () => {
+test('removing the final provider preserves the managed sequence and leaves an explicit empty map', () => {
   const source = `- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n- insert:\n    - id: dsh-crew-hub\n`;
   const inspected = inspectProviderProfile(source);
   const result = removeProviderDeclarations(source, {
@@ -99,7 +99,17 @@ test('removing the final provider removes the managed sequence item cleanly', ()
   assert.equal(result.ok, true);
   assert.deepEqual(result.remaining, []);
   assert.equal(result.text.includes('opencode-go:'), false);
+  assert.match(result.text, /providers: \{\}/);
+  assert.match(result.text, /- id: llm-pi-ai/);
   assert.equal(result.text.includes('dsh-crew-hub'), true);
+});
+
+test('removing the final provider preserves unrelated llm-pi-ai sibling fields', () => {
+  const source = `- id: llm-pi-ai\n  config:\n    timeout: 30000\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n- insert:\n    - id: dsh-crew-hub\n`;
+  const result = removeProviderDeclarations(source, { providerIds: ['opencode-go'], expectedRevision: inspectProviderProfile(source).revision });
+  assert.equal(result.ok, true);
+  assert.match(result.text, /timeout: 30000/);
+  assert.match(result.text, /providers: \{\}/);
 });
 
 test('malformed nested sequence or unexpected dedent fails closed without partial deletion', () => {

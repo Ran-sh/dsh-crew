@@ -19,8 +19,8 @@ test('Harness settings parser discovers nested provider declarations with a stab
   const result = readProviderSettingsDeclarations(SETTINGS);
   assert.equal(result.ok, true);
   assert.deepEqual(result.declarations, [
-    { id: 'opencode-go', display_name: 'opencode-go', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }, credential_ref: 'OPENCODE_GO_API_KEY' },
-    { id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }, credential_ref: 'OPENROUTER_API_KEY' },
+    { id: 'opencode-go', display_name: 'opencode-go', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }, credential_ref: { kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'unknown' } },
+    { id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }, credential_ref: { kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'unknown' } },
   ]);
   assert.equal(JSON.stringify(result).includes('deepseek-v4-flash'), false);
 });

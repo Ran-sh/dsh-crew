@@ -36,7 +36,7 @@ function parseProviderMap(source) {
     }
   }
 
-  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^\s+providers:\s*$/.test(line));
+  const providersLine = lines.findIndex((line, index) => index > llmStart && index < blockEnd && /^\s+providers:\s*(?:\{\s*\})?\s*$/.test(line));
   if (providersLine < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
   const providersIndent = indentOf(lines[providersLine]);
   const providerIndent = providersIndent + 2;
@@ -75,7 +75,6 @@ function parseProviderMap(source) {
     entries.push({ id, start: index, end });
     index = end - 1;
   }
-  if (entries.length === 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
   return { ok: true, lines, llmStart, blockEnd, providersLine, providerIndent, entries };
 }
 
@@ -157,19 +156,14 @@ export function removeProviderDeclarations(source, { providerIds = [], expectedR
 
   const removedSet = new Set(requested);
   const remaining = parsed.entries.filter((entry) => !removedSet.has(entry.id)).map((entry) => entry.id);
-  const removeRanges = [];
-  if (remaining.length === 0) {
-    // Avoid leaving an empty `llm-pi-ai.config.providers` mapping that could
-    // fail the next profile parse. Remove the complete managed sequence item.
-    removeRanges.push([parsed.llmStart, parsed.blockEnd]);
-  } else {
-    for (const id of requested) {
-      const entry = byId.get(id);
-      removeRanges.push([entry.start, entry.end]);
-    }
-  }
+  const removeRanges = requested.map((id) => { const entry = byId.get(id); return [entry.start, entry.end]; });
   const shouldRemove = (index) => removeRanges.some(([start, end]) => index >= start && index < end);
   const lines = parsed.lines.filter((_line, index) => !shouldRemove(index));
+  if (remaining.length === 0) {
+    const providersIndex = parsed.providersLine - removeRanges.filter(([start]) => start < parsed.providersLine).length;
+    const providersIndent = indentOf(parsed.lines[parsed.providersLine]);
+    lines[providersIndex] = `${' '.repeat(providersIndent)}providers: {}`;
+  }
   const newline = source.includes('\r\n') ? '\r\n' : '\n';
   const text = lines.join(newline);
   return {

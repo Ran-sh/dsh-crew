@@ -187,6 +187,39 @@ test('provider source backups fail closed on inline credential values', async ()
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('PROFILE_SECRET'), true);
 });
 
+test('provider source backups reject inline credentials belonging to a retained sibling', async () => {
+  const paths = fixture();
+  const unsafeProfile = PROFILE.replace('apiKeyEnv: OPENROUTER_API_KEY', 'apiKey: RETAINED_SIBLING_SECRET');
+  writeFileSync(paths.profileFile, unsafeProfile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('RETAINED_SIBLING_SECRET'), true);
+});
+
+test('Harness settings backups reject inline credentials belonging to a retained sibling', async () => {
+  const paths = fixture();
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  const unsafeSettings = SETTINGS.replace('apiKeyEnv: OPENROUTER_API_KEY', 'apiKey: RETAINED_SETTINGS_SECRET');
+  writeFileSync(paths.settingsFile, unsafeSettings);
+  const plan = settingsPlanFor(paths);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+  assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('RETAINED_SETTINGS_SECRET'), true);
+});
+
+test('provider delete adapters reject managed paths outside the backup Crew root', () => {
+  const paths = fixture();
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths,
+    configFile: join(paths.dir, '..', 'outside-config.json'),
+    backupDir: join(paths.dir, 'backups'),
+  }), (error) => error.code === 'PROVIDER_DELETE_UNSAFE_PATH');
+});
+
 test('transaction stores an independent rollback runtime baseline', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');

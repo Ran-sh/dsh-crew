@@ -156,3 +156,15 @@ test('provider credential references aggregate across every declaration authorit
   ] });
   assert.deepEqual(result.records[0].credential_refs.map((ref) => ref.name_or_handle), ['PROFILE_DUAL_KEY', 'SETTINGS_DUAL_KEY']);
 });
+
+test('credential refs preserve kind identity and downgrade ownership conflicts', () => {
+  const result = buildProviderInventory({ declarations: [
+    { id: 'refs', credential_ref: { kind: 'env', name_or_handle: 'SAME', ownership: 'user' }, declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.refs' } },
+    { id: 'refs', credential_ref: { kind: 'env', name_or_handle: 'SAME', ownership: 'crew' }, declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.refs' } },
+    { id: 'refs', credential_ref: { kind: 'crew-store', name_or_handle: 'SAME', ownership: 'crew' }, declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.refs' } },
+  ] });
+  assert.deepEqual(result.records[0].credential_refs, [
+    { kind: 'env', name_or_handle: 'SAME', ownership: 'unknown' },
+    { kind: 'crew-store', name_or_handle: 'SAME', ownership: 'crew' },
+  ]);
+});

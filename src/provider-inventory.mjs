@@ -19,22 +19,29 @@ function normalizeProviderId(value) {
 
 function normalizeCredentialRefs(declarations) {
   const entries = Array.isArray(declarations) ? declarations : [declarations];
-  const seen = new Set();
+  const seen = new Map();
   const refs = [];
   for (const declaration of entries) {
     const raw = declaration?.credential_refs ?? declaration?.credential_ref;
     const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
     for (const candidate of values) {
       const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
       const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
       const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
-      refs.push({
+      const normalized = {
         kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
         name_or_handle: name,
         ownership: ['crew', 'user', 'external', 'unknown'].includes(ownership) ? ownership : 'unknown',
-      });
+      };
+      if (!name) continue;
+      const key = `${normalized.kind}:${normalized.name_or_handle}`;
+      const existing = seen.get(key);
+      if (existing) {
+        if (existing.ownership !== normalized.ownership) existing.ownership = 'unknown';
+      } else {
+        seen.set(key, normalized);
+        refs.push(normalized);
+      }
     }
   }
   return refs;

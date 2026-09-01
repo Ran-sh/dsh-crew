@@ -109,7 +109,7 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
         ownership: 'crew-managed-profile',
         file,
         declaration_authority: { kind: 'harness-settings', locator: `llm-pi-ai.providers.${entry.id}` },
-        ...(credentialRef ? { credential_ref: credentialRef } : {}),
+        ...(credentialRef ? { credential_ref: { kind: 'env', name_or_handle: credentialRef, ownership: 'unknown' } } : {}),
       };
     }),
   };

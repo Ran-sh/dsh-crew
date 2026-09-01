@@ -11,13 +11,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  realpathSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
 import {
   readProviderSettingsDeclarations,
@@ -147,7 +148,31 @@ function safeRestoreFile(source, target) {
   atomicWrite(target, readFileSync(source));
 }
 
-function assertManagedPath(file) {
+function assertManagedPath(file, managedRoot = null) {
+  if (managedRoot) {
+    const root = resolvePath(managedRoot);
+    const target = resolvePath(file);
+    const outside = relative(root, target).startsWith('..') || isAbsolute(relative(root, target));
+    if (outside) throw Object.assign(new Error('managed provider path escapes Crew root'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+    let current = target;
+    while (current && current !== dirname(current)) {
+      try {
+        if (lstatSync(current).isSymbolicLink()) throw Object.assign(new Error('managed provider path is a symlink'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+        current = dirname(current);
+      } catch (error) {
+        if (error?.code === 'ENOENT') { current = dirname(current); continue; }
+        throw error;
+      }
+    }
+    try {
+      const existing = realpathSync(target);
+      const resolvedRoot = realpathSync(root);
+      const resolvedRelative = relative(resolvedRoot, existing);
+      if (resolvedRelative.startsWith('..') || isAbsolute(resolvedRelative)) throw Object.assign(new Error('managed provider path resolves outside Crew root'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
   try {
     if (lstatSync(file).isSymbolicLink()) {
       throw Object.assign(new Error('managed provider path is a symlink'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
@@ -213,6 +238,11 @@ export function createProviderDeleteFileHooks({
   if (typeof backupDir !== 'string' || !backupDir.trim()) throw new TypeError('provider delete backup directory is required');
   const paths = fileMap({ profileFile, settingsFile, configFile, lifecycleFile });
   validatePaths(paths);
+  const managedRoot = dirname(resolvePath(backupDir));
+  for (const key of [...FILE_KEYS, ...(settingsFile ? ['settings'] : [])]) {
+    if (paths[key]) assertManagedPath(paths[key], managedRoot);
+  }
+  assertManagedPath(backupDir, managedRoot);
   let activeBackup = null;
   let lockPath = null;
   let lockOwned = false;
@@ -243,6 +273,23 @@ export function createProviderDeleteFileHooks({
   const persistManifest = () => {
     if (!activeBackup) return;
     atomicWrite(join(activeBackup.root, 'manifest.json'), JSON.stringify(activeBackup.manifest, null, 2) + '\n');
+  };
+
+  const prepareMutation = (key, nextRevision) => {
+    if (!activeBackup || typeof nextRevision !== 'string') return;
+    activeBackup.manifest.mutation_journal ??= {};
+    activeBackup.manifest.mutation_journal[key] = {
+      next_revision: nextRevision,
+      prepared_at: new Date().toISOString(),
+    };
+    persistManifest();
+  };
+
+  const commitMutation = (key, nextRevision) => {
+    if (!activeBackup || typeof nextRevision !== 'string') return;
+    activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
+    if (activeBackup.manifest.mutation_journal) delete activeBackup.manifest.mutation_journal[key];
+    persistManifest();
   };
 
   const backup = async (plan) => {
@@ -287,6 +334,7 @@ export function createProviderDeleteFileHooks({
         })).filter((ref) => ref.kind && ref.name_or_handle && ref.ownership).slice(0, 32),
       },
       files: {},
+      mutation_journal: {},
     };
     const authorityKinds = new Set((Array.isArray(plan?.declaration_authorities) ? plan.declaration_authorities : []).map((authority) => authority?.kind));
     const managesHarnessDefault = plan?.was_harness_default === true && plan?.harness_default_authority?.kind === 'harness-settings';
@@ -299,7 +347,7 @@ export function createProviderDeleteFileHooks({
       if (existed && key !== 'config' && managed) {
         if (key === 'profile') {
           const sourceText = fs.readFileSync(source, 'utf8');
-          const credentials = hasInlineProfileCredentials(sourceText, { providerIds: [plan.provider_id] });
+          const credentials = hasInlineProfileCredentials(sourceText);
           if (credentials.ok !== true) throw Object.assign(new Error('provider profile credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
           if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
         }
@@ -314,7 +362,7 @@ export function createProviderDeleteFileHooks({
       manifest.files.settings = { existed, managed };
       if (existed && managed) {
         const sourceText = fs.readFileSync(settingsFile, 'utf8');
-        const credentials = hasInlineSettingsCredentials(sourceText, { providerIds: [plan.provider_id] });
+        const credentials = hasInlineSettingsCredentials(sourceText);
         if (credentials.ok !== true) throw Object.assign(new Error('provider settings credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
         if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
         fs.copyFileSync(settingsFile, join(root, 'settings.backup'));
@@ -344,11 +392,10 @@ export function createProviderDeleteFileHooks({
       throw Object.assign(new Error('provider lifecycle changed'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
     }
     const marked = markProviderTombstone(state, providerId);
+    const nextRevision = sha256(JSON.stringify(marked));
+    prepareMutation('lifecycle', nextRevision);
     atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n');
-    if (activeBackup) {
-      activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(marked));
-      persistManifest();
-    }
+    commitMutation('lifecycle', nextRevision);
   };
 
   const scrubReferences = async (plan) => {
@@ -380,17 +427,14 @@ export function createProviderDeleteFileHooks({
         model: plan.replacement_default_model.trim(),
       };
     }
+    const configRevision = sha256(JSON.stringify(scrubbed.config));
+    prepareMutation('config', configRevision);
     await writeConfig(scrubbed.config);
-    if (activeBackup) {
-      activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(scrubbed.config));
-      persistManifest();
-    }
+    commitMutation('config', configRevision);
     if (settingsMutation) {
+      prepareMutation('settings', settingsMutation.revision);
       await writeSettings(settingsMutation.text);
-      if (activeBackup) {
-        activeBackup.manifest.applied_settings_revision = settingsMutation.revision;
-        persistManifest();
-      }
+      commitMutation('settings', settingsMutation.revision);
     }
   };
 
@@ -407,9 +451,10 @@ export function createProviderDeleteFileHooks({
         expectedRevision: plan.expected_revisions?.profile ?? plan.expected_revision,
       });
       if (!result.ok) throw Object.assign(new Error('provider profile changed'), { code: result.code });
+      prepareMutation('profile', result.revision);
       atomicWrite(profileFile, result.text);
       removed += result.removed.length;
-      if (activeBackup) activeBackup.manifest.applied_profile_revision = result.revision;
+      commitMutation('profile', result.revision);
     }
     if (authorityKinds.has('harness-settings') && !(plan.was_harness_default === true)) {
       if (typeof settingsFile !== 'string' || !settingsFile.trim()) throw Object.assign(new Error('provider settings path is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
@@ -420,12 +465,12 @@ export function createProviderDeleteFileHooks({
         expectedRevision: plan.expected_revisions?.settings,
       });
       if (!result.ok) throw Object.assign(new Error('provider settings changed'), { code: result.code });
+      prepareMutation('settings', result.revision);
       atomicWrite(settingsFile, result.text);
       removed += result.removed.length;
-      if (activeBackup) activeBackup.manifest.applied_settings_revision = result.revision;
+      commitMutation('settings', result.revision);
     }
     if (removed === 0) throw Object.assign(new Error('provider declaration source is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
-    if (activeBackup) persistManifest();
   };
 
   const checkpointApplied = async () => {
@@ -436,6 +481,7 @@ export function createProviderDeleteFileHooks({
     activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(lifecycle));
     if (activeBackup.manifest.files.profile?.managed !== false && fs.existsSync(profileFile)) activeBackup.manifest.applied_profile_revision = sha256(fs.readFileSync(profileFile, 'utf8'));
     if (activeBackup.manifest.files.settings?.managed === true && typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile)) activeBackup.manifest.applied_settings_revision = sha256(fs.readFileSync(settingsFile, 'utf8'));
+    activeBackup.manifest.mutation_journal = {};
     persistManifest();
   };
 
@@ -493,15 +539,17 @@ export function createProviderDeleteFileHooks({
 
   const rollback = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_ROLLBACK_UNAVAILABLE' });
-    const allowedRevision = (current, original, applied) => current === original || (typeof applied === 'string' && current === applied);
+    const allowedRevision = (current, original, applied, key) => current === original
+      || (typeof applied === 'string' && current === applied)
+      || (typeof activeBackup.manifest.mutation_journal?.[key]?.next_revision === 'string' && current === activeBackup.manifest.mutation_journal[key].next_revision);
     const currentConfig = await readConfig();
     const currentLifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     const currentProfile = fs.existsSync(profileFile) ? fs.readFileSync(profileFile, 'utf8') : null;
     const currentSettings = typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
-    if (!allowedRevision(sha256(JSON.stringify(currentConfig)), activeBackup.manifest.config_revision, activeBackup.manifest.applied_config_revision)
-      || !allowedRevision(sha256(JSON.stringify(currentLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision)
-      || (activeBackup.manifest.profile_revision && (!currentProfile || !allowedRevision(sha256(currentProfile), activeBackup.manifest.profile_revision, activeBackup.manifest.applied_profile_revision)))
-      || (activeBackup.manifest.settings_revision && (!currentSettings || !allowedRevision(sha256(currentSettings), activeBackup.manifest.settings_revision, activeBackup.manifest.applied_settings_revision)))) {
+    if (!allowedRevision(sha256(JSON.stringify(currentConfig)), activeBackup.manifest.config_revision, activeBackup.manifest.applied_config_revision, 'config')
+      || !allowedRevision(sha256(JSON.stringify(currentLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision, 'lifecycle')
+      || (activeBackup.manifest.profile_revision && (!currentProfile || !allowedRevision(sha256(currentProfile), activeBackup.manifest.profile_revision, activeBackup.manifest.applied_profile_revision, 'profile')))
+      || (activeBackup.manifest.settings_revision && (!currentSettings || !allowedRevision(sha256(currentSettings), activeBackup.manifest.settings_revision, activeBackup.manifest.applied_settings_revision, 'settings')))) {
       throw Object.assign(new Error('managed provider state changed after the transaction'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
     }
     for (const key of FILE_KEYS) {
@@ -530,6 +578,8 @@ export function createProviderDeleteFileHooks({
       if (settingsEntry?.existed === true) safeRestoreFile(backupFile, settingsFile);
       else fs.rmSync(settingsFile, { force: true });
     }
+    activeBackup.manifest.mutation_journal = {};
+    persistManifest();
   };
 
   const release = async () => {
@@ -587,11 +637,10 @@ export function createProviderDeleteFileHooks({
         ? sha256(fs.readFileSync(settingsFile, 'utf8')) : '';
       next.last_verified_revision[plan.provider_id] = sha256(`${profileRevision}:${settingsRevision}`);
     }
+    const nextRevision = sha256(JSON.stringify(next));
+    prepareMutation('lifecycle', nextRevision);
     atomicWrite(lifecycleFile, JSON.stringify(next, null, 2) + '\n');
-    if (activeBackup) {
-      activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(next));
-      persistManifest();
-    }
+    commitMutation('lifecycle', nextRevision);
   };
 
   return {
