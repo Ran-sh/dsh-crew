@@ -143,7 +143,7 @@ function restoreConfigProjection(config, projection) {
   return next;
 }
 
-function safeRestoreFile(source, target, managedRoot = null) {
+function safeRestoreFile(source, target, managedRoot = null, verifiedContent = null) {
   if (managedRoot) {
     assertManagedPath(source, managedRoot);
     assertManagedPath(target, managedRoot);
@@ -154,7 +154,7 @@ function safeRestoreFile(source, target, managedRoot = null) {
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
-  atomicWrite(target, readFileSync(source), managedRoot);
+  atomicWrite(target, verifiedContent ?? readFileSync(source), managedRoot);
 }
 
 function assertManagedPath(file, managedRoot = null) {
@@ -495,14 +495,16 @@ export function createProviderDeleteFileHooks({
     atomicWrite(manifestFile, JSON.stringify(activeBackup.manifest, null, 2) + '\n', managedRoot);
   };
 
-  const assertBackupFileDigest = (key) => {
+  const readVerifiedBackup = (key) => {
     const entry = activeBackup?.manifest?.files?.[key];
-    if (!entry?.existed || !entry?.managed || key === 'config') return;
+    if (!entry?.existed || !entry?.managed || key === 'config') return null;
     const backupFile = join(activeBackup.root, key === 'settings' ? 'settings.backup' : `${key}.backup`);
     const digest = activeBackup.manifest.backup_digests?.[key];
     assertManagedPath(backupFile, managedRoot);
-    if (!/^[a-f0-9]{64}$/i.test(digest) || !fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink()
-      || sha256(fs.readFileSync(backupFile, 'utf8')) !== digest) throw backupInvalid();
+    if (!/^[a-f0-9]{64}$/i.test(digest) || !fs.existsSync(backupFile) || lstatSync(backupFile).isSymbolicLink()) throw backupInvalid();
+    const content = fs.readFileSync(backupFile);
+    if (sha256(content) !== digest) throw backupInvalid();
+    return content;
   };
 
   const prepareMutation = (key, nextRevision) => {
@@ -885,12 +887,12 @@ export function createProviderDeleteFileHooks({
         }
       } else if (key === 'lifecycle' && entry?.existed === true) {
         ensureMutationLock();
-        assertBackupFileDigest('lifecycle');
+        const verifiedLifecycle = readVerifiedBackup('lifecycle');
         const latestLifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
         if (!allowedRevision(sha256(JSON.stringify(latestLifecycle)), activeBackup.manifest.lifecycle_revision, activeBackup.manifest.applied_lifecycle_revision, 'lifecycle')) {
           throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
         }
-        const savedLifecycle = normalizeProviderLifecycleState(readJson(backupFile, {}));
+        const savedLifecycle = normalizeProviderLifecycleState(JSON.parse(verifiedLifecycle.toString('utf8')));
         const restoredLifecycle = { ...currentLifecycle, tombstones: { ...savedLifecycle.tombstones } };
         const restoredRevision = sha256(JSON.stringify(restoredLifecycle));
         prepareMutation('lifecycle', restoredRevision);
@@ -898,12 +900,12 @@ export function createProviderDeleteFileHooks({
         commitMutation('lifecycle', restoredRevision);
       } else if (entry?.existed === true) {
         ensureMutationLock();
-        assertBackupFileDigest(key);
+        const verifiedContent = readVerifiedBackup(key);
         const latest = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
         if (latest === null || !allowedRevision(sha256(latest), activeBackup.manifest[`${key}_revision`], activeBackup.manifest[`applied_${key}_revision`], key)) {
           throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
         }
-        safeRestoreFile(backupFile, target, managedRoot);
+        safeRestoreFile(backupFile, target, managedRoot, verifiedContent);
       } else {
         fs.rmSync(target, { force: true });
       }
@@ -915,12 +917,12 @@ export function createProviderDeleteFileHooks({
       const backupFile = join(activeBackup.root, 'settings.backup');
       assertManagedPath(backupFile, managedRoot);
       if (settingsEntry?.existed === true) {
-        assertBackupFileDigest('settings');
+        const verifiedSettings = readVerifiedBackup('settings');
         const latestSettings = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
         if (latestSettings === null || !allowedRevision(sha256(latestSettings), activeBackup.manifest.settings_revision, activeBackup.manifest.applied_settings_revision, 'settings')) {
           throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
         }
-        safeRestoreFile(backupFile, settingsFile, managedRoot);
+        safeRestoreFile(backupFile, settingsFile, managedRoot, verifiedSettings);
       }
       else fs.rmSync(settingsFile, { force: true });
     }
