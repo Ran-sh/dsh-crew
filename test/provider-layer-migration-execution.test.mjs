@@ -105,6 +105,7 @@ test('migration recovery scanner exposes only nonterminal, secret-free transacti
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
+      mutation_journal: {},
     };
     const withoutChecksum = JSON.stringify(manifest);
     manifest.checksum = createHash('sha256').update(withoutChecksum, 'utf8').digest('hex');
@@ -117,6 +118,7 @@ test('migration recovery scanner exposes only nonterminal, secret-free transacti
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
+      mutation_journal: {},
     };
     terminalManifest.checksum = createHash('sha256').update(JSON.stringify(terminalManifest), 'utf8').digest('hex');
     writeFileSync(join(root, 'tx-2', 'manifest.json'), JSON.stringify(terminalManifest), 'utf8');

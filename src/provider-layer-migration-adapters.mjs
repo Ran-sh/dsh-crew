@@ -130,6 +130,12 @@ function validMigrationManifest(root, manifest) {
   if (!manifest.plan || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action) || !safeMaterialization(manifest.plan.materialization?.provider)) return false;
   const expected = manifest.plan.expected_revisions;
   if (!expected || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
+  if (!manifest.mutation_journal || typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal)) return false;
+  if (Object.entries(manifest.mutation_journal).some(([key, entry]) => !['profile', 'settings'].includes(key)
+    || !entry || typeof entry !== 'object' || entry.phase !== 'WRITE_PENDING'
+    || !/^[a-f0-9]{64}$/u.test(entry.next_revision ?? '')
+    || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
+    || typeof entry.created !== 'boolean')) return false;
   if (manifest.files?.settings?.existed === false && manifest.phase !== 'PREPARED' && !validFileIdentity(manifest.created_settings_identity)) return false;
   if (typeof manifest.checksum !== 'string' || manifest.checksum !== manifestDigest(manifest)) return false;
   for (const key of ['profile', 'settings']) {
@@ -285,6 +291,7 @@ export function createProviderLayerMigrationFileHooks({
         settings: { existed: settings !== null, revision: revision(settings) },
       },
       applied_revisions: {},
+      mutation_journal: {},
       created_at: new Date().toISOString(),
     };
     active = { root, manifest };
@@ -299,10 +306,20 @@ export function createProviderLayerMigrationFileHooks({
   };
   const writeApplied = (key, file, content) => {
     ensureLock();
+    const nextRevision = revision(content);
+    const previousRevision = active.manifest.files[key]?.revision ?? null;
+    active.manifest.mutation_journal[key] = {
+      next_revision: nextRevision,
+      previous_revision: previousRevision,
+      created: active.manifest.files[key]?.existed === false,
+      phase: 'WRITE_PENDING',
+    };
+    persist();
     atomicReplace(file, content, managedRoot);
-    active.manifest.applied_revisions[key] = revision(content);
+    active.manifest.applied_revisions[key] = nextRevision;
     if (key === 'settings' && active.manifest.files.settings.existed === false) active.manifest.created_settings_identity = fileIdentity(file);
     active.manifest.phase = key === 'settings' ? 'USER_MATERIALIZED' : 'BASE_REMOVED';
+    delete active.manifest.mutation_journal[key];
     persist();
   };
 
@@ -336,13 +353,17 @@ export function createProviderLayerMigrationFileHooks({
       const snapshot = active.manifest.files[key];
       const current = readText(file);
       const currentRevision = revision(current);
-      const allowed = currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key];
+      const pending = active.manifest.mutation_journal?.[key];
+      const pendingApplied = currentRevision !== null && currentRevision === pending?.next_revision;
+      const allowed = currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key] || pendingApplied;
       if (!allowed) throw Object.assign(new Error('provider migration state changed during rollback'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
       if (key === 'profile') {
         if (!snapshot.existed) throw Object.assign(new Error('provider profile snapshot is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
-        const restored = addProviderDeclaration(current, { provider: active.manifest.plan.materialization?.provider, expectedRevision: currentRevision });
-        if (!restored.ok) throw Object.assign(new Error('provider migration profile restore failed'), { code: restored.code });
-        atomicReplace(file, restored.text, managedRoot);
+        if (currentRevision !== snapshot.revision) {
+          const restored = addProviderDeclaration(current, { provider: active.manifest.plan.materialization?.provider, expectedRevision: currentRevision });
+          if (!restored.ok) throw Object.assign(new Error('provider migration profile restore failed'), { code: restored.code });
+          atomicReplace(file, restored.text, managedRoot);
+        }
       } else if (active.manifest.plan.action === 'materialize-user') {
         if (snapshot.existed) {
           const restored = readProviderSettingsDeclarations(current ?? '', { file: 'harness/settings.yaml' });
@@ -355,7 +376,8 @@ export function createProviderLayerMigrationFileHooks({
           if (!removed.ok) throw Object.assign(new Error('provider migration settings restore failed'), { code: removed.code });
           atomicReplace(file, removed.text, managedRoot);
         } else if (current !== null) {
-          if (!sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
+          const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity);
+          if (!ownedByIdentity && !(pendingApplied && pending?.created === true)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
           rmSync(file, { force: true });
         }
       }

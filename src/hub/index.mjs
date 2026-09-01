@@ -2102,7 +2102,11 @@ export async function apply(ctx) {
                 backupDir: join(CONFIG_DIR, 'provider-backups'),
                 runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
                 afterLockAcquired: () => {
-                  if (readProviderRecoveryTransactions().length > 0) {
+                  const pendingRecovery = [
+                    ...readProviderRecoveryTransactions(),
+                    ...readProviderLayerMigrationTransactions(join(CONFIG_DIR, 'provider-migration-backups')),
+                  ];
+                  if (pendingRecovery.length > 0) {
                     throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
                   }
                   if (hub.hasProviderLease(providerId)) {
