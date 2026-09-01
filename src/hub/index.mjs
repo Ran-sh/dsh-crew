@@ -224,6 +224,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   } catch { declarationEvidence.ok = false; declarationEvidence.sources.profile = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
   const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
   let settingsDefault = null;
+  let defaultEvidence = { ok: true, source: 'none' };
   try {
     declarationEvidence.sources.settings = { present: existsSync(settingsFile) };
     if (existsSync(settingsFile)) {
@@ -233,12 +234,29 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       else { declarationEvidence.ok = false; declarationEvidence.sources.settings.code = parsed.code; }
       const parsedDefault = readHarnessDefault(source);
       if (parsedDefault.ok) settingsDefault = parsedDefault;
+      else defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' };
     }
-  } catch { declarationEvidence.ok = false; declarationEvidence.sources.settings = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
-  if (catalog.harness_default && settingsDefault
-    && settingsDefault.provider === catalog.harness_default.provider
-    && settingsDefault.model === catalog.harness_default.model) {
-    catalog = { ...catalog, harness_default_authority: { kind: 'harness-settings', locator: settingsDefault.locator } };
+  } catch {
+    declarationEvidence.ok = false;
+    declarationEvidence.sources.settings = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' };
+    defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' };
+  }
+  const liveDefault = catalog.harness_default && typeof catalog.harness_default.provider === 'string' && typeof catalog.harness_default.model === 'string'
+    ? { provider: catalog.harness_default.provider, model: catalog.harness_default.model } : null;
+  const persistedDefault = settingsDefault ? { provider: settingsDefault.provider, model: settingsDefault.model } : null;
+  if (liveDefault || persistedDefault) {
+    if (!liveDefault || !persistedDefault) defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' };
+    else if (liveDefault.provider !== persistedDefault.provider || liveDefault.model !== persistedDefault.model) defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' };
+  }
+  // The persisted agent-default-model is the mutation authority. Keep it in
+  // the inventory even when the live selection is stale; the evidence gate
+  // above prevents destructive operations until both sources agree.
+  if (persistedDefault) {
+    catalog = {
+      ...catalog,
+      harness_default: persistedDefault,
+      harness_default_authority: { kind: 'harness-settings', locator: settingsDefault.locator },
+    };
   }
   const lifecycleEvidence = readProviderLifecycleStateStatus();
   const lifecycle = lifecycleEvidence.state;
@@ -256,6 +274,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     ...inventory,
     catalog_evidence: catalogEvidence,
     declaration_evidence: declarationEvidence,
+    default_evidence: defaultEvidence,
     lifecycle_evidence: lifecycleEvidence.ok ? { ok: true } : { ok: false, code: lifecycleEvidence.code },
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
@@ -1458,6 +1477,7 @@ export async function apply(ctx) {
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
             if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
+            if (providerId !== 'deepseek-official' && inventory.default_evidence?.ok !== true) return sendJson(res, 409, { ok: false, code: inventory.default_evidence?.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
             const revisions = readProviderSourceRevisions();
             if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
             const expectedRevision = (revisions.profile.ok ? revisions.profile.revision : null) ?? revisions.settings.revision;
@@ -1525,6 +1545,7 @@ export async function apply(ctx) {
               const verification = await hooks.verify(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verification.catalog_evidence = live.catalog_evidence;
+              verification.default_evidence = live.default_evidence;
               verification.catalogAbsent = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && !live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
               verification.harnessDefault = plan.was_harness_default !== true || (
@@ -1532,7 +1553,7 @@ export async function apply(ctx) {
                 && live.harness_default?.model === plan.replacement_default_model
               );
               verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.delete_runtime_id_before_restart, getHubRuntimeIdentity().runtime_id);
-              if (verification?.providerAbsent !== true || !hasCompleteProviderCatalogEvidence(verification?.catalog_evidence) || verification?.catalogAbsent !== true || verification?.harnessDefault !== true || verification?.runtimeRestarted !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
+              if (verification?.providerAbsent !== true || !hasCompleteProviderCatalogEvidence(verification?.catalog_evidence) || verification?.default_evidence?.ok !== true || verification?.catalogAbsent !== true || verification?.harnessDefault !== true || verification?.runtimeRestarted !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
                 return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
               }
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
@@ -1589,6 +1610,7 @@ export async function apply(ctx) {
               const verified = await hooks.verifyRollback(plan);
               const live = await readProviderInventorySnapshot(hub, ctx, config);
               verified.catalog_evidence = live.catalog_evidence;
+              verified.default_evidence = live.default_evidence;
               verified.catalogPresent = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
                 && live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
               verified.harnessDefaultRestored = plan.was_harness_default !== true || (
@@ -1596,7 +1618,7 @@ export async function apply(ctx) {
                 && live.harness_default?.model === plan.harness_default_before?.model
               );
               verified.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before_restart, getHubRuntimeIdentity().runtime_id);
-              if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
+              if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.default_evidence?.ok !== true || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
@@ -1618,6 +1640,7 @@ export async function apply(ctx) {
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
             if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
+            if (providerId !== 'deepseek-official' && inventory.default_evidence?.ok !== true) return sendJson(res, 409, { ok: false, code: inventory.default_evidence?.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
             const storedExpected = stored.plan.expected_revisions;
             const revisionsMatch = storedExpected
               ? (storedExpected.profile === (revisions.profile.ok ? revisions.profile.revision : null)

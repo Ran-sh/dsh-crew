@@ -89,6 +89,7 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
   if (!record) return fail('PROVIDER_NOT_FOUND');
   if (record.delete_capability === 'immutable-builtin') return fail('PROVIDER_BUILTIN_IMMUTABLE');
   if (inventory?.catalog_evidence && inventory.catalog_evidence.ok !== true) return fail('PROVIDER_CATALOG_UNAVAILABLE');
+  if (inventory?.default_evidence && inventory.default_evidence.ok !== true) return fail(inventory.default_evidence.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE');
   if (record.delete_capability !== 'supported') return fail(text(record.delete_blocker) ?? 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
   if (!hasCanonicalAuthorities(record, id)) return fail('PROVIDER_DELETE_SOURCE_UNRESOLVED');
   if (record.desired_state === 'absent') return fail('PROVIDER_ALREADY_ABSENT');

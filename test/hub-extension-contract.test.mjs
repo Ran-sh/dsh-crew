@@ -32,6 +32,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /readProviderSourceRevisions/);
   assert.match(hubSource, /catalogAbsent/);
   assert.match(hubSource, /catalog_evidence/);
+  assert.match(hubSource, /default_evidence/);
+  assert.match(hubSource, /PROVIDER_DEFAULT_AUTHORITY_MISMATCH/);
   assert.match(hubSource, /catalogPresent/);
   assert.match(hubSource, /runtime_id_before/);
   assert.match(hubSource, /delete_runtime_id_before_restart/);

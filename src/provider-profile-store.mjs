@@ -113,7 +113,7 @@ function isInlineCredentialLine(line) {
   if (!value || /^(?:null|~|\{\}|\[\])$/u.test(value)) return false;
   const normalized = field.replace(/[_.-]/gu, '');
   if (SENSITIVE_CREDENTIAL_FIELD.test(field) && !REFERENCE_FIELD_SUFFIX.test(normalized)) return true;
-  return /(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key)\s*["']?\s*:/iu.test(value);
+  return /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)\s*["']?\s*:/iu.test(value);
 }
 
 export function hasInlineProviderCredentials(source, { providerIds = [] } = {}) {
