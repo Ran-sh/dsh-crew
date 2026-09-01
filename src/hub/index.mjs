@@ -130,16 +130,18 @@ function readProviderRecoveryTransactions() {
   const root = join(CONFIG_DIR, 'provider-backups');
   if (!existsSync(root)) return [];
   try {
-    return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(-64).flatMap((entry) => {
+    const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => {
       try {
         const manifest = JSON.parse(readFileSync(join(root, entry.name, 'manifest.json'), 'utf8'));
         const transactionId = typeof manifest?.plan?.plan_id === 'string' ? manifest.plan.plan_id : null;
         const providerId = typeof manifest?.provider_id === 'string' ? manifest.provider_id : null;
         const phase = typeof manifest?.phase_journal?.phase === 'string' ? manifest.phase_journal.phase : null;
-        if (!transactionId || !providerId || !phase || ['ROLLED_BACK', 'VERIFIED'].includes(phase)) return [];
-        return [{ transaction_id: transactionId, provider_id: providerId, phase }];
+        const updatedAt = typeof manifest?.phase_journal?.updated_at === 'string' ? manifest.phase_journal.updated_at : null;
+        if (!transactionId || !providerId || !phase || !updatedAt || ['ROLLED_BACK', 'VERIFIED'].includes(phase)) return [];
+        return [{ transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt }];
       } catch { return []; }
     });
+    return transactions.sort((a, b) => a.updated_at.localeCompare(b.updated_at)).slice(-64);
   } catch { return []; }
 }
 
@@ -235,12 +237,14 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   }
   const lifecycleEvidence = readProviderLifecycleStateStatus();
   const lifecycle = lifecycleEvidence.state;
+  const recoveryTransactions = readProviderRecoveryTransactions();
   const credentialPurge = readCredentialPurgeState();
   const inventory = buildProviderInventory({
     catalog,
     declarations,
     policy: providerInventoryPolicy(config),
     tombstones: lifecycle.tombstones,
+    additionalProviderIds: [...Object.keys(lifecycle.tombstones ?? {}), ...recoveryTransactions.map((entry) => entry.provider_id)],
     activeJobs: hub.list(),
   });
   return {
@@ -260,9 +264,10 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       transaction_id: transactionId,
       provider_id: transaction.provider_id,
       state: transaction.state,
+      ...(transaction.updated_at ? { updated_at: transaction.updated_at } : {}),
       ...(transaction.expected_revision ? { expected_revision: transaction.expected_revision } : {}),
     })),
-    recovery_transactions: readProviderRecoveryTransactions(),
+    recovery_transactions: recoveryTransactions,
   };
 }
 

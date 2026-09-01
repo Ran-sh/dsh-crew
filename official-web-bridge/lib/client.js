@@ -2024,7 +2024,19 @@ function WorkersPanel({ ctx }) {
 	};
 	const rollbackHarnessProvider = async (record, transactionId, transactionState = "VERIFIED") => {
 		const continuing = ["ROLLBACK_PENDING", "ROLLBACK_RESTART_PENDING"].includes(transactionState);
-		if (!record || !transactionId || !continuing && record.desired_state !== "absent") {
+		const recoverable = [
+			"PLANNED",
+			"TOMBSTONE_APPLYING",
+			"TOMBSTONE_APPLIED",
+			"REFERENCES_APPLYING",
+			"REFERENCES_APPLIED",
+			"DECLARATIONS_APPLYING",
+			"DECLARATIONS_APPLIED",
+			"DELETE_RESTART_PENDING",
+			"ROLLBACK_APPLYING",
+			"ROLLBACK_RESTORED"
+		].includes(transactionState);
+		if (!record || !transactionId || !continuing && !recoverable && record.desired_state !== "absent") {
 			setNotice(copy.providerRollbackUnavailable);
 			return;
 		}
@@ -3620,11 +3632,18 @@ function WorkersPanel({ ctx }) {
 								"VERIFIED",
 								"RESTART_PENDING",
 								"ROLLBACK_PENDING",
+								"PLANNED",
+								"TOMBSTONE_APPLYING",
+								"TOMBSTONE_APPLIED",
+								"REFERENCES_APPLYING",
+								"REFERENCES_APPLIED",
+								"DECLARATIONS_APPLYING",
+								"DECLARATIONS_APPLIED",
 								"DELETE_RESTART_PENDING",
 								"ROLLBACK_RESTART_PENDING",
 								"ROLLBACK_RESTORED",
 								"ROLLBACK_APPLYING"
-							].includes(entry.state)).at(-1);
+							].includes(entry.state)).sort((a, b) => String(a.updated_at ?? "").localeCompare(String(b.updated_at ?? ""))).at(-1);
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
 									display: "flex",
@@ -3679,6 +3698,14 @@ function WorkersPanel({ ctx }) {
 										children: providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan
 									}),
 									(record.desired_state === "absent" || [
+										"PLANNED",
+										"TOMBSTONE_APPLYING",
+										"TOMBSTONE_APPLIED",
+										"REFERENCES_APPLYING",
+										"REFERENCES_APPLIED",
+										"DECLARATIONS_APPLYING",
+										"DECLARATIONS_APPLIED",
+										"DELETE_RESTART_PENDING",
 										"ROLLBACK_PENDING",
 										"ROLLBACK_RESTART_PENDING",
 										"ROLLBACK_RESTORED",

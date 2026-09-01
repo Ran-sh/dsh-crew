@@ -87,12 +87,12 @@ function modelIds(provider) {
  * Build a secret-free provider inventory from live Harness and Crew-owned
  * observations. No credential value is accepted or copied into the result.
  */
-export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], multimodalRefs = {} } = {}) {
+export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], multimodalRefs = {}, additionalProviderIds = [] } = {}) {
   const catalogProviders = Array.isArray(catalog?.providers) ? catalog.providers : [];
   const safeDeclarations = Array.isArray(declarations) ? declarations : [];
   const ids = [];
   const seen = new Set();
-  for (const source of [catalogProviders, safeDeclarations]) {
+  for (const source of [catalogProviders, safeDeclarations, Array.isArray(additionalProviderIds) ? additionalProviderIds.map((id) => ({ id })) : []]) {
     for (const entry of source) {
       const id = normalizeProviderId(entry?.id);
       if (!id || seen.has(id)) continue;

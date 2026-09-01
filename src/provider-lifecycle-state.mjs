@@ -17,6 +17,10 @@ function validRevision(value) {
   return typeof value === 'string' && REVISION_PATTERN.test(value);
 }
 
+function validTimestamp(value) {
+  return typeof value === 'string' && value.length >= 16 && value.length <= 64;
+}
+
 function normalizedCredentialRefs(value) {
   if (!Array.isArray(value)) return undefined;
   const refs = value.map((ref) => {
@@ -40,6 +44,7 @@ function normalizedTransaction(value) {
   return {
     provider_id: value.provider_id,
     state: value.state,
+    ...(validTimestamp(value.updated_at) ? { updated_at: value.updated_at } : {}),
     ...(validRevision(value.expected_revision) ? { expected_revision: value.expected_revision } : {}),
     ...(refs === undefined ? {} : { credential_refs: refs }),
   };
