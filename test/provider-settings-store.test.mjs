@@ -35,6 +35,15 @@ test('settings declarations are user-layer provenance, not Crew profile ownershi
   }
 });
 
+test('settings credential values are redacted while presence remains visible', () => {
+  const source = SETTINGS.replace('apiKeyEnv: OPENCODE_GO_API_KEY', 'apiKeyEnv: sk-live-secret');
+  const result = readProviderSettingsDeclarations(source);
+  const declaration = result.declarations.find((entry) => entry.id === 'opencode-go');
+  assert.equal(declaration.credential_ref, undefined);
+  assert.equal(declaration.credential_status, 'present-redacted');
+  assert.equal(JSON.stringify(result).includes('sk-live-secret'), false);
+});
+
 test('Harness settings removal is revision checked and preserves unrelated sections', () => {
   const inspected = inspectProviderSettings(SETTINGS);
   const removed = removeProviderSettings(SETTINGS, { providerIds: ['opencode-go'], expectedRevision: inspected.revision });

@@ -3,6 +3,7 @@
 // credential values are never deserialized or returned.
 
 import { createHash } from 'node:crypto';
+import { classifyCredentialReference } from './credential-reference.mjs';
 
 const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
@@ -114,7 +115,8 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
   return {
     ok: true,
     declarations: parsed.entries.map((entry) => {
-      const credentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+      const rawCredentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+      const credential = classifyCredentialReference(rawCredentialRef, { kind: 'env' });
       return {
         id: entry.id,
         display_name: scalarField(parsed.lines, entry, 'displayName') ?? entry.id,
@@ -124,7 +126,8 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
         ownership: 'dynamic-user',
         file,
         declaration_authority: { kind: 'harness-settings', locator: `llm-pi-ai.providers.${entry.id}` },
-        ...(credentialRef ? { credential_ref: { kind: 'env', name_or_handle: credentialRef, ownership: 'unknown' } } : {}),
+        ...(credential.value ? { credential_ref: { kind: 'env', name_or_handle: credential.value, ownership: 'unknown' } } : {}),
+        ...(credential.redacted ? { credential_status: 'present-redacted' } : {}),
       };
     }),
   };

@@ -250,6 +250,14 @@ export function hasProviderRuntimeRestartEvidence(beforeRuntimeId, currentRuntim
     && beforeRuntimeId !== currentRuntimeId;
 }
 
+/** Preserve profile/settings provenance when preparing the migration planner. */
+export function buildProviderMigrationDeclarations(profileDeclarations = [], settingsDeclarations = []) {
+  return [
+    ...(Array.isArray(profileDeclarations) ? profileDeclarations : []),
+    ...(Array.isArray(settingsDeclarations) ? settingsDeclarations : []),
+  ];
+}
+
 async function readProviderInventorySnapshot(hub, ctx, config) {
   let catalog = { providers: [], harness_default: null };
   let catalogEvidence = { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' };
@@ -268,13 +276,18 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   } catch {}
   const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
   let declarations = [];
+  let profileDeclarations = [];
+  let settingsDeclarations = [];
   const declarationEvidence = { ok: true, sources: {} };
   try {
     declarationEvidence.sources.profile = { present: existsSync(profileFile) };
     if (existsSync(profileFile)) {
       const source = readFileSync(profileFile, 'utf8');
       const parsed = readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
-      if (parsed.ok) declarations = parsed.declarations;
+      if (parsed.ok) {
+        profileDeclarations = parsed.declarations;
+        declarations = profileDeclarations;
+      }
       else { declarationEvidence.ok = false; declarationEvidence.sources.profile.code = parsed.code; }
     }
   } catch { declarationEvidence.ok = false; declarationEvidence.sources.profile = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
@@ -286,7 +299,10 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     if (existsSync(settingsFile)) {
       const source = readFileSync(settingsFile, 'utf8');
       const parsed = readProviderSettingsDeclarations(source, { file: 'harness/settings.yaml' });
-      if (parsed.ok) declarations = [...declarations, ...parsed.declarations];
+      if (parsed.ok) {
+        settingsDeclarations = parsed.declarations;
+        declarations = [...declarations, ...settingsDeclarations];
+      }
       else { declarationEvidence.ok = false; declarationEvidence.sources.settings.code = parsed.code; }
       const parsedDefault = readHarnessDefault(source);
       if (parsedDefault.ok) settingsDefault = parsedDefault;
@@ -329,12 +345,10 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     ],
     activeJobs: hub.list(),
   });
-  const migrationDeclarations = inventory.records.flatMap((record) => (record.declaration_authorities ?? []).map((authority) => ({
-    id: record.id,
-    display_name: record.display_name,
-    credential_ref: record.credential_refs?.[0]?.name_or_handle ?? null,
-    declaration_authority: authority,
-  })));
+  // Keep each authoritative source's credential reference with its own
+  // declaration. Reconstructing from the merged inventory would silently
+  // attach the first key to every layer when profile/settings differ.
+  const migrationDeclarations = buildProviderMigrationDeclarations(profileDeclarations, settingsDeclarations);
   const routingReferences = [
     ...(config.flash_model_priority ?? []), ...(config.pro_model_priority ?? []),
     ...(config.worker?.model_policy?.priority ?? []), ...(config.worker?.model_policy?.escalation_priority ?? []),
@@ -345,6 +359,8 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     catalogProviders: catalog.providers,
     harnessDefault: catalog.harness_default,
     routingReferences,
+    tombstones: lifecycle.tombstones,
+    recoveryTransactions,
   });
   return {
     ...inventory,

@@ -155,3 +155,19 @@ test('listProviders failure is a safe MODEL_CATALOG_UNAVAILABLE error', async ()
 test('missing Harness llm service fails safely', async () => {
   await assert.rejects(readHarnessModelCatalog({}), (error) => error.code === 'MODEL_CATALOG_UNAVAILABLE');
 });
+
+test('provider ownership metadata is preserved only as bounded booleans', async () => {
+  const result = await readHarnessModelCatalog({
+    llm: fakeLlm([
+      { id: 'native', name: 'Native', adapter_owned: true, secret: 'drop-me' },
+      { id: 'user', name: 'User', adapterOwned: false },
+      { id: 'ignored', name: 'Ignored', adapter_owned: 'yes' },
+    ], {}),
+  });
+  assert.deepEqual(result.providers.map(({ id, adapter_owned }) => ({ id, adapter_owned })), [
+    { id: 'native', adapter_owned: true },
+    { id: 'user', adapter_owned: false },
+    { id: 'ignored', adapter_owned: undefined },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /drop-me|secret/i);
+});

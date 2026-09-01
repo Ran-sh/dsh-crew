@@ -205,3 +205,12 @@ test('credential refs preserve kind identity and downgrade ownership conflicts',
     { kind: 'crew-store', name_or_handle: 'SAME', ownership: 'crew' },
   ]);
 });
+
+test('provider inventory redacts suspicious credential references', () => {
+  const result = buildProviderInventory({ declarations: [{
+    id: 'leaky', credential_ref: 'sk-live-secret', declaration_authority: { kind: 'crew-profile', locator: 'providers.leaky' },
+  }] });
+  assert.deepEqual(result.records[0].credential_refs, []);
+  assert.equal(result.records[0].credential_status, 'present-redacted');
+  assert.equal(JSON.stringify(result).includes('sk-live-secret'), false);
+});

@@ -5,6 +5,7 @@
 // bounded, revision-checked text edits while preserving unrelated patch items.
 
 import { createHash } from 'node:crypto';
+import { classifyCredentialReference } from './credential-reference.mjs';
 
 const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -132,7 +133,8 @@ export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) 
   if (!parsed.ok) return { ok: false, code: parsed.code };
   const declarations = parsed.entries.map((entry) => {
     const displayName = scalarField(parsed.lines, entry, 'displayName');
-    const credentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+    const rawCredentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+    const credential = classifyCredentialReference(rawCredentialRef, { kind: 'env' });
     return {
       id: entry.id,
       display_name: displayName ?? entry.id,
@@ -140,7 +142,8 @@ export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) 
       ownership: 'crew-managed-profile',
       file,
       declaration_authority: { kind: 'crew-profile', locator: `llm-pi-ai.config.providers.${entry.id}` },
-      ...(credentialRef ? { credential_ref: credentialRef } : {}),
+      ...(credential.value ? { credential_ref: credential.value } : {}),
+      ...(credential.redacted ? { credential_status: 'present-redacted' } : {}),
     };
   });
   return { ok: true, declarations };

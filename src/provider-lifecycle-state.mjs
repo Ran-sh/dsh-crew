@@ -2,6 +2,8 @@
 // Tombstones prevent an explicitly removed managed route from being re-seeded;
 // transactions retain only bounded audit metadata needed for recovery.
 
+import { classifyCredentialReference } from './credential-reference.mjs';
+
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REVISION_PATTERN = /^[a-f0-9]{64}$/;
 const STATES = new Set([
@@ -28,7 +30,8 @@ function normalizedCredentialRefs(value) {
     const kind = typeof ref.kind === 'string' && ref.kind.trim() ? ref.kind.trim() : null;
     const name = typeof ref.name_or_handle === 'string' && ref.name_or_handle.trim() ? ref.name_or_handle.trim() : null;
     const ownership = typeof ref.ownership === 'string' && ref.ownership.trim() ? ref.ownership.trim() : null;
-    return kind && name && ownership ? { kind, name_or_handle: name, ownership } : null;
+    const safeName = classifyCredentialReference(name, { kind }).value;
+    return kind && safeName && ownership ? { kind, name_or_handle: safeName, ownership } : null;
   }).filter(Boolean).slice(0, 32);
   return refs;
 }

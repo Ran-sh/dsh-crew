@@ -20,7 +20,14 @@ function catalogError() {
 function normalizeProvider(raw) {
   if (!raw || typeof raw.id !== 'string' || raw.id.trim() === '') return null;
   const id = raw.id.trim();
-  return { id, name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : id };
+  const adapterOwned = typeof raw.adapter_owned === 'boolean'
+    ? raw.adapter_owned
+    : typeof raw.adapterOwned === 'boolean' ? raw.adapterOwned : undefined;
+  return {
+    id,
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : id,
+    ...(adapterOwned === undefined ? {} : { adapter_owned: adapterOwned }),
+  };
 }
 
 function normalizeModels(raw, provider) {

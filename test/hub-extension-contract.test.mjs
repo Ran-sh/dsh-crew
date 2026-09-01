@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
+import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -125,6 +125,14 @@ test('provider deletion is blocked while a recovery transaction is pending', () 
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: false }] }), true);
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [] }), false);
   assert.equal(hasPendingProviderRecoveryTransactions({}), false);
+});
+
+test('hub migration input preserves credentials per authoritative layer', () => {
+  const declarations = buildProviderMigrationDeclarations(
+    [{ id: 'dual', credential_ref: 'PROFILE_KEY', declaration_authority: { kind: 'crew-profile' } }],
+    [{ id: 'dual', credential_ref: 'SETTINGS_KEY', declaration_authority: { kind: 'harness-settings' } }],
+  );
+  assert.deepEqual(declarations.map((entry) => entry.credential_ref), ['PROFILE_KEY', 'SETTINGS_KEY']);
 });
 
 test('provider recovery keeps manifests without phase timestamps visible using file mtime', () => {

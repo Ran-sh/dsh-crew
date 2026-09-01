@@ -4,6 +4,8 @@
 // and (where explicitly marked) profile provenance. This module only joins
 // those observations into a bounded record set for lifecycle/readiness UIs.
 
+import { classifyCredentialReference } from './credential-reference.mjs';
+
 const LIFECYCLE_ORIGINS = new Set(['builtin', 'profile-managed', 'dynamic', 'unknown']);
 const OWNERSHIPS = new Set(['harness', 'crew-managed-profile', 'user-managed-profile', 'dynamic-user', 'unknown']);
 const MUTABLE_AUTHORITY_KINDS = new Set(['crew-profile', 'harness-settings']);
@@ -21,12 +23,15 @@ function normalizeCredentialRefs(declarations) {
   const entries = Array.isArray(declarations) ? declarations : [declarations];
   const seen = new Map();
   const refs = [];
+  let redacted = false;
   for (const declaration of entries) {
     const raw = declaration?.credential_refs ?? declaration?.credential_ref;
     const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
     for (const candidate of values) {
-      const name = text(typeof candidate === 'object' ? candidate.name_or_handle ?? candidate.name : candidate);
       const kind = text(typeof candidate === 'object' ? candidate.kind : null) ?? 'env';
+      const classified = classifyCredentialReference(candidate, { kind });
+      if (classified.redacted) redacted = true;
+      const name = classified.value;
       const ownership = text(typeof candidate === 'object' ? candidate.ownership : null) ?? 'crew';
       const normalized = {
         kind: ['env', 'crew-store', 'harness-store', 'unknown'].includes(kind) ? kind : 'unknown',
@@ -44,7 +49,7 @@ function normalizeCredentialRefs(declarations) {
       }
     }
   }
-  return refs;
+  return { refs, redacted };
 }
 
 function findPriorityIndex(policy, key, providerId) {
@@ -131,6 +136,7 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     const deleteBlocker = immutable ? 'PROVIDER_BUILTIN_IMMUTABLE' : deleteCapability === 'supported' ? null : 'PROVIDER_DELETE_SOURCE_UNRESOLVED';
     const origin = normalizeOrigin(declaration?.origin ?? (immutable ? 'builtin' : declared ? 'profile-managed' : 'unknown'));
     const ownership = normalizeOwnership(declaration?.ownership ?? (immutable ? 'harness' : declared ? 'crew-managed-profile' : 'unknown'));
+    const credentialProjection = normalizeCredentialRefs(providerDeclarations);
     return {
       id,
       display_name: text(declaration?.display_name) ?? text(declaration?.name) ?? text(catalogEntry?.name) ?? id,
@@ -157,7 +163,8 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         enabled: !tombstoned && declaration?.enabled !== false,
         catalogued,
       },
-      credential_refs: normalizeCredentialRefs(providerDeclarations),
+      credential_refs: credentialProjection.refs,
+      ...(credentialProjection.redacted ? { credential_status: 'present-redacted' } : {}),
       references: {
         harness_default: harnessDefault === id,
         ...(harnessDefault === id && normalizeAuthority(catalog?.harness_default_authority) ? { harness_default_authority: normalizeAuthority(catalog.harness_default_authority) } : {}),
