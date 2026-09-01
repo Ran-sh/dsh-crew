@@ -345,6 +345,16 @@ test('offline recovery clears a stale reclaim guard only when no live owner rema
   assert.equal(blocked.ok, false);
   assert.equal(blocked.code, 'PROVIDER_DELETE_BUSY');
   rmSync(guardPath, { force: true });
+
+  writeFileSync(join(backupDir, '.delete.recovery.lock'), '{"token":"partial"');
+  writeFileSync(guardPath, '{}');
+  mkdirSync(join(backupDir, '.delete.lock'));
+  writeFileSync(join(backupDir, '.delete.lock', 'owner.json'), JSON.stringify({ token: 'malformed-owner' }));
+  const malformedRecovered = await hooks.recoverLock();
+  assert.equal(malformedRecovered.ok, true);
+  assert.equal(existsSync(guardPath), false);
+  assert.equal(existsSync(join(backupDir, '.delete.recovery.lock')), false);
+  assert.equal(existsSync(join(backupDir, '.delete.lock')), false);
 });
 
 test('provider verification fails closed when a managed profile is malformed', async () => {
@@ -552,6 +562,22 @@ test('reopening a backup fails closed when a backed-up file digest is tampered',
   await first.backup(plan);
   await first.release();
   writeFileSync(join(backupDir, plan.plan_id, 'profile.backup'), `${PROFILE}tampered`);
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
+test('reopening a backup fails closed when its config projection digest is tampered', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  manifest.config_projection.fields = { tampered: 'must-not-restore' };
+  writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
   assert.throws(() => createProviderDeleteFileHooks({
     ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
   }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
