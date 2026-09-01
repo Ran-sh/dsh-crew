@@ -96,6 +96,8 @@ test('credential lifecycle UI keeps purge separate from provider deletion', () =
   assert.match(panelSource, /credential-references\/\$\{encoded\}\/purge-plan/);
   assert.match(panelSource, /method: 'DELETE'/);
   assert.match(panelSource, /purge_capability === 'eligible'/);
+  assert.match(panelSource, /credentialUnverified/);
+  assert.match(panelSource, /credentialPurgeUnverified/);
 });
 
 test('role-first routing UI exposes ordering, health gates, and reviewer gate', () => {

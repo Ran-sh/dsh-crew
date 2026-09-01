@@ -110,7 +110,7 @@ const COPY = {
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
-    credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用',
+    credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
     customProviders: '自定义 Provider', addProvider: '＋ 添加 Provider',
     noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
     providerName: '名称', modelsField: '模型列表（逗号分隔）',
@@ -249,7 +249,7 @@ const COPY = {
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
-    credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable',
+    credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
     customProviders: 'Custom providers', addProvider: '＋ Add provider',
     noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
     providerName: 'Name', modelsField: 'Models (comma-separated)',
@@ -531,6 +531,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [providerInventory, setProviderInventory] = useState<any>(null);
   const [providerHealth, setProviderHealth] = useState<any[]>([]);
   const [credentialRefs, setCredentialRefs] = useState<any[]>([]);
+  const [credentialUnverified, setCredentialUnverified] = useState<any[]>([]);
   const [credentialLifecycleBusy, setCredentialLifecycleBusy] = useState<string | null>(null);
   const [providerInventoryError, setProviderInventoryError] = useState('');
   const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
@@ -629,7 +630,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       ]);
       if (pi?.ok) setProviderInventory(pi);
       if (ph?.ok) setProviderHealth(ph.health ?? []);
-      if (cr?.ok) setCredentialRefs(cr.records ?? []);
+      if (cr?.ok) { setCredentialRefs(cr.records ?? []); setCredentialUnverified(cr.unverified_purges ?? []); }
       if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
     } catch { /* instance restarting */ }
   }, [get]);
@@ -667,7 +668,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (!result.ok) throw new Error(result.error ?? copy.providerNoInventory);
       setProviderInventory(result);
       if (health?.ok) setProviderHealth(health.health ?? []);
-      if (refs?.ok) setCredentialRefs(refs.records ?? []);
+      if (refs?.ok) { setCredentialRefs(refs.records ?? []); setCredentialUnverified(refs.unverified_purges ?? []); }
     } catch (error: any) {
       setProviderInventoryError(error?.message ?? copy.providerNoInventory);
     }
@@ -1475,10 +1476,15 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               </div>
             );
           })}
-          {credentialRefs.length > 0 && (
+          {(credentialRefs.length > 0 || credentialUnverified.length > 0) && (
             <div style={{ marginTop: 10, borderTop: '1px solid rgba(128,128,128,0.16)', paddingTop: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 12.5 }}>{copy.credentialReferences}</div>
               <div style={{ fontSize: 11, opacity: 0.6, margin: '3px 0 7px' }}>{copy.credentialReferenceHint}</div>
+              {credentialUnverified.map((entry: any) => (
+                <div key={`unverified:${entry.reference_id}`} style={{ color: '#c55', fontSize: 11.5 }}>
+                  <span style={S.mono}>{entry.reference_id}</span> · {copy.credentialPurgeUnverified}
+                </div>
+              ))}
               {credentialRefs.map((ref: any) => (
                 <div key={ref.reference_id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, flexWrap: 'wrap' as const }}>
                   <span style={S.mono}>{ref.reference_id}</span>

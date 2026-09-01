@@ -42,7 +42,7 @@ import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
 import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
 import { createCredentialPurgeFileHooks } from '../credential-purge-adapters.mjs';
-import { markCredentialPurged, normalizeCredentialPurgeState } from '../credential-purge-state.mjs';
+import { normalizeCredentialPurgeState, recordCredentialPurgeOutcome } from '../credential-purge-state.mjs';
 import { buildRuntimeReadinessSnapshot } from '../runtime-readiness-snapshot.mjs';
 
 // policy.mjs is pure (no @deepseek-ai imports, no ctx access), so importing it
@@ -175,6 +175,11 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
     credential_purged_refs: Object.keys(credentialPurge.purged),
+    credential_purge_unverified: Object.entries(credentialPurge.unverified).map(([referenceId, record]) => ({
+      reference_id: referenceId,
+      transaction_id: record.transaction_id,
+      state: record.state,
+    })),
     lifecycle_transactions: Object.entries(lifecycle.transactions ?? {}).slice(-64).map(([transactionId, transaction]) => ({
       transaction_id: transactionId,
       provider_id: transaction.provider_id,
@@ -1273,7 +1278,7 @@ export async function apply(ctx) {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const snapshot = await readProviderInventorySnapshot(hub, ctx, config);
           const credentials = buildCredentialReferenceInventory({ providers: snapshot.records, additional_refs: snapshot.credential_history_refs, purged_refs: snapshot.credential_purged_refs });
-          return sendJson(res, 200, { ok: true, ...credentials, runtime: getHubRuntimeIdentity() });
+          return sendJson(res, 200, { ok: true, ...credentials, unverified_purges: snapshot.credential_purge_unverified, runtime: getHubRuntimeIdentity() });
         } catch {
           return sendJson(res, 503, { ok: false, code: 'CREDENTIAL_REFERENCE_INVENTORY_UNAVAILABLE' });
         }
@@ -1333,7 +1338,7 @@ export async function apply(ctx) {
             });
             if (result.state === 'PURGED' || result.state === 'VERIFIED') {
               try {
-                writeCredentialPurgeState(markCredentialPurged(readCredentialPurgeState(), current.plan));
+                writeCredentialPurgeState(recordCredentialPurgeOutcome(readCredentialPurgeState(), current.plan, result));
               } catch {
                 return sendJson(res, 503, { ok: false, code: 'CREDENTIAL_PURGE_AUDIT_FAILED', state: result.state, reference_id: referenceId });
               }
