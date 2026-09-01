@@ -124,9 +124,12 @@ function safeModelRefList(value) {
 }
 
 function configProjection(config) {
-  const projection = { schema_version: 1, fields: {} };
+  const projection = { schema_version: 1, fields: {}, present_fields: [] };
   for (const key of ['flash_model_priority', 'pro_model_priority', 'harness_default', 'agent_default_model', 'agentDefaultModel']) {
-    if (hasOwn(config, key)) projection.fields[key] = key.endsWith('_priority') ? safeModelRefList(config[key]) : safeModelRef(config[key]);
+    if (hasOwn(config, key)) {
+      projection.present_fields.push(key);
+      projection.fields[key] = key.endsWith('_priority') ? safeModelRefList(config[key]) : safeModelRef(config[key]);
+    }
   }
   for (const [scope, value] of [['worker', config?.worker?.model_policy], ['review', config?.review?.model_policy]]) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
@@ -145,6 +148,7 @@ function restoreConfigProjection(config, projection) {
   const next = typeof structuredClone === 'function' ? structuredClone(config) : JSON.parse(JSON.stringify(config));
   for (const key of ['flash_model_priority', 'pro_model_priority', 'harness_default', 'agent_default_model', 'agentDefaultModel']) {
     if (hasOwn(projection?.fields, key)) next[key] = projection.fields[key];
+    else if (Array.isArray(projection?.present_fields) && !projection.present_fields.includes(key)) delete next[key];
   }
   for (const scope of ['worker', 'review']) {
     const saved = projection?.fields?.[scope]?.model_policy;
@@ -290,6 +294,7 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     if (entry.managed !== expectedManaged || (!entry.existed && manifest.backup_digests[key] !== undefined)) throw backupInvalid();
     if (key === 'config' && (!manifest.config_projection || typeof manifest.config_projection !== 'object'
       || Array.isArray(manifest.config_projection) || typeof manifest.config_revision !== 'string'
+      || !Array.isArray(manifest.config_projection.present_fields)
       || !/^[a-f0-9]{64}$/i.test(manifest.config_revision)
       || typeof manifest.routing_projection_digest !== 'string'
       || !/^[a-f0-9]{64}$/i.test(manifest.routing_projection_digest)
