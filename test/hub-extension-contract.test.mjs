@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,6 +46,7 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /PROVIDER_LIFECYCLE_UNAVAILABLE/);
   assert.match(hubSource, /recovery_transactions/);
   assert.match(hubSource, /readProviderRecoveryTransactions/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_PENDING/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -110,6 +111,13 @@ test('provider lifecycle does not treat corrupted lifecycle state as available e
   assert.equal(hasAvailableProviderLifecycleEvidence({ ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' }), false);
 });
 
+test('provider deletion is blocked while a recovery transaction is pending', () => {
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: true }] }), true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: false }] }), false);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [] }), false);
+  assert.equal(hasPendingProviderRecoveryTransactions({}), false);
+});
+
 test('provider recovery keeps manifests without phase timestamps visible using file mtime', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-'));
   const id = '11111111-1111-4111-8111-111111111111';
@@ -126,6 +134,7 @@ test('provider recovery keeps manifests without phase timestamps visible using f
   assert.equal(transactions.length, 1);
   assert.equal(transactions[0].provider_id, 'opencode-go');
   assert.equal(transactions[0].phase, 'DECLARATIONS_APPLYING');
+  assert.equal(transactions[0].recoverable, false);
   assert.equal(typeof transactions[0].updated_at, 'string');
 });
 

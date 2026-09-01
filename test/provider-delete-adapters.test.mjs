@@ -715,6 +715,30 @@ test('transaction-owned absent files are created exclusively and removed on roll
   assert.equal(existsSync(paths.configFile), false);
 });
 
+test('an absent lifecycle file remains auditable after the transaction creates it', async () => {
+  const paths = fixture();
+  rmSync(paths.lifecycleFile);
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(result.audit_recorded, true);
+  const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
+  assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
+
+  const reopened = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    existingBackupId: plan.plan_id,
+    expectedProviderId: plan.provider_id,
+  });
+  await reopened.acquireLock();
+  await reopened.rollback(reopened.backupPlan());
+  await reopened.release();
+  assert.equal(existsSync(paths.lifecycleFile), false);
+});
+
 test('rollback preserves an external same-content replacement of a transaction-created file', async () => {
   const paths = fixture();
   rmSync(paths.configFile);
@@ -764,6 +788,18 @@ test('owner metadata write failure cleans up the half-created lock', async () =>
   const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, fs: ownerWriteFs });
   await assert.rejects(() => hooks.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
   assert.equal(existsSync(join(backupDir, '.delete.lock')), false);
+});
+
+test('malformed owner metadata fails closed instead of being reclaimed automatically', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const lockPath = join(backupDir, '.delete.lock');
+  mkdirSync(lockPath, { recursive: true });
+  writeFileSync(join(lockPath, 'owner.json'), '{ malformed');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  await assert.rejects(() => hooks.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_BUSY');
+  assert.equal(existsSync(lockPath), true);
+  rmSync(lockPath, { recursive: true, force: true });
 });
 
 test('persisted provider delete backup retains sanitized credential references for final audit', async () => {

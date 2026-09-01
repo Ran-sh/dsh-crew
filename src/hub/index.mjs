@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { dirname, join, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
 import {
@@ -39,7 +39,7 @@ import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclar
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
-import { createProviderDeleteFileHooks } from '../provider-delete-adapters.mjs';
+import { createProviderDeleteFileHooks, isRecoverableProviderDeleteBackup } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
 import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
 import { createCredentialPurgeFileHooks } from '../credential-purge-adapters.mjs';
@@ -129,7 +129,15 @@ function readCredentialPurgeState() {
 export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provider-backups')) {
   if (!existsSync(root)) return [];
   try {
+    const managedRoot = dirname(resolvePath(root));
+    const paths = {
+      profile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+      settings: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+      config: join(CONFIG_DIR, 'config.json'),
+      lifecycle: join(CONFIG_DIR, 'provider-lifecycle.json'),
+    };
     const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => {
+      const transactionRoot = join(root, entry.name);
       const manifestFile = join(root, entry.name, 'manifest.json');
       try {
         const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
@@ -143,7 +151,13 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
         const hasPendingMutation = manifest?.mutation_journal && typeof manifest.mutation_journal === 'object'
           && Object.keys(manifest.mutation_journal).length > 0;
         if (['ROLLED_BACK', 'VERIFIED'].includes(phase) && !hasPendingMutation) return [];
-        return [{ transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt }];
+        const recoverable = isRecoverableProviderDeleteBackup(manifest, {
+          root: transactionRoot,
+          managedRoot,
+          paths,
+          expectedProviderId: providerId,
+        });
+        return [{ transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt, recoverable }];
       } catch { return []; }
     });
     return transactions.sort((a, b) => a.updated_at.localeCompare(b.updated_at)).slice(-64);
@@ -186,6 +200,11 @@ export function hasCompleteProviderDeclarationEvidence(evidence) {
 
 export function hasAvailableProviderLifecycleEvidence(evidence) {
   return evidence?.ok === true;
+}
+
+export function hasPendingProviderRecoveryTransactions(inventory) {
+  return Array.isArray(inventory?.recovery_transactions)
+    && inventory.recovery_transactions.some((entry) => entry?.recoverable === true);
 }
 
 export function hasProviderRuntimeRestartEvidence(beforeRuntimeId, currentRuntimeId) {
@@ -1486,6 +1505,7 @@ export async function apply(ctx) {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
+            if (providerId !== 'deepseek-official' && hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(inventory.catalog_evidence)) return sendJson(res, 503, { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' });
             if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(inventory.declaration_evidence)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
             if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(inventory.lifecycle_evidence)) return sendJson(res, 503, { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
@@ -1661,6 +1681,7 @@ export async function apply(ctx) {
             if (!revisionsMatch || body?.expected_revision !== stored.plan.expected_revision) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROFILE_CHANGED' });
             }
+            if (providerId !== 'deepseek-official' && hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
             const refreshed = planProviderDelete({
               providerId,
               inventory,
