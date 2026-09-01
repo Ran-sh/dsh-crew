@@ -499,6 +499,43 @@ test('reopening a backup fails closed when a required backup file is missing', a
   }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
 });
 
+test('backup binds original revisions to the same source snapshot as its backup bytes', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  let profileReads = 0;
+  const snapshotFs = {
+    copyFileSync,
+    existsSync,
+    mkdirSync,
+    readFileSync(file, encoding) {
+      if (file === paths.profileFile && encoding === 'utf8') {
+        profileReads += 1;
+        return profileReads === 1 ? PROFILE : `${PROFILE}# external edit after snapshot`;
+      }
+      return readFileSync(file, encoding);
+    },
+    rmSync,
+    writeFileSync,
+  };
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), fs: snapshotFs });
+  await hooks.backup(plan);
+  const manifest = JSON.parse(readFileSync(join(paths.dir, 'backups', plan.plan_id, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.profile_revision, inspectProviderProfile(PROFILE).revision);
+});
+
+test('reopening a backup fails closed when a backed-up file digest is tampered', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  writeFileSync(join(backupDir, plan.plan_id, 'profile.backup'), `${PROFILE}tampered`);
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
 test('owner metadata write failure cleans up the half-created lock', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
