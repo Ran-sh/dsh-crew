@@ -1303,7 +1303,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   <CustomSelect value={mode} onChange={(v) => field('collaboration_mode', v)}
                     options={(['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'] as const).map((m) => ({ value: m, label: copy.collaborationModeDesc[m] }))} /></label>
                 <label style={S.field} title={copy.workerProviderHint}><span style={S.fieldLabel}>{copy.workerProvider}</span>
-                  <CustomSelect value={config.worker_provider_mode ?? 'follow-dsh'} onChange={(v) => field('worker_provider_mode', v)}
+                  <CustomSelect value={config.worker_provider_mode ?? 'deepseek-official'} onChange={(v) => field('worker_provider_mode', v)}
                     options={(['follow-dsh', 'deepseek-official'] as const).map((m) => ({ value: m, label: copy.workerProviderDesc[m] }))} /></label>
               </>))}
               {block({ t: copy.workerModels, d: modelCatalog ? copy.modelPoolSummary(modelCatalog.provider_count ?? 0, modelCatalog.model_count ?? 0) : copy.catalogFailed }, (<>

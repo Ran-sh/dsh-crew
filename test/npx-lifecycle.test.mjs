@@ -209,11 +209,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 1.0.1', () => {
+test('package, runtime identity, and changelog identify candidate 1.0.2', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '1.0.1');
-  assert.equal(RUNTIME_VERSION, '1.0.1');
-  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 0\.5\.6/m);
+  assert.equal(manifest.version, '1.0.2');
+  assert.equal(RUNTIME_VERSION, '1.0.2');
+  assert.match(readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8'), /^## 1\.0\.2/m);
 });
 
 test('packaged lifecycle invokes npm on Windows without shell mode', () => {

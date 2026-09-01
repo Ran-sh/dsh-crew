@@ -797,13 +797,13 @@ export function getCapabilities(config) {
   const c = config;
   const vision = {
     enabled: normalizeBool(c.vision_enabled, true),
-    provider: c.vision_provider ?? 'claude-code',
+    provider: c.vision_provider ?? 'off',
     providerOff: c.vision_provider === 'off',
     usable: normalizeBool(c.vision_enabled, true) && c.vision_provider !== 'off',
   };
   const imagegen = {
     enabled: normalizeBool(c.imagegen_enabled, true),
-    provider: c.imagegen_provider ?? 'codex',
+    provider: c.imagegen_provider ?? 'off',
     providerOff: c.imagegen_provider === 'off',
     usable: normalizeBool(c.imagegen_enabled, true) && c.imagegen_provider !== 'off',
   };

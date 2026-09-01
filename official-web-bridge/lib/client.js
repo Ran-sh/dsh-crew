@@ -3102,7 +3102,7 @@ function WorkersPanel({ ctx }) {
 											style: S.fieldLabel,
 											children: copy.workerProvider
 										}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CustomSelect, {
-											value: config.worker_provider_mode ?? "follow-dsh",
+											value: config.worker_provider_mode ?? "deepseek-official",
 											onChange: (v) => field("worker_provider_mode", v),
 											options: ["follow-dsh", "deepseek-official"].map((m) => ({
 												value: m,
