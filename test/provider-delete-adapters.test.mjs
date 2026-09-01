@@ -251,6 +251,25 @@ test('provider backups reject nested flow-map credential values', async () => {
   assert.equal(settingsResult.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
 });
 
+test('provider backups reject sequence-item flow-map credential values', async () => {
+  const paths = fixture();
+  const unsafeProfile = PROFILE.replace('apiKeyEnv: OPENROUTER_API_KEY', 'models:\n          - { bearer: RETAINED_SEQUENCE_BEARER }');
+  writeFileSync(paths.profileFile, unsafeProfile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(planFor(paths.profileFile), hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(result.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+
+  const settingsPaths = fixture();
+  settingsPaths.settingsFile = join(settingsPaths.dir, 'settings.yaml');
+  const unsafeSettings = SETTINGS.replace('        - id: minimax/minimax-m3:free', '        - { token: RETAINED_SEQUENCE_TOKEN }');
+  writeFileSync(settingsPaths.settingsFile, unsafeSettings);
+  const settingsHooks = createProviderDeleteFileHooks({ ...settingsPaths, backupDir: join(settingsPaths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const settingsResult = await executeProviderDelete(settingsPlanFor(settingsPaths), settingsHooks);
+  assert.equal(settingsResult.state, 'FAILED');
+  assert.equal(settingsResult.error_code, 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+});
+
 test('default settings writer carries managed-root containment through atomic rename', () => {
   assert.match(ADAPTER_SOURCE, /atomicWrite\(settingsFile, content, managedRoot\)/);
   assert.match(ADAPTER_SOURCE, /atomicWrite\(target, sourceBytes, managedRoot\)/);
