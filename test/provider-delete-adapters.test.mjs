@@ -633,6 +633,30 @@ test('reopening a backup fails closed when rollback existence semantics are tamp
   }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
 });
 
+test('active-default rollback removes a config mirror that was originally absent', async () => {
+  const paths = fixture();
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
+  const config = JSON.parse(readFileSync(paths.configFile, 'utf8'));
+  delete config.harness_default;
+  writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
+  const expectedProfile = inspectProviderProfile(readFileSync(paths.profileFile, 'utf8')).revision;
+  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const inventory = structuredClone(INVENTORY);
+  inventory.harness_default = { provider: 'opencode-go', model: 'mimo-v2.5' };
+  inventory.records[0].references = { harness_default: true, active_jobs: 0, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' } };
+  inventory.records[0].declaration_authorities = [
+    { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+    { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' },
+  ];
+  inventory.records[1].references = { harness_default: false, active_jobs: 0 };
+  const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision: expectedProfile, expectedRevisions: { profile: expectedProfile, settings: expectedSettings } }).plan;
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(paths.configFile, 'utf8')), 'harness_default'), false);
+});
+
 test('owner metadata write failure cleans up the half-created lock', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
