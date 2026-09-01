@@ -138,6 +138,27 @@ test('settings-only authority remains deletable when the Crew profile file is ab
   assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('    opencode-go:'), false);
 });
 
+test('settings-only active Harness Default is replaced and removed in one transaction', async () => {
+  const paths = fixture();
+  rmSync(paths.profileFile);
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
+  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const inventory = {
+    harness_default: { provider: 'opencode-go', model: 'mimo-v2.5' },
+    records: [
+      { ...INVENTORY.records[0], references: { harness_default: true, active_jobs: 0, harness_default_authority: { kind: 'harness-settings', locator: 'agent-default-model' } }, declaration_authorities: [{ kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }] },
+      { ...INVENTORY.records[1], references: { harness_default: false, active_jobs: 0 } },
+    ],
+  };
+  const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter', expectedRevision: expectedSettings, expectedRevisions: { profile: null, settings: expectedSettings } }).plan;
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.match(readFileSync(paths.settingsFile, 'utf8'), /agent-default-model:\n  provider: openrouter\n  model: minimax\/minimax-m3:free/);
+  assert.doesNotMatch(readFileSync(paths.settingsFile, 'utf8'), /    opencode-go:/);
+});
+
 test('deferred delete audit remains rollbackable after reopening the transaction', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
