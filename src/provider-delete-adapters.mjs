@@ -480,12 +480,25 @@ export function createProviderDeleteFileHooks({
     const stagingPath = join(backupDir, `.delete.lock.${ownerToken}.staging`);
     const retiredPath = join(backupDir, `.delete.lock.${ownerToken}.retired`);
     const reclaimGuardPath = join(backupDir, '.delete.reclaim.lock');
+    const recoveryPath = join(backupDir, '.delete.recovery.lock');
     let guardOwned = false;
-    for (const path of [canonicalPath, activePath, stagingPath, retiredPath, reclaimGuardPath]) assertManagedPath(path, managedRoot);
+    let coordinationOwned = false;
+    for (const path of [canonicalPath, activePath, stagingPath, retiredPath, reclaimGuardPath, recoveryPath]) assertManagedPath(path, managedRoot);
+    try {
+      fs.writeFileSync(recoveryPath, JSON.stringify({ pid: process.pid, token: ownerToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
+      coordinationOwned = true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw Object.assign(new Error('provider delete recovery is active'), { code: 'PROVIDER_DELETE_BUSY' });
+      throw Object.assign(new Error('provider delete recovery lock unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+    }
     try {
       fs.writeFileSync(reclaimGuardPath, JSON.stringify({ pid: process.pid, token: ownerToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
       guardOwned = true;
     } catch (error) {
+      if (coordinationOwned) {
+        try { fs.rmSync(recoveryPath, { force: true }); } catch {}
+        coordinationOwned = false;
+      }
       if (error?.code === 'EEXIST') throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
       throw Object.assign(new Error('provider delete lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
     }
@@ -564,7 +577,16 @@ export function createProviderDeleteFileHooks({
       cleanup(stagingPath);
       throw error;
     } finally {
-      if (guardOwned) cleanup(reclaimGuardPath);
+      if (guardOwned) {
+        let owner = null;
+        try { owner = readJson(reclaimGuardPath, null); } catch {}
+        if (owner?.token === ownerToken) cleanup(reclaimGuardPath);
+      }
+      if (coordinationOwned) {
+        let owner = null;
+        try { owner = readJson(recoveryPath, null); } catch {}
+        if (owner?.token === ownerToken) cleanup(recoveryPath);
+      }
     }
   };
 
