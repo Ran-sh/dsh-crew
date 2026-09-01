@@ -232,6 +232,17 @@ test('a crashed owner lock can be reclaimed when its recorded process is dead', 
   assert.equal(existsSync(lockPath), false);
 });
 
+test('a half-created owner lock without metadata can be safely reclaimed', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const lockPath = join(backupDir, '.delete.lock');
+  mkdirSync(lockPath, { recursive: true });
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await hooks.backup(planFor(paths.profileFile));
+  await hooks.release();
+  assert.equal(existsSync(lockPath), false);
+});
+
 test('provider verification fails closed when a managed profile is malformed', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
