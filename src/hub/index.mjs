@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -107,6 +107,7 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
+const RECOVERY_ENTRY_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 function readProviderLifecycleStateStatus() {
   const file = join(CONFIG_DIR, 'provider-lifecycle.json');
@@ -136,7 +137,7 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
       config: join(CONFIG_DIR, 'config.json'),
       lifecycle: join(CONFIG_DIR, 'provider-lifecycle.json'),
     };
-    const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => {
+    const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name !== '.quarantine').flatMap((entry) => {
       const transactionRoot = join(root, entry.name);
       const manifestFile = join(root, entry.name, 'manifest.json');
       try {
@@ -157,11 +158,27 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
           paths,
           expectedProviderId: providerId,
         });
-        return [{ transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt, recoverable }];
-      } catch { return []; }
+        return [{ storage_id: entry.name, transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt, recoverable, unresolved: recoverable !== true }];
+      } catch {
+        let updatedAt;
+        try { updatedAt = statSync(transactionRoot).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
+        return [{
+          storage_id: entry.name,
+          transaction_id: RECOVERY_ENTRY_PATTERN.test(entry.name) ? entry.name : null,
+          provider_id: null,
+          phase: 'RECOVERY_UNRESOLVED',
+          updated_at: updatedAt,
+          recoverable: false,
+          unresolved: true,
+        }];
+      }
     });
     return transactions.sort((a, b) => a.updated_at.localeCompare(b.updated_at)).slice(-64);
-  } catch { return []; }
+  } catch {
+    let updatedAt;
+    try { updatedAt = statSync(root).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
+    return [{ storage_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: updatedAt, recoverable: false, unresolved: true }];
+  }
 }
 
 function writeCredentialPurgeState(state) {
@@ -203,8 +220,7 @@ export function hasAvailableProviderLifecycleEvidence(evidence) {
 }
 
 export function hasPendingProviderRecoveryTransactions(inventory) {
-  return Array.isArray(inventory?.recovery_transactions)
-    && inventory.recovery_transactions.some((entry) => entry?.recoverable === true);
+  return Array.isArray(inventory?.recovery_transactions) && inventory.recovery_transactions.length > 0;
 }
 
 export function hasProviderRuntimeRestartEvidence(beforeRuntimeId, currentRuntimeId) {
@@ -286,7 +302,10 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     declarations,
     policy: providerInventoryPolicy(config),
     tombstones: lifecycle.tombstones,
-    additionalProviderIds: [...Object.keys(lifecycle.tombstones ?? {}), ...recoveryTransactions.map((entry) => entry.provider_id)],
+    additionalProviderIds: [
+      ...Object.keys(lifecycle.tombstones ?? {}),
+      ...recoveryTransactions.map((entry) => entry.provider_id).filter((id) => typeof id === 'string' && id.trim()),
+    ],
     activeJobs: hub.list(),
   });
   return {
@@ -1501,6 +1520,28 @@ export async function apply(ctx) {
             });
             const recovered = await hooks.recoverLock();
             return sendJson(res, recovered.ok ? 200 : 409, recovered);
+          }
+          if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'quarantine' && parts.length === 2) {
+            if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED' });
+            const transactionId = typeof body?.transaction_id === 'string' && RECOVERY_ENTRY_PATTERN.test(body.transaction_id)
+              ? body.transaction_id : null;
+            if (!transactionId) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_PLAN_INVALID' });
+            const recovery = readProviderRecoveryTransactions().find((entry) => entry.transaction_id === transactionId || entry.storage_id === transactionId);
+            if (!recovery) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
+            if (recovery.recoverable === true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_RECOVERABLE' });
+            const recoveryRoot = join(CONFIG_DIR, 'provider-backups');
+            const source = join(recoveryRoot, recovery.storage_id ?? transactionId);
+            const quarantineRoot = join(recoveryRoot, '.quarantine');
+            try {
+              if (!existsSync(source) || !lstatSync(source).isDirectory()) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
+              if (existsSync(quarantineRoot) && !lstatSync(quarantineRoot).isDirectory()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+              mkdirSync(quarantineRoot, { recursive: true });
+              const target = join(quarantineRoot, `${transactionId}.${Date.now()}.${randomUUID().slice(0, 8)}`);
+              renameSync(source, target);
+              return sendJson(res, 200, { ok: true, transaction_id: recovery.transaction_id ?? transactionId, state: 'QUARANTINED' });
+            } catch {
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED' });
+            }
           }
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);

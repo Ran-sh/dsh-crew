@@ -47,6 +47,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /recovery_transactions/);
   assert.match(hubSource, /readProviderRecoveryTransactions/);
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_PENDING/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED/);
+  assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
@@ -113,7 +115,7 @@ test('provider lifecycle does not treat corrupted lifecycle state as available e
 
 test('provider deletion is blocked while a recovery transaction is pending', () => {
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: true }] }), true);
-  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: false }] }), false);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [{ provider_id: 'opencode-go', recoverable: false }] }), true);
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: [] }), false);
   assert.equal(hasPendingProviderRecoveryTransactions({}), false);
 });
@@ -133,9 +135,33 @@ test('provider recovery keeps manifests without phase timestamps visible using f
   const transactions = readProviderRecoveryTransactions(root);
   assert.equal(transactions.length, 1);
   assert.equal(transactions[0].provider_id, 'opencode-go');
+  assert.equal(transactions[0].storage_id, id);
   assert.equal(transactions[0].phase, 'DECLARATIONS_APPLYING');
   assert.equal(transactions[0].recoverable, false);
+  assert.equal(transactions[0].unresolved, true);
   assert.equal(typeof transactions[0].updated_at, 'string');
+});
+
+test('provider recovery surfaces malformed manifests as unresolved blockers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-invalid-'));
+  const entry = join(root, '22222222-2222-4222-8222-222222222222');
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), '{ malformed');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].phase, 'RECOVERY_UNRESOLVED');
+  assert.equal(transactions[0].storage_id, '22222222-2222-4222-8222-222222222222');
+  assert.equal(transactions[0].recoverable, false);
+  assert.equal(transactions[0].unresolved, true);
+  assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
+});
+
+test('provider recovery ignores quarantined directories after explicit resolution', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-quarantine-'));
+  const quarantine = join(root, '.quarantine');
+  mkdirSync(quarantine);
+  mkdirSync(join(quarantine, '22222222-2222-4222-8222-222222222222.1'));
+  assert.deepEqual(readProviderRecoveryTransactions(root), []);
 });
 
 test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
