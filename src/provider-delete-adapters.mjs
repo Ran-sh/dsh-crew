@@ -241,6 +241,26 @@ function validRevision(value) {
   return value === null || (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value));
 }
 
+function recoveryDescriptor(manifest) {
+  return {
+    plan: {
+      plan_id: manifest?.plan?.plan_id ?? null,
+      provider_id: manifest?.plan?.provider_id ?? null,
+      declaration_authorities: manifest?.plan?.declaration_authorities ?? null,
+      was_harness_default: manifest?.plan?.was_harness_default ?? null,
+      harness_default_authority: manifest?.plan?.harness_default_authority ?? null,
+    },
+    files: manifest?.files ?? null,
+    backup_digests: manifest?.backup_digests ?? null,
+    profile_revision: manifest?.profile_revision ?? null,
+    settings_revision: manifest?.settings_revision ?? null,
+    config_revision: manifest?.config_revision ?? null,
+    lifecycle_revision: manifest?.lifecycle_revision ?? null,
+    routing_projection_digest: manifest?.routing_projection_digest ?? null,
+    lifecycle_projection_digest: manifest?.lifecycle_projection_digest ?? null,
+  };
+}
+
 function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expectedProviderId }) {
   const backupId = basename(root);
   if (!manifest || manifest.schema_version !== 1 || !validProviderId(manifest.provider_id)
@@ -249,7 +269,9 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     || !safePlanId(manifest.plan.plan_id) || manifest.plan.provider_id !== manifest.provider_id
     || !Array.isArray(manifest.plan.declaration_authorities)
     || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
-    || !manifest.backup_digests || typeof manifest.backup_digests !== 'object' || Array.isArray(manifest.backup_digests)) {
+    || !manifest.backup_digests || typeof manifest.backup_digests !== 'object' || Array.isArray(manifest.backup_digests)
+    || typeof manifest.recovery_descriptor_digest !== 'string' || !/^[a-f0-9]{64}$/i.test(manifest.recovery_descriptor_digest)
+    || sha256(JSON.stringify(recoveryDescriptor(manifest))) !== manifest.recovery_descriptor_digest) {
     throw backupInvalid();
   }
   try {
@@ -257,12 +279,15 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   } catch {
     throw backupInvalid();
   }
+  const authorityKinds = new Set(manifest.plan.declaration_authorities.map((authority) => authority?.kind));
   for (const key of FILE_KEYS) {
     const entry = manifest.files[key];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)
       || typeof entry.existed !== 'boolean' || typeof entry.managed !== 'boolean') {
       throw backupInvalid();
     }
+    const expectedManaged = key === 'profile' ? authorityKinds.has('crew-profile') : true;
+    if (entry.managed !== expectedManaged || (!entry.existed && manifest.backup_digests[key] !== undefined)) throw backupInvalid();
     if (key === 'config' && (!manifest.config_projection || typeof manifest.config_projection !== 'object'
       || Array.isArray(manifest.config_projection) || typeof manifest.config_revision !== 'string'
       || !/^[a-f0-9]{64}$/i.test(manifest.config_revision)
@@ -296,6 +321,8 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     const entry = manifest.files.settings;
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)
       || typeof entry.existed !== 'boolean' || typeof entry.managed !== 'boolean') throw backupInvalid();
+    const expectedManaged = authorityKinds.has('harness-settings') || manifest.plan.was_harness_default === true;
+    if (entry.managed !== expectedManaged || (!entry.existed && manifest.backup_digests.settings !== undefined)) throw backupInvalid();
     if (entry.existed && entry.managed) {
       const backupFile = join(root, 'settings.backup');
       assertManagedPath(backupFile, managedRoot);
@@ -403,16 +430,22 @@ export function createProviderDeleteFileHooks({
     };
     if (!recoveryAcquire()) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
     try {
-      if (!existsSync(guardPath)) return { ok: true, recovered: false };
+      const guardExists = existsSync(guardPath);
       let guardOwner = null;
-      try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
-      if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+      if (guardExists) {
+        try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
+        if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+      }
       const candidates = [canonicalPath];
       try {
         for (const entry of readdirSync(backupDir, { withFileTypes: true })) {
           if (/^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging)$/iu.test(entry.name)) candidates.push(join(backupDir, entry.name));
         }
       } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
+      if (candidates.every((candidate) => !existsSync(candidate))) {
+        if (guardExists) cleanup(guardPath);
+        return { ok: true, recovered: guardExists };
+      }
       for (const candidate of [...new Set(candidates)]) {
         if (!existsSync(candidate)) continue;
         let mainOwner = null;
@@ -567,6 +600,11 @@ export function createProviderDeleteFileHooks({
     const content = fs.readFileSync(backupFile);
     if (sha256(content) !== digest) throw backupInvalid();
     return content;
+  };
+
+  const assertRecoveryDescriptor = () => {
+    const digest = activeBackup?.manifest?.recovery_descriptor_digest;
+    if (!/^[a-f0-9]{64}$/i.test(digest) || sha256(JSON.stringify(recoveryDescriptor(activeBackup.manifest))) !== digest) throw backupInvalid();
   };
 
   const prepareMutation = (key, nextRevision) => {
@@ -752,6 +790,7 @@ export function createProviderDeleteFileHooks({
     manifest.lifecycle_projection_digest = sha256(JSON.stringify(lifecycleProjection(lifecycleSnapshot)));
     if (authorityKinds.has('crew-profile') && sourceRevisions.profile) manifest.profile_revision = sourceRevisions.profile;
     if ((authorityKinds.has('harness-settings') || managesHarnessDefault) && sourceRevisions.settings) manifest.settings_revision = sourceRevisions.settings;
+    manifest.recovery_descriptor_digest = sha256(JSON.stringify(recoveryDescriptor(manifest)));
     activeBackup = { root, manifest };
     persistManifest();
     return { ok: true, backup_id: planId };
@@ -938,6 +977,7 @@ export function createProviderDeleteFileHooks({
   const rollback = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_ROLLBACK_UNAVAILABLE' });
     ensureMutationLock();
+    assertRecoveryDescriptor();
     assertManagedPath(configFile, managedRoot);
     assertManagedPath(profileFile, managedRoot);
     assertManagedPath(lifecycleFile, managedRoot);
