@@ -49,6 +49,9 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /saveRoleProfiles\(await readBody\(req\)\)/);
   assert.match(hubSource, /saveWorkspaceContexts\(await readBody\(req\)\)/);
   assert.match(hubSource, /buildHubExecutionRows\(liveJobs\)/);
+  assert.doesNotMatch(hubSource, /const \[modelExecution, reviewerExecution\] = buildHubExecutionRows\(liveJobs\)/);
+  assert.match(hubSource, /const executionRows = buildHubExecutionRows\(liveJobs\)/);
+  assert.match(hubSource, /\.\.\.executionRows/);
   assert.match(hubSource, /buildRuntimeReadinessSnapshot/);
   assert.match(hubSource, /ingress/);
 });
