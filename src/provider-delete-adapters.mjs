@@ -609,7 +609,7 @@ export function createProviderDeleteFileHooks({
       let guardOwner = null;
       if (guardExists) {
         try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
-        if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+        if (alive(guardOwner) === true && !force) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
       }
       const candidates = [canonicalPath];
       try {
@@ -628,7 +628,7 @@ export function createProviderDeleteFileHooks({
           mainOwner = lstatSync(candidate).isDirectory()
             ? readJson(join(candidate, 'owner.json'), null) : readJson(candidate, null);
         } catch { mainOwner = null; }
-        if (alive(mainOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+        if (alive(mainOwner) === true && !force) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
       }
       for (const candidate of [...new Set(candidates)]) if (existsSync(candidate)) cleanup(candidate);
       cleanup(guardPath);
