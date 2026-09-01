@@ -61,13 +61,13 @@ test('filesystem adapter materializes settings, removes base, and can restore th
     const profileFile = join(root, 'profile.yml');
     const settingsFile = join(root, 'settings.yaml');
     const backupDir = join(root, 'backups');
-    const profile = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        apiKeyEnv: CUSTOM_API_KEY\n        api: openai-completions\n        baseURL: https://example.test/v1\n        models:\n          - id: model-1\n            name: Model One\n- insert:\n    - id: dsh-crew-hub\n`;
+    const profile = `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        apiKeyEnv: CUSTOM_API_KEY\n        api: openai-completions\n        baseURL: https://example.test/v1\n        models:\n          - id: model-1\n            name: Model One\n            contextWindow: 1000000\n            maxTokens: 384000\n            input: [text]\n            reasoningEfforts:\n              off: null\n              max: reasoning_effort_max\n- insert:\n    - id: dsh-crew-hub\n`;
     const settings = 'llm-pi-ai:\n  providers: {}\nagent-default-model:\n  provider: custom\n  model: model-1\n';
     writeFileSync(profileFile, profile, 'utf8');
     writeFileSync(settingsFile, settings, 'utf8');
     const material = readProviderMaterialization(profile, { providerId: 'custom' });
     assert.equal(material.ok, true);
-    assert.deepEqual(material.provider.models, [{ id: 'model-1', name: 'Model One' }]);
+    assert.deepEqual(material.provider.models, [{ id: 'model-1', name: 'Model One', context_window: 1000000, max_tokens: 384000, input: ['text'], reasoning_efforts: { off: null, max: 'reasoning_effort_max' } }]);
     const plan = {
       ...PLAN,
       expected_revisions: {
@@ -87,6 +87,7 @@ test('filesystem adapter materializes settings, removes base, and can restore th
     const rollbackHooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
     await rollbackHooks.acquireLock();
     await rollbackHooks.backup({});
+    await rollbackHooks.rollback();
     await rollbackHooks.rollback();
     await rollbackHooks.release();
     assert.equal(readProviderMaterialization(readFileSync(profileFile, 'utf8'), { providerId: 'custom' }).ok, true);
@@ -141,7 +142,10 @@ test('migration backup refuses inline credentials belonging to a retained siblin
     writeFileSync(profileFile, `- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n      retained:\n        apiKey: RETAINED_SECRET\n`, 'utf8');
     writeFileSync(settingsFile, 'llm-pi-ai:\n  providers: {}\n', 'utf8');
     const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
-    await assert.rejects(() => hooks.backup(PLAN), (error) => error.code === 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
+    const unsafeProfile = readFileSync(profileFile, 'utf8');
+    const unsafeSettings = readFileSync(settingsFile, 'utf8');
+    const unsafePlan = { ...PLAN, expected_revisions: { profile: createHash('sha256').update(unsafeProfile, 'utf8').digest('hex'), settings: createHash('sha256').update(unsafeSettings, 'utf8').digest('hex') } };
+    await assert.rejects(() => hooks.backup(unsafePlan), (error) => error.code === 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED');
     assert.equal(readFileSync(profileFile, 'utf8').includes('RETAINED_SECRET'), true);
     assert.equal(readProviderLayerMigrationTransactions(backupDir).length, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }

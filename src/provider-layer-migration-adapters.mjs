@@ -33,6 +33,12 @@ function safeMaterialization(provider) {
     models: (Array.isArray(provider.models) ? provider.models : []).map((model) => ({
       id: safeValue(model?.id, 256),
       ...(safeValue(model?.name, 256) ? { name: safeValue(model.name, 256) } : {}),
+      ...(Number.isSafeInteger(model?.context_window) && model.context_window > 0 ? { context_window: model.context_window } : {}),
+      ...(Number.isSafeInteger(model?.max_tokens) && model.max_tokens > 0 ? { max_tokens: model.max_tokens } : {}),
+      ...(Array.isArray(model?.input) && model.input.every((value) => value === 'text' || value === 'image') ? { input: [...new Set(model.input)] } : {}),
+      ...(model?.reasoning_efforts && typeof model.reasoning_efforts === 'object' && !Array.isArray(model.reasoning_efforts)
+        ? { reasoning_efforts: Object.fromEntries(Object.entries(model.reasoning_efforts).filter(([key, value]) => /^[A-Za-z][A-Za-z0-9_-]*$/u.test(key) && (value === null || safeValue(value, 256)))) } : {}),
+      ...(model?.compat && typeof model.compat === 'object' && !Array.isArray(model.compat) && Object.keys(model.compat).length === 0 ? { compat: {} } : {}),
     })).filter((model) => model.id).slice(0, 256),
   };
 }
@@ -90,12 +96,9 @@ function atomicReplace(file, content, root) {
   assertManagedPath(temp, root);
   writeFileSync(temp, content, 'utf8');
   try {
-    try { renameSync(temp, file); }
-    catch (error) {
-      if (error?.code !== 'EEXIST' && error?.code !== 'EPERM') throw error;
-      rmSync(file, { force: true });
-      renameSync(temp, file);
-    }
+    renameSync(temp, file);
+  } catch (error) {
+    throw Object.assign(new Error('provider migration atomic replace failed'), { code: 'PROVIDER_MIGRATION_REPLACE_FAILED', cause: error });
   } finally { rmSync(temp, { force: true }); }
 }
 
@@ -133,14 +136,15 @@ function validMigrationManifest(root, manifest) {
   if (!manifest.mutation_journal || typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal)) return false;
   if (Object.entries(manifest.mutation_journal).some(([key, entry]) => !['profile', 'settings'].includes(key)
     || !entry || typeof entry !== 'object' || entry.phase !== 'WRITE_PENDING'
-    || !/^[a-f0-9]{64}$/u.test(entry.next_revision ?? '')
+    || (entry.next_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.next_revision ?? ''))
     || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
-    || typeof entry.created !== 'boolean')) return false;
+    || typeof entry.created !== 'boolean'
+    || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction)))) return false;
   if (manifest.files?.settings?.existed === false && manifest.phase !== 'PREPARED' && !validFileIdentity(manifest.created_settings_identity)) return false;
   if (typeof manifest.checksum !== 'string' || manifest.checksum !== manifestDigest(manifest)) return false;
   for (const key of ['profile', 'settings']) {
     const entry = manifest.files?.[key];
-    if (!entry || typeof entry.existed !== 'boolean' || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
+    if (!entry || typeof entry.existed !== 'boolean' || entry.revision !== expected[key] || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
     if (entry.backup_digest !== undefined || existsSync(join(root, `${key}.backup`))) return false;
   }
   return true;
@@ -204,7 +208,11 @@ export function createProviderLayerMigrationFileHooks({
       return { ok: true };
     } catch (error) {
       if (error?.code === 'EEXIST') {
+        const reclaimGuard = `${lockFile}.reclaim`;
+        let guardOwned = false;
         try {
+          mkdirSync(reclaimGuard, { recursive: false });
+          guardOwned = true;
           const owner = JSON.parse(readFileSync(lockFile, 'utf8'));
           if (!owner || typeof owner !== 'object' || Array.isArray(owner) || !Number.isInteger(owner.pid) || owner.pid <= 0 || !safeValue(owner.token, 128)) {
             throw Object.assign(new Error('provider migration lock metadata is invalid'), { code: 'PROVIDER_MIGRATION_BUSY' });
@@ -218,7 +226,9 @@ export function createProviderLayerMigrationFileHooks({
             writeLock();
             return { ok: true, recovered: true };
           }
-        } catch {}
+        } catch (reclaimError) {
+          if (reclaimError?.code === 'PROVIDER_MIGRATION_BUSY') throw reclaimError;
+        } finally { if (guardOwned) rmSync(reclaimGuard, { recursive: true, force: true }); }
         throw Object.assign(new Error('provider migration is busy'), { code: 'PROVIDER_MIGRATION_BUSY' });
       }
       throw Object.assign(new Error('provider migration lock is unavailable'), { code: 'PROVIDER_MIGRATION_LOCK_UNAVAILABLE' });
@@ -262,8 +272,13 @@ export function createProviderLayerMigrationFileHooks({
     assertManagedPath(root, managedRoot);
     if (existsSync(root)) throw Object.assign(new Error('provider migration transaction already exists'), { code: 'PROVIDER_MIGRATION_EXISTS' });
     mkdirSync(root, { recursive: true });
-    const profile = readText(profileFile);
-    const settings = readText(settingsFile);
+  const profile = readText(profileFile);
+  const settings = readText(settingsFile);
+    const expected = safe.expected_revisions;
+    if (revision(profile) !== expected.profile || revision(settings) !== expected.settings) {
+      rmSync(root, { recursive: true, force: true });
+      throw Object.assign(new Error('provider migration source changed before backup'), { code: 'PROVIDER_MIGRATION_SOURCE_CHANGED' });
+    }
     // Migration snapshots are structured metadata only. Reject known inline
     // credential shapes in either source before touching it, while never
     // persisting a complete source file (including unrelated custom fields).
@@ -323,6 +338,43 @@ export function createProviderLayerMigrationFileHooks({
     persist();
   };
 
+  const writeRollbackApplied = (key, file, content) => {
+    ensureLock();
+    const nextRevision = revision(content);
+    active.manifest.mutation_journal[key] = {
+      next_revision: nextRevision,
+      previous_revision: active.manifest.applied_revisions[key] ?? active.manifest.files[key]?.revision ?? null,
+      created: false,
+      direction: 'rollback',
+      phase: 'WRITE_PENDING',
+    };
+    persist();
+    atomicReplace(file, content, managedRoot);
+    active.manifest.rollback_revisions ??= {};
+    active.manifest.rollback_revisions[key] = nextRevision;
+    delete active.manifest.mutation_journal[key];
+    active.manifest.phase = 'ROLLBACK_APPLYING';
+    persist();
+  };
+
+  const writeRollbackDeleted = (key, file) => {
+    ensureLock();
+    active.manifest.mutation_journal[key] = {
+      next_revision: null,
+      previous_revision: active.manifest.applied_revisions[key] ?? active.manifest.files[key]?.revision ?? null,
+      created: false,
+      direction: 'rollback',
+      phase: 'WRITE_PENDING',
+    };
+    persist();
+    rmSync(file, { force: true });
+    active.manifest.rollback_revisions ??= {};
+    active.manifest.rollback_revisions[key] = null;
+    delete active.manifest.mutation_journal[key];
+    active.manifest.phase = 'ROLLBACK_APPLYING';
+    persist();
+  };
+
   const materialize = async (plan) => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
     if (plan.action !== 'materialize-user') return { ok: true, changed: false };
@@ -348,6 +400,7 @@ export function createProviderLayerMigrationFileHooks({
 
   const rollback = async () => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
+    if (['ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING', 'ROLLED_BACK'].includes(active.manifest.phase)) return { ok: true, state: active.manifest.phase };
     for (const [key, file] of [['profile', profileFile], ['settings', settingsFile]]) {
       ensureLock();
       const snapshot = active.manifest.files[key];
@@ -355,14 +408,22 @@ export function createProviderLayerMigrationFileHooks({
       const currentRevision = revision(current);
       const pending = active.manifest.mutation_journal?.[key];
       const pendingApplied = currentRevision !== null && currentRevision === pending?.next_revision;
-      const allowed = currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key] || pendingApplied;
+      const rollbackRevision = active.manifest.rollback_revisions?.[key];
+      const rollbackReplay = active.manifest.phase?.startsWith('ROLLBACK') === true || pending?.direction === 'rollback';
+      const semanticComplete = key === 'profile'
+        ? (() => { const parsed = current === null ? { ok: false } : readProviderDeclarations(current, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' }); return parsed.ok === true && parsed.declarations.some((entry) => entry.id === active.manifest.provider_id); })()
+        : active.manifest.plan.action !== 'materialize-user'
+          || (() => { const parsed = current === null ? { ok: false } : readProviderSettingsDeclarations(current, { file: 'harness/settings.yaml' }); return parsed.ok === true && !parsed.declarations.some((entry) => entry.id === active.manifest.provider_id); })();
+      const alreadyRolledBack = (rollbackRevision === null && rollbackRevision !== undefined ? current === null : currentRevision === rollbackRevision)
+        || (rollbackReplay && semanticComplete);
+      const allowed = alreadyRolledBack || currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key] || pendingApplied;
       if (!allowed) throw Object.assign(new Error('provider migration state changed during rollback'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
       if (key === 'profile') {
         if (!snapshot.existed) throw Object.assign(new Error('provider profile snapshot is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
-        if (currentRevision !== snapshot.revision) {
+        if (!alreadyRolledBack && currentRevision !== snapshot.revision) {
           const restored = addProviderDeclaration(current, { provider: active.manifest.plan.materialization?.provider, expectedRevision: currentRevision });
           if (!restored.ok) throw Object.assign(new Error('provider migration profile restore failed'), { code: restored.code });
-          atomicReplace(file, restored.text, managedRoot);
+          writeRollbackApplied('profile', file, restored.text);
         }
       } else if (active.manifest.plan.action === 'materialize-user') {
         if (snapshot.existed) {
@@ -374,11 +435,11 @@ export function createProviderLayerMigrationFileHooks({
           // settings (including user fields) remain byte-for-byte untouched.
           const removed = removeProviderSettings(current, { providerIds: [active.manifest.provider_id], expectedRevision: currentRevision });
           if (!removed.ok) throw Object.assign(new Error('provider migration settings restore failed'), { code: removed.code });
-          atomicReplace(file, removed.text, managedRoot);
+          writeRollbackApplied('settings', file, removed.text);
         } else if (current !== null) {
           const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity);
           if (!ownedByIdentity && !(pendingApplied && pending?.created === true)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
-          rmSync(file, { force: true });
+          writeRollbackDeleted('settings', file);
         }
       }
     }
@@ -414,6 +475,15 @@ export function createProviderLayerMigrationFileHooks({
     return { ok: true, runtime_id: active.manifest.plan.rollback_runtime_id_before };
   };
 
+  const setRestartRuntimeBaseline = async (runtimeId) => {
+    if (!active || !safeValue(runtimeId, 128)) throw Object.assign(new Error('provider migration runtime identity is unavailable'), { code: 'PROVIDER_RUNTIME_ID_MISSING' });
+    ensureLock();
+    active.manifest.plan.runtime_id_before_restart = safeValue(runtimeId, 128);
+    active.manifest.phase = 'RESTART_PENDING';
+    persist();
+    return { ok: true, runtime_id: active.manifest.plan.runtime_id_before_restart };
+  };
+
   const verifyRollback = async (plan) => {
     const profile = readText(profileFile);
     const settings = readText(settingsFile);
@@ -440,7 +510,7 @@ export function createProviderLayerMigrationFileHooks({
   };
 
   return {
-    acquireLock, release, backup, materialize, removeBase, rollback, verify, verifyRollback, finalizeVerified, finalizeRollback, setRollbackRuntimeBaseline, quarantine,
+    acquireLock, release, backup, materialize, removeBase, rollback, verify, verifyRollback, finalizeVerified, finalizeRollback, setRollbackRuntimeBaseline, setRestartRuntimeBaseline, quarantine,
     backupPlan: () => active?.manifest?.plan ? JSON.parse(JSON.stringify(active.manifest.plan)) : null,
     backupManifest: () => active?.manifest ? JSON.parse(JSON.stringify(active.manifest)) : null,
     restart,

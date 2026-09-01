@@ -79,7 +79,7 @@ function parseProviderMap(source) {
   return { ok: true, lines, llmStart, blockEnd, providersLine, providersBlockEnd, entries };
 }
 
-const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
+const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|(?:^|[_-])token(?:$|[_-])|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
 const REFERENCE_FIELD_SUFFIX = /(?:env|ref|name|handle|id|file|path)$/iu;
 
 function isInlineCredentialLine(line) {
@@ -176,6 +176,14 @@ export function addProviderSettings(source, { provider, expectedRevision } = {})
       lines.push(`        - id: ${id}`);
       const name = yamlScalar(model.name, 256);
       if (name) lines.push(`          name: ${name}`);
+      if (Number.isSafeInteger(model.context_window) && model.context_window > 0) lines.push(`          contextWindow: ${model.context_window}`);
+      if (Number.isSafeInteger(model.max_tokens) && model.max_tokens > 0) lines.push(`          maxTokens: ${model.max_tokens}`);
+      if (Array.isArray(model.input) && model.input.every((value) => value === 'text' || value === 'image')) lines.push(`          input: [${[...new Set(model.input)].join(', ')}]`);
+      if (model.reasoning_efforts && typeof model.reasoning_efforts === 'object' && !Array.isArray(model.reasoning_efforts)) {
+        lines.push('          reasoningEfforts:');
+        for (const [key, value] of Object.entries(model.reasoning_efforts)) if (/^[A-Za-z][A-Za-z0-9_-]*$/u.test(key) && (value === null || yamlScalar(value, 256))) lines.push(`            ${key}: ${value === null ? 'null' : yamlScalar(value, 256)}`);
+      }
+      if (model.compat && typeof model.compat === 'object' && !Array.isArray(model.compat) && Object.keys(model.compat).length === 0) lines.push('          compat: {}');
     }
   }
   const nextLines = [...parsed.lines];

@@ -104,7 +104,7 @@ function scalarField(lines, entry, field) {
   return null;
 }
 
-const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
+const SENSITIVE_CREDENTIAL_FIELD = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|(?:^|[_-])token(?:$|[_-])|secret|password|authorization|credential|private[_-]?key|client[_-]?secret|cookie|bearer|webhook)/iu;
 const REFERENCE_FIELD_SUFFIX = /(?:env|ref|name|handle|id|file|path)$/iu;
 
 function isInlineCredentialLine(line) {
@@ -160,6 +160,7 @@ function providerModels(lines, entry) {
   if (modelsLine < 0) return [];
   const modelsIndent = (lines[modelsLine].match(/^\s*/u) ?? [''])[0].length;
   const models = [];
+  const seenModelIds = new Set();
   for (let index = modelsLine + 1; index < entry.end; index += 1) {
     const line = lines[index];
     if (!nonBlank(line)) continue;
@@ -168,17 +169,57 @@ function providerModels(lines, entry) {
     const match = line.match(/^\s*-\s+id:\s*(.*?)\s*$/u);
     if (!match) continue;
     const id = unquoteScalar(match[1]);
-    if (!id || id.length > 256 || /[\r\n]/u.test(id)) continue;
-    let name = null;
+    if (!id || id.length > 256 || /[\r\n]/u.test(id) || seenModelIds.has(id)) return null;
+    seenModelIds.add(id);
+    const modelIndent = indentOf(line);
+    const model = { id };
+    const seenFields = new Set(['id']);
     for (let child = index + 1; child < entry.end; child += 1) {
       const childLine = lines[child];
       if (!nonBlank(childLine)) continue;
       const childIndent = indentOf(childLine);
       if (childIndent <= modelsIndent || /^\s*-\s+id:\s*/u.test(childLine)) break;
-      const nameMatch = childLine.match(/^\s+name:\s*(.*?)\s*$/u);
-      if (nameMatch) { name = unquoteScalar(nameMatch[1]); break; }
+      if (childIndent !== modelIndent + 2) continue;
+      const fieldMatch = childLine.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/u);
+      if (!fieldMatch) return null;
+      const [, field, rawValue] = fieldMatch;
+      if (seenFields.has(field) || !['name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'compat'].includes(field)) return null;
+      seenFields.add(field);
+      if (field === 'name') {
+        const value = unquoteScalar(rawValue);
+        if (!value || value.length > 256 || /[\r\n]/u.test(value)) return null;
+        model.name = value;
+      } else if (field === 'contextWindow' || field === 'maxTokens') {
+        const value = Number(unquoteScalar(rawValue));
+        if (!Number.isSafeInteger(value) || value <= 0) return null;
+        model[field === 'contextWindow' ? 'context_window' : 'max_tokens'] = value;
+      } else if (field === 'input') {
+        const value = unquoteScalar(rawValue);
+        if (!/^\[[^\]\r\n]*\]$/u.test(value ?? '')) return null;
+        const modalities = value.slice(1, -1).split(',').map((item) => item.trim()).filter(Boolean);
+        if (modalities.some((item) => !['text', 'image'].includes(item))) return null;
+        model.input = [...new Set(modalities)];
+      } else if (field === 'reasoningEfforts') {
+        const efforts = {};
+        for (let nested = child + 1; nested < entry.end; nested += 1) {
+          const nestedLine = lines[nested];
+          if (!nonBlank(nestedLine)) continue;
+          const nestedIndent = indentOf(nestedLine);
+          if (nestedIndent <= childIndent) break;
+          if (nestedIndent !== childIndent + 2) return null;
+          const effortMatch = nestedLine.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/u);
+          if (!effortMatch || Object.hasOwn(efforts, effortMatch[1])) return null;
+          const effortValue = unquoteScalar(effortMatch[2]);
+          if (effortValue !== null && effortValue !== 'null' && effortValue !== '~' && (effortValue.length > 256 || /[\r\n]/u.test(effortValue))) return null;
+          efforts[effortMatch[1]] = effortValue === null || effortValue === 'null' || effortValue === '~' ? null : effortValue;
+        }
+        model.reasoning_efforts = efforts;
+      } else if (field === 'compat') {
+        if (rawValue.trim() !== '{}') return null;
+        model.compat = {};
+      }
     }
-    models.push({ id, ...(name && name.length <= 256 && !/[\r\n]/u.test(name) ? { name } : {}) });
+    models.push(model);
   }
   return models.slice(0, 256);
 }
@@ -193,20 +234,29 @@ export function readProviderMaterialization(source, { providerId, file = 'profil
   if (!parsed.ok) return { ok: false, code: parsed.code };
   const entry = parsed.entries.find((candidate) => candidate.id === providerId);
   if (!entry) return { ok: false, code: 'PROVIDER_NOT_FOUND' };
-  const credentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
+  const providerIndent = indentOf(parsed.lines[entry.start]);
+  const directScalarField = (field) => {
+    const pattern = new RegExp(`^\\s{${providerIndent + 2}}${field}:\\s*(.*?)\\s*$`);
+    for (const line of parsed.lines.slice(entry.start, entry.end)) {
+      const match = line.match(pattern);
+      if (match) return unquoteScalar(match[1]);
+    }
+    return null;
+  };
+  const credentialRef = directScalarField('apiKeyEnv');
   const credential = classifyCredentialReference(credentialRef, { kind: 'env' });
   if (credential.redacted) return { ok: false, code: 'PROVIDER_CREDENTIAL_REFERENCE_UNSAFE' };
   const readBounded = (field, max = 2048) => {
-    const value = scalarField(parsed.lines, entry, field);
+    const value = directScalarField(field);
     return value && value.length <= max && !/[\r\n]/u.test(value) ? value : null;
   };
-  const providerIndent = indentOf(parsed.lines[entry.start]);
   const knownFields = new Set(['displayName', 'apiKeyEnv', 'api', 'baseURL', 'models']);
-  const unknownFields = [...new Set(parsed.lines.slice(entry.start + 1, entry.end)
+  const directFields = parsed.lines.slice(entry.start + 1, entry.end)
     .filter((line) => nonBlank(line) && indentOf(line) === providerIndent + 2)
     .map((line) => line.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):/u)?.[1])
-    .filter((field) => field && !knownFields.has(field)))];
-  if (unknownFields.length > 0) return { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' };
+    .filter(Boolean);
+  const unknownFields = directFields.filter((field) => !knownFields.has(field));
+  if (unknownFields.length > 0 || new Set(directFields).size !== directFields.length) return { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' };
   const baseUrl = readBounded('baseURL');
   if (baseUrl) {
     try {
@@ -225,6 +275,7 @@ export function readProviderMaterialization(source, { providerId, file = 'profil
     models: providerModels(parsed.lines, entry),
     source_file: file,
   };
+  if (provider.models === null) return { ok: false, code: 'PROVIDER_MODEL_SCHEMA_UNSUPPORTED' };
   return { ok: true, provider };
 }
 
@@ -262,6 +313,14 @@ export function addProviderDeclaration(source, { provider, expectedRevision } = 
       lines.push(`${' '.repeat(fieldIndent + 2)}- id: ${id}`);
       const name = yamlScalar(model.name, 256);
       if (name) lines.push(`${' '.repeat(fieldIndent + 4)}name: ${name}`);
+      if (Number.isSafeInteger(model.context_window) && model.context_window > 0) lines.push(`${' '.repeat(fieldIndent + 4)}contextWindow: ${model.context_window}`);
+      if (Number.isSafeInteger(model.max_tokens) && model.max_tokens > 0) lines.push(`${' '.repeat(fieldIndent + 4)}maxTokens: ${model.max_tokens}`);
+      if (Array.isArray(model.input) && model.input.every((value) => value === 'text' || value === 'image')) lines.push(`${' '.repeat(fieldIndent + 4)}input: [${[...new Set(model.input)].join(', ')}]`);
+      if (model.reasoning_efforts && typeof model.reasoning_efforts === 'object' && !Array.isArray(model.reasoning_efforts)) {
+        lines.push(`${' '.repeat(fieldIndent + 4)}reasoningEfforts:`);
+        for (const [key, value] of Object.entries(model.reasoning_efforts)) if (/^[A-Za-z][A-Za-z0-9_-]*$/u.test(key) && (value === null || yamlScalar(value, 256))) lines.push(`${' '.repeat(fieldIndent + 6)}${key}: ${value === null ? 'null' : yamlScalar(value, 256)}`);
+      }
+      if (model.compat && typeof model.compat === 'object' && !Array.isArray(model.compat) && Object.keys(model.compat).length === 0) lines.push(`${' '.repeat(fieldIndent + 4)}compat: {}`);
     }
   }
   const nextLines = [...parsed.lines];

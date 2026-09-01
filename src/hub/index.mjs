@@ -608,6 +608,12 @@ export class WorkerRegistry {  constructor(ctx) {
     return (this.providerLeases.get(providerId) ?? 0) > 0;
   }
 
+  // Profile/settings are shared stores. A migration or delete of provider A
+  // must fence a concurrent lifecycle write for provider B in this Hub.
+  beginProviderStoreMutation() { return this.beginProviderMutation('__dsh-provider-store__'); }
+  endProviderStoreMutation() { this.endProviderMutation('__dsh-provider-store__'); }
+  hasProviderStoreMutation() { return this.providerMutations.has('__dsh-provider-store__'); }
+
   publish() {
     this.shard.publish([...this.jobs.values()].map((j) => this.view(j)));
   }
@@ -1239,6 +1245,7 @@ export async function apply(ctx) {
   const providerDeletePlans = new Map();
   const providerMigrationPlans = new Map();
   const providerMigrationOwners = new Map();
+  const providerStoreMutationOwners = new Map();
   const credentialPurgePlans = new Map();
   const rememberProviderDeletePlan = (plan) => {
     providerDeletePlans.set(plan.plan_id, { plan, created_at: Date.now() });
@@ -1776,20 +1783,31 @@ export async function apply(ctx) {
             });
             let result;
             if (hub.hasProviderLease(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_IN_USE' });
-            if (!hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+            if (!hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+            if (!hub.beginProviderMutation(providerId)) {
+              hub.endProviderStoreMutation();
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+            }
             let retainProviderMutation = false;
+            let retainProviderStoreMutation = false;
             try {
               await hooks.acquireLock();
               if (hub.hasProviderLease(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_IN_USE' });
               if (hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
               result = await executeProviderLayerMigration(stored.plan, hooks, { confirm: true, deferRestart: true });
+              if (result.ok && result.state === 'RESTART_PENDING') await hooks.setRestartRuntimeBaseline(getHubRuntimeIdentity().runtime_id);
               providerMigrationPlans.delete(body.plan_id);
               retainProviderMutation = result.state === 'RESTART_PENDING';
-              if (retainProviderMutation) providerMigrationOwners.set(providerId, stored.plan.plan_id);
+              if (retainProviderMutation) {
+                providerMigrationOwners.set(providerId, stored.plan.plan_id);
+                providerStoreMutationOwners.set(stored.plan.plan_id, providerId);
+                retainProviderStoreMutation = true;
+              }
               return sendJson(res, result.ok ? 202 : 409, { ok: result.ok, restart_required: result.restart_required === true, result });
             } finally {
               await hooks.release();
               if (!retainProviderMutation) hub.endProviderMutation(providerId);
+              if (!retainProviderStoreMutation) hub.endProviderStoreMutation();
             }
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-migration') {
@@ -1807,17 +1825,29 @@ export async function apply(ctx) {
               const plan = hooks.backupPlan();
               if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
               const owner = providerMigrationOwners.get(providerId);
+              if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerStoreMutationOwners.set(plan.plan_id, providerId);
+              }
               if (owner !== plan.plan_id) {
                 if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerMigrationOwners.set(providerId, plan.plan_id);
               }
               const verification = await hooks.verify(plan);
-              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
-              if (verification.nativeRemovable !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_FAILED', verification });
+              const live = await readProviderInventorySnapshot(hub, ctx, config);
+              verification.catalogEvidence = live.catalog_evidence;
+              verification.liveNativeRemovable = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
+                && live.records.some((record) => record.id === providerId && record.lifecycle?.catalogued === true && record.native_removable === true);
+              verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.runtime_id_before_restart ?? plan.runtime_id_before, getHubRuntimeIdentity().runtime_id);
+              if (verification.nativeRemovable !== true || verification.liveNativeRemovable !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_VERIFY_FAILED', verification });
               await hooks.finalizeVerified();
               if (providerMigrationOwners.get(providerId) === plan.plan_id) {
                 providerMigrationOwners.delete(providerId);
                 hub.endProviderMutation(providerId);
+              }
+              if (providerStoreMutationOwners.get(plan.plan_id) === providerId) {
+                providerStoreMutationOwners.delete(plan.plan_id);
+                hub.endProviderStoreMutation();
               }
               return sendJson(res, 200, { ok: true, state: 'VERIFIED', transaction_id: plan.plan_id, provider_id: providerId, verification });
             } finally {
@@ -1843,6 +1873,10 @@ export async function apply(ctx) {
               const plan = hooks.backupPlan();
               if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
               const owner = providerMigrationOwners.get(providerId);
+              if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerStoreMutationOwners.set(plan.plan_id, providerId);
+              }
               if (owner !== plan.plan_id) {
                 if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerMigrationOwners.set(providerId, plan.plan_id);
@@ -1877,17 +1911,29 @@ export async function apply(ctx) {
               const plan = hooks.backupPlan();
               if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_PROVIDER_MISMATCH' });
               const owner = providerMigrationOwners.get(providerId);
+              if (providerStoreMutationOwners.get(plan.plan_id) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
+                providerStoreMutationOwners.set(plan.plan_id, providerId);
+              }
               if (owner !== plan.plan_id) {
                 if (hub.hasProviderLease(providerId) || !hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_BUSY' });
                 providerMigrationOwners.set(providerId, plan.plan_id);
               }
               const verification = await hooks.verifyRollback(plan);
+              const live = await readProviderInventorySnapshot(hub, ctx, config);
+              verification.catalogEvidence = live.catalog_evidence;
+              verification.liveRestored = hasCompleteProviderCatalogEvidence(live.catalog_evidence)
+                && live.records.some((record) => record.id === providerId && record.lifecycle?.catalogued === true && record.native_removable === false);
               verification.runtimeRestarted = hasProviderRuntimeRestartEvidence(plan.rollback_runtime_id_before, getHubRuntimeIdentity().runtime_id);
-              if (verification.ok !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_FAILED', verification });
+              if (verification.ok !== true || verification.liveRestored !== true || verification.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_ROLLBACK_VERIFY_FAILED', verification });
               await hooks.finalizeRollback();
               if (providerMigrationOwners.get(providerId) === plan.plan_id) {
                 providerMigrationOwners.delete(providerId);
                 hub.endProviderMutation(providerId);
+              }
+              if (providerStoreMutationOwners.get(plan.plan_id) === providerId) {
+                providerStoreMutationOwners.delete(plan.plan_id);
+                hub.endProviderStoreMutation();
               }
               return sendJson(res, 200, { ok: true, state: 'ROLLED_BACK', transaction_id: plan.plan_id, provider_id: providerId, verification });
             } finally { await hooks.release(); }
@@ -1978,6 +2024,10 @@ export async function apply(ctx) {
               }
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
               hub.endProviderMutation(providerId);
+              if (providerStoreMutationOwners.get(transactionId) === providerId) {
+                providerStoreMutationOwners.delete(transactionId);
+                hub.endProviderStoreMutation();
+              }
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED', verification });
             } finally {
               await hooks.release();
@@ -1996,9 +2046,16 @@ export async function apply(ctx) {
               expectedProviderId: providerId,
             });
             await hooks.acquireLock();
+            let acquiredStoreMutation = false;
+            let retainStoreMutation = false;
             try {
               const plan = hooks.backupPlan();
               if (!plan || plan.provider_id !== providerId) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_PROVIDER_MISMATCH' });
+              if (providerStoreMutationOwners.get(transactionId) !== providerId || !hub.hasProviderStoreMutation()) {
+                if (hub.hasProviderStoreMutation() || !hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+                providerStoreMutationOwners.set(transactionId, providerId);
+                acquiredStoreMutation = true;
+              }
               await hooks.rollback(plan);
               await hooks.setRuntimeBaseline(getHubRuntimeIdentity().runtime_id, 'rollback');
               const rollbackPlan = hooks.backupPlan() ?? plan;
@@ -2007,9 +2064,14 @@ export async function apply(ctx) {
               } catch (error) {
                 return sendJson(res, 409, { ok: false, code: boundedMachineCodeFromError(error) ?? 'PROVIDER_LIFECYCLE_RECORD_FAILED' });
               }
+              retainStoreMutation = true;
               return sendJson(res, 202, { ok: true, restart_required: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLBACK_PENDING' });
             } finally {
               await hooks.release();
+              if (acquiredStoreMutation && !retainStoreMutation && providerStoreMutationOwners.get(transactionId) === providerId) {
+                providerStoreMutationOwners.delete(transactionId);
+                hub.endProviderStoreMutation();
+              }
             }
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'verify-rollback') {
@@ -2042,6 +2104,10 @@ export async function apply(ctx) {
               if (verified?.ok !== true || !hasCompleteProviderCatalogEvidence(verified?.catalog_evidence) || verified?.default_evidence?.ok !== true || verified?.catalogPresent !== true || verified?.harnessDefaultRestored !== true || verified?.runtimeRestarted !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               hub.endProviderMutation(providerId);
+              if (providerStoreMutationOwners.get(transactionId) === providerId) {
+                providerStoreMutationOwners.delete(transactionId);
+                hub.endProviderStoreMutation();
+              }
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
               await hooks.release();
@@ -2091,8 +2157,13 @@ export async function apply(ctx) {
               expected_revisions: stored.plan.expected_revisions,
               runtime_id_before: stored.plan.runtime_id_before,
             };
-            if (!hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+            if (!hub.beginProviderStoreMutation()) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+            if (!hub.beginProviderMutation(providerId)) {
+              hub.endProviderStoreMutation();
+              return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+            }
             let retainProviderMutation = false;
+            let retainProviderStoreMutation = false;
             try {
               const hooks = createProviderDeleteFileHooks({
                 profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
@@ -2118,9 +2189,14 @@ export async function apply(ctx) {
               const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
               const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
               retainProviderMutation = result.state === 'RESTART_PENDING';
+              if (retainProviderMutation) {
+                providerStoreMutationOwners.set(executionPlan.plan_id, providerId);
+                retainProviderStoreMutation = true;
+              }
               return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
             } finally {
               if (!retainProviderMutation) hub.endProviderMutation(providerId);
+              if (!retainProviderStoreMutation) hub.endProviderStoreMutation();
             }
           }
           return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
