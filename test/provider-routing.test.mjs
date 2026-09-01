@@ -182,6 +182,20 @@ test('Hub Case 4: provider changes between spawns → second worker uses the new
   assert.equal(created[1].agentOptions.provider, 'deepseek-official');
 });
 
+test('Hub blocks new jobs while their resolved provider is being deleted', async () => {
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  const created = captureAgentOptions(reg);
+  reg.beginProviderMutation('opencode-go');
+  await assert.rejects(
+    reg.spawn({ task: 'blocked', tier: 'flash', effort: 'off', cwd: '/tmp' }),
+    (error) => error.code === 'PROVIDER_DELETE_BUSY',
+  );
+  assert.equal(created.length, 0);
+  reg.endProviderMutation('opencode-go');
+  const job = await reg.spawn({ task: 'allowed', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  assert.equal(job.provider, 'opencode-go');
+});
+
 test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {
   const reg = makeRegistry(undefined, 'follow-dsh');
   const created = captureAgentOptions(reg);

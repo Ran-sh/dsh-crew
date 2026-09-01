@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
@@ -391,7 +391,7 @@ test('offline recovery also clears a malformed main lock without a reclaim guard
   assert.equal(existsSync(lockPath), false);
 });
 
-test('offline recovery supports an explicit force override for a reused live PID', async () => {
+test('offline recovery never forcefully reclaims a live recovery owner', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');
   mkdirSync(backupDir, { recursive: true });
@@ -402,8 +402,35 @@ test('offline recovery supports an explicit force override for a reused live PID
   assert.equal(blocked.ok, false);
   assert.equal(blocked.code, 'PROVIDER_DELETE_BUSY');
   const forced = await hooks.recoverLock({ force: true });
-  assert.equal(forced.ok, true);
-  assert.equal(existsSync(recoveryPath), false);
+  assert.equal(forced.ok, false);
+  assert.equal(forced.code, 'PROVIDER_DELETE_BUSY');
+  assert.equal(existsSync(recoveryPath), true);
+  rmSync(recoveryPath, { force: true });
+});
+
+test('offline recovery never forcefully removes a live mutation owner', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const lockPath = join(backupDir, '.delete.lock');
+  mkdirSync(backupDir, { recursive: true });
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: 'live-mutation' }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const result = await hooks.recoverLock({ force: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_BUSY');
+  assert.equal(existsSync(lockPath), true);
+  rmSync(lockPath, { force: true });
+});
+
+test('mutation writes fail closed when their on-disk lock token is fenced', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const plan = planFor(paths.profileFile);
+  await hooks.backup(plan);
+  writeFileSync(join(backupDir, '.delete.lock'), JSON.stringify({ pid: process.pid, token: 'new-owner' }));
+  await assert.rejects(() => hooks.markTombstone(plan.provider_id), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
+  assert.equal(JSON.parse(readFileSync(paths.lifecycleFile, 'utf8')).tombstones[plan.provider_id], undefined);
 });
 
 test('offline recovery does not steal an active stale-lock reclaim claim', async () => {
@@ -811,6 +838,38 @@ test('an absent lifecycle file remains auditable after the transaction creates i
   assert.equal(existsSync(paths.lifecycleFile), false);
 });
 
+test('absent lifecycle ownership remains rollbackable after a crash during witness handoff', async () => {
+  const paths = fixture();
+  rmSync(paths.lifecycleFile);
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  let injected = false;
+  const hooks = createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    restart: async () => ({ ok: true }),
+    afterOwnedReplacePublished: (key) => {
+      if (key === 'lifecycle' && !injected) {
+        injected = true;
+        throw Object.assign(new Error('simulated crash after publish'), { code: 'SIMULATED_CRASH' });
+      }
+    },
+  });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(result.audit_recorded, false);
+  assert.equal(injected, true);
+  const manifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.mutation_journal.lifecycle.created, true);
+  assert.equal(existsSync(manifest.mutation_journal.lifecycle.witness), true);
+
+  const reopened = createProviderDeleteFileHooks({ ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id });
+  await reopened.acquireLock();
+  await reopened.rollback(reopened.backupPlan());
+  await reopened.release();
+  assert.equal(existsSync(paths.lifecycleFile), false);
+});
+
 test('rollback preserves an external same-content replacement of a transaction-created file', async () => {
   const paths = fixture();
   rmSync(paths.configFile);
@@ -885,6 +944,39 @@ test('invalid recovery entries can be quarantined under the owned backup root', 
   assert.equal(existsSync(entry), false);
   const quarantineRoot = join(backupDir, '.quarantine');
   assert.equal(readdirSync(quarantineRoot).length, 1);
+});
+
+test('long unresolved recovery entry names can be quarantined safely', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const entryName = `invalid-${'x'.repeat(160)}`;
+  const entry = join(backupDir, entryName);
+  mkdirSync(entry, { recursive: true });
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const result = await hooks.quarantine(entryName);
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(entry), false);
+});
+
+test('reopening rejects a symlinked manifest before reading it', async (t) => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  await hooks.backup(plan);
+  await hooks.release();
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const outside = join(paths.dir, 'outside-manifest.json');
+  writeFileSync(outside, readFileSync(manifestFile));
+  rmSync(manifestFile, { force: true });
+  try { symlinkSync(outside, manifestFile); }
+  catch (error) {
+    if (['EPERM', 'EACCES'].includes(error?.code)) { t.skip('symlinks unavailable on this Windows host'); return; }
+    throw error;
+  }
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_UNSAFE_PATH');
 });
 
 test('persisted provider delete backup retains sanitized credential references for final audit', async () => {

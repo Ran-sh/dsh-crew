@@ -172,6 +172,26 @@ test('provider recovery does not hide structurally incomplete or terminal-invali
   assert.equal(hasPendingProviderRecoveryTransactions({ recovery_transactions: transactions }), true);
 });
 
+test('provider recovery surfaces non-directory entries with opaque action ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-file-'));
+  writeFileSync(join(root, 'unexpected-file'), 'not a transaction');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, 'unexpected-file');
+  assert.match(transactions[0].action_id, /^[a-f0-9]{32}$/);
+  assert.equal(transactions[0].unresolved, true);
+});
+
+test('provider recovery gives long malformed entries actionable opaque ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-long-'));
+  const name = `invalid-${'x'.repeat(160)}`;
+  mkdirSync(join(root, name));
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].storage_id, name);
+  assert.match(transactions[0].action_id, /^[a-f0-9]{32}$/);
+});
+
 test('provider recovery ignores quarantined directories after explicit resolution', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-quarantine-'));
   const quarantine = join(root, '.quarantine');
