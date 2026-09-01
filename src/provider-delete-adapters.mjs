@@ -326,7 +326,7 @@ export function createProviderDeleteFileHooks({
   configFile,
   lifecycleFile,
   backupDir,
-  readConfig = () => defaultReadConfig(configFile),
+  readConfig = null,
   writeConfig = (config, { managedRoot: writeRoot } = {}) => defaultWriteConfig(configFile, config, writeRoot),
   writeSettings = null,
   restart,
@@ -347,6 +347,10 @@ export function createProviderDeleteFileHooks({
   let lockPath = null;
   let lockOwned = false;
   let lockOwnerToken = null;
+
+  const readConfigFn = typeof readConfig === 'function'
+    ? readConfig
+    : () => defaultReadConfig(configFile, managedRoot);
 
   const writeSettingsFn = typeof writeSettings === 'function' ? writeSettings : (content, { expectedRevision } = {}) => {
     if (typeof settingsFile !== 'string' || !settingsFile.trim()) throw Object.assign(new Error('provider settings path is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
@@ -593,14 +597,14 @@ export function createProviderDeleteFileHooks({
     ensureMutationLock();
     assertManagedPath(configFile, managedRoot);
     if (typeof expectedRevision === 'string') {
-      const current = await readConfig();
+      const current = await readConfigFn();
       if (sha256(JSON.stringify(current)) !== expectedRevision) {
         throw Object.assign(new Error('provider config changed during commit'), { code: 'PROVIDER_CONFIG_CHANGED' });
       }
     }
     await writeConfig(config, { expectedRevision, managedRoot });
     assertManagedPath(configFile, managedRoot);
-    const written = await readConfig();
+    const written = await readConfigFn();
     if (sha256(JSON.stringify(written)) !== sha256(JSON.stringify(config))) {
       throw Object.assign(new Error('provider config write could not be verified'), { code: 'PROVIDER_CONFIG_WRITE_UNVERIFIED' });
     }
@@ -773,7 +777,7 @@ export function createProviderDeleteFileHooks({
   };
 
   const scrubReferences = async (plan) => {
-    const config = await readConfig();
+    const config = await readConfigFn();
     if (sha256(JSON.stringify(config)) !== activeBackup?.manifest?.config_revision) {
       throw Object.assign(new Error('provider config changed'), { code: 'PROVIDER_CONFIG_CHANGED' });
     }
@@ -858,7 +862,7 @@ export function createProviderDeleteFileHooks({
 
   const checkpointApplied = async () => {
     if (!activeBackup) throw Object.assign(new Error('provider delete backup is unavailable'), { code: 'PROVIDER_DELETE_BACKUP_INVALID' });
-    const config = await readConfig();
+    const config = await readConfigFn();
     const lifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     activeBackup.manifest.applied_config_revision = sha256(JSON.stringify(config));
     activeBackup.manifest.applied_lifecycle_revision = sha256(JSON.stringify(lifecycle));
@@ -903,7 +907,7 @@ export function createProviderDeleteFileHooks({
         providerAbsent = providerAbsent && parsed.ok && !parsed.declarations.some((declaration) => declaration.id === plan.provider_id);
       }
     }
-    const config = await readConfig();
+    const config = await readConfigFn();
     const routingClear = scrubProviderReferences(config, [plan.provider_id]).removed.length === 0;
     const replacementApplied = plan.was_harness_default !== true || (
       config?.harness_default?.provider === plan.replacement_default
@@ -928,7 +932,7 @@ export function createProviderDeleteFileHooks({
     const allowedRevision = (current, original, applied, key) => current === original
       || (typeof applied === 'string' && current === applied)
       || (typeof activeBackup.manifest.mutation_journal?.[key]?.next_revision === 'string' && current === activeBackup.manifest.mutation_journal[key].next_revision);
-    const currentConfig = await readConfig();
+    const currentConfig = await readConfigFn();
     const currentLifecycle = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     const currentProfile = fs.existsSync(profileFile) ? fs.readFileSync(profileFile, 'utf8') : null;
     const currentSettings = typeof settingsFile === 'string' && settingsFile.trim() && fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : null;
@@ -946,7 +950,7 @@ export function createProviderDeleteFileHooks({
         ?? activeBackup.manifest.mutation_journal?.[key]?.next_revision;
       if (typeof expected !== 'string') throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       let current;
-      if (key === 'config') current = sha256(JSON.stringify(await readConfig()));
+      if (key === 'config') current = sha256(JSON.stringify(await readConfigFn()));
       else if (key === 'lifecycle') current = sha256(JSON.stringify(normalizeProviderLifecycleState(readJson(lifecycleFile, {}))));
       else current = sha256(fs.readFileSync(target));
       if (current !== expected) throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
@@ -964,7 +968,7 @@ export function createProviderDeleteFileHooks({
       assertManagedPath(target, managedRoot);
       if (key === 'config') {
         if (entry?.existed === true) {
-          const restored = restoreConfigProjection(await readConfig(), activeBackup.manifest.config_projection);
+          const restored = restoreConfigProjection(await readConfigFn(), activeBackup.manifest.config_projection);
           await writeManagedConfig(restored, sha256(JSON.stringify(currentConfig)));
         } else {
           await removeIfTransactionCreated('config', target);
@@ -1037,7 +1041,7 @@ export function createProviderDeleteFileHooks({
       const settings = readProviderSettingsDeclarations(fs.readFileSync(settingsFile, 'utf8'), { file: 'harness/settings.yaml' });
       providerPresent = providerPresent || (settings.ok && settings.declarations.some((declaration) => declaration.id === plan.provider_id));
     }
-    const config = await readConfig();
+    const config = await readConfigFn();
     const state = normalizeProviderLifecycleState(readJson(lifecycleFile, {}));
     const routingRestored = typeof activeBackup?.manifest?.routing_projection_digest === 'string'
       && sha256(JSON.stringify(configProjection(config))) === activeBackup.manifest.routing_projection_digest;
