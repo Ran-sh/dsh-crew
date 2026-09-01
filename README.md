@@ -49,6 +49,7 @@ silently falling back.
 dsh-crew inspect          # live capabilities and readiness
 dsh-crew jobs list        # jobs and Result Contracts
 dsh-crew providers list   # 3210 Harness provider inventory (secret-free)
+dsh-crew providers migration-status # detect legacy base providers; no automatic migration
 dsh-crew providers probe <provider-id>
 curl http://127.0.0.1:3210/_dsh/dsh-crew/credential-references  # references/orphans only
 dsh-crew credentials list  # secret-free reference inventory

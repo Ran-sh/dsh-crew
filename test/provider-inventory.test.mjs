@@ -156,6 +156,28 @@ test('provider inventory counts only non-terminal jobs as active', () => {
   assert.equal(result.records.find((record) => record.id === 'opencode-go').references.active_jobs, 1);
 });
 
+test('provider inventory keeps base and user authorities separate for native removability', () => {
+  const result = buildProviderInventory({
+    catalog,
+    declarations: [
+      ...declarations.map((entry) => ({ ...entry, declaration_authority: { kind: 'harness-settings', locator: `llm-pi-ai.providers.${entry.id}` }, origin: 'dynamic', ownership: 'dynamic-user' })),
+      { id: 'opencode-go', display_name: 'OpenCode Go', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' } },
+      { id: 'legacy-only', display_name: 'Legacy only', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.legacy-only' } },
+    ],
+  });
+  const openrouter = result.records.find((record) => record.id === 'openrouter');
+  const opencode = result.records.find((record) => record.id === 'opencode-go');
+  const legacyOnly = result.records.find((record) => record.id === 'legacy-only');
+  assert.equal(openrouter.native_removable, true);
+  assert.deepEqual(openrouter.layers.base, []);
+  assert.deepEqual(openrouter.layers.user, ['harness-settings']);
+  assert.equal(opencode.native_removable, false);
+  assert.deepEqual(opencode.layers.base, ['crew-profile']);
+  assert.deepEqual(opencode.layers.user, ['harness-settings']);
+  assert.equal(legacyOnly.native_removable, false);
+  assert.deepEqual(legacyOnly.layers.user, []);
+});
+
 test('malformed authority alongside a valid declaration fails closed for the whole provider', () => {
   const result = buildProviderInventory({ declarations: [
     { id: 'mixed', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.mixed' } },

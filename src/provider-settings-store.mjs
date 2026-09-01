@@ -118,8 +118,10 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
       return {
         id: entry.id,
         display_name: scalarField(parsed.lines, entry, 'displayName') ?? entry.id,
-        origin: 'profile-managed',
-        ownership: 'crew-managed-profile',
+        // settings.yaml is the Harness user layer. Crew profile/base
+        // declarations are reported separately by provider-profile-store.
+        origin: 'dynamic',
+        ownership: 'dynamic-user',
         file,
         declaration_authority: { kind: 'harness-settings', locator: `llm-pi-ai.providers.${entry.id}` },
         ...(credentialRef ? { credential_ref: { kind: 'env', name_or_handle: credentialRef, ownership: 'unknown' } } : {}),

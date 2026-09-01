@@ -1227,7 +1227,7 @@ Commands:
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
-  providers   3210 provider lifecycle API: list|delete-plan|delete|rollback|probe
+  providers   3210 provider lifecycle API: list|migration-status|delete-plan|delete|rollback|probe
   credentials 3210 credential references: list|purge-plan|purge (separate confirmation)
   releases    list retained, validated Crew payload releases
   rollback    switch to a retained payload version and verify the 3210 runtime
@@ -1306,6 +1306,7 @@ export async function npxJobs({
 
 const PROVIDER_CAPABILITY_REQUIREMENTS = Object.freeze({
   list: Object.freeze(['provider-inventory']),
+  'migration-status': Object.freeze(['provider-inventory']),
   'delete-plan': Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
   delete: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
   rollback: Object.freeze(['provider-inventory', 'provider-lifecycle-v1']),
@@ -1399,6 +1400,8 @@ export async function npxProviders({
   let init = { headers: { accept: 'application/json' } };
   if (action === 'list') {
     // keep defaults
+  } else if (action === 'migration-status') {
+    url = `${base}/migration-status`;
   } else if (action === 'delete-plan') {
     if (!id) throw new Error('providers delete-plan requires a provider id');
     url = `${base}/${encodeURIComponent(id)}/delete-plan`;

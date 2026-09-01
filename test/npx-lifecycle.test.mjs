@@ -970,6 +970,9 @@ test('providers CLI stays on the 3210 lifecycle API and binds destructive flags'
   const common = { log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl };
   await npxProviders({ ...common, args: ['list'] });
   assert.equal(calls.at(-1)[0], 'http://127.0.0.1:3210/_dsh/dsh-crew/providers');
+  await npxProviders({ ...common, args: ['migration-status'] });
+  assert.equal(calls.at(-1)[0], 'http://127.0.0.1:3210/_dsh/dsh-crew/providers/migration-status');
+  assert.equal(calls.at(-1)[1].method, undefined);
   await npxProviders({ ...common, args: ['delete-plan', 'opencode-go'], replacementDefault: 'openrouter' });
   assert.equal(calls.at(-1)[1].method, 'POST');
   assert.match(calls.at(-1)[1].body, /"replacement_default":"openrouter"/);

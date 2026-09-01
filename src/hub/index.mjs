@@ -34,6 +34,7 @@ import { buildHubExecutionRows } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
+import { buildProviderLayerMigrationPlan } from '../provider-layer-migration.mjs';
 import { inspectProviderProfile, readProviderDeclarations } from '../provider-profile-store.mjs';
 import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
@@ -328,8 +329,26 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     ],
     activeJobs: hub.list(),
   });
+  const migrationDeclarations = inventory.records.flatMap((record) => (record.declaration_authorities ?? []).map((authority) => ({
+    id: record.id,
+    display_name: record.display_name,
+    credential_ref: record.credential_refs?.[0]?.name_or_handle ?? null,
+    declaration_authority: authority,
+  })));
+  const routingReferences = [
+    ...(config.flash_model_priority ?? []), ...(config.pro_model_priority ?? []),
+    ...(config.worker?.model_policy?.priority ?? []), ...(config.worker?.model_policy?.escalation_priority ?? []),
+    ...(config.review?.model_policy?.priority ?? []), ...(config.review?.model_policy?.escalation_priority ?? []),
+  ];
+  const migration = buildProviderLayerMigrationPlan({
+    declarations: migrationDeclarations,
+    catalogProviders: catalog.providers,
+    harnessDefault: catalog.harness_default,
+    routingReferences,
+  });
   return {
     ...inventory,
+    migration,
     catalog_evidence: catalogEvidence,
     declaration_evidence: declarationEvidence,
     default_evidence: defaultEvidence,
@@ -1603,6 +1622,11 @@ export async function apply(ctx) {
         try { url = new URL(req.url, 'http://localhost'); } catch { return sendJson(res, 400, { ok: false, code: 'PROVIDER_PLAN_INVALID' }); }
         const parts = url.pathname.slice(`${ROUTE_BASE}/providers`.length).split('/').filter(Boolean);
         try {
+          if (req.method === 'GET' && parts.length === 1 && parts[0] === 'migration-status') {
+            const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+            const inventory = await readProviderInventorySnapshot(hub, ctx, config);
+            return sendJson(res, 200, { ok: true, ...inventory.migration, runtime: getHubRuntimeIdentity() });
+          }
           const providerId = decodeURIComponent(parts[0]);
           const body = await readBody(req);
           if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'lock' && parts.length === 2) {

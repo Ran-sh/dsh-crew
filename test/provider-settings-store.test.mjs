@@ -19,10 +19,20 @@ test('Harness settings parser discovers nested provider declarations with a stab
   const result = readProviderSettingsDeclarations(SETTINGS);
   assert.equal(result.ok, true);
   assert.deepEqual(result.declarations, [
-    { id: 'opencode-go', display_name: 'opencode-go', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }, credential_ref: { kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'unknown' } },
-    { id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed', ownership: 'crew-managed-profile', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }, credential_ref: { kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'unknown' } },
+    { id: 'opencode-go', display_name: 'opencode-go', origin: 'dynamic', ownership: 'dynamic-user', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }, credential_ref: { kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'unknown' } },
+    { id: 'openrouter', display_name: 'openrouter', origin: 'dynamic', ownership: 'dynamic-user', file: 'harness/settings.yaml', declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }, credential_ref: { kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'unknown' } },
   ]);
   assert.equal(JSON.stringify(result).includes('deepseek-v4-flash'), false);
+});
+
+test('settings declarations are user-layer provenance, not Crew profile ownership', () => {
+  const result = readProviderSettingsDeclarations(SETTINGS_WITH_DEFAULT);
+  assert.equal(result.ok, true);
+  for (const declaration of result.declarations) {
+    assert.equal(declaration.origin, 'dynamic');
+    assert.equal(declaration.ownership, 'dynamic-user');
+    assert.equal(declaration.declaration_authority.kind, 'harness-settings');
+  }
 });
 
 test('Harness settings removal is revision checked and preserves unrelated sections', () => {

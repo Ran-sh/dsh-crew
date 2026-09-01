@@ -106,13 +106,14 @@ const COPY = {
     harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
+    providerLayerMigration: '检测到旧版 profile Provider', providerLayerMigrationHint: '这些 Provider 仍在 Crew profile/base 层，所以 3210 原生页面不会显示删除。请先按迁移计划提升到 Harness 用户设置层；不会复制密钥。', providerLayerMigrationPlan: '迁移计划',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败', providerDeletePending: '配置可能已变更，事务仍待重启/验证；请刷新状态后选择回滚。', providerRollbackContinue: '继续回滚验证', recoveryUnresolved: '发现不可自动恢复的事务', recoveryStorage: '存储项', recoveryQuarantine: '隔离', recoveryQuarantineConfirm: '该事务清单无法安全恢复。将其移入隔离区并阻止自动使用，继续？',
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
     credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
-    customProviders: '自定义 Provider', addProvider: '＋ 添加 Provider',
+    customProviders: '多模态适配器', addProvider: '＋ 添加多模态适配器',
     noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
     providerName: '名称', modelsField: '模型列表（逗号分隔）',
     providerType: '接入方式', typeApi: 'API · 兼容 OpenAI 接口', typeCli: 'CLI · 本地命令',
@@ -246,13 +247,14 @@ const COPY = {
     harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
+    providerLayerMigration: 'Legacy profile Providers detected', providerLayerMigrationHint: 'These Providers still exist in the Crew profile/base layer, so the native 3210 page cannot show Delete. Promote them to Harness user settings with an explicit plan; keys are never copied.', providerLayerMigrationPlan: 'Migration plan',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed', providerDeletePending: 'Configuration may already be changed; the transaction still needs restart/verification. Refresh status and use rollback if needed.', providerRollbackContinue: 'Continue rollback verification', recoveryUnresolved: 'An unrecoverable recovery transaction is blocking deletion', recoveryStorage: 'storage entry', recoveryQuarantine: 'Quarantine', recoveryQuarantineConfirm: 'This recovery manifest cannot be safely reopened. Move it into the quarantine area and keep it out of automatic recovery?',
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
     credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
-    customProviders: 'Custom providers', addProvider: '＋ Add provider',
+    customProviders: 'Multimodal adapters', addProvider: '＋ Add multimodal adapter',
     noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
     providerName: 'Name', modelsField: 'Models (comma-separated)',
     providerType: 'Connection', typeApi: 'API · OpenAI-compatible', typeCli: 'CLI · local command',
@@ -1475,6 +1477,22 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           summary={sectionSummary(copy.providerCount(providerInventory?.records?.length ?? 0), providerInventoryError ? copy.providerLifecycleError : '')}
           expanded={!!expandedSections.harnessProviders} onToggle={() => toggleSection('harnessProviders')}>
           {providerInventoryError && <div style={{ fontSize: 12, color: '#c55' }}>{providerInventoryError}</div>}
+          {!providerInventoryError && (providerInventory?.migration?.providers?.length ?? 0) > 0 && (
+            <div style={{ border: '1px solid rgba(201,135,53,0.45)', borderRadius: 7, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ fontWeight: 650, fontSize: 12.5 }}>{copy.providerLayerMigration}</div>
+              <div style={{ fontSize: 11.5, opacity: 0.7, marginTop: 3 }}>{copy.providerLayerMigrationHint}</div>
+              <div style={{ fontSize: 11, marginTop: 6, fontFamily: 'monospace' }}>
+                {(providerInventory.migration.providers ?? []).map((entry: any) => (
+                  <div key={entry.provider_id}>
+                    {entry.provider_id} · {entry.action}{entry.harness_default ? ' · Harness Default' : ''}
+                  </div>
+                ))}
+              </div>
+              <a href="http://127.0.0.1:3210/" target="_blank" rel="noopener noreferrer" style={{ ...S.btn, display: 'inline-block', textDecoration: 'none', marginTop: 7, padding: '3px 8px' }}>
+                {copy.providerLayerMigrationPlan} → 3210
+              </a>
+            </div>
+          )}
           {!providerInventoryError && (providerInventory?.records?.length ?? 0) === 0 && (
             <div style={{ fontSize: 12, opacity: 0.55 }}>{copy.providerNoInventory}</div>
           )}

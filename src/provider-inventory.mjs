@@ -105,6 +105,8 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
   const records = ids.map((id) => {
     const catalogEntry = catalogFor(catalogProviders, id);
     const providerDeclarations = declarationsFor(safeDeclarations, id);
+    const baseDeclarations = providerDeclarations.filter((entry) => normalizeAuthority(entry?.declaration_authority)?.kind === 'crew-profile');
+    const userDeclarations = providerDeclarations.filter((entry) => normalizeAuthority(entry?.declaration_authority)?.kind === 'harness-settings');
     const declaration = providerDeclarations[0] ?? null;
     const declared = declaration !== null;
     const catalogued = catalogEntry !== null;
@@ -141,6 +143,11 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         present: declared,
       },
       declaration_authorities: uniqueAuthorities,
+      layers: {
+        base: [...new Set(baseDeclarations.map((entry) => normalizeAuthority(entry.declaration_authority)?.kind).filter(Boolean))],
+        user: [...new Set(userDeclarations.map((entry) => normalizeAuthority(entry.declaration_authority)?.kind).filter(Boolean))],
+      },
+      native_removable: userDeclarations.length > 0 && baseDeclarations.length === 0,
       delete_capability: deleteCapability,
       ...(deleteBlocker ? { delete_blocker: deleteBlocker } : {}),
       models: modelIds(catalogEntry),
