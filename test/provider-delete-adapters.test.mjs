@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -252,6 +253,7 @@ test('provider backups reject nested flow-map credential values', async () => {
 
 test('default settings writer carries managed-root containment through atomic rename', () => {
   assert.match(ADAPTER_SOURCE, /atomicWrite\(settingsFile, content, managedRoot\)/);
+  assert.match(ADAPTER_SOURCE, /atomicWrite\(target, sourceText, managedRoot\)/);
 });
 
 test('provider delete adapters reject managed paths outside the backup Crew root', () => {
@@ -284,6 +286,41 @@ test('a half-created owner lock without metadata can be safely reclaimed', async
   await hooks.backup(planFor(paths.profileFile));
   await hooks.release();
   assert.equal(existsSync(lockPath), false);
+});
+
+test('two processes reclaiming the same stale lock yield exactly one owner', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const staleLock = join(backupDir, '.delete.lock');
+  mkdirSync(staleLock, { recursive: true });
+  writeFileSync(join(staleLock, 'owner.json'), JSON.stringify({ pid: 999999, token: 'stale-owner' }));
+  const plan = planFor(paths.profileFile);
+  const start = join(paths.dir, 'start.signal');
+  const ready = [join(paths.dir, 'ready-a'), join(paths.dir, 'ready-b')];
+  const childSource = (readyFile) => `
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { createProviderDeleteFileHooks } from './src/provider-delete-adapters.mjs';
+    const payload = ${JSON.stringify({ paths, backupDir, plan, start })};
+    writeFileSync(${JSON.stringify(readyFile)}, 'ready');
+    while (!existsSync(payload.start)) await new Promise((resolve) => setTimeout(resolve, 5));
+    const hooks = createProviderDeleteFileHooks({ ...payload.paths, backupDir: payload.backupDir });
+    try { await hooks.backup(payload.plan); console.log('WON'); await new Promise((resolve) => setTimeout(resolve, 500)); }
+    catch (error) { console.log(error.code ?? 'UNKNOWN'); }
+    finally { await hooks.release(); }
+  `;
+  const children = ready.map((readyFile) => spawn(process.execPath, ['--input-type=module', '-e', childSource(readyFile)], { cwd: process.cwd() }));
+  const output = children.map((child) => new Promise((resolve) => {
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.on('close', () => resolve(text.trim()));
+  }));
+  const deadline = Date.now() + 5_000;
+  while (ready.some((file) => !existsSync(file)) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(ready.map((file) => existsSync(file)), [true, true]);
+  writeFileSync(start, 'go');
+  const results = await Promise.all(output);
+  assert.equal(results.filter((value) => value === 'WON').length, 1);
+  assert.equal(results.filter((value) => value === 'PROVIDER_DELETE_BUSY').length, 1);
 });
 
 test('provider verification fails closed when a managed profile is malformed', async () => {
