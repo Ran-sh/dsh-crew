@@ -737,6 +737,9 @@ export class WorkerRegistry {  constructor(ctx) {
       abortRequested: false,
       abortPromise: null,
       resolveAbort: null,
+      providerLease: false,
+      lateHandleCreated: false,
+      lateCreateCleanupPromise: null,
     };
     job.abortPromise = new Promise((resolve) => { job.resolveAbort = resolve; });
     const disposeJobHandle = async () => {
@@ -813,14 +816,15 @@ export class WorkerRegistry {  constructor(ctx) {
         job.abortPromise.then(() => ({ aborted: true })),
       ]);
       if (created.aborted) {
-        createPromise.then(async (handle) => {
-          if (handle && (job.status !== 'running' || job.abortRequested)) {
-            job.handle = handle;
-            try { await job.disposeHandle(); } catch (error) {
-              job.cleanup_warning = `agent cleanup failed: ${error?.message ?? String(error)}`;
-            }
-          }
-        }).catch(() => {});
+        job.lateCreateCleanupPromise = createPromise.then(async (handle) => {
+          if (!handle) return;
+          job.lateHandleCreated = true;
+          job.handle = handle;
+          if (job.status !== 'running' || job.abortRequested) await job.disposeHandle();
+        }).catch((error) => {
+          job.cleanup_warning = `late agent creation failed: ${error?.message ?? String(error)}`;
+          throw error;
+        });
         return;
       }
       const handle = created.handle;
@@ -893,8 +897,18 @@ export class WorkerRegistry {  constructor(ctx) {
           handleCleanupWarning = `agent cleanup failed: ${error?.message ?? String(error)}`;
         }
         if (job.providerLease) {
-          this.releaseProviderLease(job.provider);
-          job.providerLease = false;
+          const releaseLease = () => {
+            if (!job.providerLease) return;
+            this.releaseProviderLease(job.provider);
+            job.providerLease = false;
+          };
+          if (job.lateCreateCleanupPromise) {
+            job.lateCreateCleanupPromise.then(releaseLease).catch(() => {
+              if (!job.lateHandleCreated) releaseLease();
+              // A late-created handle that failed disposal remains fenced by
+              // the provider lease until an operator restarts/reclaims it.
+            });
+          } else releaseLease();
         }
         // Delivery completeness is separate from execution status: a job can
         // be done yet fail to report Diff/Tests/Risks (or Review sections for
