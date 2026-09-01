@@ -343,18 +343,30 @@ export function createProviderDeleteFileHooks({
     };
     const acquireReclaimLock = () => {
       assertManagedPath(reclaimPath, managedRoot);
+      const sameOwner = (left, right) => left?.token && right?.token
+        ? left.token === right.token
+        : left === right;
       try {
         fs.writeFileSync(reclaimPath, JSON.stringify({ pid: process.pid, token: reclaimToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
+        const adopted = readJson(reclaimPath, null);
+        if (!sameOwner(adopted, { token: reclaimToken })) throw Object.assign(new Error('provider delete reclaim lock was not persisted'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
         return true;
       } catch (error) {
         if (error?.code !== 'EEXIST') throw Object.assign(new Error('provider delete lock reclaim unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
         let reclaimOwner = null;
         try { reclaimOwner = readJson(reclaimPath, null); } catch {}
         if (reclaimOwner && ownerIsAlive(reclaimOwner) !== false) throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
+        // Re-read before reclaiming. A contender may have replaced a stale
+        // owner after our first read; never rename that contender's live lock.
+        let currentReclaimOwner = null;
+        try { currentReclaimOwner = readJson(reclaimPath, null); } catch {}
+        if (!sameOwner(currentReclaimOwner, reclaimOwner)) throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' });
         const stalePath = `${reclaimPath}.${randomUUID()}.stale`;
         try { renameSync(reclaimPath, stalePath); } catch { throw Object.assign(new Error('another provider deletion is reclaiming the lock'), { code: 'PROVIDER_DELETE_BUSY' }); }
         try {
           fs.writeFileSync(reclaimPath, JSON.stringify({ pid: process.pid, token: reclaimToken, created_at: new Date().toISOString() }) + '\n', { flag: 'wx' });
+          const adopted = readJson(reclaimPath, null);
+          if (!sameOwner(adopted, { token: reclaimToken })) throw Object.assign(new Error('provider delete reclaim lock was not persisted'), { code: 'PROVIDER_DELETE_BUSY' });
           return true;
         } finally { try { fs.rmSync(stalePath, { force: true }); } catch {} }
       }
