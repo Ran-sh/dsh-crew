@@ -4,7 +4,7 @@
 // and serves the one-click installer endpoints for the settings page.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
@@ -126,18 +126,23 @@ function readCredentialPurgeState() {
   try { return normalizeCredentialPurgeState(JSON.parse(readFileSync(CREDENTIAL_PURGE_STATE_FILE, 'utf8'))); } catch { return normalizeCredentialPurgeState(); }
 }
 
-function readProviderRecoveryTransactions() {
-  const root = join(CONFIG_DIR, 'provider-backups');
+export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provider-backups')) {
   if (!existsSync(root)) return [];
   try {
     const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => {
+      const manifestFile = join(root, entry.name, 'manifest.json');
       try {
-        const manifest = JSON.parse(readFileSync(join(root, entry.name, 'manifest.json'), 'utf8'));
+        const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
         const transactionId = typeof manifest?.plan?.plan_id === 'string' ? manifest.plan.plan_id : null;
         const providerId = typeof manifest?.provider_id === 'string' ? manifest.provider_id : null;
-        const phase = typeof manifest?.phase_journal?.phase === 'string' ? manifest.phase_journal.phase : null;
-        const updatedAt = typeof manifest?.phase_journal?.updated_at === 'string' ? manifest.phase_journal.updated_at : null;
-        if (!transactionId || !providerId || !phase || !updatedAt || ['ROLLED_BACK', 'VERIFIED'].includes(phase)) return [];
+        if (!transactionId || !providerId) return [];
+        const phase = typeof manifest?.phase_journal?.phase === 'string' && manifest.phase_journal.phase.trim()
+          ? manifest.phase_journal.phase.trim() : 'RECOVERY_INCOMPLETE';
+        const updatedAt = typeof manifest?.phase_journal?.updated_at === 'string' && manifest.phase_journal.updated_at.trim()
+          ? manifest.phase_journal.updated_at : statSync(manifestFile).mtime.toISOString();
+        const hasPendingMutation = manifest?.mutation_journal && typeof manifest.mutation_journal === 'object'
+          && Object.keys(manifest.mutation_journal).length > 0;
+        if (['ROLLED_BACK', 'VERIFIED'].includes(phase) && !hasPendingMutation) return [];
         return [{ transaction_id: transactionId, provider_id: providerId, phase, updated_at: updatedAt }];
       } catch { return []; }
     });
