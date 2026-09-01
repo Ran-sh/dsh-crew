@@ -689,6 +689,16 @@ test('an external lifecycle create after an absent snapshot is rejected and pres
   assert.match(readFileSync(paths.lifecycleFile, 'utf8'), /"tombstones": \{\}/);
 });
 
+test('transaction-owned absent files are created exclusively and removed on rollback', async () => {
+  const paths = fixture();
+  rmSync(paths.configFile);
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: false, code: 'CREW_BACKEND_START_TIMEOUT' }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'FAILED');
+  assert.equal(existsSync(paths.configFile), false);
+});
+
 test('owner metadata write failure cleans up the half-created lock', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');

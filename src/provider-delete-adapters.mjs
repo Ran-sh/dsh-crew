@@ -103,6 +103,27 @@ function defaultReadConfig(configFile, managedRoot = null) {
   return readJson(configFile, {});
 }
 
+function atomicCreateWithWitness(file, content, managedRoot, witness) {
+  if (!managedRoot || typeof witness !== 'string' || !witness.trim()) {
+    throw Object.assign(new Error('exclusive provider create witness is unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+  }
+  assertManagedPath(file, managedRoot);
+  assertManagedPath(witness, managedRoot);
+  const parent = dirname(file);
+  assertManagedPath(parent, managedRoot);
+  if (!existsSync(parent)) throw Object.assign(new Error('managed provider directory is missing'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+  try {
+    writeFileSync(witness, content, { flag: 'wx' });
+    assertManagedPath(witness, managedRoot);
+    linkSync(witness, file);
+    assertManagedPath(file, managedRoot);
+    return witness;
+  } catch (error) {
+    try { rmSync(witness, { force: true }); } catch {}
+    throw error;
+  }
+}
+
 function defaultWriteConfig(configFile, config, managedRoot = null, replace = true) {
   atomicWrite(configFile, JSON.stringify(config, null, 2) + '\n', managedRoot, { replace });
 }
@@ -258,6 +279,12 @@ function recoveryDescriptor(manifest) {
       declaration_authorities: manifest?.plan?.declaration_authorities ?? null,
       was_harness_default: manifest?.plan?.was_harness_default ?? null,
       harness_default_authority: manifest?.plan?.harness_default_authority ?? null,
+      replacement_default: manifest?.plan?.replacement_default ?? null,
+      replacement_default_model: manifest?.plan?.replacement_default_model ?? null,
+      harness_default_before: manifest?.plan?.harness_default_before ?? null,
+      runtime_id_before: manifest?.plan?.runtime_id_before ?? null,
+      delete_runtime_id_before_restart: manifest?.plan?.delete_runtime_id_before_restart ?? null,
+      rollback_runtime_id_before_restart: manifest?.plan?.rollback_runtime_id_before_restart ?? null,
     },
     files: manifest?.files ?? null,
     backup_digests: manifest?.backup_digests ?? null,
@@ -267,6 +294,20 @@ function recoveryDescriptor(manifest) {
     lifecycle_revision: manifest?.lifecycle_revision ?? null,
     routing_projection_digest: manifest?.routing_projection_digest ?? null,
     lifecycle_projection_digest: manifest?.lifecycle_projection_digest ?? null,
+    applied_revisions: {
+      profile: manifest?.applied_profile_revision ?? null,
+      settings: manifest?.applied_settings_revision ?? null,
+      config: manifest?.applied_config_revision ?? null,
+      lifecycle: manifest?.applied_lifecycle_revision ?? null,
+    },
+    created: {
+      profile: manifest?.created_profile ?? false,
+      settings: manifest?.created_settings ?? false,
+      config: manifest?.created_config ?? false,
+      lifecycle: manifest?.created_lifecycle ?? false,
+    },
+    mutation_journal: manifest?.mutation_journal ?? null,
+    phase_journal: manifest?.phase_journal ?? null,
   };
 }
 
@@ -344,8 +385,22 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   }
   if (manifest.profile_revision !== undefined && !/^[a-f0-9]{64}$/i.test(manifest.profile_revision)) throw backupInvalid();
   if (manifest.settings_revision !== undefined && !/^[a-f0-9]{64}$/i.test(manifest.settings_revision)) throw backupInvalid();
+  for (const key of ['profile', 'settings', 'config', 'lifecycle']) {
+    const applied = manifest[`applied_${key}_revision`];
+    const created = manifest[`created_${key}`];
+    if (applied !== undefined && !/^[a-f0-9]{64}$/i.test(applied)) throw backupInvalid();
+    if (created !== undefined && typeof created !== 'boolean') throw backupInvalid();
+  }
   if (manifest.mutation_journal !== undefined && (typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal))) throw backupInvalid();
   if (manifest.phase_journal !== undefined && (typeof manifest.phase_journal !== 'object' || Array.isArray(manifest.phase_journal))) throw backupInvalid();
+  for (const [key, mutation] of Object.entries(manifest.mutation_journal ?? {})) {
+    if (!['profile', 'settings', 'config', 'lifecycle'].includes(key) || !mutation || typeof mutation !== 'object'
+      || !/^[a-f0-9]{64}$/i.test(mutation.next_revision) || typeof mutation.created !== 'boolean') throw backupInvalid();
+    if (mutation.witness !== undefined) {
+      if (typeof mutation.witness !== 'string') throw backupInvalid();
+      assertManagedPath(mutation.witness, managedRoot);
+    }
+  }
   return true;
 }
 
@@ -388,6 +443,7 @@ export function createProviderDeleteFileHooks({
   const readConfigFn = typeof readConfig === 'function'
     ? readConfig
     : () => defaultReadConfig(configFile, managedRoot);
+  const createWitnessPath = (key) => join(managedRoot, `.dsh-crew-${activeBackup?.manifest?.plan?.plan_id ?? 'pending'}-${key}.witness`);
 
   const writeSettingsFn = typeof writeSettings === 'function' ? writeSettings : (content, { expectedRevision } = {}) => {
     if (typeof settingsFile !== 'string' || !settingsFile.trim()) throw Object.assign(new Error('provider settings path is unavailable'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
@@ -617,6 +673,7 @@ export function createProviderDeleteFileHooks({
 
   const persistManifest = () => {
     if (!activeBackup) return;
+    activeBackup.manifest.recovery_descriptor_digest = sha256(JSON.stringify(recoveryDescriptor(activeBackup.manifest)));
     const manifestFile = join(activeBackup.root, 'manifest.json');
     assertManagedPath(manifestFile, managedRoot);
     atomicWrite(manifestFile, JSON.stringify(activeBackup.manifest, null, 2) + '\n', managedRoot);
@@ -639,12 +696,13 @@ export function createProviderDeleteFileHooks({
     if (!/^[a-f0-9]{64}$/i.test(digest) || sha256(JSON.stringify(recoveryDescriptor(activeBackup.manifest))) !== digest) throw backupInvalid();
   };
 
-  const prepareMutation = (key, nextRevision) => {
+  const prepareMutation = (key, nextRevision, details = {}) => {
     if (!activeBackup || typeof nextRevision !== 'string') return;
     activeBackup.manifest.mutation_journal ??= {};
     activeBackup.manifest.mutation_journal[key] = {
       next_revision: nextRevision,
       created: activeBackup.manifest.files?.[key]?.existed === false,
+      ...(typeof details.witness === 'string' ? { witness: details.witness } : {}),
       prepared_at: new Date().toISOString(),
     };
     persistManifest();
@@ -655,8 +713,12 @@ export function createProviderDeleteFileHooks({
     const pending = activeBackup.manifest.mutation_journal?.[key];
     activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
     if (pending?.created === true) activeBackup.manifest[`created_${key}`] = true;
+    const witness = pending?.witness;
     if (activeBackup.manifest.mutation_journal) delete activeBackup.manifest.mutation_journal[key];
     persistManifest();
+    if (typeof witness === 'string') {
+      try { rmSync(witness, { force: true }); } catch {}
+    }
   };
 
   const setPhase = (phase, details = {}) => {
@@ -668,7 +730,7 @@ export function createProviderDeleteFileHooks({
   // Every managed writer runs while the transaction lock is held and verifies
   // both the target boundary and the resulting revision. Custom writers are
   // accepted for the Hub's in-memory adapters, but cannot bypass these checks.
-  const writeManagedConfig = async (config, expectedRevision) => {
+  const writeManagedConfig = async (config, expectedRevision, witness = null) => {
     ensureMutationLock();
     assertManagedPath(configFile, managedRoot);
     if (activeBackup?.manifest?.files?.config?.existed === false && fs.existsSync(configFile)) {
@@ -680,9 +742,10 @@ export function createProviderDeleteFileHooks({
         throw Object.assign(new Error('provider config changed during commit'), { code: 'PROVIDER_CONFIG_CHANGED' });
       }
     }
-    const createOnly = activeBackup?.manifest?.files?.config?.existed === false && !fs.existsSync(configFile);
+    const createOnly = activeBackup?.manifest?.files?.config?.existed === false;
     try {
-      await writeConfig(config, { expectedRevision, managedRoot, replace: !createOnly });
+      if (createOnly) atomicCreateWithWitness(configFile, JSON.stringify(config, null, 2) + '\n', managedRoot, witness ?? createWitnessPath('config'));
+      else await writeConfig(config, { expectedRevision, managedRoot, replace: true });
     } catch (error) {
       if (createOnly && error?.code === 'EEXIST') throw Object.assign(new Error('provider config was created before the transaction write'), { code: 'PROVIDER_CONFIG_CHANGED' });
       throw error;
@@ -858,10 +921,12 @@ export function createProviderDeleteFileHooks({
     }
     setPhase('TOMBSTONE_APPLYING');
     const nextRevision = sha256(JSON.stringify(marked));
-    prepareMutation('lifecycle', nextRevision);
-    const createOnly = activeBackup?.manifest?.files?.lifecycle?.existed === false && !fs.existsSync(lifecycleFile);
+    const createOnly = activeBackup?.manifest?.files?.lifecycle?.existed === false;
+    const lifecycleWitness = createOnly ? createWitnessPath('lifecycle') : null;
+    prepareMutation('lifecycle', nextRevision, lifecycleWitness ? { witness: lifecycleWitness } : {});
     try {
-      atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n', managedRoot, { replace: !createOnly });
+      if (createOnly) atomicCreateWithWitness(lifecycleFile, JSON.stringify(marked, null, 2) + '\n', managedRoot, lifecycleWitness);
+      else atomicWrite(lifecycleFile, JSON.stringify(marked, null, 2) + '\n', managedRoot, { replace: true });
     } catch (error) {
       if (createOnly && error?.code === 'EEXIST') throw Object.assign(new Error('provider lifecycle was created before the transaction write'), { code: 'PROVIDER_LIFECYCLE_CHANGED' });
       throw error;
@@ -902,8 +967,10 @@ export function createProviderDeleteFileHooks({
       };
     }
     const configRevision = sha256(JSON.stringify(scrubbed.config));
-    prepareMutation('config', configRevision);
-    await writeManagedConfig(scrubbed.config, activeBackup?.manifest?.config_revision);
+    const configCreateOnly = activeBackup?.manifest?.files?.config?.existed === false;
+    const configWitness = configCreateOnly ? createWitnessPath('config') : null;
+    prepareMutation('config', configRevision, configWitness ? { witness: configWitness } : {});
+    await writeManagedConfig(scrubbed.config, activeBackup?.manifest?.config_revision, configWitness);
     commitMutation('config', configRevision);
     if (settingsMutation) {
       prepareMutation('settings', settingsMutation.revision);
@@ -1057,7 +1124,15 @@ export function createProviderDeleteFileHooks({
       // A pending journal proves intent, not ownership: a crash can happen
       // before the exclusive-create rename. Only the durable commit marker
       // authorizes deleting an originally absent file during compensation.
-      const created = activeBackup.manifest[`created_${key}`] === true;
+      let created = activeBackup.manifest[`created_${key}`] === true;
+      const pending = activeBackup.manifest.mutation_journal?.[key];
+      if (!created && pending?.created === true && typeof pending.witness === 'string' && fs.existsSync(pending.witness) && fs.existsSync(target)) {
+        try {
+          const witnessStat = lstatSync(pending.witness);
+          const targetStat = lstatSync(target);
+          created = witnessStat.dev === targetStat.dev && witnessStat.ino === targetStat.ino;
+        } catch { created = false; }
+      }
       if (typeof expected !== 'string' || !created) throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       let current;
       if (key === 'config') current = sha256(JSON.stringify(await readConfigFn()));
@@ -1066,6 +1141,7 @@ export function createProviderDeleteFileHooks({
       if (current !== expected) throw Object.assign(new Error('managed provider state changed during rollback'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
       assertManagedPath(target, managedRoot);
       fs.rmSync(target, { force: true });
+      if (pending?.witness) { try { fs.rmSync(pending.witness, { force: true }); } catch {} }
       assertManagedPath(target, managedRoot);
     };
     setPhase('ROLLBACK_APPLYING');
