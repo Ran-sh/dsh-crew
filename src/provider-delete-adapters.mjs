@@ -67,6 +67,18 @@ function safePlanId(value) {
   return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
 }
 
+function validTimestamp(value) {
+  return typeof value === 'string' && value.length <= 128 && !/[\r\n]/u.test(value) && Number.isFinite(Date.parse(value));
+}
+
+const DELETE_PHASES = new Set([
+  'PLANNED', 'TOMBSTONE_APPLYING', 'TOMBSTONE_APPLIED',
+  'REFERENCES_APPLYING', 'REFERENCES_APPLIED', 'DECLARATIONS_APPLYING',
+  'DECLARATIONS_APPLIED', 'DELETE_RESTART_PENDING', 'RESTART_PENDING',
+  'ROLLBACK_PENDING', 'ROLLBACK_APPLYING', 'ROLLBACK_RESTART_PENDING',
+  'ROLLBACK_RESTORED', 'AUDIT_APPLYING', 'VERIFIED', 'ROLLED_BACK', 'FAILED',
+]);
+
 function safeRecoveryEntryName(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 255
     && value !== '.' && value !== '..' && !/[\\/\u0000]/u.test(value) ? value : null;
@@ -89,7 +101,7 @@ function atomicWrite(file, content, managedRoot = null, { replace = true } = {})
     if (managedRoot) assertManagedPath(file, managedRoot);
     if (replace) renameSync(temp, file);
     else {
-      linkSync(temp, file);
+      publishHardlink(temp, file, managedRoot);
       rmSync(temp, { force: true });
     }
   } catch (error) {
@@ -112,6 +124,17 @@ function defaultReadConfig(configFile, managedRoot = null) {
   return readJson(configFile, {});
 }
 
+function publishHardlink(source, target, managedRoot) {
+  // Check both operands and every ancestor at the last possible moment. The
+  // post-link check catches a destination that was swapped during publication.
+  assertManagedPath(source, managedRoot);
+  assertManagedPath(dirname(source), managedRoot);
+  assertManagedPath(target, managedRoot);
+  assertManagedPath(dirname(target), managedRoot);
+  linkSync(source, target);
+  assertManagedPath(target, managedRoot);
+}
+
 function atomicCreateWithWitness(file, content, managedRoot, witness) {
   if (!managedRoot || typeof witness !== 'string' || !witness.trim()) {
     throw Object.assign(new Error('exclusive provider create witness is unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
@@ -127,7 +150,7 @@ function atomicCreateWithWitness(file, content, managedRoot, witness) {
       if (sha256(readFileSync(witness)) !== sha256(content)) throw Object.assign(new Error('provider create witness content changed'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
     } else writeFileSync(witness, content, { flag: 'wx' });
     assertManagedPath(witness, managedRoot);
-    linkSync(witness, file);
+    publishHardlink(witness, file, managedRoot);
     assertManagedPath(file, managedRoot);
     return witness;
   } catch (error) {
@@ -150,8 +173,9 @@ function atomicReplaceWithWitness(file, content, managedRoot, witness) {
     if (witnessExisted) {
       if (sha256(readFileSync(witness)) !== sha256(content)) throw Object.assign(new Error('provider replace witness content changed'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
     } else writeFileSync(witness, content, { flag: 'wx' });
-    linkSync(witness, stage);
+    publishHardlink(witness, stage, managedRoot);
     assertManagedPath(file, managedRoot);
+    assertManagedPath(dirname(file), managedRoot);
     renameSync(stage, file);
     published = true;
     assertManagedPath(file, managedRoot);
@@ -175,6 +199,11 @@ function hasOwn(value, key) {
   return !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function onlyKeys(value, allowed) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => allowed.includes(key));
+}
+
 function safeModelRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value ?? null;
   const result = {};
@@ -186,6 +215,32 @@ function safeModelRef(value) {
 
 function safeModelRefList(value) {
   return Array.isArray(value) ? value.map((entry) => safeModelRef(entry)) : value;
+}
+
+function validModelRef(value) {
+  return onlyKeys(value, ['provider', 'model', 'reasoningEffort'])
+    && Object.values(value).every((entry) => typeof entry === 'string' && entry.length > 0 && entry.length <= 256 && !/[\r\n]/u.test(entry));
+}
+
+function validConfigProjection(value) {
+  if (!onlyKeys(value, ['schema_version', 'fields', 'present_fields']) || value.schema_version !== 1 || !Array.isArray(value.present_fields)
+    || value.present_fields.some((key) => !['flash_model_priority', 'pro_model_priority', 'harness_default', 'agent_default_model', 'agentDefaultModel', 'worker', 'review'].includes(key))) return false;
+  if (!onlyKeys(value.fields, ['flash_model_priority', 'pro_model_priority', 'harness_default', 'agent_default_model', 'agentDefaultModel', 'worker', 'review'])) return false;
+  for (const key of ['flash_model_priority', 'pro_model_priority']) {
+    if (value.fields[key] !== undefined && (!Array.isArray(value.fields[key]) || value.fields[key].some((entry) => !validModelRef(entry)))) return false;
+  }
+  for (const key of ['harness_default', 'agent_default_model', 'agentDefaultModel']) {
+    if (value.fields[key] !== undefined && !validModelRef(value.fields[key])) return false;
+  }
+  for (const scope of ['worker', 'review']) {
+    const entry = value.fields[scope];
+    if (entry === undefined) continue;
+    if (!onlyKeys(entry, ['model_policy']) || !onlyKeys(entry.model_policy, ['priority', 'escalation_priority'])) return false;
+    for (const list of ['priority', 'escalation_priority']) {
+      if (entry.model_policy[list] !== undefined && (!Array.isArray(entry.model_policy[list]) || entry.model_policy[list].some((model) => !validModelRef(model)))) return false;
+    }
+  }
+  return true;
 }
 
 function configProjection(config) {
@@ -409,9 +464,29 @@ function recoveryDescriptor(manifest) {
 
 function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expectedProviderId }) {
   const backupId = basename(root);
+  const manifestKeys = [
+    'schema_version', 'provider_id', 'plan', 'files', 'backup_digests',
+    'ownership_witnesses', 'mutation_journal', 'phase_journal',
+    'config_projection', 'config_revision', 'lifecycle_revision',
+    'routing_projection_digest', 'lifecycle_projection_digest',
+    'recovery_descriptor_digest', 'profile_revision', 'settings_revision',
+    'applied_profile_revision', 'applied_settings_revision',
+    'applied_config_revision', 'applied_lifecycle_revision',
+    'created_profile', 'created_settings', 'created_config', 'created_lifecycle',
+    'created_profile_identity', 'created_settings_identity',
+    'created_config_identity', 'created_lifecycle_identity',
+  ];
+  const planKeys = [
+    'plan_id', 'provider_id', 'expected_revision', 'replacement_default',
+    'was_harness_default', 'replacement_default_model', 'harness_default_before',
+    'harness_default_authority', 'runtime_id_before',
+    'delete_runtime_id_before_restart', 'rollback_runtime_id_before_restart',
+    'declaration_authorities', 'expected_revisions', 'credential_refs',
+  ];
   if (!manifest || manifest.schema_version !== 1 || !validProviderId(manifest.provider_id)
+    || !onlyKeys(manifest, manifestKeys)
     || (expectedProviderId && manifest.provider_id !== expectedProviderId)
-    || !manifest.plan || manifest.plan.plan_id !== backupId
+    || !onlyKeys(manifest.plan, planKeys) || !manifest.plan || manifest.plan.plan_id !== backupId
     || !safePlanId(manifest.plan.plan_id) || manifest.plan.provider_id !== manifest.provider_id
     || !Array.isArray(manifest.plan.declaration_authorities)
     || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
@@ -425,17 +500,41 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   } catch {
     throw backupInvalid();
   }
+  for (const authority of manifest.plan.declaration_authorities) {
+    if (!onlyKeys(authority, ['kind', 'locator']) || typeof authority.kind !== 'string' || typeof authority.locator !== 'string') throw backupInvalid();
+  }
+  for (const ref of manifest.plan.credential_refs) {
+    if (!onlyKeys(ref, ['kind', 'name_or_handle', 'ownership']) || typeof ref.kind !== 'string' || typeof ref.name_or_handle !== 'string' || typeof ref.ownership !== 'string') throw backupInvalid();
+  }
+  for (const key of ['harness_default_before', 'harness_default_authority']) {
+    const value = manifest.plan[key];
+    if (value !== undefined && (!onlyKeys(value, key === 'harness_default_before' ? ['provider', 'model'] : ['kind', 'locator']))) throw backupInvalid();
+  }
   if (manifest.plan.expected_revision !== null && !/^[a-f0-9]{64}$/i.test(manifest.plan.expected_revision)) throw backupInvalid();
   if (manifest.plan.expected_revisions !== undefined) {
     if (!manifest.plan.expected_revisions || typeof manifest.plan.expected_revisions !== 'object' || Array.isArray(manifest.plan.expected_revisions)
+      || !onlyKeys(manifest.plan.expected_revisions, ['profile', 'settings'])
       || !validRevision(manifest.plan.expected_revisions.profile) || !validRevision(manifest.plan.expected_revisions.settings)) throw backupInvalid();
   }
+  if (manifest.plan.declaration_authorities.length > 16 || !Array.isArray(manifest.plan.credential_refs) || manifest.plan.credential_refs.length > 32) throw backupInvalid();
+  if (manifest.plan.harness_default_before !== undefined
+    && (typeof manifest.plan.harness_default_before.provider !== 'string' || !validProviderId(manifest.plan.harness_default_before.provider)
+      || typeof manifest.plan.harness_default_before.model !== 'string' || manifest.plan.harness_default_before.model.length === 0 || manifest.plan.harness_default_before.model.length > 256)) throw backupInvalid();
+  if (manifest.plan.harness_default_authority !== undefined
+    && (typeof manifest.plan.harness_default_authority.kind !== 'string' || manifest.plan.harness_default_authority.kind.length > 64
+      || typeof manifest.plan.harness_default_authority.locator !== 'string' || manifest.plan.harness_default_authority.locator.length > 256)) throw backupInvalid();
+  if (!onlyKeys(manifest.backup_digests, ['profile', 'settings', 'lifecycle'])) throw backupInvalid();
+  if (!onlyKeys(manifest.files, ['profile', 'settings', 'config', 'lifecycle'])) throw backupInvalid();
+  if (manifest.ownership_witnesses !== undefined && !onlyKeys(manifest.ownership_witnesses, ['profile', 'settings', 'config', 'lifecycle'])) throw backupInvalid();
+  if (manifest.phase_journal !== undefined && (!onlyKeys(manifest.phase_journal, ['phase', 'updated_at']) || !DELETE_PHASES.has(manifest.phase_journal.phase) || !validTimestamp(manifest.phase_journal.updated_at))) throw backupInvalid();
+  if (manifest.config_projection !== undefined && (!validConfigProjection(manifest.config_projection)
+    || new Set(manifest.config_projection.present_fields).size !== manifest.config_projection.present_fields.length)) throw backupInvalid();
   if (!Array.isArray(manifest.plan.credential_refs) || manifest.plan.credential_refs.some((ref) => !ref || typeof ref !== 'object'
     || typeof ref.kind !== 'string' || typeof ref.name_or_handle !== 'string' || typeof ref.ownership !== 'string')) throw backupInvalid();
   const authorityKinds = new Set(manifest.plan.declaration_authorities.map((authority) => authority?.kind));
   for (const key of FILE_KEYS) {
     const entry = manifest.files[key];
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+    if (!onlyKeys(entry, ['existed', 'managed']) || !entry || typeof entry !== 'object' || Array.isArray(entry)
       || typeof entry.existed !== 'boolean' || typeof entry.managed !== 'boolean') {
       throw backupInvalid();
     }
@@ -473,7 +572,7 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   }
   if (paths.settings) {
     const entry = manifest.files.settings;
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+    if (!onlyKeys(entry, ['existed', 'managed']) || !entry || typeof entry !== 'object' || Array.isArray(entry)
       || typeof entry.existed !== 'boolean' || typeof entry.managed !== 'boolean') throw backupInvalid();
     const expectedManaged = authorityKinds.has('harness-settings') || manifest.plan.was_harness_default === true;
     if (entry.managed !== expectedManaged || (!entry.existed && manifest.backup_digests.settings !== undefined)) throw backupInvalid();
@@ -494,11 +593,11 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     if (applied !== undefined && !/^[a-f0-9]{64}$/i.test(applied)) throw backupInvalid();
     if (created !== undefined && typeof created !== 'boolean') throw backupInvalid();
     const identity = manifest[`created_${key}_identity`];
-    if (identity !== undefined && (!identity || typeof identity !== 'object' || typeof identity.dev !== 'string' || typeof identity.ino !== 'string')) throw backupInvalid();
+    if (identity !== undefined && (!onlyKeys(identity, ['dev', 'ino']) || typeof identity.dev !== 'string' || !/^\d+$/u.test(identity.dev) || typeof identity.ino !== 'string' || !/^\d+$/u.test(identity.ino))) throw backupInvalid();
     if (created === true && !identity) throw backupInvalid();
   }
-  if (manifest.mutation_journal !== undefined && (typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal))) throw backupInvalid();
-  if (manifest.phase_journal !== undefined && (typeof manifest.phase_journal !== 'object' || Array.isArray(manifest.phase_journal))) throw backupInvalid();
+  if (manifest.mutation_journal !== undefined && (!onlyKeys(manifest.mutation_journal, ['profile', 'settings', 'config', 'lifecycle']))) throw backupInvalid();
+  if (manifest.phase_journal !== undefined && (!onlyKeys(manifest.phase_journal, ['phase', 'updated_at']) || !DELETE_PHASES.has(manifest.phase_journal.phase) || !validTimestamp(manifest.phase_journal.updated_at))) throw backupInvalid();
   if (manifest.ownership_witnesses !== undefined && (typeof manifest.ownership_witnesses !== 'object' || Array.isArray(manifest.ownership_witnesses))) throw backupInvalid();
   for (const key of ['profile', 'settings', 'config', 'lifecycle']) {
     const witnessName = manifest.ownership_witnesses?.[key];
@@ -521,8 +620,8 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     }
   }
   for (const [key, mutation] of Object.entries(manifest.mutation_journal ?? {})) {
-    if (!['profile', 'settings', 'config', 'lifecycle'].includes(key) || !mutation || typeof mutation !== 'object'
-      || !/^[a-f0-9]{64}$/i.test(mutation.next_revision) || typeof mutation.created !== 'boolean') throw backupInvalid();
+    if (!['profile', 'settings', 'config', 'lifecycle'].includes(key) || !onlyKeys(mutation, ['next_revision', 'created', 'witness', 'prepared_at']) || !mutation || typeof mutation !== 'object'
+      || !/^[a-f0-9]{64}$/i.test(mutation.next_revision) || typeof mutation.created !== 'boolean' || !validTimestamp(mutation.prepared_at)) throw backupInvalid();
     if (mutation.witness !== undefined) {
       if (typeof mutation.witness !== 'string') throw backupInvalid();
       assertManagedPath(mutation.witness, managedRoot);
@@ -610,8 +709,7 @@ export function createProviderDeleteFileHooks({
     try {
       fs.writeFileSync(stage, content, { flag: 'wx' });
       assertManagedPath(stage, managedRoot);
-      linkSync(stage, file);
-      assertManagedPath(file, managedRoot);
+      publishHardlink(stage, file, managedRoot);
     } finally {
       try { fs.rmSync(stage, { force: true }); } catch {}
     }
@@ -1060,7 +1158,7 @@ export function createProviderDeleteFileHooks({
     const witness = durableWitnessPath(key);
     const previous = activeBackup.manifest.ownership_witnesses?.[key];
     try {
-      linkSync(source, witness);
+      publishHardlink(source, witness, managedRoot);
       const sourceIdentity = fileIdentity(source);
       const witnessIdentity = fileIdentity(witness);
       if (!sameFileIdentity(sourceIdentity, witnessIdentity)) {
@@ -1295,6 +1393,16 @@ export function createProviderDeleteFileHooks({
     if (authorityKinds.has('crew-profile') && sourceRevisions.profile) manifest.profile_revision = sourceRevisions.profile;
     if ((authorityKinds.has('harness-settings') || managesHarnessDefault) && sourceRevisions.settings) manifest.settings_revision = sourceRevisions.settings;
     manifest.recovery_descriptor_digest = sha256(JSON.stringify(recoveryDescriptor(manifest)));
+    // Validate the exact durable record before returning success. A
+    // parseable-but-unsupported config projection must fail before any
+    // destructive phase can start, rather than becoming unreopenable after a
+    // crash.
+    try {
+      validateBackupManifest(manifest, { root, fs, paths, managedRoot, expectedProviderId: plan.provider_id });
+    } catch (error) {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
+      throw error;
+    }
     activeBackup = { root, manifest };
     persistManifest();
     return { ok: true, backup_id: planId };

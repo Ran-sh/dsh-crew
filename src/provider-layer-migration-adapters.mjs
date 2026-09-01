@@ -4,9 +4,9 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve as resolvePath } from 'node:path';
-import { addProviderDeclaration, hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, removeProviderDeclarations } from './provider-profile-store.mjs';
-import { addProviderSettings, hasInlineProviderCredentials as hasInlineSettingsCredentials, readProviderSettingsDeclarations, removeProviderSettings } from './provider-settings-store.mjs';
+import { basename, dirname, join, relative, resolve as resolvePath } from 'node:path';
+import { addProviderDeclaration, hasInlineProviderCredentials as hasInlineProfileCredentials, readProviderDeclarations, readProviderMaterialization, removeProviderDeclarations } from './provider-profile-store.mjs';
+import { addProviderSettings, hasInlineProviderCredentials as hasInlineSettingsCredentials, readProviderSettingsDeclarations, readProviderSettingsMaterialization, removeProviderSettings } from './provider-settings-store.mjs';
 import { classifyCredentialReference } from './credential-reference.mjs';
 import { acquireProviderStoreLock, recoverProviderStoreLock } from './provider-store-lock.mjs';
 
@@ -14,8 +14,11 @@ function text(value) { return typeof value === 'string' && value.trim() ? value.
 function sha256(value) { return createHash('sha256').update(value, 'utf8').digest('hex'); }
 function safeId(value) { return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value) ? value : null; }
 function safeValue(value, max = 2048) { return typeof value === 'string' && value.trim() && value.length <= max && !/[\r\n]/u.test(value) ? value.trim() : null; }
+function safeTimestamp(value) { return safeValue(value, 128) && Number.isFinite(Date.parse(value)); }
 function safeMaterialization(provider) {
   if (!provider || typeof provider !== 'object' || Array.isArray(provider) || !safeId(provider.id)) return null;
+  const allowedProviderKeys = new Set(['id', 'display_name', 'credential_ref', 'api', 'base_url', 'models', 'source_file']);
+  if (Object.keys(provider).some((key) => !allowedProviderKeys.has(key))) return null;
   const credential = provider.credential_ref ? classifyCredentialReference(provider.credential_ref, { kind: 'env' }).value : null;
   if (provider.credential_ref && !credential) return null;
   const api = safeValue(provider.api, 128);
@@ -27,13 +30,11 @@ function safeMaterialization(provider) {
       if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash || /[?#]/u.test(baseUrl)) return null;
     } catch { return null; }
   }
-  return {
-    id: provider.id,
-    display_name: safeValue(provider.display_name, 256) ?? provider.id,
-    ...(credential ? { credential_ref: credential } : {}),
-    ...(api ? { api } : {}),
-    ...(baseUrl ? { base_url: baseUrl } : {}),
-    models: (Array.isArray(provider.models) ? provider.models : []).map((model) => ({
+  const models = (Array.isArray(provider.models) ? provider.models : []).map((model) => {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) return null;
+    const allowedModelKeys = new Set(['id', 'name', 'context_window', 'max_tokens', 'input', 'reasoning_efforts', 'compat']);
+    if (Object.keys(model).some((key) => !allowedModelKeys.has(key))) return null;
+    return {
       id: safeValue(model?.id, 256),
       ...(safeValue(model?.name, 256) ? { name: safeValue(model.name, 256) } : {}),
       ...(Number.isSafeInteger(model?.context_window) && model.context_window > 0 ? { context_window: model.context_window } : {}),
@@ -42,8 +43,30 @@ function safeMaterialization(provider) {
       ...(model?.reasoning_efforts && typeof model.reasoning_efforts === 'object' && !Array.isArray(model.reasoning_efforts)
         ? { reasoning_efforts: Object.fromEntries(Object.entries(model.reasoning_efforts).filter(([key, value]) => /^[A-Za-z][A-Za-z0-9_-]*$/u.test(key) && (value === null || safeValue(value, 256)))) } : {}),
       ...(model?.compat && typeof model.compat === 'object' && !Array.isArray(model.compat) && Object.keys(model.compat).length === 0 ? { compat: {} } : {}),
-    })).filter((model) => model.id).slice(0, 256),
+    };
+  });
+  if (models.some((model) => !model?.id)) return null;
+  return {
+    id: provider.id,
+    display_name: safeValue(provider.display_name, 256) ?? provider.id,
+    ...(credential ? { credential_ref: credential } : {}),
+    ...(api ? { api } : {}),
+    ...(baseUrl ? { base_url: baseUrl } : {}),
+    models: models.slice(0, 256),
   };
+}
+
+function onlyKeys(value, allowed) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function sameProviderSemantics(left, right) {
+  return JSON.stringify(safeMaterialization(left)) === JSON.stringify(safeMaterialization(right));
+}
+function canonicalMaterialization(value) {
+  const safe = safeMaterialization(value);
+  return safe && JSON.stringify(safe) === JSON.stringify(value) ? safe : null;
 }
 function safePlan(plan) {
   if (!plan || !safeId(plan.provider_id) || !safeId(plan.plan_id) || !['promote-existing-user', 'materialize-user'].includes(plan.action)) throw Object.assign(new Error('provider migration plan is invalid'), { code: 'PROVIDER_MIGRATION_PLAN_INVALID' });
@@ -57,6 +80,21 @@ function safePlan(plan) {
   };
   const materialization = safeMaterialization(plan.materialization?.provider);
   if (!materialization) throw Object.assign(new Error('provider materialization is invalid'), { code: 'PROVIDER_MATERIALIZATION_INVALID' });
+  const userMaterializationBefore = plan.user_materialization_before === undefined
+    ? null
+    : safeMaterialization(plan.user_materialization_before);
+  if (plan.user_materialization_before !== undefined && !userMaterializationBefore) {
+    throw Object.assign(new Error('provider user-layer baseline is invalid'), { code: 'PROVIDER_MIGRATION_PLAN_INVALID' });
+  }
+  if (plan.action === 'promote-existing-user' && !userMaterializationBefore) {
+    throw Object.assign(new Error('provider user-layer baseline is required'), { code: 'PROVIDER_MIGRATION_PLAN_INVALID' });
+  }
+  const routingReferences = Array.isArray(plan.routing_references)
+    ? plan.routing_references.map((entry) => ({ provider: plan.provider_id, model: safeValue(entry?.model, 256) })).filter((entry) => entry.model).slice(0, 256)
+    : [];
+  if (Array.isArray(plan.routing_references) && routingReferences.length !== plan.routing_references.length) {
+    throw Object.assign(new Error('provider migration routing references are invalid'), { code: 'PROVIDER_MIGRATION_PLAN_INVALID' });
+  }
   return {
     schema_version: 1,
     kind: 'provider-layer-migration',
@@ -65,6 +103,8 @@ function safePlan(plan) {
     action: plan.action,
     expected_revisions: revisions,
     materialization: { provider: materialization },
+    ...(userMaterializationBefore ? { user_materialization_before: userMaterializationBefore } : {}),
+    ...(routingReferences.length > 0 ? { routing_references: routingReferences } : {}),
     ...(plan.harness_default_before && typeof plan.harness_default_before === 'object' && safeId(plan.harness_default_before.provider) && safeValue(plan.harness_default_before.model, 256)
       ? { harness_default_before: { provider: plan.harness_default_before.provider, model: safeValue(plan.harness_default_before.model, 256) } } : {}),
     ...(safeValue(plan.runtime_id_before, 128) ? { runtime_id_before: safeValue(plan.runtime_id_before, 128) } : {}),
@@ -115,20 +155,33 @@ function readText(file) {
 
 function revision(source) { return source === null ? null : sha256(source); }
 function fileIdentity(file) {
-  const stat = lstatSync(file);
+  const stat = lstatSync(file, { bigint: true });
   if (stat.isSymbolicLink() || !stat.isFile()) throw Object.assign(new Error('provider migration file identity is unsafe'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
-  return { dev: Number(stat.dev) || 0, ino: Number(stat.ino) || 0, size: Number(stat.size) || 0, mtimeMs: Number(stat.mtimeMs) || 0 };
+  return { dev: String(stat.dev), ino: String(stat.ino), size: Number(stat.size) || 0, mtimeMs: Number(stat.mtimeMs) || 0 };
 }
 function sameFileIdentity(left, right) {
   return left && right && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 function validFileIdentity(value) {
-  return value && typeof value === 'object' && Number.isFinite(value.dev) && Number.isFinite(value.ino)
+  return value && typeof value === 'object' && typeof value.dev === 'string' && /^\d+$/u.test(value.dev)
+    && typeof value.ino === 'string' && /^\d+$/u.test(value.ino)
     && Number.isFinite(value.size) && Number.isFinite(value.mtimeMs);
 }
 function validWitness(root, value) {
-  if (typeof value !== 'string' || resolvePath(value).startsWith(`${resolvePath(root)}${process.platform === 'win32' ? '\\' : '/'}`) !== true) return false;
+  if (typeof value !== 'string') return false;
+  const relativePath = relative(resolvePath(root), resolvePath(value));
+  if (relativePath === '..' || relativePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || /^[A-Za-z]:/u.test(relativePath)) return false;
+  if (relativePath.includes('\\') || relativePath.includes('/') || !/^settings\.[0-9a-f-]{36}\.ownership\.witness$/iu.test(basename(value))) return false;
   try { const stat = lstatSync(value); return stat.isFile() && !stat.isSymbolicLink(); } catch { return false; }
+}
+
+function publishHardlink(source, target, managedRoot) {
+  assertManagedPath(source, managedRoot);
+  assertManagedPath(dirname(source), managedRoot);
+  assertManagedPath(target, managedRoot);
+  assertManagedPath(dirname(target), managedRoot);
+  linkSync(source, target);
+  assertManagedPath(target, managedRoot);
 }
 
 function manifestDigest(manifest) {
@@ -137,30 +190,47 @@ function manifestDigest(manifest) {
 }
 
 function validMigrationManifest(root, manifest) {
-  if (!manifest || manifest.kind !== 'provider-layer-migration' || !safeId(manifest.plan_id) || !safeId(manifest.provider_id)) return false;
+  if (!manifest || manifest.schema_version !== 1 || manifest.kind !== 'provider-layer-migration' || !safeId(manifest.plan_id) || !safeId(manifest.provider_id)) return false;
+  if (!onlyKeys(manifest, ['schema_version', 'kind', 'plan_id', 'provider_id', 'plan', 'phase', 'files', 'applied_revisions', 'rollback_revisions', 'mutation_journal', 'created_at', 'created_settings_identity', 'created_settings_witness', 'checksum'])) return false;
   if (!['PREPARED', 'USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING', 'ROLLBACK_APPLYING', 'VERIFIED', 'ROLLED_BACK'].includes(manifest.phase)) return false;
   try { if (!lstatSync(root).isDirectory()) return false; } catch { return false; }
-  if (!manifest.plan || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action) || !safeMaterialization(manifest.plan.materialization?.provider)) return false;
+  if (!manifest.plan || !onlyKeys(manifest.plan, ['schema_version', 'kind', 'plan_id', 'provider_id', 'action', 'expected_revisions', 'materialization', 'user_materialization_before', 'harness_default_before', 'runtime_id_before', 'runtime_id_before_restart', 'rollback_runtime_id_before', 'routing_references'])
+    || manifest.plan.schema_version !== 1 || manifest.plan.kind !== 'provider-layer-migration'
+    || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action)
+    || !onlyKeys(manifest.plan.materialization, ['provider']) || !canonicalMaterialization(manifest.plan.materialization?.provider)
+    || (manifest.plan.user_materialization_before !== undefined && !canonicalMaterialization(manifest.plan.user_materialization_before))) return false;
   const expected = manifest.plan.expected_revisions;
-  if (!expected || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
-  if (!manifest.mutation_journal || typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal)) return false;
+  if (!onlyKeys(expected, ['profile', 'settings']) || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
+  if (manifest.plan.harness_default_before !== undefined && (!onlyKeys(manifest.plan.harness_default_before, ['provider', 'model']) || !safeId(manifest.plan.harness_default_before.provider) || !safeValue(manifest.plan.harness_default_before.model, 256))) return false;
+  if (manifest.plan.runtime_id_before !== undefined && !safeValue(manifest.plan.runtime_id_before, 128)) return false;
+  if (manifest.plan.runtime_id_before_restart !== undefined && !safeValue(manifest.plan.runtime_id_before_restart, 128)) return false;
+  if (manifest.plan.rollback_runtime_id_before !== undefined && !safeValue(manifest.plan.rollback_runtime_id_before, 128)) return false;
+  if (manifest.plan.routing_references !== undefined && (!Array.isArray(manifest.plan.routing_references) || manifest.plan.routing_references.length > 256 || manifest.plan.routing_references.some((entry) => !onlyKeys(entry, ['provider', 'model']) || entry.provider !== manifest.provider_id || !safeValue(entry.model, 256)))) return false;
+  if (!onlyKeys(manifest.mutation_journal, ['profile', 'settings'])) return false;
+  if (['VERIFIED', 'ROLLED_BACK'].includes(manifest.phase) && Object.keys(manifest.mutation_journal).length > 0) return false;
   if (!manifest.applied_revisions || typeof manifest.applied_revisions !== 'object' || Array.isArray(manifest.applied_revisions)
+    || Object.keys(manifest.applied_revisions).some((key) => !['profile', 'settings'].includes(key))
     || Object.values(manifest.applied_revisions).some((value) => !/^[a-f0-9]{64}$/u.test(value ?? ''))) return false;
   if (manifest.rollback_revisions !== undefined && (!manifest.rollback_revisions || typeof manifest.rollback_revisions !== 'object' || Array.isArray(manifest.rollback_revisions)
+    || Object.keys(manifest.rollback_revisions).some((key) => !['profile', 'settings'].includes(key))
     || Object.values(manifest.rollback_revisions).some((value) => value !== null && !/^[a-f0-9]{64}$/u.test(value ?? '')))) return false;
   if (Object.entries(manifest.mutation_journal).some(([key, entry]) => !['profile', 'settings'].includes(key)
+    || !onlyKeys(entry, ['next_revision', 'previous_revision', 'created', 'witness', 'phase', 'direction'])
     || !entry || typeof entry !== 'object' || entry.phase !== 'WRITE_PENDING'
     || (entry.next_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.next_revision ?? ''))
     || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
     || typeof entry.created !== 'boolean'
     || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction))
     || (entry.witness !== undefined && !validWitness(root, entry.witness)))) return false;
-  if (manifest.files?.settings?.existed === false && ['USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'VERIFIED'].includes(manifest.phase)
+  if (!onlyKeys(manifest.files, ['profile', 'settings']) || manifest.files?.settings?.existed === false && ['USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'VERIFIED'].includes(manifest.phase)
     && (!validFileIdentity(manifest.created_settings_identity) || !validWitness(root, manifest.created_settings_witness))) return false;
+  if (manifest.created_settings_identity !== undefined && !onlyKeys(manifest.created_settings_identity, ['dev', 'ino', 'size', 'mtimeMs'])) return false;
+  if (manifest.created_settings_witness !== undefined && !validWitness(root, manifest.created_settings_witness)) return false;
+  if (!safeTimestamp(manifest.created_at)) return false;
   if (typeof manifest.checksum !== 'string' || manifest.checksum !== manifestDigest(manifest)) return false;
   for (const key of ['profile', 'settings']) {
     const entry = manifest.files?.[key];
-    if (!entry || typeof entry.existed !== 'boolean' || (key === 'profile' && entry.existed !== true) || (!entry.existed && entry.revision !== null) || entry.revision !== expected[key] || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
+    if (!onlyKeys(entry, ['existed', 'revision']) || !entry || typeof entry.existed !== 'boolean' || (key === 'profile' && entry.existed !== true) || (!entry.existed && entry.revision !== null) || entry.revision !== expected[key] || (entry.revision !== null && !/^[a-f0-9]{64}$/u.test(entry.revision))) return false;
     if (entry.backup_digest !== undefined || existsSync(join(root, `${key}.backup`))) return false;
   }
   return true;
@@ -374,8 +444,13 @@ export function createProviderLayerMigrationFileHooks({
     };
     persist();
     if (witness) {
-      try { linkSync(witness, file); }
+      try { publishHardlink(witness, file, managedRoot); }
       catch (error) { throw Object.assign(new Error('provider migration exclusive create failed'), { code: 'PROVIDER_MIGRATION_REPLACE_FAILED', cause: error }); }
+      // The witness is created inside the managed root, but the destination
+      // can still be swapped between planning and publication. Re-check the
+      // complete destination path immediately before and after the hardlink.
+      assertManagedPath(file, managedRoot);
+      fileIdentity(file);
     } else atomicReplace(file, content, managedRoot);
     active.manifest.applied_revisions[key] = nextRevision;
     if (key === 'settings' && active.manifest.files.settings.existed === false) {
@@ -464,12 +539,26 @@ export function createProviderLayerMigrationFileHooks({
       const rollbackRevision = active.manifest.rollback_revisions?.[key];
       const rollbackReplay = active.manifest.phase?.startsWith('ROLLBACK') === true || pending?.direction === 'rollback';
       const semanticComplete = key === 'profile'
-        ? (() => { const parsed = current === null ? { ok: false } : readProviderDeclarations(current, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' }); return parsed.ok === true && parsed.declarations.some((entry) => entry.id === active.manifest.provider_id); })()
-        : active.manifest.plan.action !== 'materialize-user'
-          || (() => { const parsed = current === null ? { ok: false } : readProviderSettingsDeclarations(current, { file: 'harness/settings.yaml' }); return parsed.ok === true && !parsed.declarations.some((entry) => entry.id === active.manifest.provider_id); })();
+        ? (() => {
+          const parsed = current === null ? { ok: false } : readProviderMaterialization(current, { providerId: active.manifest.provider_id, file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
+          return parsed.ok === true && sameProviderSemantics(parsed.provider, active.manifest.plan.materialization?.provider);
+        })()
+        : active.manifest.plan.action === 'materialize-user'
+          ? (() => { const parsed = current === null ? { ok: false } : readProviderSettingsDeclarations(current, { file: 'harness/settings.yaml' }); return parsed.ok === true && !parsed.declarations.some((entry) => entry.id === active.manifest.provider_id); })()
+          : (() => { const material = current === null ? { ok: false } : readProviderSettingsMaterialization(current, { providerId: active.manifest.provider_id, file: 'harness/settings.yaml' }); return material.ok === true && sameProviderSemantics(material.provider, active.manifest.plan.user_materialization_before); })();
       const alreadyRolledBack = (rollbackRevision === null && rollbackRevision !== undefined ? current === null : currentRevision === rollbackRevision)
         || (rollbackReplay && semanticComplete);
-      const allowed = alreadyRolledBack || currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key] || pendingApplied;
+      // For an originally absent settings file, a matching digest is not
+      // ownership evidence: a different actor can recreate the same bytes on
+      // a different inode after a crash. Require the durable witness/identity
+      // path below instead of allowing the hash-only pending journal fallback.
+      const pendingWitnessPath = key === 'settings' && pending?.witness ? pending.witness : null;
+      const pendingWitnessIdentity = pendingWitnessPath && validWitness(active.root, pendingWitnessPath)
+        ? fileIdentity(pending.witness) : null;
+      const ownershipSafePending = key !== 'settings' || snapshot.existed !== false || (pendingApplied
+        && (sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity)
+          || sameFileIdentity(fileIdentity(file), pendingWitnessIdentity)));
+      const allowed = alreadyRolledBack || currentRevision === snapshot.revision || currentRevision === active.manifest.applied_revisions[key] || (pendingApplied && ownershipSafePending);
       if (!allowed) throw Object.assign(new Error('provider migration state changed during rollback'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
       if (key === 'profile') {
         if (!snapshot.existed) throw Object.assign(new Error('provider profile snapshot is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
@@ -493,13 +582,17 @@ export function createProviderLayerMigrationFileHooks({
           const witnessPath = active.manifest.created_settings_witness ?? pending?.witness;
           const witnessIdentity = witnessPath && validWitness(active.root, witnessPath) ? fileIdentity(witnessPath) : null;
           const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity) || sameFileIdentity(fileIdentity(file), witnessIdentity);
-          if (!ownedByIdentity && !(pendingApplied && pending?.created === true)) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
+          if (!ownedByIdentity) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
           writeRollbackDeleted('settings', file);
+          if (pendingWitnessPath && pendingWitnessPath !== active.manifest.created_settings_witness) rmSync(pendingWitnessPath, { force: true });
         }
       }
     }
     active.manifest.phase = 'ROLLBACK_APPLIED';
-    if (active.manifest.created_settings_witness) rmSync(active.manifest.created_settings_witness, { force: true });
+    if (active.manifest.created_settings_witness) {
+      rmSync(active.manifest.created_settings_witness, { force: true });
+      delete active.manifest.created_settings_witness;
+    }
     persist();
     return { ok: true, state: 'ROLLBACK_APPLIED' };
   };
@@ -517,6 +610,7 @@ export function createProviderLayerMigrationFileHooks({
 
   const finalizeVerified = async () => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
+    if (Object.keys(active.manifest.mutation_journal ?? {}).length > 0) throw Object.assign(new Error('provider migration mutation journal is not empty'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
     active.manifest.phase = 'VERIFIED';
     persist();
     return { ok: true, state: 'VERIFIED' };
@@ -545,17 +639,32 @@ export function createProviderLayerMigrationFileHooks({
     const settings = readText(settingsFile);
     const profileParsed = profile === null ? { ok: false } : readProviderDeclarations(profile, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
     const settingsParsed = settings === null ? { ok: false } : readProviderSettingsDeclarations(settings, { file: 'harness/settings.yaml' });
-    const basePresent = profileParsed.ok === true && profileParsed.declarations.some((entry) => entry.id === plan.provider_id);
+    const restored = profileParsed.ok === true
+      && (() => {
+        const material = readProviderMaterialization(profile, { providerId: plan.provider_id, file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
+        return material.ok === true && sameProviderSemantics(material.provider, active?.manifest?.plan?.materialization?.provider ?? plan.materialization?.provider);
+      })();
+    const basePresent = restored;
     const userPresent = settingsParsed.ok === true && settingsParsed.declarations.some((entry) => entry.id === plan.provider_id);
     const expectedUser = plan.action === 'promote-existing-user';
-    return { ok: basePresent && userPresent === expectedUser, basePresent, userPresent, expectedUser };
+    const userSemantics = expectedUser
+      ? (() => { const material = readProviderSettingsMaterialization(settings, { providerId: plan.provider_id, file: 'harness/settings.yaml' }); return material.ok === true && sameProviderSemantics(material.provider, active?.manifest?.plan?.user_materialization_before ?? plan.user_materialization_before); })()
+      : !userPresent;
+    return { ok: basePresent && userSemantics, basePresent, userPresent, userSemantics, expectedUser };
   };
 
   const finalizeRollback = async () => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
     ensureLock();
+    for (const entry of Object.values(active.manifest.mutation_journal ?? {})) {
+      if (entry?.witness && validWitness(active.root, entry.witness)) rmSync(entry.witness, { force: true });
+    }
+    active.manifest.mutation_journal = {};
     active.manifest.phase = 'ROLLED_BACK';
-    if (active.manifest.created_settings_witness) rmSync(active.manifest.created_settings_witness, { force: true });
+    if (active.manifest.created_settings_witness) {
+      rmSync(active.manifest.created_settings_witness, { force: true });
+      delete active.manifest.created_settings_witness;
+    }
     persist();
     return { ok: true, state: 'ROLLED_BACK' };
   };
@@ -603,7 +712,7 @@ export function readProviderLayerMigrationTransactions(root) {
       } catch {
         return [{ storage_id: entry.name, action_id: actionId, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: new Date(0).toISOString(), recoverable: false, unresolved: true, source: 'provider-layer-migration' }];
       }
-    }).slice(-64);
+    });
   } catch {
     return [{ storage_id: null, action_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: new Date(0).toISOString(), recoverable: false, unresolved: true, source: 'provider-layer-migration' }];
   }

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { executeProviderLayerMigration } from '../src/provider-layer-migration.mjs';
 import { createProviderLayerMigrationFileHooks, readProviderLayerMigrationTransactions } from '../src/provider-layer-migration-adapters.mjs';
 import { readProviderMaterialization } from '../src/provider-profile-store.mjs';
+import { readProviderSettingsMaterialization } from '../src/provider-settings-store.mjs';
 
 const PLAN = {
   schema_version: 1,
@@ -95,33 +96,109 @@ test('filesystem adapter materializes settings, removes base, and can restore th
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('migration runtime baselines survive reopen in both restart phases', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-baseline-'));
+  try {
+    const profileFile = join(root, 'profile.yml');
+    const settingsFile = join(root, 'settings.yaml');
+    const backupDir = join(root, 'backups');
+    const profile = '- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n';
+    writeFileSync(profileFile, profile, 'utf8');
+    const plan = {
+      ...PLAN,
+      plan_id: '11111111-1111-4111-8111-111111111111',
+      expected_revisions: { profile: createHash('sha256').update(profile, 'utf8').digest('hex'), settings: null },
+      materialization: { provider: { id: 'custom', display_name: 'Custom', models: [] } },
+    };
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+    await hooks.acquireLock();
+    const applied = await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true });
+    assert.equal(applied.state, 'RESTART_PENDING');
+    await hooks.setRestartRuntimeBaseline('runtime-before-migrate-restart');
+    await hooks.release();
+
+    const reopened = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
+    await reopened.acquireLock();
+    await reopened.backup({});
+    assert.equal(reopened.backupPlan().runtime_id_before_restart, 'runtime-before-migrate-restart');
+    await reopened.rollback();
+    await reopened.setRollbackRuntimeBaseline('runtime-before-rollback-restart');
+    await reopened.release();
+
+    const reopenedRollback = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
+    await reopenedRollback.acquireLock();
+    await reopenedRollback.backup({});
+    assert.equal(reopenedRollback.backupPlan().rollback_runtime_id_before, 'runtime-before-rollback-restart');
+    await reopenedRollback.release();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('promote-existing-user rollback rejects drifted user-layer semantics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-promote-drift-'));
+  try {
+    const profileFile = join(root, 'profile.yml');
+    const settingsFile = join(root, 'settings.yaml');
+    const backupDir = join(root, 'backups');
+    const profile = '- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        api: openai-completions\n        baseURL: https://example.test/v1\n        models:\n          - id: model-1\n';
+    const settings = 'llm-pi-ai:\n  providers:\n    custom:\n      displayName: Custom\n      api: openai-completions\n      baseURL: https://example.test/v1\n      models:\n        - id: model-1\nagent-default-model:\n  provider: custom\n  model: model-1\n';
+    writeFileSync(profileFile, profile, 'utf8');
+    writeFileSync(settingsFile, settings, 'utf8');
+    const user = readProviderSettingsMaterialization(settings, { providerId: 'custom' });
+    assert.equal(user.ok, true);
+    const plan = {
+      ...PLAN,
+      plan_id: '22222222-2222-4222-8222-222222222222',
+      action: 'promote-existing-user',
+      expected_revisions: {
+        profile: createHash('sha256').update(profile, 'utf8').digest('hex'),
+        settings: createHash('sha256').update(settings, 'utf8').digest('hex'),
+      },
+      materialization: { provider: readProviderMaterialization(profile, { providerId: 'custom' }).provider },
+      user_materialization_before: user.provider,
+    };
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+    await hooks.acquireLock();
+    const applied = await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true });
+    assert.equal(applied.state, 'RESTART_PENDING');
+    await hooks.release();
+    writeFileSync(settingsFile, settings.replace('openai-completions', 'anthropic-messages'), 'utf8');
+    const reopened = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
+    await reopened.acquireLock();
+    await reopened.backup({});
+    await assert.rejects(() => reopened.rollback(), (error) => error.code === 'PROVIDER_MIGRATION_STATE_CHANGED');
+    await reopened.release();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migration recovery scanner exposes only nonterminal, secret-free transactions', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-scan-'));
   try {
     mkdirSync(join(root, 'tx-1'), { recursive: true });
     const manifest = {
-      kind: 'provider-layer-migration', plan_id: 'tx-1', provider_id: 'custom', phase: 'BASE_REMOVED',
-      plan: { plan_id: 'tx-1', provider_id: 'custom', action: 'materialize-user', expected_revisions: { profile: 'a'.repeat(64), settings: 'b'.repeat(64) }, materialization: { provider: { id: 'custom', display_name: 'Custom', models: [] } } },
+      schema_version: 1, kind: 'provider-layer-migration', plan_id: 'tx-1', provider_id: 'custom', phase: 'BASE_REMOVED',
+      plan: { schema_version: 1, kind: 'provider-layer-migration', plan_id: 'tx-1', provider_id: 'custom', action: 'materialize-user', expected_revisions: { profile: 'a'.repeat(64), settings: 'b'.repeat(64) }, materialization: { provider: { id: 'custom', display_name: 'Custom', models: [] } } },
       files: {
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
       applied_revisions: {},
       mutation_journal: {},
+      created_at: '2024-01-01T00:00:00.000Z',
     };
     const withoutChecksum = JSON.stringify(manifest);
     manifest.checksum = createHash('sha256').update(withoutChecksum, 'utf8').digest('hex');
     writeFileSync(join(root, 'tx-1', 'manifest.json'), JSON.stringify(manifest), 'utf8');
     mkdirSync(join(root, 'tx-2'), { recursive: true });
     const terminalManifest = {
-      kind: 'provider-layer-migration', plan_id: 'tx-2', provider_id: 'done', phase: 'VERIFIED',
-      plan: { plan_id: 'tx-2', provider_id: 'done', action: 'materialize-user', expected_revisions: { profile: 'a'.repeat(64), settings: 'b'.repeat(64) }, materialization: { provider: { id: 'done', display_name: 'Done', models: [] } } },
+      schema_version: 1, kind: 'provider-layer-migration', plan_id: 'tx-2', provider_id: 'done', phase: 'VERIFIED',
+      plan: { schema_version: 1, kind: 'provider-layer-migration', plan_id: 'tx-2', provider_id: 'done', action: 'materialize-user', expected_revisions: { profile: 'a'.repeat(64), settings: 'b'.repeat(64) }, materialization: { provider: { id: 'done', display_name: 'Done', models: [] } } },
       files: {
         profile: { existed: true, revision: 'a'.repeat(64) },
         settings: { existed: true, revision: 'b'.repeat(64) },
       },
       applied_revisions: {},
       mutation_journal: {},
+      created_at: '2024-01-01T00:00:00.000Z',
     };
     terminalManifest.checksum = createHash('sha256').update(JSON.stringify(terminalManifest), 'utf8').digest('hex');
     writeFileSync(join(root, 'tx-2', 'manifest.json'), JSON.stringify(terminalManifest), 'utf8');
@@ -132,6 +209,38 @@ test('migration recovery scanner exposes only nonterminal, secret-free transacti
       updated_at: records[0].updated_at, recoverable: true, unresolved: false, source: 'provider-layer-migration',
     });
     assert.doesNotMatch(JSON.stringify(records), /drop/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migration recovery scanner preserves every unresolved transaction beyond the UI window', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-many-'));
+  try {
+    for (let index = 0; index < 70; index += 1) {
+      mkdirSync(join(root, `broken-${index}`), { recursive: true });
+      writeFileSync(join(root, `broken-${index}`, 'manifest.json'), '{ malformed', 'utf8');
+    }
+    const records = readProviderLayerMigrationTransactions(root);
+    assert.equal(records.length, 70);
+    assert.equal(records.every((entry) => entry.unresolved === true), true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('migration scanner rejects unknown executable manifest fields', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-schema-'));
+  try {
+    mkdirSync(join(root, 'tx-unknown'), { recursive: true });
+    writeFileSync(join(root, 'tx-unknown', 'manifest.json'), JSON.stringify({
+      schema_version: 1,
+      kind: 'provider-layer-migration',
+      plan_id: 'tx-unknown',
+      provider_id: 'custom',
+      phase: 'BASE_REMOVED',
+      evil: 'must-fail-closed',
+    }), 'utf8');
+    const records = readProviderLayerMigrationTransactions(root);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].unresolved, true);
+    assert.equal(records[0].recoverable, false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -4,6 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import { classifyCredentialReference } from './credential-reference.mjs';
+import { readProviderMaterialization } from './provider-profile-store.mjs';
 
 const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
@@ -131,6 +132,20 @@ export function readProviderSettingsDeclarations(source, { file = 'harness/setti
       };
     }),
   };
+}
+
+/** Return the same bounded provider projection as the profile parser, adapted
+ * to the Harness settings indentation. This is used only for rollback CAS and
+ * never exposes credential values. */
+export function readProviderSettingsMaterialization(source, { providerId, file = 'harness/settings.yaml' } = {}) {
+  const parsed = parseProviderMap(source);
+  if (!parsed.ok) return { ok: false, code: parsed.code };
+  const entry = parsed.entries.find((candidate) => candidate.id === providerId);
+  if (!entry) return { ok: false, code: 'PROVIDER_NOT_FOUND' };
+  const block = parsed.lines.slice(entry.start, entry.end).map((line) => `  ${line}`);
+  const synthetic = ['- id: llm-pi-ai', '  config:', '    providers:', ...block, ''].join('\n');
+  const result = readProviderMaterialization(synthetic, { providerId, file });
+  return result.ok ? { ...result, provider: { ...result.provider, source_file: file } } : result;
 }
 
 export function readHarnessDefault(source) {

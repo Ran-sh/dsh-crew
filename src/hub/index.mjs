@@ -36,7 +36,7 @@ import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
 import { buildProviderLayerMigrationPlan, executeProviderLayerMigration } from '../provider-layer-migration.mjs';
 import { inspectProviderProfile, readProviderDeclarations, readProviderMaterialization } from '../provider-profile-store.mjs';
-import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
+import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations, readProviderSettingsMaterialization } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
@@ -195,7 +195,9 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
         }];
       }
     });
-    return transactions.sort((a, b) => a.updated_at.localeCompare(b.updated_at)).slice(-64);
+    // Recovery is a safety gate, not a bounded history view. Never discard an
+    // older unresolved transaction merely because newer entries exist.
+    return transactions.sort((a, b) => a.updated_at.localeCompare(b.updated_at));
   } catch {
     let updatedAt;
     try { updatedAt = statSync(root).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
@@ -726,6 +728,12 @@ export class WorkerRegistry {  constructor(ctx) {
     const pendingLayerMigration = readProviderLayerMigrationTransactions(join(CONFIG_DIR, 'provider-migration-backups'))
       .find((entry) => entry.unresolved === true || entry.provider_id === selection.provider);
     if (pendingLayerMigration) throw Object.assign(new Error('provider layer migration is pending verification'), { code: 'PROVIDER_MIGRATION_PENDING' });
+    // A process restart clears the in-memory mutation fence, so persisted
+    // provider-delete transactions must also gate admission. Unknown-owner
+    // recovery entries fence globally; known entries fence their provider.
+    const pendingProviderDelete = readProviderRecoveryTransactions()
+      .find((entry) => entry.unresolved === true || entry.provider_id === selection.provider);
+    if (pendingProviderDelete) throw Object.assign(new Error('provider delete recovery is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
     const providerMutationEpoch = this.getProviderMutationEpoch(selection.provider);
     this.assertProviderNotMutating(selection.provider, providerMutationEpoch);
 
@@ -1755,6 +1763,14 @@ export async function apply(ctx) {
             const parsedMaterialization = readProviderMaterialization(readFileSync(profileFile, 'utf8'), { providerId, file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
             if (!parsedMaterialization.ok) return sendJson(res, 409, { ok: false, code: parsedMaterialization.code });
             const materialization = parsedMaterialization.provider;
+            let userMaterializationBefore;
+            if (entry.action === 'promote-existing-user') {
+              const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
+              if (!existsSync(settingsFile)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_SETTINGS_CHANGED' });
+              const parsedUserMaterialization = readProviderSettingsMaterialization(readFileSync(settingsFile, 'utf8'), { providerId, file: 'harness/settings.yaml' });
+              if (!parsedUserMaterialization.ok) return sendJson(res, 409, { ok: false, code: parsedUserMaterialization.code });
+              userMaterializationBefore = parsedUserMaterialization.provider;
+            }
             const plan = {
               schema_version: 1,
               kind: 'provider-layer-migration',
@@ -1762,7 +1778,9 @@ export async function apply(ctx) {
               provider_id: providerId,
               action: entry.action,
               source: entry.source,
+              routing_references: entry.referenced_by,
               materialization: { provider: materialization },
+              ...(userMaterializationBefore ? { user_materialization_before: userMaterializationBefore } : {}),
               expected_revisions: {
                 profile: revisions.profile.revision,
                 settings: revisions.settings.ok ? revisions.settings.revision : null,
@@ -1805,8 +1823,44 @@ export async function apply(ctx) {
             let retainProviderStoreMutation = false;
             try {
               await hooks.acquireLock();
+              // The plan was created from a pre-lock snapshot. Re-read every
+              // authoritative source after taking the shared store lock so a
+              // concurrent catalog/default/recovery change cannot be hidden
+              // behind unchanged profile/settings revisions.
+              const lockedConfig = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+              const lockedInventory = await readProviderInventorySnapshot(hub, ctx, lockedConfig);
+              const lockedEntry = lockedInventory.migration.providers.find((candidate) => candidate.provider_id === providerId);
+              const expectedRouting = Array.isArray(stored.plan.routing_references) ? stored.plan.routing_references : [];
+              const sameRouting = JSON.stringify(lockedEntry?.referenced_by ?? []) === JSON.stringify(expectedRouting);
+              const sameDefault = JSON.stringify(lockedInventory.harness_default ?? null) === JSON.stringify(stored.plan.harness_default_before ?? null);
+              const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
+              const lockedMaterialization = existsSync(profileFile)
+                ? readProviderMaterialization(readFileSync(profileFile, 'utf8'), { providerId, file: 'harness/profiles/dsh-crew/cordis.patch.yml' })
+                : { ok: false };
+              const sameMaterialization = lockedMaterialization.ok === true
+                && JSON.stringify(lockedMaterialization.provider) === JSON.stringify(stored.plan.materialization?.provider ?? null);
+              const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
+              const lockedUserMaterialization = stored.plan.action === 'promote-existing-user' && existsSync(settingsFile)
+                ? readProviderSettingsMaterialization(readFileSync(settingsFile, 'utf8'), { providerId, file: 'harness/settings.yaml' })
+                : { ok: stored.plan.action !== 'promote-existing-user' };
+              const sameUserMaterialization = stored.plan.action !== 'promote-existing-user'
+                || (lockedUserMaterialization.ok === true && JSON.stringify(lockedUserMaterialization.provider) === JSON.stringify(stored.plan.user_materialization_before ?? null));
+              const lockedRevisions = readProviderSourceRevisions();
+              const expectedLocked = stored.plan.expected_revisions ?? {};
+              const sameRevisions = lockedRevisions.profile.revision === expectedLocked.profile
+                && (lockedRevisions.settings.ok ? lockedRevisions.settings.revision : null) === expectedLocked.settings;
+              if (hasPendingProviderRecoveryTransactions(lockedInventory)) {
+                return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+              }
+              if (!lockedEntry || lockedEntry.action !== stored.plan.action || lockedEntry.collision !== null
+                || !sameRouting || !sameDefault || !sameMaterialization || !sameUserMaterialization || !sameRevisions
+                || lockedInventory.default_evidence?.ok !== true
+                || !hasCompleteProviderCatalogEvidence(lockedInventory.catalog_evidence)
+                || !hasCompleteProviderDeclarationEvidence(lockedInventory.declaration_evidence)
+                || !hasAvailableProviderLifecycleEvidence(lockedInventory.lifecycle_evidence)) {
+                return sendJson(res, 409, { ok: false, code: 'PROVIDER_MIGRATION_PLAN_CHANGED' });
+              }
               if (hub.hasProviderLease(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_IN_USE' });
-              if (hasPendingProviderRecoveryTransactions(inventory)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
               result = await executeProviderLayerMigration(stored.plan, hooks, { confirm: true, deferRestart: true });
               if (result.ok && result.state === 'RESTART_PENDING') await hooks.setRestartRuntimeBaseline(getHubRuntimeIdentity().runtime_id);
               providerMigrationPlans.delete(body.plan_id);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -197,6 +197,16 @@ test('provider recovery surfaces non-directory entries with opaque action ids', 
   assert.equal(transactions[0].storage_id, 'unexpected-file');
   assert.match(transactions[0].action_id, /^[a-f0-9]{32}$/);
   assert.equal(transactions[0].unresolved, true);
+});
+
+test('provider recovery keeps unresolved entries beyond the display bound', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-many-'));
+  try {
+    for (let index = 0; index < 70; index += 1) writeFileSync(join(root, `unresolved-${index}`), 'recovery residue');
+    const transactions = readProviderRecoveryTransactions(root);
+    assert.equal(transactions.length, 70);
+    assert.equal(transactions.every((entry) => entry.unresolved === true), true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('provider recovery gives long malformed entries actionable opaque ids', () => {

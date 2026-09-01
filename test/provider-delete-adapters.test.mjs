@@ -110,6 +110,22 @@ test('file adapters apply a deletion and verify absence without touching credent
   assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
 });
 
+test('delete backup rejects a parseable config projection before mutation', async () => {
+  const paths = fixture();
+  try {
+    writeFileSync(paths.configFile, JSON.stringify({ ...CONFIG, harness_default: null }, null, 2) + '\n');
+    const plan = planFor(paths.profileFile);
+    const backupDir = join(paths.dir, 'backups');
+    const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+    await assert.rejects(() => hooks.backup(plan), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+    const transactionEntries = existsSync(backupDir)
+      ? readdirSync(backupDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && /^[0-9a-f-]{36}$/iu.test(entry.name))
+      : [];
+    assert.equal(transactionEntries.length, 0);
+    assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
+  } finally { rmSync(paths.dir, { recursive: true, force: true }); }
+});
+
 test('file adapters remove a provider from both profile and Harness settings authorities', async () => {
   const paths = fixture();
   paths.settingsFile = join(paths.dir, 'settings.yaml');
