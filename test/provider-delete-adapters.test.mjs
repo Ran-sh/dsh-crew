@@ -823,8 +823,8 @@ test('an absent lifecycle file remains auditable after the transaction creates i
   const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
   assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
   const manifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.ownership_witnesses.lifecycle, 'lifecycle.ownership.witness');
-  assert.equal(existsSync(join(backupDir, plan.plan_id, 'lifecycle.ownership.witness')), true);
+  assert.match(manifest.ownership_witnesses.lifecycle, /^lifecycle\.[0-9a-f-]{36}\.ownership\.witness$/i);
+  assert.equal(existsSync(join(backupDir, plan.plan_id, manifest.ownership_witnesses.lifecycle)), true);
 
   const reopened = createProviderDeleteFileHooks({
     ...paths,
@@ -956,6 +956,20 @@ test('long unresolved recovery entry names can be quarantined safely', async () 
   const result = await hooks.quarantine(entryName);
   assert.equal(result.ok, true);
   assert.equal(existsSync(entry), false);
+});
+
+test('non-directory recovery entries can be quarantined without following them', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const entryName = 'unexpected-file';
+  const entry = join(backupDir, entryName);
+  writeFileSync(entry, 'untrusted recovery residue');
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const result = await hooks.quarantine(entryName);
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(entry), false);
+  assert.equal(readdirSync(join(backupDir, '.quarantine')).length, 1);
 });
 
 test('reopening rejects a symlinked manifest before reading it', async (t) => {

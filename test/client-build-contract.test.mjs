@@ -90,6 +90,7 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /recoveryUnresolved/);
   assert.match(panelSource, /providers\/_recovery\/quarantine/);
   assert.match(panelSource, /storage_id/);
+  assert.match(panelSource, /action_id/);
   assert.match(panelSource, /ROLLBACK_RESTART_PENDING/);
   assert.match(panelSource, /ROLLBACK_APPLYING/);
   assert.match(panelSource, /Harness Providers|Harness Provider/);

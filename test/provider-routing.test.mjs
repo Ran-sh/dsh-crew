@@ -196,6 +196,29 @@ test('Hub blocks new jobs while their resolved provider is being deleted', async
   assert.equal(job.provider, 'opencode-go');
 });
 
+test('Hub rechecks the deletion gate after asynchronous spawn preparation', async () => {
+  let releasePreset;
+  let presetStarted;
+  const presetGate = new Promise((resolve) => { releasePreset = resolve; });
+  const presetObserved = new Promise((resolve) => { presetStarted = resolve; });
+  const reg = makeRegistry({ provider: 'opencode-go', model: 'deepseek-v4-flash' }, 'follow-dsh');
+  reg.ctx.get = (key) => {
+    if (key === 'loader') return { await: async () => {} };
+    if (key === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'opencode-go', model: 'deepseek-v4-flash' }) };
+    if (key === 'agentPresets') return { resolve: async () => { presetStarted(); await presetGate; return { id: 'default' }; } };
+    return undefined;
+  };
+  const created = captureAgentOptions(reg);
+  const spawning = reg.spawn({ task: 'racing', tier: 'flash', effort: 'off', cwd: '/tmp' });
+  await presetObserved;
+  reg.beginProviderMutation('opencode-go');
+  releasePreset();
+  await assert.rejects(spawning, (error) => error.code === 'PROVIDER_DELETE_BUSY');
+  assert.equal(created.length, 0);
+  assert.equal(reg.jobs.size, 0);
+  reg.endProviderMutation('opencode-go');
+});
+
 test('follow-dsh + no selection → spawn rejects with NO_WORKER_MODEL_AVAILABLE, no agents.create', async () => {
   const reg = makeRegistry(undefined, 'follow-dsh');
   const created = captureAgentOptions(reg);

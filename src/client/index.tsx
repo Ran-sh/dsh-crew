@@ -963,13 +963,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
 
   const quarantineRecoveryTransaction = async (entry: any) => {
-    const storageId = typeof entry?.storage_id === 'string' ? entry.storage_id : '';
-    if (!storageId || entry?.recoverable === true) return;
+    const actionId = typeof entry?.action_id === 'string' ? entry.action_id : '';
+    if (!actionId || entry?.recoverable === true) return;
     if (!window.confirm(copy.recoveryQuarantineConfirm)) return;
-    setProviderLifecycleBusy(`quarantine:${storageId}`);
+    setProviderLifecycleBusy(`quarantine:${actionId}`);
     setNotice(copy.working);
     try {
-      const result = await post('/providers/_recovery/quarantine', { transaction_id: storageId, confirm: true });
+      const result = await post('/providers/_recovery/quarantine', { action_id: actionId, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       setNotice(copy.saved);
       await refreshProviderInventory();
@@ -1519,9 +1519,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               <span style={S.mono}>{entry.storage_id ?? entry.transaction_id ?? 'unknown'}</span>
               <span style={{ opacity: 0.7 }}>{entry.phase}</span>
               <span style={{ flex: 1 }} />
-              {entry.storage_id && <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
+              {entry.action_id && <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={providerLifecycleBusy !== null}
                 onClick={() => { void quarantineRecoveryTransaction(entry); }}>
-                {providerLifecycleBusy === `quarantine:${entry.storage_id}` ? copy.working : copy.recoveryQuarantine}
+                {providerLifecycleBusy === `quarantine:${entry.action_id}` ? copy.working : copy.recoveryQuarantine}
               </button>}
             </div>
           ))}

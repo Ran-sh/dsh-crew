@@ -3,7 +3,7 @@
 // Web UI session list), exposes a loopback jobs API for the CC/Codex MCP shim,
 // and serves the one-click installer endpoints for the settings page.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
@@ -39,7 +39,7 @@ import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclar
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
-import { createProviderDeleteFileHooks, isRecoverableProviderDeleteBackup } from '../provider-delete-adapters.mjs';
+import { createProviderDeleteFileHooks, isRecoverableProviderDeleteBackup, readProviderDeleteManifestFile } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
 import { executeCredentialPurge, planCredentialPurge } from '../credential-lifecycle.mjs';
 import { createCredentialPurgeFileHooks } from '../credential-purge-adapters.mjs';
@@ -107,7 +107,21 @@ const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' 
 const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
-const RECOVERY_ENTRY_PATTERN = /^(?!\.{1,2}$)[^\\/\u0000-\u001f]{1,128}$/u;
+const RECOVERY_ACTION_PATTERN = /^[a-f0-9]{32}$/u;
+
+function recoveryActionId(name) {
+  return createHash('sha256').update(String(name)).digest('hex').slice(0, 32);
+}
+
+function isRecoveryControlEntry(name) {
+  return name === '.quarantine'
+    || name === '.delete.lock'
+    || name === '.delete.reclaim.lock'
+    || name === '.delete.recovery.lock'
+    || name === '.delete.recovery.lock.claim'
+    || /^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging|retired)$/iu.test(name)
+    || /^\.delete\.recovery\.lock\.[0-9a-f-]+\.stale$/iu.test(name);
+}
 
 function readProviderLifecycleStateStatus() {
   const file = join(CONFIG_DIR, 'provider-lifecycle.json');
@@ -137,11 +151,17 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
       config: join(CONFIG_DIR, 'config.json'),
       lifecycle: join(CONFIG_DIR, 'provider-lifecycle.json'),
     };
-    const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name !== '.quarantine').flatMap((entry) => {
+    const transactions = readdirSync(root, { withFileTypes: true }).filter((entry) => !isRecoveryControlEntry(entry.name)).flatMap((entry) => {
       const transactionRoot = join(root, entry.name);
       const manifestFile = join(root, entry.name, 'manifest.json');
+      const actionId = recoveryActionId(entry.name);
+      if (!entry.isDirectory()) {
+        let updatedAt;
+        try { updatedAt = statSync(transactionRoot).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
+        return [{ storage_id: entry.name, action_id: actionId, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: updatedAt, recoverable: false, unresolved: true }];
+      }
       try {
-        const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+        const manifest = readProviderDeleteManifestFile(manifestFile, managedRoot);
         const transactionId = typeof manifest?.plan?.plan_id === 'string' ? manifest.plan.plan_id : null;
         const providerId = typeof manifest?.provider_id === 'string' ? manifest.provider_id : null;
         const phase = typeof manifest?.phase_journal?.phase === 'string' && manifest.phase_journal.phase.trim()
@@ -157,13 +177,14 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
           expectedProviderId: providerId,
         }) === true;
         if (['ROLLED_BACK', 'VERIFIED'].includes(phase) && !hasPendingMutation && recoverable) return [];
-        return [{ storage_id: entry.name, transaction_id: transactionId ?? entry.name, provider_id: providerId, phase, updated_at: updatedAt, recoverable, unresolved: recoverable !== true }];
+        return [{ storage_id: entry.name, action_id: actionId, transaction_id: transactionId ?? entry.name, provider_id: providerId, phase, updated_at: updatedAt, recoverable, unresolved: recoverable !== true }];
       } catch {
         let updatedAt;
         try { updatedAt = statSync(transactionRoot).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
         return [{
           storage_id: entry.name,
-          transaction_id: RECOVERY_ENTRY_PATTERN.test(entry.name) ? entry.name : null,
+          action_id: actionId,
+          transaction_id: null,
           provider_id: null,
           phase: 'RECOVERY_UNRESOLVED',
           updated_at: updatedAt,
@@ -176,7 +197,7 @@ export function readProviderRecoveryTransactions(root = join(CONFIG_DIR, 'provid
   } catch {
     let updatedAt;
     try { updatedAt = statSync(root).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
-    return [{ storage_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: updatedAt, recoverable: false, unresolved: true }];
+    return [{ storage_id: null, action_id: null, transaction_id: null, provider_id: null, phase: 'RECOVERY_UNRESOLVED', updated_at: updatedAt, recoverable: false, unresolved: true }];
   }
 }
 
@@ -457,6 +478,7 @@ export function selectProviderProbeModel({ providerId, record, config } = {}) {
 export class WorkerRegistry {  constructor(ctx) {
     this.ctx = ctx;
     this.jobs = new Map();
+    this.providerMutations = new Set();
     this.nextId = 1;
     this.shard = createShardWriter('hub');
     this.healthStore = createProviderHealthStore();
@@ -504,6 +526,22 @@ export class WorkerRegistry {  constructor(ctx) {
 
   list() {
     return [...this.jobs.values()].map((job) => this.view(job));
+  }
+
+  beginProviderMutation(providerId) {
+    if (typeof providerId !== 'string' || !providerId.trim() || this.providerMutations.has(providerId)) return false;
+    this.providerMutations.add(providerId);
+    return true;
+  }
+
+  endProviderMutation(providerId) {
+    this.providerMutations.delete(providerId);
+  }
+
+  assertProviderNotMutating(providerId) {
+    if (this.providerMutations.has(providerId)) {
+      throw Object.assign(new Error('provider mutation is active'), { code: 'PROVIDER_DELETE_BUSY' });
+    }
   }
 
   publish() {
@@ -614,6 +652,7 @@ export class WorkerRegistry {  constructor(ctx) {
       }
       if (!selection.ok) throw Object.assign(new Error(selection.message), { policyCode: selection.code });
     }
+    this.assertProviderNotMutating(selection.provider);
 
     // The worker always gets the auditable Delivery Contract appended (unless
     // it already carries one), so its final message follows ## Diff / ## Tests
@@ -693,6 +732,12 @@ export class WorkerRegistry {  constructor(ctx) {
     // only needs the before-state by the time the worker finishes. Non-repos
     // degrade to { kind:'no-git' } instead of failing the job.
     job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
+    try {
+      this.assertProviderNotMutating(selection.provider);
+    } catch (error) {
+      if (isolatedWorkspace) await cleanupIsolatedWorkspace({ repoRoot: isolatedWorkspace.repoRoot, worktreePath: isolatedWorkspace.worktreePath }).catch(() => {});
+      throw error;
+    }
     this.jobs.set(id, job);
 
     const onEvent = (session, event) => {
@@ -1522,12 +1567,13 @@ export async function apply(ctx) {
           }
           if (req.method === 'POST' && parts[0] === '_recovery' && parts[1] === 'quarantine' && parts.length === 2) {
             if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_CONFIRM_REQUIRED' });
-            const transactionId = typeof body?.transaction_id === 'string' && RECOVERY_ENTRY_PATTERN.test(body.transaction_id)
-              ? body.transaction_id : null;
-            if (!transactionId) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_PLAN_INVALID' });
-            const recovery = readProviderRecoveryTransactions().find((entry) => entry.transaction_id === transactionId || entry.storage_id === transactionId);
+            const actionId = typeof body?.action_id === 'string' && RECOVERY_ACTION_PATTERN.test(body.action_id)
+              ? body.action_id : null;
+            if (!actionId) return sendJson(res, 400, { ok: false, code: 'PROVIDER_DELETE_PLAN_INVALID' });
+            const recovery = readProviderRecoveryTransactions().find((entry) => entry.action_id === actionId);
             if (!recovery) return sendJson(res, 404, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_NOT_FOUND' });
             if (recovery.recoverable === true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_RECOVERABLE' });
+            if (typeof recovery.storage_id !== 'string') return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED' });
             try {
               const hooks = createProviderDeleteFileHooks({
                 profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
@@ -1535,9 +1581,15 @@ export async function apply(ctx) {
                 configFile: join(CONFIG_DIR, 'config.json'),
                 lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
                 backupDir: join(CONFIG_DIR, 'provider-backups'),
+                afterLockAcquired: () => {
+                  const current = readProviderRecoveryTransactions().find((entry) => entry.action_id === actionId);
+                  if (!current || current.recoverable === true || current.storage_id !== recovery.storage_id) {
+                    throw Object.assign(new Error('provider recovery entry changed before quarantine'), { code: 'PROVIDER_DELETE_STATE_CHANGED' });
+                  }
+                },
               });
-              const quarantined = await hooks.quarantine(recovery.storage_id ?? transactionId);
-              return sendJson(res, 200, { ...quarantined, transaction_id: recovery.transaction_id ?? transactionId });
+              const quarantined = await hooks.quarantine(recovery.storage_id);
+              return sendJson(res, 200, { ...quarantined, action_id: actionId, transaction_id: recovery.transaction_id ?? null });
             } catch (error) {
               const code = boundedMachineCodeFromError(error) ?? 'PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED';
               return sendJson(res, 409, { ok: false, code });
@@ -1742,23 +1794,31 @@ export async function apply(ctx) {
               expected_revisions: stored.plan.expected_revisions,
               runtime_id_before: stored.plan.runtime_id_before,
             };
-            const hooks = createProviderDeleteFileHooks({
-              profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
-              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
-              configFile: join(CONFIG_DIR, 'config.json'),
-              lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
-              backupDir: join(CONFIG_DIR, 'provider-backups'),
-              runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
-              afterLockAcquired: () => {
-                if (readProviderRecoveryTransactions().length > 0) {
-                  throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
-                }
-              },
-            });
-            providerDeletePlans.delete(body.plan_id);
-            const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
-            const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
-            return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
+            if (!hub.beginProviderMutation(providerId)) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
+            try {
+              const hooks = createProviderDeleteFileHooks({
+                profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+                settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
+                configFile: join(CONFIG_DIR, 'config.json'),
+                lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
+                backupDir: join(CONFIG_DIR, 'provider-backups'),
+                runtimeIdProvider: () => getHubRuntimeIdentity().runtime_id,
+                afterLockAcquired: () => {
+                  if (readProviderRecoveryTransactions().length > 0) {
+                    throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+                  }
+                  if (hub.list().some((job) => job.status === 'running' && job.provider === providerId)) {
+                    throw Object.assign(new Error('provider is in use'), { code: 'PROVIDER_IN_USE' });
+                  }
+                },
+              });
+              providerDeletePlans.delete(body.plan_id);
+              const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
+              const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
+              return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
+            } finally {
+              hub.endProviderMutation(providerId);
+            }
           }
           return sendJson(res, 404, { ok: false, error: 'unknown providers endpoint' });
         } catch (err) {

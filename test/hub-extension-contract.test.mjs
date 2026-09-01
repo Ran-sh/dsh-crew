@@ -51,6 +51,9 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /PROVIDER_DELETE_RECOVERY_QUARANTINE_FAILED/);
   assert.match(hubSource, /hooks\.quarantine/);
   assert.match(hubSource, /afterLockAcquired/);
+  assert.match(hubSource, /beginProviderMutation/);
+  assert.match(hubSource, /endProviderMutation/);
+  assert.match(hubSource, /job\.status === 'running' && job\.provider === providerId/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);
