@@ -23,7 +23,6 @@ const TRANSITIONS = Object.freeze({
   FAILED: Object.freeze([]),
 });
 
-const DELETEABLE_OWNERSHIPS = new Set(['crew-managed-profile', 'user-managed-profile', 'dynamic-user']);
 const CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 function text(value) {
@@ -69,21 +68,23 @@ export function canTransitionProviderDelete(from, to) {
 /**
  * Validate a provider deletion request and return a secret-free impact plan.
  * The caller must provide a replacement when deleting the active Harness
- * Default; running jobs and unknown ownership always fail closed.
+ * Default; running jobs and unknown declaration sources always fail closed.
  */
-export function planProviderDelete({ providerId, inventory, activeJobs = [], replacementDefault = null, expectedRevision } = {}) {
+export function planProviderDelete({ providerId, inventory, activeJobs = [], replacementDefault = null, expectedRevision, expectedRevisions = null } = {}) {
   const id = text(providerId);
   if (!id) return fail('PROVIDER_NOT_FOUND');
   const record = recordById(inventory, id);
   if (!record) return fail('PROVIDER_NOT_FOUND');
-  if (!DELETEABLE_OWNERSHIPS.has(record.ownership)) return fail('PROVIDER_OWNERSHIP_AMBIGUOUS');
+  if (record.delete_capability === 'immutable-builtin' || id === 'deepseek-official') return fail('PROVIDER_BUILTIN_IMMUTABLE');
+  if (record.delete_capability !== 'supported') return fail(text(record.delete_blocker) ?? 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
+  if (!Array.isArray(record.declaration_authorities) || record.declaration_authorities.length === 0) return fail('PROVIDER_DELETE_SOURCE_UNRESOLVED');
   if (record.desired_state === 'absent') return fail('PROVIDER_ALREADY_ABSENT');
   if (activeJobCount(record, activeJobs) > 0) return fail('PROVIDER_IN_USE');
 
   const replacement = text(replacementDefault);
   const replacementRecord = replacement ? recordById(inventory, replacement) : null;
   if (record.references?.harness_default) {
-    if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent') {
+    if (!replacement || replacement === id || !replacementRecord || replacementRecord.desired_state === 'absent' || replacementRecord.lifecycle?.catalogued !== true) {
       return fail('PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
     }
     if (typeof replacementRecord.models?.[0] !== 'string' || replacementRecord.models[0].trim() === '') {
@@ -97,14 +98,20 @@ export function planProviderDelete({ providerId, inventory, activeJobs = [], rep
       plan_id: randomUUID(),
       provider_id: id,
       provider: { id, display_name: text(record.display_name) ?? id },
+      declaration: record.declaration ?? { present: true },
+      declaration_authorities: record.declaration_authorities,
+      delete_capability: record.delete_capability,
       expected_revision: text(expectedRevision) ?? text(record.declaration?.revision),
+      ...(expectedRevisions && typeof expectedRevisions === 'object' ? { expected_revisions: { ...expectedRevisions } } : {}),
       replacement_default: replacement,
       was_harness_default: record.references?.harness_default === true,
       ...(replacement
         ? { replacement_default_model: text(replacementRecord?.models?.[0]) }
         : {}),
       will_remove: [
-        'profile declaration', 'runtime desired registration',
+        ...(record.declaration_authorities.some((authority) => authority?.kind === 'crew-profile') ? ['profile declaration'] : []),
+        ...(record.declaration_authorities.some((authority) => authority?.kind === 'harness-settings') ? ['Harness settings declaration'] : []),
+        'runtime desired registration',
         'worker priority references', 'reviewer priority references',
         'Harness Default reference', 'cache/health state',
       ],

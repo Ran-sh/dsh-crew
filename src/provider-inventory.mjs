@@ -6,6 +6,8 @@
 
 const LIFECYCLE_ORIGINS = new Set(['builtin', 'profile-managed', 'dynamic', 'unknown']);
 const OWNERSHIPS = new Set(['harness', 'crew-managed-profile', 'user-managed-profile', 'dynamic-user', 'unknown']);
+const MUTABLE_AUTHORITY_KINDS = new Set(['crew-profile', 'harness-settings']);
+export const IMMUTABLE_HARNESS_PROVIDER_IDS = Object.freeze(['deepseek-official']);
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -41,8 +43,15 @@ function findPriorityIndex(policy, key, providerId) {
   return index >= 0 ? index : null;
 }
 
-function declarationFor(declarations, id) {
-  return declarations.find((entry) => normalizeProviderId(entry?.id) === id) ?? null;
+function declarationsFor(declarations, id) {
+  return declarations.filter((entry) => normalizeProviderId(entry?.id) === id);
+}
+
+function normalizeAuthority(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const kind = text(value.kind);
+  const locator = text(value.locator);
+  return kind && locator ? { kind, locator } : null;
 }
 
 function catalogFor(providers, id) {
@@ -85,7 +94,8 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
   const harnessDefault = normalizeProviderId(catalog?.harness_default?.provider);
   const records = ids.map((id) => {
     const catalogEntry = catalogFor(catalogProviders, id);
-    const declaration = declarationFor(safeDeclarations, id);
+    const providerDeclarations = declarationsFor(safeDeclarations, id);
+    const declaration = providerDeclarations[0] ?? null;
     const declared = declaration !== null;
     const catalogued = catalogEntry !== null;
     const tombstoned = tombstones?.[id] === 'absent';
@@ -97,16 +107,28 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     const declarationFile = text(declaration?.file);
     const locator = text(declaration?.locator);
 
+    const authorities = providerDeclarations.map((entry) => normalizeAuthority(entry.declaration_authority)).filter(Boolean);
+    const uniqueAuthorities = [...new Map(authorities.map((authority) => [`${authority.kind}:${authority.locator}`, authority])).values()];
+    const mutableAuthorities = uniqueAuthorities.filter((authority) => MUTABLE_AUTHORITY_KINDS.has(authority.kind));
+    const immutable = IMMUTABLE_HARNESS_PROVIDER_IDS.includes(id);
+    const deleteCapability = immutable ? 'immutable-builtin' : mutableAuthorities.length > 0 ? 'supported' : 'source-unresolved';
+    const deleteBlocker = immutable ? 'PROVIDER_BUILTIN_IMMUTABLE' : deleteCapability === 'supported' ? null : 'PROVIDER_DELETE_SOURCE_UNRESOLVED';
+    const origin = normalizeOrigin(declaration?.origin ?? (immutable ? 'builtin' : declared ? 'profile-managed' : 'unknown'));
+    const ownership = normalizeOwnership(declaration?.ownership ?? (immutable ? 'harness' : declared ? 'crew-managed-profile' : 'unknown'));
     return {
       id,
       display_name: text(declaration?.display_name) ?? text(declaration?.name) ?? text(catalogEntry?.name) ?? id,
-      origin: normalizeOrigin(declaration?.origin ?? (declared ? 'profile-managed' : 'builtin')),
-      ownership: normalizeOwnership(declaration?.ownership ?? (declared ? 'crew-managed-profile' : 'harness')),
+      origin,
+      ownership,
       declaration: {
         ...(declarationFile ? { file: declarationFile } : {}),
         ...(locator ? { locator } : {}),
+        ...(normalizeAuthority(declaration?.declaration_authority) ? { authority: normalizeAuthority(declaration.declaration_authority) } : {}),
         present: declared,
       },
+      declaration_authorities: uniqueAuthorities,
+      delete_capability: deleteCapability,
+      ...(deleteBlocker ? { delete_blocker: deleteBlocker } : {}),
       models: modelIds(catalogEntry),
       lifecycle: {
         installed: declared || catalogued,
@@ -120,6 +142,7 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         worker_priority: findPriorityIndex(policy?.worker, 'priority', id),
         worker_escalation: findPriorityIndex(policy?.worker, 'escalation_priority', id),
         reviewer_priority: findPriorityIndex(policy?.reviewer ?? policy?.review, 'priority', id),
+        reviewer_escalation: findPriorityIndex(policy?.reviewer ?? policy?.review, 'escalation_priority', id),
         active_jobs: active,
         multimodal_refs: multimodal,
       },

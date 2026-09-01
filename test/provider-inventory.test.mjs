@@ -30,6 +30,7 @@ const declarations = [
     origin: 'profile-managed',
     ownership: 'crew-managed-profile',
     file: 'profiles/dsh-crew/cordis.patch.yml',
+    declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
     credential_ref: 'OPENCODE_GO_API_KEY',
   },
   {
@@ -38,6 +39,7 @@ const declarations = [
     origin: 'dynamic',
     ownership: 'dynamic-user',
     file: 'settings.yaml',
+    declaration_authority: { kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' },
     credential_ref: 'OPENROUTER_API_KEY',
   },
 ];
@@ -129,4 +131,12 @@ test('declared non-official providers are explicitly deletable', () => {
     assert.equal(record.delete_capability, 'supported', id);
     assert.ok(Array.isArray(record.declaration_authorities), id);
   }
+});
+
+test('unknown declaration authority does not advertise a destructive capability', () => {
+  const result = buildProviderInventory({ declarations: [{
+    id: 'mystery', display_name: 'mystery', declaration_authority: { kind: 'future-store', locator: 'providers.mystery' },
+  }] });
+  assert.equal(result.records[0].delete_capability, 'source-unresolved');
+  assert.equal(result.records[0].delete_blocker, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });

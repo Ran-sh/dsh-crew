@@ -22,22 +22,22 @@ test('readProviderDeclarations returns provenance and credential references only
   assert.deepEqual(result.declarations, [
     {
       id: 'opencode-go', display_name: 'OpenCode Go', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
       credential_ref: 'OPENCODE_GO_API_KEY',
     },
     {
       id: 'opencode-alt', display_name: 'Opencode', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-alt' },
       credential_ref: 'OPENCODE_ALT_API_KEY',
     },
     {
       id: 'opencode-muse', display_name: 'opencode-go-muse', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-muse' },
       credential_ref: 'OPENCODE_MUSE_API_KEY',
     },
     {
       id: 'openrouter', display_name: 'openrouter', origin: 'profile-managed',
-      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml',
+      ownership: 'crew-managed-profile', file: 'profiles/dsh-crew/cordis.patch.yml', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.openrouter' },
       credential_ref: 'OPENROUTER_API_KEY',
     },
   ]);
@@ -47,7 +47,7 @@ test('readProviderDeclarations returns provenance and credential references only
 test('provider declarations carry an explicit mutation authority locator', () => {
   const result = readProviderDeclarations(PROFILE, { file: 'profiles/dsh-crew/cordis.patch.yml' });
   assert.deepEqual(result.declarations[0].declaration_authority, {
-    kind: 'crew-profile', locator: 'llm-pi-ai.providers.opencode-go',
+    kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go',
   });
 });
 

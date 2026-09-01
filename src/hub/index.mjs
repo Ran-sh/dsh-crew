@@ -35,6 +35,7 @@ import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
 import { inspectProviderProfile, readProviderDeclarations } from '../provider-profile-store.mjs';
+import { inspectProviderSettings, readProviderSettingsDeclarations } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
@@ -146,11 +147,18 @@ function providerInventoryPolicy(config) {
 
 async function readProviderInventorySnapshot(hub, ctx, config) {
   let catalog = { providers: [], harness_default: null };
+  let catalogEvidence = { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' };
   try {
     catalog = await readHarnessModelCatalog({
       llm: ctx.llm ?? ctx.get('llm'),
       getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
     });
+    catalogEvidence = {
+      ok: true,
+      provider_count: Number.isInteger(catalog.provider_count) ? catalog.provider_count : catalog.providers.length,
+      refreshed_at: typeof catalog.refreshed_at === 'string' ? catalog.refreshed_at : null,
+      partial: catalog.partial === true,
+    };
   } catch {}
   const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
   let declarations = [];
@@ -159,6 +167,14 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       const source = readFileSync(profileFile, 'utf8');
       const parsed = readProviderDeclarations(source, { file: 'harness/profiles/dsh-crew/cordis.patch.yml' });
       if (parsed.ok) declarations = parsed.declarations;
+    }
+  } catch {}
+  const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
+  try {
+    if (existsSync(settingsFile)) {
+      const source = readFileSync(settingsFile, 'utf8');
+      const parsed = readProviderSettingsDeclarations(source, { file: 'harness/settings.yaml' });
+      if (parsed.ok) declarations = [...declarations, ...parsed.declarations];
     }
   } catch {}
   const lifecycle = readProviderLifecycleState();
@@ -172,6 +188,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   });
   return {
     ...inventory,
+    catalog_evidence: catalogEvidence,
     credential_history_refs: Object.values(lifecycle.transactions ?? {})
       .flatMap((transaction) => Array.isArray(transaction?.credential_refs) ? transaction.credential_refs : []),
     credential_purged_refs: Object.keys(credentialPurge.purged),
@@ -189,15 +206,17 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   };
 }
 
-function readProviderProfileRevision() {
+function readProviderSourceRevisions() {
   const profileFile = join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml');
-  try {
-    if (!existsSync(profileFile)) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
-    const parsed = inspectProviderProfile(readFileSync(profileFile, 'utf8'));
-    return parsed.ok ? { ok: true, revision: parsed.revision } : { ok: false, code: parsed.code };
-  } catch {
-    return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
-  }
+  const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
+  const read = (file, inspect) => {
+    try {
+      if (!existsSync(file)) return { ok: false, code: 'PROVIDER_SOURCE_MISSING', revision: null };
+      const parsed = inspect(readFileSync(file, 'utf8'));
+      return parsed.ok ? { ok: true, revision: parsed.revision } : { ok: false, code: parsed.code, revision: parsed.revision ?? null };
+    } catch { return { ok: false, code: 'PROVIDER_SOURCE_UNAVAILABLE', revision: null }; }
+  };
+  return { profile: read(profileFile, inspectProviderProfile), settings: read(settingsFile, inspectProviderSettings) };
 }
 
 export function hubCanonicalEvents(job = {}) {
@@ -1366,18 +1385,23 @@ export async function apply(ctx) {
           const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
           const inventory = await readProviderInventorySnapshot(hub, ctx, config);
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'delete-plan') {
-            const profile = readProviderProfileRevision();
-            if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
+            const revisions = readProviderSourceRevisions();
+            if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
+            const expectedRevision = (revisions.profile.ok ? revisions.profile.revision : null) ?? revisions.settings.revision;
             const planned = planProviderDelete({
               providerId,
               inventory,
               activeJobs: hub.list(),
               replacementDefault: body?.replacement_default,
-              expectedRevision: profile.revision,
+              expectedRevision,
+              expectedRevisions: {
+                profile: revisions.profile.ok ? revisions.profile.revision : null,
+                settings: revisions.settings.ok ? revisions.settings.revision : null,
+              },
             });
             if (!planned.ok) return sendJson(res, 409, { ok: false, code: planned.code });
             rememberProviderDeletePlan(planned.plan);
-            return sendJson(res, 200, { ok: true, profile_revision: profile.revision, plan: planned.plan });
+            return sendJson(res, 200, { ok: true, profile_revision: expectedRevision, plan: planned.plan });
           }
           if (req.method === 'POST' && parts.length === 2 && parts[1] === 'probe') {
             const record = inventory.records.find((entry) => entry.id === providerId);
@@ -1413,6 +1437,7 @@ export async function apply(ctx) {
             const { transaction_id: transactionId } = body ?? {};
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
@@ -1424,7 +1449,11 @@ export async function apply(ctx) {
             await hooks.acquireLock();
             try {
               const verification = await hooks.verify(plan);
-              if (verification?.providerAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
+              const live = await readProviderInventorySnapshot(hub, ctx, config);
+              verification.catalog_evidence = live.catalog_evidence;
+              verification.catalogAbsent = live.catalog_evidence?.ok === true
+                && !live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
+              if (verification?.providerAbsent !== true || verification?.catalog_evidence?.ok !== true || verification?.catalogAbsent !== true || verification?.routingClear !== true || verification?.tombstonePresent !== true) {
                 return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_VERIFY_FAILED', verification });
               }
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'VERIFIED' }, plan);
@@ -1438,6 +1467,7 @@ export async function apply(ctx) {
             const { transaction_id: transactionId } = body ?? {};
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
@@ -1464,6 +1494,7 @@ export async function apply(ctx) {
             const { transaction_id: transactionId } = body ?? {};
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),
@@ -1475,7 +1506,11 @@ export async function apply(ctx) {
             await hooks.acquireLock();
             try {
               const verified = await hooks.verifyRollback(plan);
-              if (verified?.ok !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED' });
+              const live = await readProviderInventorySnapshot(hub, ctx, config);
+              verified.catalog_evidence = live.catalog_evidence;
+              verified.catalogPresent = live.catalog_evidence?.ok === true
+                && live.records.some((entry) => entry.id === providerId && entry.lifecycle?.catalogued === true);
+              if (verified?.ok !== true || verified?.catalog_evidence?.ok !== true || verified?.catalogPresent !== true) return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_ROLLBACK_VERIFY_FAILED', verification: verified });
               await hooks.recordTransaction({ transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' }, plan);
               return sendJson(res, 200, { ok: true, transaction_id: transactionId, provider_id: providerId, state: 'ROLLED_BACK' });
             } finally {
@@ -1492,9 +1527,14 @@ export async function apply(ctx) {
               providerDeletePlans.delete(body?.plan_id);
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_EXPIRED' });
             }
-            const profile = readProviderProfileRevision();
-            if (!profile.ok) return sendJson(res, 409, { ok: false, code: profile.code });
-            if (body?.expected_revision !== stored.plan.expected_revision || profile.revision !== stored.plan.expected_revision) {
+            const revisions = readProviderSourceRevisions();
+            if (!revisions.profile.ok && !revisions.settings.ok) return sendJson(res, 409, { ok: false, code: revisions.profile.code ?? revisions.settings.code });
+            const storedExpected = stored.plan.expected_revisions;
+            const revisionsMatch = storedExpected
+              ? (storedExpected.profile === (revisions.profile.ok ? revisions.profile.revision : null)
+                && storedExpected.settings === (revisions.settings.ok ? revisions.settings.revision : null))
+              : (body?.expected_revision === stored.plan.expected_revision && (revisions.profile.revision ?? revisions.settings.revision) === stored.plan.expected_revision);
+            if (!revisionsMatch || body?.expected_revision !== stored.plan.expected_revision) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_PROFILE_CHANGED' });
             }
             const refreshed = planProviderDelete({
@@ -1502,15 +1542,22 @@ export async function apply(ctx) {
               inventory,
               activeJobs: hub.list(),
               replacementDefault: stored.plan.replacement_default,
-              expectedRevision: profile.revision,
+              expectedRevision: stored.plan.expected_revision,
+              expectedRevisions: stored.plan.expected_revisions,
             });
             if (!refreshed.ok) return sendJson(res, 409, { ok: false, code: refreshed.code });
             if (refreshed.plan.replacement_default_model !== stored.plan.replacement_default_model) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_CHANGED' });
             }
-            const executionPlan = { ...refreshed.plan, plan_id: stored.plan.plan_id, expected_revision: stored.plan.expected_revision };
+            const executionPlan = {
+              ...refreshed.plan,
+              plan_id: stored.plan.plan_id,
+              expected_revision: stored.plan.expected_revision,
+              expected_revisions: stored.plan.expected_revisions,
+            };
             const hooks = createProviderDeleteFileHooks({
               profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
+              settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
               configFile: join(CONFIG_DIR, 'config.json'),
               lifecycleFile: join(CONFIG_DIR, 'provider-lifecycle.json'),
               backupDir: join(CONFIG_DIR, 'provider-backups'),

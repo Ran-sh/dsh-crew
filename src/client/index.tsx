@@ -105,6 +105,7 @@ const COPY = {
     visionProvider: '视觉 provider', visionModel: '视觉模型', imagegenProvider: '生图 provider',
     harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
+    providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
     providerDeletePlan: '生成删除计划', providerDelete: '确认删除', providerPlanReady: '计划已生成；再次确认后才会修改 3210 配置。', providerRollback: '回滚', providerRollbackConfirm: '按已保存事务恢复这个 Harness Provider 及原有路由？', providerRollbackUnavailable: '没有可验证的回滚事务',
     providerReplacement: '替换 Harness 默认 Provider（输入 Provider id）', providerDeleteConfirm: '确认按计划删除这个 Harness Provider？会清理路由引用并重启 3210。',
     providerDeleteBlocked: '当前 Provider 不能删除（内置、在用、已删除或缺少可用替换）。', providerLifecycleError: 'Provider 生命周期操作失败',
@@ -244,6 +245,7 @@ const COPY = {
     visionProvider: 'Vision provider', visionModel: 'Vision model', imagegenProvider: 'Image-gen provider',
     harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
+    providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerDeletePlan: 'Plan deletion', providerDelete: 'Confirm delete', providerPlanReady: 'Plan ready; a second confirmation is required before changing 3210 config.', providerRollback: 'Rollback', providerRollbackConfirm: 'Restore this Harness Provider and its previous routing from the saved transaction?', providerRollbackUnavailable: 'No verified rollback transaction is available',
     providerReplacement: 'Replacement Harness Default provider id', providerDeleteConfirm: 'Delete this Harness Provider per the plan? Routing refs will be scrubbed and 3210 restarted.',
     providerDeleteBlocked: 'This Provider cannot be deleted (built-in, in use, already absent, or missing a valid replacement).', providerLifecycleError: 'Provider lifecycle operation failed',
@@ -876,14 +878,16 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
 
   const deleteHarnessProvider = async (record: any) => {
-    if (!record || record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
+    if (!record || record.delete_capability !== 'supported' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
       setNotice(copy.providerDeleteBlocked);
       return;
     }
     let replacementDefault: string | undefined;
     if (record.references?.harness_default === true) {
-      const candidate = (providerInventory?.records ?? []).find((item: any) => item.id !== record.id
-        && item.desired_state !== 'absent' && item.ownership !== 'harness' && (item.models?.length ?? 0) > 0)?.id ?? '';
+      const candidate = (providerInventory?.records ?? []).find((item: any) => item.id === 'deepseek-official'
+        && item.id !== record.id && item.desired_state !== 'absent' && (item.models?.length ?? 0) > 0)?.id
+        ?? (providerInventory?.records ?? []).find((item: any) => item.id !== record.id
+          && item.desired_state !== 'absent' && item.delete_capability !== 'source-unresolved' && (item.models?.length ?? 0) > 0)?.id ?? '';
       const entered = window.prompt(copy.providerReplacement, candidate);
       if (!entered?.trim()) return;
       replacementDefault = entered.trim();
@@ -1450,7 +1454,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <div style={{ fontSize: 12, opacity: 0.55 }}>{copy.providerNoInventory}</div>
           )}
           {(providerInventory?.records ?? []).map((record: any) => {
-            const blocked = record.ownership === 'harness' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
+            const immutable = record.delete_capability === 'immutable-builtin';
+            const unresolved = record.delete_capability === 'source-unresolved';
+            const blocked = immutable || unresolved || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0;
             const lifecycle = record.desired_state === 'absent' ? 'absent' : record.lifecycle?.enabled === false ? 'disabled' : record.lifecycle?.catalogued ? 'catalogued' : 'configured';
             const rollbackTransaction = (providerInventory?.lifecycle_transactions ?? []).find((entry: any) => entry.provider_id === record.id && ['VERIFIED', 'RESTART_PENDING'].includes(entry.state));
             return (
@@ -1459,9 +1465,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                 <span style={{ ...S.chip(record.lifecycle?.enabled === true), ...S.mono }}>{record.id}</span>
                 <span style={{ opacity: 0.65 }}>{copy.providerState(lifecycle)}</span>
                 <span style={{ opacity: 0.65 }}>{copy.providerModels(record.models?.length ?? 0)}</span>
+                {immutable && <span style={{ opacity: 0.65 }}>{copy.providerOfficialBuiltin}</span>}
+                {unresolved && <span style={{ color: '#c98735' }}>{copy.providerSourceUnresolved}</span>}
                 {Number(record.references?.active_jobs ?? 0) > 0 && <span style={{ color: '#c98735' }}>{copy.providerJobs(record.references.active_jobs)}</span>}
                 <span style={{ flex: 1 }} />
-                {record.ownership !== 'harness' && record.desired_state !== 'absent' && (
+                {record.delete_capability === 'supported' && record.desired_state !== 'absent' && (
                   <button type="button" style={{ ...S.btn, padding: '2px 8px' }} disabled={blocked || providerLifecycleBusy !== null}
                     onClick={() => { void deleteHarnessProvider(record); }}>
                     {providerLifecycleBusy === record.id ? copy.working : copy.providerDeletePlan}

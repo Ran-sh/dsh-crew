@@ -24,6 +24,12 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(providerPreview, /tombstones: lifecycleState\.tombstones/);
   assert.match(hubSource, /delete-plan/);
   assert.match(hubSource, /createProviderDeleteFileHooks/);
+  assert.match(hubSource, /readProviderSettingsDeclarations/);
+  assert.match(hubSource, /settingsFile:/);
+  assert.match(hubSource, /readProviderSourceRevisions/);
+  assert.match(hubSource, /catalogAbsent/);
+  assert.match(hubSource, /catalog_evidence/);
+  assert.match(hubSource, /catalogPresent/);
   assert.match(hubSource, /createCredentialPurgeFileHooks/);
   assert.match(hubSource, /recordCredentialPurgeOutcome/);
   assert.match(hubSource, /unverified_purges/);

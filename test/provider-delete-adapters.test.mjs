@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
+import { inspectProviderSettings } from '../src/provider-settings-store.mjs';
 import { planProviderDelete, executeProviderDelete } from '../src/provider-lifecycle.mjs';
 import { createProviderDeleteFileHooks } from '../src/provider-delete-adapters.mjs';
 
@@ -16,20 +17,26 @@ const CONFIG = {
   harness_default: { provider: 'openrouter', model: 'free' },
 };
 
+const SETTINGS = `llm-pi-ai:\n  providers:\n    opencode-go:\n      models:\n        - id: mimo-v2.5\n      apiKeyEnv: OPENCODE_GO_API_KEY\n    openrouter:\n      models:\n        - id: minimax/minimax-m3:free\n      apiKeyEnv: OPENROUTER_API_KEY\nagent-default-model:\n  provider: opencode-go\n  model: mimo-v2.5\n`;
+
 const INVENTORY = {
   records: [
     {
       id: 'opencode-go', display_name: 'OpenCode Go', ownership: 'crew-managed-profile', origin: 'profile-managed',
       declaration: { present: true, file: 'profile.yml' }, desired_state: 'present',
+      delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' }],
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
       models: ['mimo-v2.5'],
+      lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
       references: { harness_default: false, active_jobs: 0 },
     },
     {
       id: 'openrouter', display_name: 'openrouter', ownership: 'crew-managed-profile', origin: 'profile-managed',
       declaration: { present: true, file: 'profile.yml' }, desired_state: 'present',
+      delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.openrouter' }],
       credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
       models: ['minimax/minimax-m3:free'],
+      lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
       references: { harness_default: true, active_jobs: 0 },
     },
   ],
@@ -44,6 +51,24 @@ function fixture() {
   writeFileSync(configFile, JSON.stringify(CONFIG, null, 2) + '\n');
   writeFileSync(lifecycleFile, JSON.stringify({ schema_version: 1, tombstones: {}, transactions: {}, last_verified_revision: {} }) + '\n');
   return { dir, profileFile, configFile, lifecycleFile };
+}
+
+function settingsPlanFor(paths) {
+  const expectedProfile = inspectProviderProfile(readFileSync(paths.profileFile, 'utf8')).revision;
+  const expectedSettings = inspectProviderSettings(readFileSync(paths.settingsFile, 'utf8')).revision;
+  return planProviderDelete({
+    providerId: 'opencode-go', inventory: {
+      records: [{
+        ...INVENTORY.records[0], references: { harness_default: false, active_jobs: 0 },
+        declaration_authorities: [
+          { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' },
+          { kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' },
+        ],
+      }],
+    },
+    expectedRevision: expectedProfile,
+    expectedRevisions: { profile: expectedProfile, settings: expectedSettings },
+  }).plan;
 }
 
 function planFor(profileFile) {
@@ -81,6 +106,36 @@ test('file adapters apply a deletion and verify absence without touching credent
   const lifecycle = JSON.parse(readFileSync(paths.lifecycleFile, 'utf8'));
   assert.equal(lifecycle.tombstones['opencode-go'], 'absent');
   assert.equal(lifecycle.transactions[plan.plan_id]?.state, 'VERIFIED');
+});
+
+test('file adapters remove a provider from both profile and Harness settings authorities', async () => {
+  const paths = fixture();
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
+  const plan = settingsPlanFor(paths);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), false);
+  assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('    opencode-go:'), false);
+  assert.equal((await hooks.verify(plan)).providerAbsent, true);
+});
+
+test('settings-only authority remains deletable when the Crew profile file is absent', async () => {
+  const paths = fixture();
+  rmSync(paths.profileFile);
+  paths.settingsFile = join(paths.dir, 'settings.yaml');
+  writeFileSync(paths.settingsFile, SETTINGS);
+  const expectedSettings = inspectProviderSettings(SETTINGS).revision;
+  const plan = planProviderDelete({
+    providerId: 'opencode-go', inventory: {
+      records: [{ ...INVENTORY.records[0], declaration_authorities: [{ kind: 'harness-settings', locator: 'llm-pi-ai.providers.opencode-go' }] }],
+    }, expectedRevisions: { profile: null, settings: expectedSettings }, expectedRevision: expectedSettings,
+  }).plan;
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir: join(paths.dir, 'backups'), restart: async () => ({ ok: true }) });
+  const result = await executeProviderDelete(plan, hooks);
+  assert.equal(result.state, 'VERIFIED');
+  assert.equal(readFileSync(paths.settingsFile, 'utf8').includes('    opencode-go:'), false);
 });
 
 test('file adapters fail closed on malformed managed JSON', async () => {

@@ -117,6 +117,7 @@ export function readProviderDeclarations(source, { file = 'profile.yml' } = {}) 
       origin: 'profile-managed',
       ownership: 'crew-managed-profile',
       file,
+      declaration_authority: { kind: 'crew-profile', locator: `llm-pi-ai.config.providers.${entry.id}` },
       ...(credentialRef ? { credential_ref: credentialRef } : {}),
     };
   });

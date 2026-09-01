@@ -14,6 +14,8 @@ const records = [
     origin: 'profile-managed',
     ownership: 'crew-managed-profile',
     declaration: { present: true, file: 'profiles/dsh-crew/cordis.patch.yml' },
+    delete_capability: 'supported',
+    declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' }],
     models: ['mimo-v2.5'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENCODE_GO_API_KEY', ownership: 'crew' }],
@@ -30,6 +32,8 @@ const records = [
     origin: 'dynamic',
     ownership: 'dynamic-user',
     declaration: { present: true, file: 'settings.yaml' },
+    delete_capability: 'supported',
+    declaration_authorities: [{ kind: 'harness-settings', locator: 'llm-pi-ai.providers.openrouter' }],
     models: ['minimax/minimax-m3:free'],
     lifecycle: { installed: true, configured: true, enabled: true, catalogued: true },
     credential_refs: [{ kind: 'env', name_or_handle: 'OPENROUTER_API_KEY', ownership: 'user' }],
@@ -79,7 +83,7 @@ test('only deepseek-official is immutable and DeepSeek may replace a deleted def
   const inventory = {
     records: [
       { ...records[0], id: 'deepseek-official', ownership: 'harness', origin: 'builtin', delete_capability: 'immutable-builtin', delete_blocker: 'PROVIDER_BUILTIN_IMMUTABLE', models: ['deepseek-v4-flash'], references: { harness_default: false, active_jobs: 0 } },
-      { ...records[0], id: 'opencode-go', references: { ...records[0].references, harness_default: true }, delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.providers.opencode-go' }] },
+      { ...records[0], id: 'opencode-go', references: { ...records[0].references, harness_default: true }, delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.opencode-go' }] },
     ],
   };
   assert.equal(planProviderDelete({ providerId: 'deepseek-official', inventory, replacementDefault: 'opencode-go' }).code, 'PROVIDER_BUILTIN_IMMUTABLE');
@@ -127,6 +131,13 @@ test('Harness Default deletion requires an advertised replacement model', () => 
   });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'PROVIDER_DEFAULT_REPLACEMENT_MODEL_REQUIRED');
+});
+
+test('Harness Default replacement must be present in the live catalog', () => {
+  const inventory = { records: records.map((record) => ({ ...record, lifecycle: { ...record.lifecycle, catalogued: record.id === 'opencode-go' } })) };
+  const result = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'openrouter' });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
 });
 
 test('delete transaction reaches VERIFIED only after restart and absence evidence', async () => {
