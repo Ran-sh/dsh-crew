@@ -44,6 +44,13 @@ test('readProviderDeclarations returns provenance and credential references only
   assert.equal(JSON.stringify(result).includes('secret-value'), false);
 });
 
+test('provider declarations carry an explicit mutation authority locator', () => {
+  const result = readProviderDeclarations(PROFILE, { file: 'profiles/dsh-crew/cordis.patch.yml' });
+  assert.deepEqual(result.declarations[0].declaration_authority, {
+    kind: 'crew-profile', locator: 'llm-pi-ai.providers.opencode-go',
+  });
+});
+
 test('removeProviderDeclarations removes only selected providers and preserves the rest', () => {
   const inspected = inspectProviderProfile(PROFILE);
   const result = removeProviderDeclarations(PROFILE, {

@@ -60,7 +60,7 @@ test('delete plan fails closed for built-in, in-use, and default providers', () 
     replacementDefault: 'openrouter',
   });
   assert.equal(builtin.ok, false);
-  assert.equal(builtin.code, 'PROVIDER_OWNERSHIP_AMBIGUOUS');
+  assert.equal(builtin.code, 'PROVIDER_BUILTIN_IMMUTABLE');
 
   const inUse = planProviderDelete({
     providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter' }],
@@ -73,6 +73,29 @@ test('delete plan fails closed for built-in, in-use, and default providers', () 
   });
   assert.equal(defaultWithoutReplacement.ok, false);
   assert.equal(defaultWithoutReplacement.code, 'PROVIDER_DEFAULT_REPLACEMENT_REQUIRED');
+});
+
+test('only deepseek-official is immutable and DeepSeek may replace a deleted default', () => {
+  const inventory = {
+    records: [
+      { ...records[0], id: 'deepseek-official', ownership: 'harness', origin: 'builtin', delete_capability: 'immutable-builtin', delete_blocker: 'PROVIDER_BUILTIN_IMMUTABLE', models: ['deepseek-v4-flash'], references: { harness_default: false, active_jobs: 0 } },
+      { ...records[0], id: 'opencode-go', references: { ...records[0].references, harness_default: true }, delete_capability: 'supported', declaration_authorities: [{ kind: 'crew-profile', locator: 'llm-pi-ai.providers.opencode-go' }] },
+    ],
+  };
+  assert.equal(planProviderDelete({ providerId: 'deepseek-official', inventory, replacementDefault: 'opencode-go' }).code, 'PROVIDER_BUILTIN_IMMUTABLE');
+  const plan = planProviderDelete({ providerId: 'opencode-go', inventory, replacementDefault: 'deepseek-official', expectedRevision: 'a'.repeat(64) });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.plan.replacement_default, 'deepseek-official');
+  assert.equal(plan.plan.replacement_default_model, 'deepseek-v4-flash');
+});
+
+test('source-unresolved non-official providers fail with a specific lifecycle code', () => {
+  const result = planProviderDelete({
+    providerId: 'openrouter',
+    inventory: { records: [{ ...records[1], id: 'openrouter', ownership: 'unknown', origin: 'unknown', delete_capability: 'source-unresolved', delete_blocker: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' }] },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
 test('delete plan records impact and sanitized credential references', () => {

@@ -105,3 +105,28 @@ test('catalog-only and declaration-only providers remain machine-visible with bo
   assert.equal(declarationOnly.lifecycle.catalogued, false);
   assert.equal(declarationOnly.lifecycle.configured, true);
 });
+
+test('only deepseek-official is immutable; catalog-only non-official providers are source-unresolved', () => {
+  const result = buildProviderInventory({
+    catalog: { providers: [
+      { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-v4-flash' }] },
+      { id: 'openrouter', name: 'openrouter', models: [{ id: 'minimax/minimax-m3:free' }] },
+    ] },
+  });
+  const official = result.records.find((record) => record.id === 'deepseek-official');
+  const unresolved = result.records.find((record) => record.id === 'openrouter');
+  assert.equal(official.delete_capability, 'immutable-builtin');
+  assert.equal(official.delete_blocker, 'PROVIDER_BUILTIN_IMMUTABLE');
+  assert.equal(unresolved.delete_capability, 'source-unresolved');
+  assert.equal(unresolved.ownership, 'unknown');
+  assert.equal(unresolved.origin, 'unknown');
+});
+
+test('declared non-official providers are explicitly deletable', () => {
+  const result = buildProviderInventory({ catalog, declarations, policy });
+  for (const id of ['opencode-go', 'openrouter']) {
+    const record = result.records.find((entry) => entry.id === id);
+    assert.equal(record.delete_capability, 'supported', id);
+    assert.ok(Array.isArray(record.declaration_authorities), id);
+  }
+});
