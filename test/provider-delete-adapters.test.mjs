@@ -1044,6 +1044,19 @@ test('malformed owner metadata fails closed instead of being reclaimed automatic
   rmSync(lockPath, { recursive: true, force: true });
 });
 
+test('scalar or array owner metadata fails closed instead of being reclaimed', async () => {
+  for (const raw of ['null', 'false', '0', '[]', '"owner"']) {
+    const paths = fixture();
+    const backupDir = join(paths.dir, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    const lockPath = join(backupDir, '.delete.lock');
+    writeFileSync(lockPath, raw);
+    const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+    await assert.rejects(() => hooks.acquireLock(), (error) => error.code === 'PROVIDER_DELETE_BUSY', raw);
+    assert.equal(existsSync(lockPath), true, raw);
+  }
+});
+
 test('invalid recovery entries can be quarantined under the owned backup root', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');

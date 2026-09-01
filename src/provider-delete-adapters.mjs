@@ -813,7 +813,12 @@ export function createProviderDeleteFileHooks({
         if (error?.code === 'ENOENT') return null;
         throw lockUnavailable();
       }
-      try { return JSON.parse(raw); }
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? parsed
+          : { invalid: true };
+      }
       catch {
         // A present but malformed owner record is not an orphan. Normal
         // acquisition must fail closed; only explicit offline recovery may
