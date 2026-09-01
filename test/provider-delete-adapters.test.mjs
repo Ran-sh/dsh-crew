@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectProviderProfile } from '../src/provider-profile-store.mjs';
@@ -368,6 +368,64 @@ test('a persisted transaction backup can be reopened for an explicit rollback', 
   await reopened.release();
   assert.equal(verified.ok, true);
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), true);
+});
+
+test('reopening a backup fails closed when its manifest omits a managed file entry', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+  delete manifest.files.lifecycle;
+  writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    existingBackupId: plan.plan_id,
+    expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
+test('reopening a backup fails closed when a required backup file is missing', async () => {
+  const paths = fixture();
+  const plan = planFor(paths.profileFile);
+  const backupDir = join(paths.dir, 'backups');
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir, restart: async () => ({ ok: true }) });
+  await first.backup(plan);
+  await first.release();
+  rmSync(join(backupDir, plan.plan_id, 'profile.backup'));
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths,
+    backupDir,
+    existingBackupId: plan.plan_id,
+    expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_BACKUP_INVALID');
+});
+
+test('owner metadata write failure cleans up the half-created lock', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const ownerWriteFs = {
+    copyFileSync,
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    rmSync,
+    writeFileSync(file, content, options) {
+      if (String(file).endsWith('owner.json')) {
+        const error = new Error('owner metadata write denied');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return writeFileSync(file, content, options);
+    },
+  };
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, fs: ownerWriteFs });
+  await assert.rejects(() => hooks.backup(planFor(paths.profileFile)), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE');
+  assert.equal(existsSync(join(backupDir, '.delete.lock')), false);
 });
 
 test('persisted provider delete backup retains sanitized credential references for final audit', async () => {

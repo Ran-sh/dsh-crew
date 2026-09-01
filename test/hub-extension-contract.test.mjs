@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry } from '../src/hub/index.mjs';
+import { createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const hubSource = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
 
@@ -101,6 +104,25 @@ test('provider lifecycle fails closed when any existing declaration source is ma
 test('provider lifecycle does not treat corrupted lifecycle state as available evidence', () => {
   assert.equal(hasAvailableProviderLifecycleEvidence({ ok: true }), true);
   assert.equal(hasAvailableProviderLifecycleEvidence({ ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' }), false);
+});
+
+test('provider recovery keeps manifests without phase timestamps visible using file mtime', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-recovery-'));
+  const id = '11111111-1111-4111-8111-111111111111';
+  const entry = join(root, id);
+  mkdirSync(entry);
+  writeFileSync(join(entry, 'manifest.json'), JSON.stringify({
+    schema_version: 1,
+    provider_id: 'opencode-go',
+    plan: { plan_id: id, provider_id: 'opencode-go' },
+    files: { profile: { existed: true, managed: true }, config: { existed: true, managed: true }, lifecycle: { existed: true, managed: true } },
+    phase_journal: { phase: 'DECLARATIONS_APPLYING' },
+  }) + '\n');
+  const transactions = readProviderRecoveryTransactions(root);
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0].provider_id, 'opencode-go');
+  assert.equal(transactions[0].phase, 'DECLARATIONS_APPLYING');
+  assert.equal(typeof transactions[0].updated_at, 'string');
 });
 
 test('provider probe adapter performs one bounded 3210 Harness stream and classifies terminal errors', async () => {
