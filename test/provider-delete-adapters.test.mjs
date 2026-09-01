@@ -254,6 +254,7 @@ test('provider backups reject nested flow-map credential values', async () => {
 test('default settings writer carries managed-root containment through atomic rename', () => {
   assert.match(ADAPTER_SOURCE, /atomicWrite\(settingsFile, content, managedRoot\)/);
   assert.match(ADAPTER_SOURCE, /atomicWrite\(target, sourceText, managedRoot\)/);
+  assert.match(ADAPTER_SOURCE, /const tempRoot = managedRoot \? resolvePath\(managedRoot\)/);
 });
 
 test('provider delete adapters reject managed paths outside the backup Crew root', () => {

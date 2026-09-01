@@ -53,8 +53,15 @@ function safePlanId(value) {
 function atomicWrite(file, content, managedRoot = null) {
   if (managedRoot) assertManagedPath(file, managedRoot);
   const dir = dirname(file);
-  mkdirSync(dir, { recursive: true });
-  const temp = join(dir, `.${basename(file)}.${process.pid}.${Date.now()}.dsh-crew.tmp`);
+  if (managedRoot) {
+    assertManagedPath(dir, managedRoot);
+    if (!existsSync(dir)) throw Object.assign(new Error('managed provider directory is missing'), { code: 'PROVIDER_DELETE_UNSAFE_PATH' });
+  } else {
+    mkdirSync(dir, { recursive: true });
+  }
+  const tempRoot = managedRoot ? resolvePath(managedRoot) : dir;
+  const temp = join(tempRoot, `.${basename(file)}.${process.pid}.${Date.now()}.dsh-crew.tmp`);
+  if (managedRoot) assertManagedPath(temp, managedRoot);
   try {
     writeFileSync(temp, content);
     if (managedRoot) assertManagedPath(file, managedRoot);
@@ -559,6 +566,9 @@ export function createProviderDeleteFileHooks({
       manifest.files[key] = { existed, managed };
       if (existed && key !== 'config' && managed) {
         const sourceText = fs.readFileSync(source, 'utf8');
+        // The backup contains this exact snapshot, never a second pathname
+        // read after a possible ancestor/junction swap.
+        assertManagedPath(source, managedRoot);
         if (key === 'profile') {
           const credentials = hasInlineProfileCredentials(sourceText);
           if (credentials.ok !== true) throw Object.assign(new Error('provider profile credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
@@ -576,6 +586,7 @@ export function createProviderDeleteFileHooks({
       manifest.files.settings = { existed, managed };
       if (existed && managed) {
         const sourceText = fs.readFileSync(settingsFile, 'utf8');
+        assertManagedPath(settingsFile, managedRoot);
         const credentials = hasInlineSettingsCredentials(sourceText);
         if (credentials.ok !== true) throw Object.assign(new Error('provider settings credential shape is unsupported'), { code: 'PROVIDER_DELETE_FILE_INVALID' });
         if (credentials.inline === true) throw Object.assign(new Error('inline provider credential is not supported'), { code: 'PROVIDER_INLINE_CREDENTIAL_UNSUPPORTED' });
