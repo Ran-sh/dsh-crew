@@ -265,7 +265,10 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     }
     if (key === 'config' && (!manifest.config_projection || typeof manifest.config_projection !== 'object'
       || Array.isArray(manifest.config_projection) || typeof manifest.config_revision !== 'string'
-      || !/^[a-f0-9]{64}$/i.test(manifest.config_revision))) {
+      || !/^[a-f0-9]{64}$/i.test(manifest.config_revision)
+      || typeof manifest.routing_projection_digest !== 'string'
+      || !/^[a-f0-9]{64}$/i.test(manifest.routing_projection_digest)
+      || sha256(JSON.stringify(manifest.config_projection)) !== manifest.routing_projection_digest)) {
       throw backupInvalid();
     }
     if (key === 'lifecycle' && (!validRevision(manifest.lifecycle_revision) || typeof manifest.lifecycle_revision !== 'string')) {
@@ -279,7 +282,13 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
       const backupBytes = fs.readFileSync(backupFile);
       if (sha256(backupBytes) !== digest) throw backupInvalid();
       if (key === 'profile' && manifest.profile_revision !== digest) throw backupInvalid();
-      if (key === 'lifecycle' && sha256(JSON.stringify(normalizeProviderLifecycleState(parseManagedJson(backupBytes)))) !== manifest.lifecycle_revision) throw backupInvalid();
+      if (key === 'lifecycle') {
+        const lifecycle = normalizeProviderLifecycleState(parseManagedJson(backupBytes));
+        if (sha256(JSON.stringify(lifecycle)) !== manifest.lifecycle_revision
+          || typeof manifest.lifecycle_projection_digest !== 'string'
+          || !/^[a-f0-9]{64}$/i.test(manifest.lifecycle_projection_digest)
+          || sha256(JSON.stringify(lifecycleProjection(lifecycle))) !== manifest.lifecycle_projection_digest) throw backupInvalid();
+      }
       if (key === 'settings' && manifest.settings_revision !== digest) throw backupInvalid();
     }
   }
@@ -374,7 +383,7 @@ export function createProviderDeleteFileHooks({
         if (error?.code !== 'EEXIST') return false;
         let existing = null;
         try { existing = readJson(recoveryPath, null); } catch {}
-        if (existing && alive(existing) !== false) return false;
+        if (existing && alive(existing) === true) return false;
         let reread = null;
         try { reread = readJson(recoveryPath, null); } catch {}
         if ((existing?.token ?? null) !== (reread?.token ?? null)) return false;
@@ -391,15 +400,15 @@ export function createProviderDeleteFileHooks({
     try {
       if (!existsSync(guardPath)) return { ok: true, recovered: false };
       let guardOwner = null;
-      try { guardOwner = readJson(guardPath, null); } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
-      if (alive(guardOwner) !== false) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+      try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
+      if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
       if (existsSync(canonicalPath)) {
         let mainOwner = null;
         try {
           mainOwner = lstatSync(canonicalPath).isDirectory()
             ? readJson(join(canonicalPath, 'owner.json'), null) : readJson(canonicalPath, null);
-        } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
-        if (mainOwner && alive(mainOwner) !== false) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+        } catch { mainOwner = null; }
+        if (alive(mainOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
         cleanup(canonicalPath);
       }
       cleanup(guardPath);
