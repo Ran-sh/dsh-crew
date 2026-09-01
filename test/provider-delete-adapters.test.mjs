@@ -475,6 +475,27 @@ test('offline recovery never forcefully reclaims a live recovery owner', async (
   rmSync(recoveryPath, { force: true });
 });
 
+test('offline recovery fails closed on unreadable lock metadata', async () => {
+  for (const kind of ['recovery', 'guard', 'canonical']) {
+    const paths = fixture();
+    const backupDir = join(paths.dir, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    const target = kind === 'recovery'
+      ? join(backupDir, '.delete.recovery.lock')
+      : kind === 'guard'
+        ? join(backupDir, '.delete.reclaim.lock')
+        : join(backupDir, '.delete.lock');
+    writeFileSync(target, JSON.stringify({ pid: process.pid, token: `live-${kind}` }));
+    const fsLike = { copyFileSync, existsSync, mkdirSync, readFileSync(file, encoding) {
+      if (String(file) === target) { const error = new Error('lock metadata denied'); error.code = 'EACCES'; throw error; }
+      return readFileSync(file, encoding);
+    }, writeFileSync, rmSync, readdirSync, lstatSync };
+    const hooks = createProviderDeleteFileHooks({ ...paths, backupDir, fs: fsLike });
+    await assert.rejects(() => hooks.recoverLock(), (error) => error.code === 'PROVIDER_DELETE_LOCK_UNAVAILABLE', kind);
+    assert.equal(existsSync(target), true, kind);
+  }
+});
+
 test('offline recovery never forcefully removes a live mutation owner', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');

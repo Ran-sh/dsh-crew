@@ -646,7 +646,44 @@ export function createProviderDeleteFileHooks({
       if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
       try { process.kill(owner.pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
     };
+    const lockUnavailable = () => Object.assign(new Error('provider deletion lock metadata is unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
+    const fsLstatSync = typeof fs.lstatSync === 'function' ? fs.lstatSync : lstatSync;
+    const fsReadFileSync = typeof fs.readFileSync === 'function' ? fs.readFileSync : readFileSync;
+    const fsReaddirSync = typeof fs.readdirSync === 'function' ? fs.readdirSync : readdirSync;
     const cleanup = (path) => { try { fs.rmSync(path, { recursive: true, force: true }); } catch {} };
+    const inspectPath = (path) => {
+      try { return { exists: true, stat: fsLstatSync(path) }; }
+      catch (error) {
+        if (error?.code === 'ENOENT') return { exists: false, stat: null };
+        throw lockUnavailable();
+      }
+    };
+    const readOwner = (path, knownStat = null) => {
+      let stat = knownStat;
+      if (!stat) {
+        const inspected = inspectPath(path);
+        if (!inspected.exists) return null;
+        stat = inspected.stat;
+      }
+      if (stat.isSymbolicLink?.()) throw lockUnavailable();
+      const ownerPath = stat.isDirectory() ? join(path, 'owner.json') : path;
+      let raw;
+      try { raw = fsReadFileSync(ownerPath, 'utf8'); }
+      catch (error) {
+        if (error?.code === 'ENOENT') return null;
+        throw lockUnavailable();
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? parsed
+          : { invalid: true };
+      } catch {
+        // Explicit offline recovery may reclaim recognized malformed owner
+        // metadata, but it must never guess through an unreadable file.
+        return { invalid: true };
+      }
+    };
     assertManagedPath(backupDir, managedRoot);
     for (const path of [guardPath, canonicalPath, recoveryPath, recoveryClaimPath]) assertManagedPath(path, managedRoot);
     const recoveryToken = randomUUID();
@@ -656,16 +693,14 @@ export function createProviderDeleteFileHooks({
       // A crashed reclaimer leaves a claim marker. Do not automatically steal
       // it: only an explicit operator force can clear a dead claim, which
       // keeps concurrent reclaimers from ABA-renaming a fresh recovery lock.
-      if (existsSync(recoveryClaimPath)) {
-        let claim = null;
-        try { claim = readJson(recoveryClaimPath, null); } catch {}
+      if (inspectPath(recoveryClaimPath).exists) {
+        const claim = readOwner(recoveryClaimPath);
         if (!force || alive(claim) === true) return false;
         const claimToken = claim?.token ?? null;
-        let rereadClaim = null;
-        try { rereadClaim = readJson(recoveryClaimPath, null); } catch {}
+        const rereadClaim = readOwner(recoveryClaimPath);
         if (claimToken !== (rereadClaim?.token ?? null)) return false;
         cleanup(recoveryClaimPath);
-        if (existsSync(recoveryClaimPath)) return false;
+        if (inspectPath(recoveryClaimPath).exists) return false;
       }
       try {
         publishExclusiveFile(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', recoveryToken);
@@ -673,22 +708,28 @@ export function createProviderDeleteFileHooks({
         return true;
       } catch (error) {
         if (error?.code !== 'EEXIST') return false;
-        let existing = null;
-        try { existing = readJson(recoveryPath, null); } catch {}
+        const existing = readOwner(recoveryPath);
         if (existing && alive(existing) === true) return false;
-        if (existsSync(recoveryClaimPath)) return false;
+        if (inspectPath(recoveryClaimPath).exists) return false;
         const claim = { pid: process.pid, token: recoveryToken, observed_token: existing?.token ?? null, created_at: new Date().toISOString() };
         try {
           publishExclusiveFile(recoveryClaimPath, JSON.stringify(claim) + '\n', recoveryToken);
-        } catch { return false; }
-        let reread = null;
-        try { reread = readJson(recoveryPath, null); } catch {}
+        } catch (claimError) {
+          if (claimError?.code === 'EEXIST') return false;
+          throw claimError;
+        }
+        const reread = readOwner(recoveryPath);
         if ((existing?.token ?? null) !== (reread?.token ?? null)) {
           cleanup(recoveryClaimPath);
           return false;
         }
         const stalePath = `${recoveryPath}.${recoveryToken}.stale`;
-        try { renameSync(recoveryPath, stalePath); } catch { cleanup(recoveryClaimPath); return false; }
+        try { renameSync(recoveryPath, stalePath); }
+        catch (renameError) {
+          cleanup(recoveryClaimPath);
+          if (renameError?.code === 'ENOENT' || renameError?.code === 'EEXIST') return false;
+          throw lockUnavailable();
+        }
         try {
           publishExclusiveFile(recoveryPath, JSON.stringify(recoveryOwner()) + '\n', recoveryToken);
           recoveryOwned = true;
@@ -701,32 +742,31 @@ export function createProviderDeleteFileHooks({
     };
     if (!recoveryAcquire()) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
     try {
-      const guardExists = existsSync(guardPath);
+      const guardExists = inspectPath(guardPath).exists;
       let guardOwner = null;
       if (guardExists) {
-        try { guardOwner = readJson(guardPath, null); } catch { guardOwner = null; }
+        guardOwner = readOwner(guardPath);
         if (alive(guardOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
       }
       const candidates = [canonicalPath];
       try {
-        for (const entry of readdirSync(backupDir, { withFileTypes: true })) {
+        for (const entry of fsReaddirSync(backupDir, { withFileTypes: true })) {
           if (/^\.delete\.lock\.[0-9a-f-]+\.(?:active|staging)$/iu.test(entry.name)) candidates.push(join(backupDir, entry.name));
         }
       } catch { return { ok: false, code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' }; }
-      if (candidates.every((candidate) => !existsSync(candidate))) {
+      const uniqueCandidates = [...new Set(candidates)];
+      const presentCandidates = [];
+      for (const candidate of uniqueCandidates) {
+        const inspected = inspectPath(candidate);
+        if (!inspected.exists) continue;
+        presentCandidates.push({ candidate, stat: inspected.stat, owner: readOwner(candidate, inspected.stat) });
+      }
+      if (presentCandidates.length === 0) {
         if (guardExists) cleanup(guardPath);
         return { ok: true, recovered: guardExists };
       }
-      for (const candidate of [...new Set(candidates)]) {
-        if (!existsSync(candidate)) continue;
-        let mainOwner = null;
-        try {
-          mainOwner = lstatSync(candidate).isDirectory()
-            ? readJson(join(candidate, 'owner.json'), null) : readJson(candidate, null);
-        } catch { mainOwner = null; }
-        if (alive(mainOwner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
-      }
-      for (const candidate of [...new Set(candidates)]) if (existsSync(candidate)) cleanup(candidate);
+      for (const { owner } of presentCandidates) if (alive(owner) === true) return { ok: false, code: 'PROVIDER_DELETE_BUSY' };
+      for (const { candidate } of presentCandidates) cleanup(candidate);
       cleanup(guardPath);
       return { ok: true, recovered: true };
     } finally {
