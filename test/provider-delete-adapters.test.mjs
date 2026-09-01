@@ -326,6 +326,25 @@ test('two processes reclaiming the same stale lock yield exactly one owner', asy
   assert.equal(normalized.filter((value) => value === 'PROVIDER_DELETE_BUSY').length, 1);
 });
 
+test('offline recovery clears a stale reclaim guard only when no live owner remains', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const guardPath = join(backupDir, '.delete.reclaim.lock');
+  writeFileSync(guardPath, JSON.stringify({ pid: 999999, token: 'stale-guard' }));
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const recovered = await hooks.recoverLock();
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.recovered, true);
+  assert.equal(existsSync(guardPath), false);
+
+  writeFileSync(guardPath, JSON.stringify({ pid: process.pid, token: 'live-guard' }));
+  const blocked = await hooks.recoverLock();
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'PROVIDER_DELETE_BUSY');
+  rmSync(guardPath, { force: true });
+});
+
 test('provider verification fails closed when a managed profile is malformed', async () => {
   const paths = fixture();
   const plan = planFor(paths.profileFile);
