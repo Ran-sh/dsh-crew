@@ -55,7 +55,13 @@ function hasCanonicalAuthorities(record, providerId) {
 }
 
 function activeJobCount(record, activeJobs) {
-  if (Array.isArray(activeJobs)) return activeJobs.filter((job) => job?.provider === record.id).length;
+  if (Array.isArray(activeJobs)) return activeJobs.filter((job) => {
+    if (job?.provider !== record.id) return false;
+    // WorkerRegistry retains terminal jobs for readiness/audit history. Only
+    // non-terminal jobs fence destructive provider lifecycle operations;
+    // missing/unknown status remains conservative and is treated as active.
+    return !['done', 'failed', 'cancelled'].includes(job?.status);
+  }).length;
   return Number.isInteger(record?.references?.active_jobs) ? Math.max(0, record.references.active_jobs) : 0;
 }
 

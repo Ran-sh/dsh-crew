@@ -102,6 +102,20 @@ test('source-unresolved non-official providers fail with a specific lifecycle co
   assert.equal(result.code, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
+test('terminal historical jobs do not block provider deletion, while running jobs do', () => {
+  for (const status of ['done', 'cancelled', 'failed']) {
+    const result = planProviderDelete({
+      providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter', status }],
+    });
+    assert.equal(result.ok, true, status);
+  }
+  const running = planProviderDelete({
+    providerId: 'openrouter', inventory: { records }, activeJobs: [{ provider: 'openrouter', status: 'running' }],
+  });
+  assert.equal(running.ok, false);
+  assert.equal(running.code, 'PROVIDER_IN_USE');
+});
+
 test('destructive planning fails closed when live catalog evidence is unavailable', () => {
   const result = planProviderDelete({
     providerId: 'opencode-go', inventory: {

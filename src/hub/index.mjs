@@ -738,6 +738,7 @@ export class WorkerRegistry {  constructor(ctx) {
       abortPromise: null,
       resolveAbort: null,
       providerLease: false,
+      providerLeaseReleaseBlocked: false,
       lateHandleCreated: false,
       lateCreateCleanupPromise: null,
     };
@@ -751,7 +752,15 @@ export class WorkerRegistry {  constructor(ctx) {
           job.handle_dispose_promise = Promise.reject(error);
         }
       }
-      await job.handle_dispose_promise;
+      try {
+        await job.handle_dispose_promise;
+      } catch (error) {
+        // A failed disposer is not proof that the provider is idle. Keep the
+        // lease fenced even when the job is already terminal; the operator
+        // must restart/reclaim the owned runtime before deletion can proceed.
+        job.providerLeaseReleaseBlocked = true;
+        throw error;
+      }
     };
     job.disposeHandle = disposeJobHandle;
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
@@ -904,11 +913,11 @@ export class WorkerRegistry {  constructor(ctx) {
           };
           if (job.lateCreateCleanupPromise) {
             job.lateCreateCleanupPromise.then(releaseLease).catch(() => {
-              if (!job.lateHandleCreated) releaseLease();
+              if (!job.lateHandleCreated && !job.providerLeaseReleaseBlocked) releaseLease();
               // A late-created handle that failed disposal remains fenced by
               // the provider lease until an operator restarts/reclaims it.
             });
-          } else releaseLease();
+          } else if (!job.providerLeaseReleaseBlocked) releaseLease();
         }
         // Delivery completeness is separate from execution status: a job can
         // be done yet fail to report Diff/Tests/Risks (or Review sections for

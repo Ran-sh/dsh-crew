@@ -141,6 +141,21 @@ test('unknown declaration authority does not advertise a destructive capability'
   assert.equal(result.records[0].delete_blocker, 'PROVIDER_DELETE_SOURCE_UNRESOLVED');
 });
 
+test('provider inventory counts only non-terminal jobs as active', () => {
+  const result = buildProviderInventory({
+    catalog,
+    declarations,
+    policy,
+    activeJobs: [
+      { provider: 'opencode-go', status: 'running' },
+      { provider: 'opencode-go', status: 'done' },
+      { provider: 'opencode-go', status: 'cancelled' },
+      { provider: 'opencode-go', status: 'failed' },
+    ],
+  });
+  assert.equal(result.records.find((record) => record.id === 'opencode-go').references.active_jobs, 1);
+});
+
 test('malformed authority alongside a valid declaration fails closed for the whole provider', () => {
   const result = buildProviderInventory({ declarations: [
     { id: 'mixed', declaration_authority: { kind: 'crew-profile', locator: 'llm-pi-ai.config.providers.mixed' } },

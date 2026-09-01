@@ -845,8 +845,20 @@ export function createProviderDeleteFileHooks({
             throw Object.assign(new Error('provider deletion lock unavailable'), { code: 'PROVIDER_DELETE_LOCK_UNAVAILABLE' });
           }
         }
+        const uniqueCandidates = [...new Set(candidates)];
+        // Inspect every residue before reclaiming any one of them. A stale
+        // candidate may appear before a live token-specific owner in
+        // directory order; reclaiming it first would otherwise admit a second
+        // owner while the live candidate remains untouched.
+        for (const candidate of uniqueCandidates) {
+          if (!existsSync(candidate)) continue;
+          const owner = readOwner(candidate);
+          if (owner && ownerIsAlive(owner) !== false) {
+            throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
+          }
+        }
         let raced = false;
-        for (const candidate of candidates) {
+        for (const candidate of uniqueCandidates) {
           const owner = readOwner(candidate);
           if (owner && ownerIsAlive(owner) !== false) throw Object.assign(new Error('another provider deletion is active'), { code: 'PROVIDER_DELETE_BUSY' });
           try {

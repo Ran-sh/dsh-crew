@@ -346,6 +346,41 @@ test('two processes reclaiming the same stale lock yield exactly one owner', asy
   assert.equal(normalized.filter((value) => value === 'PROVIDER_DELETE_BUSY').length, 1);
 });
 
+test('lock acquisition fails when a live candidate coexists with stale residue in either ordering', async () => {
+  const permutations = [
+    ['.delete.lock.11111111-1111-1111-1111-111111111111.active', '.delete.lock.22222222-2222-2222-2222-222222222222.active'],
+    ['.delete.lock.22222222-2222-2222-2222-222222222222.active', '.delete.lock.11111111-1111-1111-1111-111111111111.active'],
+  ];
+  for (const [first, second] of permutations) {
+    const paths = fixture();
+    const backupDir = join(paths.dir, 'backups');
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(join(backupDir, first), JSON.stringify({ pid: first.includes('11111111') ? 999999 : process.pid, token: first }));
+    writeFileSync(join(backupDir, second), JSON.stringify({ pid: second.includes('11111111') ? 999999 : process.pid, token: second }));
+    const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+    await assert.rejects(() => hooks.acquireLock(), (error) => error.code === 'PROVIDER_DELETE_BUSY');
+    assert.equal(existsSync(join(backupDir, first)), true);
+    assert.equal(existsSync(join(backupDir, second)), true);
+  }
+});
+
+test('a successful reclaim leaves a live owner that fences a second acquisition beside stale residue', async () => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  mkdirSync(backupDir, { recursive: true });
+  const staleA = join(backupDir, '.delete.lock.11111111-1111-1111-1111-111111111111.active');
+  const staleB = join(backupDir, '.delete.lock.33333333-3333-3333-3333-333333333333.staging');
+  writeFileSync(staleA, JSON.stringify({ pid: 999999, token: 'stale-a' }));
+  writeFileSync(staleB, JSON.stringify({ pid: 999999, token: 'stale-b' }));
+  const first = createProviderDeleteFileHooks({ ...paths, backupDir });
+  const second = createProviderDeleteFileHooks({ ...paths, backupDir });
+  await first.acquireLock();
+  await assert.rejects(() => second.acquireLock(), (error) => error.code === 'PROVIDER_DELETE_BUSY');
+  await first.release();
+  await second.acquireLock();
+  await second.release();
+});
+
 test('offline recovery clears a stale reclaim guard only when no live owner remains', async () => {
   const paths = fixture();
   const backupDir = join(paths.dir, 'backups');

@@ -111,7 +111,8 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
     const tombstoned = tombstones?.[id] === 'absent';
     const configured = declared;
     const active = Array.isArray(activeJobs)
-      ? activeJobs.filter((job) => normalizeProviderId(job?.provider) === id).length
+      ? activeJobs.filter((job) => normalizeProviderId(job?.provider) === id
+        && !['done', 'failed', 'cancelled'].includes(job?.status)).length
       : Number.isInteger(activeJobs?.[id]) ? Math.max(0, activeJobs[id]) : 0;
     const multimodal = Array.isArray(multimodalRefs?.[id]) ? multimodalRefs[id].length : Number.isInteger(multimodalRefs?.[id]) ? Math.max(0, multimodalRefs[id]) : 0;
     const declarationFile = text(declaration?.file);
