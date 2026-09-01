@@ -271,6 +271,11 @@ function validRevision(value) {
   return value === null || (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value));
 }
 
+function fileIdentity(file) {
+  const stat = lstatSync(file);
+  return { dev: String(stat.dev), ino: String(stat.ino) };
+}
+
 function recoveryDescriptor(manifest) {
   return {
     plan: {
@@ -285,6 +290,9 @@ function recoveryDescriptor(manifest) {
       runtime_id_before: manifest?.plan?.runtime_id_before ?? null,
       delete_runtime_id_before_restart: manifest?.plan?.delete_runtime_id_before_restart ?? null,
       rollback_runtime_id_before_restart: manifest?.plan?.rollback_runtime_id_before_restart ?? null,
+      expected_revision: manifest?.plan?.expected_revision ?? null,
+      expected_revisions: manifest?.plan?.expected_revisions ?? null,
+      credential_refs: manifest?.plan?.credential_refs ?? null,
     },
     files: manifest?.files ?? null,
     backup_digests: manifest?.backup_digests ?? null,
@@ -305,6 +313,12 @@ function recoveryDescriptor(manifest) {
       settings: manifest?.created_settings ?? false,
       config: manifest?.created_config ?? false,
       lifecycle: manifest?.created_lifecycle ?? false,
+    },
+    created_identities: {
+      profile: manifest?.created_profile_identity ?? null,
+      settings: manifest?.created_settings_identity ?? null,
+      config: manifest?.created_config_identity ?? null,
+      lifecycle: manifest?.created_lifecycle_identity ?? null,
     },
     mutation_journal: manifest?.mutation_journal ?? null,
     phase_journal: manifest?.phase_journal ?? null,
@@ -329,6 +343,13 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
   } catch {
     throw backupInvalid();
   }
+  if (manifest.plan.expected_revision !== null && !/^[a-f0-9]{64}$/i.test(manifest.plan.expected_revision)) throw backupInvalid();
+  if (manifest.plan.expected_revisions !== undefined) {
+    if (!manifest.plan.expected_revisions || typeof manifest.plan.expected_revisions !== 'object' || Array.isArray(manifest.plan.expected_revisions)
+      || !validRevision(manifest.plan.expected_revisions.profile) || !validRevision(manifest.plan.expected_revisions.settings)) throw backupInvalid();
+  }
+  if (!Array.isArray(manifest.plan.credential_refs) || manifest.plan.credential_refs.some((ref) => !ref || typeof ref !== 'object'
+    || typeof ref.kind !== 'string' || typeof ref.name_or_handle !== 'string' || typeof ref.ownership !== 'string')) throw backupInvalid();
   const authorityKinds = new Set(manifest.plan.declaration_authorities.map((authority) => authority?.kind));
   for (const key of FILE_KEYS) {
     const entry = manifest.files[key];
@@ -390,6 +411,8 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     const created = manifest[`created_${key}`];
     if (applied !== undefined && !/^[a-f0-9]{64}$/i.test(applied)) throw backupInvalid();
     if (created !== undefined && typeof created !== 'boolean') throw backupInvalid();
+    const identity = manifest[`created_${key}_identity`];
+    if (identity !== undefined && (!identity || typeof identity !== 'object' || typeof identity.dev !== 'string' || typeof identity.ino !== 'string')) throw backupInvalid();
   }
   if (manifest.mutation_journal !== undefined && (typeof manifest.mutation_journal !== 'object' || Array.isArray(manifest.mutation_journal))) throw backupInvalid();
   if (manifest.phase_journal !== undefined && (typeof manifest.phase_journal !== 'object' || Array.isArray(manifest.phase_journal))) throw backupInvalid();
@@ -712,7 +735,13 @@ export function createProviderDeleteFileHooks({
     if (!activeBackup || typeof nextRevision !== 'string') return;
     const pending = activeBackup.manifest.mutation_journal?.[key];
     activeBackup.manifest[`applied_${key}_revision`] = nextRevision;
-    if (pending?.created === true) activeBackup.manifest[`created_${key}`] = true;
+    if (pending?.created === true) {
+      activeBackup.manifest[`created_${key}`] = true;
+      const target = key === 'settings' ? settingsFile : paths[key];
+      if (typeof target === 'string' && existsSync(target)) {
+        try { activeBackup.manifest[`created_${key}_identity`] = fileIdentity(target); } catch {}
+      }
+    }
     const witness = pending?.witness;
     if (activeBackup.manifest.mutation_journal) delete activeBackup.manifest.mutation_journal[key];
     persistManifest();
@@ -843,6 +872,7 @@ export function createProviderDeleteFileHooks({
       const existed = key === 'config' ? configExisted : key === 'lifecycle' ? lifecycleExisted : fs.existsSync(source);
       const managed = key !== 'profile' || authorityKinds.has('crew-profile');
       manifest.files[key] = { existed, managed };
+      if (key === 'profile' && authorityKinds.has('crew-profile') && !existed) throw Object.assign(new Error('provider profile authority is missing'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
       if (existed && key !== 'config' && managed) {
         const sourceBytes = key === 'lifecycle' ? lifecycleBytes : fs.readFileSync(source);
         const sourceText = decodeUtf8(sourceBytes);
@@ -872,6 +902,7 @@ export function createProviderDeleteFileHooks({
       const existed = fs.existsSync(settingsFile);
       const managed = authorityKinds.has('harness-settings') || managesHarnessDefault;
       manifest.files.settings = { existed, managed };
+      if ((authorityKinds.has('harness-settings') || managesHarnessDefault) && !existed) throw Object.assign(new Error('provider settings authority is missing'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
       if (existed && managed) {
         const sourceBytes = fs.readFileSync(settingsFile);
         const sourceText = decodeUtf8(sourceBytes);
@@ -1125,6 +1156,16 @@ export function createProviderDeleteFileHooks({
       // before the exclusive-create rename. Only the durable commit marker
       // authorizes deleting an originally absent file during compensation.
       let created = activeBackup.manifest[`created_${key}`] === true;
+      if (created) {
+        const identity = activeBackup.manifest[`created_${key}_identity`];
+        if (!identity || !fs.existsSync(target)) created = false;
+        else {
+          try {
+            const currentIdentity = fileIdentity(target);
+            created = currentIdentity.dev === identity.dev && currentIdentity.ino === identity.ino;
+          } catch { created = false; }
+        }
+      }
       const pending = activeBackup.manifest.mutation_journal?.[key];
       if (!created && pending?.created === true && typeof pending.witness === 'string' && fs.existsSync(pending.witness) && fs.existsSync(target)) {
         try {
