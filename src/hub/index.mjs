@@ -1129,13 +1129,11 @@ export async function apply(ctx) {
           ? { status: 'UNAVAILABLE', reason_code: 'WORKSPACE_CONTEXT_NOT_FOUND' }
           : await assessWorkspaceReadiness({ cwd: requestedContext?.repo_root ?? null });
         const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
-        const [modelExecution, reviewerExecution] = buildHubExecutionRows(liveJobs);
+        const executionRows = buildHubExecutionRows(liveJobs);
         const readinessMatrix = { rows: [
           { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
           catalogStatus,
-          modelExecution,
-          reviewerExecution,
-          { id: 'provider_lifecycle_consistent', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE' },
+          ...executionRows,
         ] };
         const readinessSnapshot = buildRuntimeReadinessSnapshot({
           runtime: getHubRuntimeIdentity(),
