@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 — 2026-09-02
+
+- Makes profile-to-user Provider migration recoverable and exposes native
+  deletion after a Provider is materialized in Harness user settings.
+- Keeps the isolated 3210 execution plane and explicit model-priority routing
+  intact across the 3080 bridge, Codex, Claude, and ZCode integrations.
+
 ## Unreleased
 
 Future changes go here.
