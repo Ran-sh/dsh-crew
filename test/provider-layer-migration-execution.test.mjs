@@ -224,12 +224,16 @@ test('migration rollback keeps witness durable across crashes on both sides of u
         profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id,
         ...(crashHook === 'before'
           ? { afterRollbackDeleteJournaled: () => { throw Object.assign(new Error('simulated crash before unlink'), { code: 'SIMULATED_CRASH' }); } }
-          : { afterRollbackFileRemoved: () => { throw Object.assign(new Error('simulated crash after unlink'), { code: 'SIMULATED_CRASH' }); } }),
+          : crashHook === 'after'
+            ? { afterRollbackFileRemoved: () => { throw Object.assign(new Error('simulated crash after unlink'), { code: 'SIMULATED_CRASH' }); } }
+            : { afterRollbackWitnessRemoved: () => { throw Object.assign(new Error('simulated crash after witness cleanup'), { code: 'SIMULATED_CRASH' }); } }),
       });
       await crashing.acquireLock();
       await crashing.backup({});
       await assert.rejects(() => crashing.rollback(), (error) => error.code === 'SIMULATED_CRASH');
       await crashing.release();
+      const crashedManifest = JSON.parse(readFileSync(join(backupDir, plan.plan_id, 'manifest.json'), 'utf8'));
+      assert.equal(typeof crashedManifest.mutation_journal?.settings?.witness, 'string');
       const recovered = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
       await recovered.acquireLock();
       await recovered.backup({});
@@ -246,6 +250,7 @@ test('migration rollback keeps witness durable across crashes on both sides of u
   };
   await runCase('before');
   await runCase('after');
+  await runCase('cleanup');
 });
 
 test('migration recovery scanner exposes only nonterminal, secret-free transactions', () => {
