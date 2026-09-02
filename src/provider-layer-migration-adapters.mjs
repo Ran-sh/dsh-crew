@@ -167,11 +167,15 @@ function validFileIdentity(value) {
     && typeof value.ino === 'string' && /^\d+$/u.test(value.ino)
     && Number.isFinite(value.size) && Number.isFinite(value.mtimeMs);
 }
-function validWitness(root, value) {
+function validWitnessPath(root, value) {
   if (typeof value !== 'string') return false;
   const relativePath = relative(resolvePath(root), resolvePath(value));
   if (relativePath === '..' || relativePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || /^[A-Za-z]:/u.test(relativePath)) return false;
   if (relativePath.includes('\\') || relativePath.includes('/') || !/^settings\.[0-9a-f-]{36}\.ownership\.witness$/iu.test(basename(value))) return false;
+  return true;
+}
+function validWitness(root, value) {
+  if (!validWitnessPath(root, value)) return false;
   try { const stat = lstatSync(value); return stat.isFile() && !stat.isSymbolicLink(); } catch { return false; }
 }
 
@@ -222,11 +226,13 @@ function validMigrationManifest(root, manifest) {
     || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
     || typeof entry.created !== 'boolean'
     || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction))
+    || (entry.witness !== undefined && !validWitnessPath(root, entry.witness))
     || (entry.witness !== undefined && !validWitness(root, entry.witness)
       && !(entry.direction === 'rollback' && entry.next_revision === null && ['ROLLBACK_APPLYING', 'ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING'].includes(manifest.phase))))) return false;
   if (!onlyKeys(manifest.files, ['profile', 'settings']) || manifest.files?.settings?.existed === false && ['USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'VERIFIED'].includes(manifest.phase)
     && (!validFileIdentity(manifest.created_settings_identity) || !validWitness(root, manifest.created_settings_witness))) return false;
   if (manifest.created_settings_identity !== undefined && !onlyKeys(manifest.created_settings_identity, ['dev', 'ino', 'size', 'mtimeMs'])) return false;
+  if (manifest.created_settings_witness !== undefined && !validWitnessPath(root, manifest.created_settings_witness)) return false;
   if (manifest.created_settings_witness !== undefined && !validWitness(root, manifest.created_settings_witness)
     && !['ROLLBACK_APPLYING', 'ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING'].includes(manifest.phase)) return false;
   if (!safeTimestamp(manifest.created_at)) return false;
@@ -489,6 +495,7 @@ export function createProviderLayerMigrationFileHooks({
 
   const writeRollbackDeleted = (key, file, witness = null) => {
     ensureLock();
+    if (witness && !validWitnessPath(active.root, witness)) throw Object.assign(new Error('provider migration witness path is unsafe'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
     active.manifest.mutation_journal[key] = {
       next_revision: null,
       previous_revision: active.manifest.applied_revisions[key] ?? active.manifest.files[key]?.revision ?? null,
@@ -617,6 +624,7 @@ export function createProviderLayerMigrationFileHooks({
     active.manifest.mutation_journal = {};
     active.manifest.phase = 'ROLLBACK_APPLIED';
     if (active.manifest.created_settings_witness) {
+      if (!validWitnessPath(active.root, active.manifest.created_settings_witness)) throw Object.assign(new Error('provider migration witness path is unsafe'), { code: 'PROVIDER_MIGRATION_UNSAFE_PATH' });
       rmSync(active.manifest.created_settings_witness, { force: true });
       delete active.manifest.created_settings_witness;
     }

@@ -253,6 +253,38 @@ test('migration rollback keeps witness durable across crashes on both sides of u
   await runCase('cleanup');
 });
 
+test('rollback-phase manifests reject unsafe witness paths even when cleanup is in progress', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-witness-path-'));
+  try {
+    const profileFile = join(root, 'profile.yml');
+    const settingsFile = join(root, 'settings.yaml');
+    const backupDir = join(root, 'backups');
+    const profile = '- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n';
+    writeFileSync(profileFile, profile, 'utf8');
+    const plan = {
+      ...PLAN,
+      plan_id: '55555555-5555-4555-8555-555555555555',
+      expected_revisions: { profile: createHash('sha256').update(profile, 'utf8').digest('hex'), settings: null },
+      materialization: { provider: { id: 'custom', display_name: 'Custom', models: [] } },
+    };
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+    await hooks.acquireLock();
+    assert.equal((await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true })).state, 'RESTART_PENDING');
+    await hooks.release();
+    const manifestFile = join(backupDir, plan.plan_id, 'manifest.json');
+    const original = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    for (const value of ['C:/outside/settings.00000000-0000-4000-8000-000000000000.ownership.witness', 'nested/settings.00000000-0000-4000-8000-000000000000.ownership.witness', 'not-a-witness', 42]) {
+      const tampered = { ...original, phase: 'ROLLBACK_APPLYING', created_settings_witness: value };
+      const { checksum: _checksum, ...withoutChecksum } = tampered;
+      tampered.checksum = createHash('sha256').update(JSON.stringify(withoutChecksum), 'utf8').digest('hex');
+      writeFileSync(manifestFile, JSON.stringify(tampered), 'utf8');
+      const records = readProviderLayerMigrationTransactions(backupDir);
+      assert.equal(records.length, 1);
+      assert.equal(records[0].unresolved, true);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migration recovery scanner exposes only nonterminal, secret-free transactions', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-scan-'));
   try {
