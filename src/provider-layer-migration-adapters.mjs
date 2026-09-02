@@ -222,7 +222,8 @@ function validMigrationManifest(root, manifest) {
     || (entry.previous_revision !== null && !/^[a-f0-9]{64}$/u.test(entry.previous_revision ?? ''))
     || typeof entry.created !== 'boolean'
     || (entry.direction !== undefined && !['forward', 'rollback'].includes(entry.direction))
-    || (entry.witness !== undefined && !validWitness(root, entry.witness)))) return false;
+    || (entry.witness !== undefined && !validWitness(root, entry.witness)
+      && !(entry.direction === 'rollback' && entry.next_revision === null && ['ROLLBACK_APPLYING', 'ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING'].includes(manifest.phase))))) return false;
   if (!onlyKeys(manifest.files, ['profile', 'settings']) || manifest.files?.settings?.existed === false && ['USER_MATERIALIZED', 'BASE_REMOVED', 'RESTART_PENDING', 'VERIFIED'].includes(manifest.phase)
     && (!validFileIdentity(manifest.created_settings_identity) || !validWitness(root, manifest.created_settings_witness))) return false;
   if (manifest.created_settings_identity !== undefined && !onlyKeys(manifest.created_settings_identity, ['dev', 'ino', 'size', 'mtimeMs'])) return false;
@@ -263,6 +264,8 @@ export function createProviderLayerMigrationFileHooks({
   existingMigrationId = null,
   restart = null,
   sharedLockFile = null,
+  afterRollbackDeleteJournaled = null,
+  afterRollbackFileRemoved = null,
 } = {}) {
   if (![profileFile, settingsFile, backupDir].every((value) => typeof value === 'string' && value.trim())) throw new TypeError('provider migration paths are required');
   const managedRoot = dirname(resolvePath(backupDir));
@@ -482,21 +485,26 @@ export function createProviderLayerMigrationFileHooks({
     persist();
   };
 
-  const writeRollbackDeleted = (key, file) => {
+  const writeRollbackDeleted = (key, file, witness = null) => {
     ensureLock();
     active.manifest.mutation_journal[key] = {
       next_revision: null,
       previous_revision: active.manifest.applied_revisions[key] ?? active.manifest.files[key]?.revision ?? null,
       created: false,
       direction: 'rollback',
+      ...(witness ? { witness } : {}),
       phase: 'WRITE_PENDING',
     };
     persist();
+    if (typeof afterRollbackDeleteJournaled === 'function') afterRollbackDeleteJournaled({ key, file, witness });
     rmSync(file, { force: true });
+    if (typeof afterRollbackFileRemoved === 'function') afterRollbackFileRemoved({ key, file, witness });
     active.manifest.rollback_revisions ??= {};
     active.manifest.rollback_revisions[key] = null;
     delete active.manifest.mutation_journal[key];
     active.manifest.phase = 'ROLLBACK_APPLYING';
+    if (witness) rmSync(witness, { force: true });
+    if (witness && active.manifest.created_settings_witness === witness) delete active.manifest.created_settings_witness;
     persist();
   };
 
@@ -530,6 +538,7 @@ export function createProviderLayerMigrationFileHooks({
   const rollback = async () => {
     if (!active) throw Object.assign(new Error('provider migration backup is unavailable'), { code: 'PROVIDER_MIGRATION_BACKUP_INVALID' });
     if (['ROLLBACK_APPLIED', 'ROLLBACK_RESTART_PENDING', 'ROLLED_BACK'].includes(active.manifest.phase)) return { ok: true, state: active.manifest.phase };
+    const cleanupWitnesses = new Set();
     for (const [key, file] of [['profile', profileFile], ['settings', settingsFile]]) {
       ensureLock();
       const snapshot = active.manifest.files[key];
@@ -554,6 +563,7 @@ export function createProviderLayerMigrationFileHooks({
       // a different inode after a crash. Require the durable witness/identity
       // path below instead of allowing the hash-only pending journal fallback.
       const pendingWitnessPath = key === 'settings' && pending?.witness ? pending.witness : null;
+      if (pendingWitnessPath) cleanupWitnesses.add(pendingWitnessPath);
       const pendingWitnessIdentity = pendingWitnessPath && validWitness(active.root, pendingWitnessPath)
         ? fileIdentity(pending.witness) : null;
       const ownershipSafePending = key !== 'settings' || snapshot.existed !== false || (pendingApplied
@@ -584,11 +594,19 @@ export function createProviderLayerMigrationFileHooks({
           const witnessIdentity = witnessPath && validWitness(active.root, witnessPath) ? fileIdentity(witnessPath) : null;
           const ownedByIdentity = sameFileIdentity(fileIdentity(file), active.manifest.created_settings_identity) || sameFileIdentity(fileIdentity(file), witnessIdentity);
           if (!ownedByIdentity) throw Object.assign(new Error('provider migration settings ownership changed'), { code: 'PROVIDER_MIGRATION_STATE_CHANGED' });
-          writeRollbackDeleted('settings', file);
-          if (pendingWitnessPath && pendingWitnessPath !== active.manifest.created_settings_witness) rmSync(pendingWitnessPath, { force: true });
+          writeRollbackDeleted('settings', file, pendingWitnessPath);
         }
       }
     }
+    if (cleanupWitnesses.size > 0 && active.manifest.phase !== 'ROLLBACK_APPLYING') {
+      active.manifest.phase = 'ROLLBACK_APPLYING';
+      persist();
+    }
+    for (const witness of cleanupWitnesses) {
+      if (validWitness(active.root, witness)) rmSync(witness, { force: true });
+      if (active.manifest.created_settings_witness === witness) delete active.manifest.created_settings_witness;
+    }
+    active.manifest.mutation_journal = {};
     active.manifest.phase = 'ROLLBACK_APPLIED';
     if (active.manifest.created_settings_witness) {
       rmSync(active.manifest.created_settings_witness, { force: true });

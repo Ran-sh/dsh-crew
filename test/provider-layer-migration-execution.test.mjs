@@ -201,6 +201,53 @@ test('promote-existing-user forward verification rejects drift before finalizati
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('migration rollback keeps witness durable across crashes on both sides of unlink', async () => {
+  const runCase = async (crashHook) => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-crash-'));
+    try {
+      const profileFile = join(root, 'profile.yml');
+      const settingsFile = join(root, 'settings.yaml');
+      const backupDir = join(root, 'backups');
+      const profile = '- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n';
+      writeFileSync(profileFile, profile, 'utf8');
+      const plan = {
+        ...PLAN,
+        plan_id: `44444444-4444-4444-8444-${crashHook === 'before' ? '444444444444' : '555555555555'}`,
+        expected_revisions: { profile: createHash('sha256').update(profile, 'utf8').digest('hex'), settings: null },
+        materialization: { provider: { id: 'custom', display_name: 'Custom', models: [] } },
+      };
+      const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+      await hooks.acquireLock();
+      assert.equal((await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true })).state, 'RESTART_PENDING');
+      await hooks.release();
+      const crashing = createProviderLayerMigrationFileHooks({
+        profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id,
+        ...(crashHook === 'before'
+          ? { afterRollbackDeleteJournaled: () => { throw Object.assign(new Error('simulated crash before unlink'), { code: 'SIMULATED_CRASH' }); } }
+          : { afterRollbackFileRemoved: () => { throw Object.assign(new Error('simulated crash after unlink'), { code: 'SIMULATED_CRASH' }); } }),
+      });
+      await crashing.acquireLock();
+      await crashing.backup({});
+      await assert.rejects(() => crashing.rollback(), (error) => error.code === 'SIMULATED_CRASH');
+      await crashing.release();
+      const recovered = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir, existingMigrationId: plan.plan_id });
+      await recovered.acquireLock();
+      await recovered.backup({});
+      const result = await recovered.rollback();
+      assert.equal(result.ok, true);
+      await recovered.finalizeRollback();
+      await recovered.release();
+      assert.equal(existsSync(settingsFile), false);
+      assert.equal(readProviderLayerMigrationTransactions(backupDir).length, 0);
+      const transactionFiles = existsSync(join(backupDir, plan.plan_id))
+        ? (await import('node:fs')).readdirSync(join(backupDir, plan.plan_id)).filter((name) => name.endsWith('.ownership.witness')) : [];
+      assert.deepEqual(transactionFiles, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  };
+  await runCase('before');
+  await runCase('after');
+});
+
 test('migration recovery scanner exposes only nonterminal, secret-free transactions', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-scan-'));
   try {
