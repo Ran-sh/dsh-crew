@@ -2249,7 +2249,7 @@ export async function apply(ctx) {
             if (refreshed.plan.replacement_default_model !== stored.plan.replacement_default_model) {
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_PLAN_CHANGED' });
             }
-            const executionPlan = {
+            let executionPlan = {
               ...refreshed.plan,
               plan_id: stored.plan.plan_id,
               expected_revision: stored.plan.expected_revision,
@@ -2261,10 +2261,12 @@ export async function apply(ctx) {
               hub.endProviderStoreMutation();
               return sendJson(res, 409, { ok: false, code: 'PROVIDER_DELETE_BUSY' });
             }
+            let hooks = null;
+            let lockAcquired = false;
             let retainProviderMutation = false;
             let retainProviderStoreMutation = false;
             try {
-              const hooks = createProviderDeleteFileHooks({
+              hooks = createProviderDeleteFileHooks({
                 profileFile: join(CONFIG_DIR, 'harness', 'profiles', 'dsh-crew', 'cordis.patch.yml'),
                 settingsFile: join(CONFIG_DIR, 'harness', 'settings.yaml'),
                 configFile: join(CONFIG_DIR, 'config.json'),
@@ -2285,6 +2287,49 @@ export async function apply(ctx) {
                   }
                 },
               });
+              // Hold the real shared store lock while rebuilding the live
+              // inventory and delete plan. The pre-lock plan is only a
+              // proposal; catalog/default/ownership/recovery facts must be
+              // authoritative at the mutation boundary.
+              await hooks.acquireLock();
+              lockAcquired = true;
+              const lockedConfig = normalizeGlobalConfig(hub.getConfig?.() ?? {});
+              const lockedInventory = await readProviderInventorySnapshot(hub, ctx, lockedConfig);
+              const lockedRevisions = readProviderSourceRevisions();
+              const lockedExpected = stored.plan.expected_revisions;
+              const lockedRevisionsMatch = lockedExpected
+                ? lockedExpected.profile === (lockedRevisions.profile.ok ? lockedRevisions.profile.revision : null)
+                  && lockedExpected.settings === (lockedRevisions.settings.ok ? lockedRevisions.settings.revision : null)
+                : false;
+              if (providerId !== 'deepseek-official' && !hasCompleteProviderCatalogEvidence(lockedInventory.catalog_evidence)) throw Object.assign(new Error('provider catalog unavailable after lock'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+              if (providerId !== 'deepseek-official' && !hasCompleteProviderDeclarationEvidence(lockedInventory.declaration_evidence)) throw Object.assign(new Error('provider declarations unavailable after lock'), { code: 'PROVIDER_DELETE_SOURCE_UNRESOLVED' });
+              if (providerId !== 'deepseek-official' && !hasAvailableProviderLifecycleEvidence(lockedInventory.lifecycle_evidence)) throw Object.assign(new Error('provider lifecycle unavailable after lock'), { code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' });
+              if (providerId !== 'deepseek-official' && lockedInventory.default_evidence?.ok !== true) throw Object.assign(new Error('provider default authority changed after lock'), { code: lockedInventory.default_evidence?.code ?? 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' });
+              if (providerId !== 'deepseek-official' && hasPendingProviderRecoveryTransactions(lockedInventory)) throw Object.assign(new Error('provider recovery transaction is pending'), { code: 'PROVIDER_DELETE_RECOVERY_PENDING' });
+              if (!lockedRevisionsMatch) throw Object.assign(new Error('provider source changed after lock'), { code: 'PROVIDER_PROFILE_CHANGED' });
+              if (hub.hasProviderLease(providerId)) throw Object.assign(new Error('provider is in use'), { code: 'PROVIDER_IN_USE' });
+              const lockedPlan = planProviderDelete({
+                providerId,
+                inventory: lockedInventory,
+                activeJobs: hub.list(),
+                replacementDefault: stored.plan.replacement_default,
+                expectedRevision: stored.plan.expected_revision,
+                expectedRevisions: stored.plan.expected_revisions,
+              });
+              if (!lockedPlan.ok) throw Object.assign(new Error('provider delete plan changed after lock'), { code: lockedPlan.code });
+              const sameLockedPlan = lockedPlan.plan.replacement_default_model === stored.plan.replacement_default_model
+                && lockedPlan.plan.was_harness_default === stored.plan.was_harness_default
+                && JSON.stringify(lockedPlan.plan.declaration_authorities) === JSON.stringify(stored.plan.declaration_authorities)
+                && JSON.stringify(lockedPlan.plan.harness_default_before ?? null) === JSON.stringify(stored.plan.harness_default_before ?? null)
+                && JSON.stringify(lockedPlan.plan.credential_refs) === JSON.stringify(stored.plan.credential_refs);
+              if (!sameLockedPlan) throw Object.assign(new Error('provider delete plan semantics changed after lock'), { code: 'PROVIDER_DELETE_PLAN_CHANGED' });
+              executionPlan = {
+                ...lockedPlan.plan,
+                plan_id: stored.plan.plan_id,
+                expected_revision: stored.plan.expected_revision,
+                expected_revisions: stored.plan.expected_revisions,
+                runtime_id_before: stored.plan.runtime_id_before,
+              };
               providerDeletePlans.delete(body.plan_id);
               const { executeProviderDelete } = await import('../provider-lifecycle.mjs');
               const result = await executeProviderDelete(executionPlan, hooks, { deferRestart: true });
@@ -2295,6 +2340,7 @@ export async function apply(ctx) {
               }
               return sendJson(res, result.state === 'RESTART_PENDING' ? 202 : 409, { ok: result.state === 'RESTART_PENDING', restart_required: true, result });
             } finally {
+              if (lockAcquired && hooks) await hooks.release().catch(() => {});
               if (!retainProviderMutation) hub.endProviderMutation(providerId);
               if (!retainProviderStoreMutation) hub.endProviderStoreMutation();
             }

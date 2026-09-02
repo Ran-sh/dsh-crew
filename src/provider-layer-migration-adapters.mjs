@@ -198,6 +198,7 @@ function validMigrationManifest(root, manifest) {
     || manifest.plan.schema_version !== 1 || manifest.plan.kind !== 'provider-layer-migration'
     || manifest.plan.plan_id !== manifest.plan_id || manifest.plan.provider_id !== manifest.provider_id || !['promote-existing-user', 'materialize-user'].includes(manifest.plan.action)
     || !onlyKeys(manifest.plan.materialization, ['provider']) || !canonicalMaterialization(manifest.plan.materialization?.provider)
+    || (manifest.plan.action === 'promote-existing-user' && !canonicalMaterialization(manifest.plan.user_materialization_before))
     || (manifest.plan.user_materialization_before !== undefined && !canonicalMaterialization(manifest.plan.user_materialization_before))) return false;
   const expected = manifest.plan.expected_revisions;
   if (!onlyKeys(expected, ['profile', 'settings']) || !/^[a-f0-9]{64}$/u.test(expected.profile ?? '') || (expected.settings !== null && !/^[a-f0-9]{64}$/u.test(expected.settings ?? ''))) return false;
@@ -604,8 +605,13 @@ export function createProviderLayerMigrationFileHooks({
     const settingsParsed = settings === null ? { ok: false } : readProviderSettingsDeclarations(settings, { file: 'harness/settings.yaml' });
     const baseAbsent = profileParsed.ok === true && !profileParsed.declarations.some((entry) => entry.id === plan.provider_id);
     const userPresent = settingsParsed.ok === true && settingsParsed.declarations.some((entry) => entry.id === plan.provider_id);
-    const nativeRemovable = baseAbsent && userPresent;
-    return { ok: nativeRemovable, baseAbsent, userPresent, nativeRemovable };
+    const userSemanticsPreserved = plan.action !== 'promote-existing-user'
+      || (() => {
+        const material = settings === null ? { ok: false } : readProviderSettingsMaterialization(settings, { providerId: plan.provider_id, file: 'harness/settings.yaml' });
+        return material.ok === true && sameProviderSemantics(material.provider, active?.manifest?.plan?.user_materialization_before ?? plan.user_materialization_before);
+      })();
+    const nativeRemovable = baseAbsent && userPresent && userSemanticsPreserved;
+    return { ok: nativeRemovable, baseAbsent, userPresent, userSemanticsPreserved, nativeRemovable };
   };
 
   const finalizeVerified = async () => {

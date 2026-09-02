@@ -501,14 +501,28 @@ function validateBackupManifest(manifest, { root, fs, paths, managedRoot, expect
     throw backupInvalid();
   }
   for (const authority of manifest.plan.declaration_authorities) {
-    if (!onlyKeys(authority, ['kind', 'locator']) || typeof authority.kind !== 'string' || typeof authority.locator !== 'string') throw backupInvalid();
+    if (!onlyKeys(authority, ['kind', 'locator']) || typeof authority.kind !== 'string' || authority.kind.length > 64 || typeof authority.locator !== 'string' || authority.locator.length === 0 || authority.locator.length > 256) throw backupInvalid();
   }
   for (const ref of manifest.plan.credential_refs) {
-    if (!onlyKeys(ref, ['kind', 'name_or_handle', 'ownership']) || typeof ref.kind !== 'string' || typeof ref.name_or_handle !== 'string' || typeof ref.ownership !== 'string') throw backupInvalid();
+    if (!onlyKeys(ref, ['kind', 'name_or_handle', 'ownership']) || typeof ref.kind !== 'string' || ref.kind.length > 32 || typeof ref.name_or_handle !== 'string' || ref.name_or_handle.length === 0 || ref.name_or_handle.length > 128 || typeof ref.ownership !== 'string' || ref.ownership.length > 32) throw backupInvalid();
   }
   for (const key of ['harness_default_before', 'harness_default_authority']) {
     const value = manifest.plan[key];
     if (value !== undefined && (!onlyKeys(value, key === 'harness_default_before' ? ['provider', 'model'] : ['kind', 'locator']))) throw backupInvalid();
+  }
+  if (typeof manifest.plan.was_harness_default !== 'boolean') throw backupInvalid();
+  if (manifest.plan.replacement_default !== null && !validProviderId(manifest.plan.replacement_default)) throw backupInvalid();
+  if (manifest.plan.replacement_default_model !== null
+    && (typeof manifest.plan.replacement_default_model !== 'string' || manifest.plan.replacement_default_model.length === 0 || manifest.plan.replacement_default_model.length > 256 || /[\r\n]/u.test(manifest.plan.replacement_default_model))) throw backupInvalid();
+  if (manifest.plan.was_harness_default === true
+    && (!validProviderId(manifest.plan.replacement_default) || typeof manifest.plan.replacement_default_model !== 'string'
+      || !manifest.plan.replacement_default_model.trim() || !manifest.plan.harness_default_before
+      || typeof manifest.plan.harness_default_before.provider !== 'string' || !validProviderId(manifest.plan.harness_default_before.provider)
+      || typeof manifest.plan.harness_default_before.model !== 'string' || !manifest.plan.harness_default_before.model.trim()
+      || !manifest.plan.harness_default_authority || manifest.plan.harness_default_authority.kind !== 'harness-settings'
+      || manifest.plan.harness_default_authority.locator !== 'agent-default-model')) throw backupInvalid();
+  for (const key of ['runtime_id_before', 'delete_runtime_id_before_restart', 'rollback_runtime_id_before_restart']) {
+    if (manifest.plan[key] !== undefined && (typeof manifest.plan[key] !== 'string' || manifest.plan[key].length === 0 || manifest.plan[key].length > 128 || /[\r\n]/u.test(manifest.plan[key]))) throw backupInvalid();
   }
   if (manifest.plan.expected_revision !== null && !/^[a-f0-9]{64}$/i.test(manifest.plan.expected_revision)) throw backupInvalid();
   if (manifest.plan.expected_revisions !== undefined) {

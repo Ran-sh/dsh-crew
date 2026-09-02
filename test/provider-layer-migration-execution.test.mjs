@@ -170,6 +170,37 @@ test('promote-existing-user rollback rejects drifted user-layer semantics', asyn
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('promote-existing-user forward verification rejects drift before finalization', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-forward-drift-'));
+  try {
+    const profileFile = join(root, 'profile.yml');
+    const settingsFile = join(root, 'settings.yaml');
+    const backupDir = join(root, 'backups');
+    const profile = '- id: llm-pi-ai\n  config:\n    providers:\n      custom:\n        displayName: Custom\n        api: openai-completions\n        baseURL: https://example.test/v1\n        models:\n          - id: model-1\n';
+    const settings = 'llm-pi-ai:\n  providers:\n    custom:\n      displayName: Custom\n      api: openai-completions\n      baseURL: https://example.test/v1\n      models:\n        - id: model-1\nagent-default-model:\n  provider: custom\n  model: model-1\n';
+    writeFileSync(profileFile, profile, 'utf8');
+    writeFileSync(settingsFile, settings, 'utf8');
+    const base = readProviderMaterialization(profile, { providerId: 'custom' });
+    const user = readProviderSettingsMaterialization(settings, { providerId: 'custom' });
+    const plan = {
+      ...PLAN,
+      plan_id: '33333333-3333-4333-8333-333333333333',
+      action: 'promote-existing-user',
+      expected_revisions: { profile: createHash('sha256').update(profile, 'utf8').digest('hex'), settings: createHash('sha256').update(settings, 'utf8').digest('hex') },
+      materialization: { provider: base.provider },
+      user_materialization_before: user.provider,
+    };
+    const hooks = createProviderLayerMigrationFileHooks({ profileFile, settingsFile, backupDir });
+    await hooks.acquireLock();
+    assert.equal((await executeProviderLayerMigration(plan, hooks, { confirm: true, deferRestart: true })).state, 'RESTART_PENDING');
+    writeFileSync(settingsFile, settings.replace('openai-completions', 'anthropic-messages'), 'utf8');
+    const verification = await hooks.verify(plan);
+    assert.equal(verification.ok, false);
+    assert.equal(verification.userSemanticsPreserved, false);
+    await hooks.release();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migration recovery scanner exposes only nonterminal, secret-free transactions', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-migration-scan-'));
   try {
