@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -493,4 +493,81 @@ test('undo refuses to remove bundle re-pointed at later release', () => {
     assert.ok(after.dsh.profile.bundles.includes('@ran-sh/dsh-crew'), 'later bundle must be preserved');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained');
   } finally { t.cleanup(); }
+});
+
+test('second rename failure restores prev with explicit recovery', async () => {
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    writeFileSync(join(liveRoot, 'marker.txt'), 'live');
+    const calls = [];
+    let renameCount = 0;
+    const failingRename = (a, b) => {
+      renameCount += 1;
+      if (renameCount === 2) throw Object.assign(new Error('injected second-rename failure'), { code: 'EACCES' });
+      return renameSync(a, b);
+    };
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      rename: failingRename,
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => { calls.push('verify'); return { ok: true }; },
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'DSH_RUNTIME_SWAP_FAILED');
+    assert.ok(r.recovery && r.recovery.ok === true, JSON.stringify(r.recovery));
+    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
+    assert.ok(calls.includes('start'), JSON.stringify(calls));
+  } finally { t.cleanup(); }
+});
+
+test('production migration builder uses one supervisor instance', async () => {
+  const { buildProductionMigration } = await import('../src/install/npx-lifecycle.mjs');
+  const { crewDshRuntimeVersionDir, TARGET_DSH_VERSION } = await import('../src/dsh-cli-runtime.mjs');
+  let factoryCalls = 0;
+  const calls = [];
+  const fakeSupervisor = () => {
+    factoryCalls += 1;
+    return {
+      stopOwnedBackend: async () => { calls.push('stop'); return { ok: true }; },
+      startOwnedBackend: async () => { calls.push('start'); return { ok: true }; },
+    };
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-prodwire-'));
+  try {
+    const migrate = buildProductionMigration({ home: dir, supervisorFactory: fakeSupervisor, verifyOwned: async () => { calls.push('verify'); return { ok: true }; }, log: () => {} });
+    // Drive through the real builder: stage a fake cohort, then migrate.
+    const entry = join(crewDshRuntimeVersionDir({ home: dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    const liveRoot = join(dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    const r = await migrate({
+      log: () => {},
+      stageOptions: {
+        runner: () => {
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(factoryCalls, 1, 'exactly one supervisor instance per migration');
+    assert.deepEqual(calls, ['stop', 'start', 'verify']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

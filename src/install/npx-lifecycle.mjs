@@ -1131,8 +1131,25 @@ export function sanitizedPackageManagerEnv(baseEnv = process.env) {
   return env;
 }
 
-async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, stopOwned, startOwned, verifyOwned }) {
-  const ensure = ensureRuntime ?? ((opts) => {
+// Production migration adapter: builds the migrate callback used by the
+// default ensureRuntimeStep path. Exactly ONE supervisor instance is
+// created per migration and reused by stop/start/verify/rollback so the
+// child identity stays coherent. Exported so tests can prove the
+// production default wiring (single instance, full identity verify)
+// instead of hand-injecting three mock callbacks.
+export function buildProductionMigration({ home, log = () => {}, stopOwned, startOwned, verifyOwned, supervisorFactory = crewSupervisor } = {}) {
+  const supervisor = supervisorFactory({ home });
+  return (opts) => migrateCrewDshRuntime({
+    home,
+    version: TARGET_DSH_VERSION,
+    stopOwned: stopOwned ?? (() => supervisor.stopOwnedBackend()),
+    startOwned: startOwned ?? (() => supervisor.startOwnedBackend()),
+    verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
+    ...opts,
+  });
+}
+
+async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, stopOwned, startOwned, verifyOwned, supervisorFactory = crewSupervisor }) {  const ensure = ensureRuntime ?? ((opts) => {
     const r = ensureCrewDshRuntime({ ...opts, env: sanitizedPackageManagerEnv() });
     if (!r.ok && r.stderrTail) {
       log(`  (runtime installer said: ${r.stderrTail})`);
@@ -1146,17 +1163,7 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
   // reused by stop/start/verify/rollback so child identity stays coherent.
   // No legacy bridge involved. Missing callbacks fail closed inside
   // migrateCrewDshRuntime.
-  const migrate = migrateRuntime ?? ((opts) => {
-    const supervisor = crewSupervisor({ home });
-    return migrateCrewDshRuntime({
-      home,
-      version: TARGET_DSH_VERSION,
-      stopOwned: stopOwned ?? (() => supervisor.stopOwnedBackend()),
-      startOwned: startOwned ?? (() => supervisor.startOwnedBackend()),
-      verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
-      ...opts,
-    });
-  });
+  const migrate = migrateRuntime ?? buildProductionMigration({ home, log, stopOwned, startOwned, verifyOwned, supervisorFactory });
   const r = await ensure({ home });
   if (r?.ok) {
     log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);
