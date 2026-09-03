@@ -130,13 +130,15 @@ export function createCrewSidecarSupervisor({
     } catch {}
   }
 
-  function persistOwnership(pid, identity = null) {
+  function persistOwnership(pid, identity = null, { state = 'owned' } = {}) {
     if (!Number.isInteger(pid) || pid < 1) return false;
+    if (state === 'owned' && !(typeof identity?.runtime_id === 'string' && identity.runtime_id.length > 0)) return false;
     try {
       mkdirSync(dshHome, { recursive: true });
       const temp = `${ownershipFile}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(temp, JSON.stringify({
         schema_version: 1,
+        state,
         pid,
         profile: 'dsh-crew',
         execution_plane: 'hub-3210',
@@ -173,8 +175,16 @@ export function createCrewSidecarSupervisor({
       if (record) clearOwnership(record.pid);
       return false;
     }
+    // Kill authority requires a persisted non-empty runtime_id AND an exact
+    // match with the live identity. A record without runtime_id (crash
+    // between spawn and identity persistence, or PID reuse afterwards)
+    // can never authorize a kill.
+    if (typeof record.runtime_id !== 'string' || record.runtime_id.length === 0) {
+      clearOwnership(record.pid);
+      return false;
+    }
     const identity = await runtimeIdentity();
-    if (!identity || (record.runtime_id && identity.runtime_id !== record.runtime_id)) {
+    if (!identity || identity.runtime_id !== record.runtime_id) {
       clearOwnership(record.pid);
       return false;
     }
@@ -201,7 +211,7 @@ export function createCrewSidecarSupervisor({
         windowsHide: true,
       });
       const ownedChild = runningChild;
-      if (Number.isInteger(ownedChild?.pid) && !persistOwnership(ownedChild.pid)) {
+      if (Number.isInteger(ownedChild?.pid) && !persistOwnership(ownedChild.pid, null, { state: 'starting' })) {
         try { ownedChild.kill?.(); } catch {}
         runningChild = null;
         return { ok: false, code: 'SUPERVISOR_OWNERSHIP_PERSIST_FAILED' };

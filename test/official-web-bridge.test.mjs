@@ -246,9 +246,53 @@ test('sidecar supervisor refuses to adopt a healthy 3210 listener it did not spa
   assert.equal(result.code, 'PORT_OWNERSHIP_CONFLICT');
 });
 
-test('sidecar supervisor adopts its persisted healthy child after the 3080 process restarts', async () => {
+test('sidecar supervisor refuses to adopt a persisted child without runtime_id', async () => {
   const ownershipFile = join(tmpdir(), `dsh-crew-supervisor-${process.pid}.json`);
   writeFileSync(ownershipFile, JSON.stringify({ schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210 }));
+  const killed = [];
+  try {
+    const supervisor = createCrewSidecarSupervisor({
+      home: tmpdir(), ownershipFile, exists: () => true,
+      healthCheck: async () => true,
+      killImpl: (pid) => { killed.push(pid); },
+      runtimeIdentity: async () => ({ execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-2' }),
+      spawnImpl: () => { throw new Error('must not spawn'); },
+      wait: async () => {}, maxAttempts: 3,
+    });
+    const adopted = await supervisor.ensure();
+    assert.equal(adopted.ok, false);
+    assert.equal(adopted.code, 'PORT_OWNERSHIP_CONFLICT');
+    assert.deepEqual(killed, [], 'missing runtime_id must never authorize a kill');
+  } finally {
+    rmSync(ownershipFile, { force: true });
+  }
+});
+
+test('sidecar supervisor refuses to adopt on runtime_id mismatch', async () => {
+  const ownershipFile = join(tmpdir(), `dsh-crew-supervisor-${process.pid}.json`);
+  writeFileSync(ownershipFile, JSON.stringify({ schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210, runtime_id: 'runtime-1' }));
+  const killed = [];
+  try {
+    const supervisor = createCrewSidecarSupervisor({
+      home: tmpdir(), ownershipFile, exists: () => true,
+      healthCheck: async () => true,
+      killImpl: (pid) => { killed.push(pid); },
+      runtimeIdentity: async () => ({ execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-2' }),
+      spawnImpl: () => { throw new Error('must not spawn'); },
+      wait: async () => {}, maxAttempts: 3,
+    });
+    const adopted = await supervisor.ensure();
+    assert.equal(adopted.ok, false);
+    assert.equal(adopted.code, 'PORT_OWNERSHIP_CONFLICT');
+    assert.deepEqual(killed, [], 'mismatched runtime_id must never authorize a kill');
+  } finally {
+    rmSync(ownershipFile, { force: true });
+  }
+});
+
+test('sidecar supervisor adopts its persisted healthy child after the 3080 process restarts', async () => {
+  const ownershipFile = join(tmpdir(), `dsh-crew-supervisor-${process.pid}.json`);
+  writeFileSync(ownershipFile, JSON.stringify({ schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210, runtime_id: 'runtime-2' }));
   let healthy = true;
   const killed = [];
   const spawns = [];
@@ -274,6 +318,32 @@ test('sidecar supervisor adopts its persisted healthy child after the 3080 proce
     assert.equal(spawns.length, 1);
   } finally {
     rmSync(ownershipFile, { force: true });
+  }
+});
+
+test('stopOwnedBackend never kills on null or mismatched ownership identity', async () => {
+  for (const record of [
+    { schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210 },
+    { schema_version: 1, pid: 4321, profile: 'dsh-crew', execution_plane: 'hub-3210', port: 3210, runtime_id: 'runtime-1' },
+  ]) {
+    const ownershipFile = join(tmpdir(), `dsh-crew-supervisor-${process.pid}.json`);
+    writeFileSync(ownershipFile, JSON.stringify(record));
+    const killed = [];
+    try {
+      const supervisor = createCrewSidecarSupervisor({
+        home: tmpdir(), ownershipFile, exists: () => true,
+        healthCheck: async () => true,
+        killImpl: (pid) => { killed.push(pid); },
+        runtimeIdentity: async () => ({ execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-2' }),
+        spawnImpl: () => { throw new Error('must not spawn'); },
+        wait: async () => {}, maxAttempts: 3,
+      });
+      const stopped = await supervisor.stopOwnedBackend();
+      assert.equal(stopped.ok, false);
+      assert.deepEqual(killed, [], 'null/mismatched identity must never kill');
+    } finally {
+      rmSync(ownershipFile, { force: true });
+    }
   }
 });
 
