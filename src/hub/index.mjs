@@ -1482,6 +1482,57 @@ export async function apply(ctx) {
       },
     }));
 
+    // Durable restart-request protocol: the hub writes a request the Windows
+    // supervisor executes. The hub NEVER spawns itself. A fresh supervisor
+    // heartbeat is required so a request is never left to be discovered days
+    // later by a watcher that is not actually running.
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/runtime/restart-request`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' }, { allow: 'POST' });
+        try {
+          const { createRestartRequest, readSupervisorHeartbeat, supervisorStateRoot } = await import(`../supervisor/restart-request.mjs?t=${Date.now()}`);
+          const appRoot = CONFIG_DIR;
+          const heartbeat = readSupervisorHeartbeat(supervisorStateRoot(appRoot));
+          if (!heartbeat) {
+            return sendJson(res, 503, { ok: false, code: 'CREW_SUPERVISOR_UNAVAILABLE', error: 'no fresh supervisor heartbeat; restart cannot be executed' });
+          }
+          let reason = null;
+          try {
+            const body = await readBody(req);
+            reason = typeof body?.reason === 'string' && body.reason.length > 0 ? body.reason.slice(0, 200) : null;
+          } catch { /* body optional */ }
+          const created = createRestartRequest({ appRoot, runtimeIdentity: getHubRuntimeIdentity(), reason });
+          if (!created.ok) return sendJson(res, 400, { ok: false, code: created.code, error: created.error });
+          return sendJson(res, 202, { ok: true, state: 'RESTART_REQUESTED', request_id: created.request.request_id, expires_at: created.request.expires_at });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/runtime/restart-status`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const { readRestartResult, readRestartRequest, supervisorStateRoot } = await import(`../supervisor/restart-request.mjs?t=${Date.now()}`);
+          const appRoot = CONFIG_DIR;
+          const requestId = new URL(req.url, 'http://localhost').searchParams.get('id');
+          if (!requestId || !/^[0-9a-f-]{36}$/i.test(requestId)) return sendJson(res, 400, { ok: false, error: 'request id required' });
+          const result = readRestartResult(supervisorStateRoot(appRoot), requestId);
+          if (result) return sendJson(res, 200, { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null });
+          const pending = readRestartRequest(supervisorStateRoot(appRoot), requestId);
+          if (pending) return sendJson(res, 200, { ok: true, state: 'RESTART_REQUESTED', request_id: pending.request_id });
+          return sendJson(res, 404, { ok: false, error: 'unknown restart request' });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
     disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/presets`,
       handler: async (req, res) => {

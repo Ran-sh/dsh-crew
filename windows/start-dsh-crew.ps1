@@ -107,6 +107,113 @@ function Test-LegacyBridgeAvailable {
   }
 }
 
+# ---- Crew supervisor control protocol (heartbeat + restart requests) --------
+# The hub (3210) never spawns itself. It writes a durable restart request;
+# this watcher is the only process authority and executes it after proving
+# ownership (persisted identity + live runtime_id match).
+
+$crewSupervisorRoot = Join-Path $env:USERPROFILE '.config\dsh-crew\supervisor'
+$crewHeartbeatFile = Join-Path $crewSupervisorRoot 'heartbeat.json'
+$crewRequestsDir = Join-Path $crewSupervisorRoot 'restart-requests'
+$crewResultsDir = Join-Path $crewSupervisorRoot 'restart-results'
+
+function Write-SupervisorHeartbeat {
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $record = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
+  try {
+    if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
+    $temp = Join-Path $crewSupervisorRoot ("heartbeat.{0}.tmp" -f $PID)
+    Set-Content -LiteralPath $temp -Value $record -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $crewHeartbeatFile -Force
+  } catch { /* heartbeat is best-effort */ }
+}
+
+function Read-RestartRequests {
+  if (-not (Test-Path -LiteralPath $crewRequestsDir -PathType Container)) { return @() }
+  $requests = @()
+  Get-ChildItem -LiteralPath $crewRequestsDir -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $parsed = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+      if ($parsed.schema_version -eq 1 -and $parsed.operation -eq 'restart' -and $parsed.request_id) {
+        $requests += $parsed
+      }
+    } catch { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+  }
+  return $requests
+}
+
+function Write-RestartResult {
+  param([object] $Request, [string] $State, [object] $Detail = $null)
+  try {
+    if (-not (Test-Path -LiteralPath $crewResultsDir -PathType Container)) { New-Item -ItemType Directory -Path $crewResultsDir -Force | Out-Null }
+    $result = @{
+      schema_version = 1
+      request_id = $Request.request_id
+      operation = 'restart'
+      state = $State
+      runtime_id = $Request.runtime_id
+      written_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      detail = $Detail
+    } | ConvertTo-Json -Depth 5
+    $file = Join-Path $crewResultsDir ("{0}.json" -f $Request.request_id)
+    $temp = Join-Path $crewResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
+    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $file -Force
+  } catch { /* best effort */ }
+  Remove-Item -LiteralPath (Join-Path $crewRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-CrewRestartRequests {
+  # Consume durable restart requests from the hub. Called by the watch loop.
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  foreach ($request in (Read-RestartRequests)) {
+    if (($request.expires_at -as [long]) -lt $now) {
+      Write-RestartResult $request 'RESTART_REQUEST_EXPIRED'
+      Write-LaunchLog ('Restart request {0} expired; not executed.' -f $request.request_id) 'WARN'
+      continue
+    }
+    # Ownership authority: the request must name the SAME runtime identity we
+    # own, and that identity must still be live on 3210.
+    $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+    if (-not $crew) { continue }
+    $health = Get-HealthState $crew
+    $liveIdentityOk = $false
+    try {
+      $response = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+      $liveRuntimeId = $response.extension.runtime.runtime_id
+      $liveIdentityOk = ($response.ok -eq $true) -and ($liveRuntimeId -eq $request.runtime_id)
+    } catch { $liveIdentityOk = $false }
+    if (-not $liveIdentityOk) {
+      Write-RestartResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+      Write-LaunchLog ('Restart request {0} rejected: live runtime_id does not match the request.' -f $request.request_id) 'WARN'
+      continue
+    }
+    Write-LaunchLog ('Executing restart request {0} (reason: {1}).' -f $request.request_id, $request.reason)
+    $previousRuntimeId = $request.runtime_id
+    $stopped = Stop-OwnedListener $crew
+    if (-not $stopped) {
+      Write-RestartResult $request 'SUPERVISOR_STOP_FAILED'
+      Write-LaunchLog ('Restart request {0} failed to stop the owned runtime.' -f $request.request_id) 'ERROR'
+      continue
+    }
+    Start-CrewService $crew
+    Wait-CrewServices
+    # Verify: runtime_id must have changed and the cohort must still match.
+    $newRuntimeId = $null
+    try {
+      $response = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+      $newRuntimeId = $response.extension.runtime.runtime_id
+    } catch { $newRuntimeId = $null }
+    if ($newRuntimeId -and $newRuntimeId -ne $previousRuntimeId) {
+      Write-RestartResult $request 'VERIFIED' @{ previous_runtime_id = $previousRuntimeId; runtime_id = $newRuntimeId }
+      Write-LaunchLog ('Restart request {0} verified: runtime_id {1} -> {2}.' -f $request.request_id, $previousRuntimeId, $newRuntimeId)
+    } else {
+      Write-RestartResult $request 'VERIFY_FAILED' @{ previous_runtime_id = $previousRuntimeId; runtime_id = $newRuntimeId }
+      Write-LaunchLog ('Restart request {0} verification failed: runtime_id did not change.' -f $request.request_id) 'ERROR'
+    }
+  }
+}
+
 function Get-PortState {
   param([int] $Port)
   try {
@@ -375,6 +482,11 @@ function Start-ServiceSupervisor {
           Write-LaunchLog 'Update in progress; supervisor observing only, no restarts.'
           $lastRecoveryError = $null
         } else {
+          # Control protocol: publish this watcher's heartbeat and consume
+          # any durable restart requests the hub wrote (3210 never spawns
+          # itself). Then run the ordinary health supervision pass.
+          Write-SupervisorHeartbeat
+          Invoke-CrewRestartRequests
           Ensure-CrewServices -QuietHealthy
           if ($lastRecoveryError) {
             Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'
