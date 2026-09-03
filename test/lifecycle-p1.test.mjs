@@ -17,6 +17,7 @@ import {
 import { crewDshHome } from '../src/install/install.mjs';
 import {
   crewDshRuntimeVersionDir,
+  crewDshRuntimeRoot,
   stageCrewDshRuntime,
   migrateCrewDshRuntime,
   TARGET_DSH_VERSION,
@@ -219,7 +220,7 @@ test('migrateCrewDshRuntime rolls back when verify fails', async () => {
       version: TARGET_DSH_VERSION,
       stageOptions: {
         runner: () => {
-          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          const entry = join(crewDshRuntimeRoot({ home: t.dir }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
           mkdirSync(join(entry, '..'), { recursive: true });
           writeFileSync(entry, '// staged\n');
           writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
@@ -256,22 +257,19 @@ test('stale reclaim guard is recovered, live guard blocks', () => {
   } finally { t.cleanup(); }
 });
 
-test('migrateCrewDshRuntime cleans versioned stage dir before install', async () => {
+test('migrateCrewDshRuntime installs at the live root and parks the old tree', async () => {
   const t = tempHome();
   try {
-    const stagedRoot = crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION });
-    mkdirSync(join(stagedRoot, 'node_modules', 'stale-junk'), { recursive: true });
-    writeFileSync(join(stagedRoot, 'node_modules', 'stale-junk', 'x.js'), '// stale');
-    let sawClean = false;
     const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
     mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    writeFileSync(join(liveRoot, 'old-marker.txt'), 'old-live');
     const r = await migrateCrewDshRuntime({
       home: t.dir,
       version: TARGET_DSH_VERSION,
       stageOptions: {
         runner: () => {
-          sawClean = !existsSync(join(stagedRoot, 'node_modules', 'stale-junk', 'x.js'));
-          const entry = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          // migrate installs AT the live root: the fake pnpm writes there.
+          const entry = join(liveRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
           mkdirSync(join(entry, '..'), { recursive: true });
           writeFileSync(entry, '// staged\n');
           writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
@@ -284,7 +282,11 @@ test('migrateCrewDshRuntime cleans versioned stage dir before install', async ()
       log: () => {},
     });
     assert.equal(r.ok, true);
-    assert.equal(sawClean, true);
+    // Old tree was parked (removed from live) and a fresh tree now lives at
+    // the live root with the new cohort version.
+    assert.equal(existsSync(join(liveRoot, 'old-marker.txt')), false, 'old live tree replaced');
+    const pkg = JSON.parse(readFileSync(join(liveRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'));
+    assert.equal(pkg.version, TARGET_DSH_VERSION);
   } finally { t.cleanup(); }
 });
 
@@ -312,42 +314,33 @@ test('migrateCrewDshRuntime fails closed without callbacks', async () => {
   } finally { t.cleanup(); }
 });
 
-test('migrateCrewDshRuntime restores prev when second rename fails', async () => {
+test('migrateCrewDshRuntime restores the parked tree when the live install fails', async () => {
   const t = tempHome();
   try {
     const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
     mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
     writeFileSync(join(liveRoot, 'marker.txt'), 'live');
     const calls = [];
-    // Block the second rename by holding the attempt dir open is
-    // platform-specific; instead simulate a rename failure by making the
-    // attempt root disappear between stage and swap via a wrapped runner.
-    // Here we directly verify the swap-failure branch by pre-creating a
-    // FILE at the live path parent is not possible, so we test the
-    // rollback path through verify failure with stop-first ordering.
+    // The fake pnpm runner fails: migrate must stop, park the live tree,
+    // attempt the install, then restore the parked tree and restart.
     const r = await migrateCrewDshRuntime({
       home: t.dir,
       version: TARGET_DSH_VERSION,
       stageOptions: {
-        runner: () => {
-          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-          mkdirSync(join(entry, '..'), { recursive: true });
-          writeFileSync(entry, '// staged\n');
-          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
-          return { status: 0, stdout: '', stderr: '' };
-        },
+        runner: () => ({ status: 1, stdout: '', stderr: 'boom' }),
       },
       stopOwned: async () => { calls.push('stop'); return { ok: true }; },
       startOwned: async () => { calls.push('start'); return { ok: true }; },
-      verifyOwned: async () => ({ ok: false, code: 'IDENTITY_MISMATCH' }),
+      verifyOwned: async () => ({ ok: true }),
       log: () => {},
     });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'IDENTITY_MISMATCH');
-    // Rollback stops the failed candidate BEFORE touching the tree.
-    assert.deepEqual(calls, ['stop', 'start', 'stop', 'start']);
+    assert.equal(r.code, 'DSH_RUNTIME_INSTALL_FAILED');
+    // Recovery stopped the failed candidate, restored the parked tree, and
+    // restarted (stop before the failed install + recovery stop/start).
+    assert.deepEqual(calls, ['stop', 'stop', 'start']);
     assert.ok(r.recovery && r.recovery.restore === true && r.recovery.restart === true, JSON.stringify(r.recovery));
-    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
+    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true, 'parked live tree restored');
   } finally { t.cleanup(); }
 });
 
@@ -446,7 +439,7 @@ test('production migration path uses supervisor stop/start/verify', async () => 
       version: TARGET_DSH_VERSION,
       stageOptions: {
         runner: () => {
-          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          const entry = join(crewDshRuntimeRoot({ home: t.dir }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
           mkdirSync(join(entry, '..'), { recursive: true });
           writeFileSync(entry, '// staged\n');
           writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
@@ -497,25 +490,22 @@ test('undo refuses to remove bundle re-pointed at later release', () => {
   } finally { t.cleanup(); }
 });
 
-test('second rename failure restores prev with explicit recovery', async () => {
+test('park failure restores live tree with explicit recovery', async () => {
   const t = tempHome();
   try {
     const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
     mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
     writeFileSync(join(liveRoot, 'marker.txt'), 'live');
     const calls = [];
-    let renameCount = 0;
     const failingRename = (a, b) => {
-      renameCount += 1;
-      if (renameCount === 2) throw Object.assign(new Error('injected second-rename failure'), { code: 'EACCES' });
-      return renameSync(a, b);
+      throw Object.assign(new Error('injected park-rename failure'), { code: 'EACCES' });
     };
     const r = await migrateCrewDshRuntime({
       home: t.dir,
       version: TARGET_DSH_VERSION,
       stageOptions: {
         runner: () => {
-          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          const entry = join(crewDshRuntimeRoot({ home: t.dir }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
           mkdirSync(join(entry, '..'), { recursive: true });
           writeFileSync(entry, '// staged\n');
           writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
@@ -529,9 +519,9 @@ test('second rename failure restores prev with explicit recovery', async () => {
       log: () => {},
     });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'DSH_RUNTIME_SWAP_FAILED');
+    assert.equal(r.code, 'DSH_RUNTIME_PARK_FAILED');
     assert.ok(r.recovery && r.recovery.ok === true, JSON.stringify(r.recovery));
-    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
+    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true, 'live tree intact');
     assert.ok(calls.includes('start'), JSON.stringify(calls));
   } finally { t.cleanup(); }
 });
@@ -551,10 +541,11 @@ test('production migration builder uses one supervisor instance', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-prodwire-'));
   try {
     const migrate = buildProductionMigration({ home: dir, supervisorFactory: fakeSupervisor, verifyOwned: async () => { calls.push('verify'); return { ok: true }; }, log: () => {} });
-    // Drive through the real builder: stage a fake cohort, then migrate.
-    const entry = join(crewDshRuntimeVersionDir({ home: dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    // Drive through the real builder: migrate installs the fake cohort at
+    // the live root (pnpm shims are absolute-path; trees must be born there).
     const liveRoot = join(dir, '.config', 'dsh-crew', 'harness', 'runtime');
     mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    const entry = join(liveRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
     const r = await migrate({
       log: () => {},
       stageOptions: {
@@ -686,12 +677,12 @@ test('rollback pre-commit crash preserves retained target release', async () => 
 
 // ---- 1.0.4/rc.1 cohort upgrade: coordinated transaction + retention + rollback ----
 
-// Helper: build a fake staged runtime tree at the versioned dir the staged
-// runner would produce, returning the runner that "installs" it. The runner
-// must (re)create the tree because stageCrewDshRuntime wipes the stage dir
-// before invoking the package-manager runner.
+// Helper: fake pnpm runner that materializes a runtime tree AT THE LIVE ROOT
+// (migrate/coordinated transactions install at the live root because pnpm
+// shims are absolute-path). The runner is invoked after the live tree has
+// been parked aside, so the live root is empty when it runs.
 function fakeStagedRuntime({ home, version, marker }) {
-  const root = crewDshRuntimeVersionDir({ home, version });
+  const root = join(crewDshHome({ home }), 'runtime');
   const runner = () => {
     const pkgDir = join(root, 'node_modules', '@deepseek-ai', 'dsh');
     mkdirSync(join(pkgDir, 'lib'), { recursive: true });

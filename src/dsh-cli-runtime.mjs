@@ -290,11 +290,79 @@ export function describeDshCli(cli) {
   return `${cli.kind}${version}`;
 }
 
+// Shared pnpm/npm install of the pinned DSH cohort into a specific root
+// directory. pnpm materializes ABSOLUTE-path .cmd shims and junctions that
+// point at the install root's own .pnpm store, so the tree must be installed
+// at its FINAL resting path: renaming a pnpm tree breaks every shim. Callers
+// that need an atomic swap must install at the live root only after moving
+// the old tree aside.
+export function installDshInto({
+  root,
+  version,
+  packageSpec = `${DSH_CLI_PACKAGE}@${version}`,
+  npmCommand = null,
+  pnpmCommand = null,
+  findCommand = defaultFindCommand,
+  exists = defaultExists,
+  runner = spawnSync,
+  platform = process.platform,
+  comspec = process.env.ComSpec ?? 'cmd.exe',
+  env = process.env,
+}) {
+  const pnpm = pnpmCommand ?? findCommand('pnpm');
+  const npm = npmCommand ?? findCommand('npm');
+  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
+  mkdirSync(root, { recursive: true });
+  const packageManager = pnpm
+    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
+    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
+  const packageArgs = pnpm
+    ? ['add', '--dir', root, '--ignore-scripts', packageSpec]
+    : ['install', '--prefix', root, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
+  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const result = runner(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: invocation.shell,
+    env: { ...env },
+  });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_FAILED',
+      error: 'Crew runtime install failed',
+      status: result.status ?? -1,
+      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  const moduleEntry = join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  if (!exists(moduleEntry)) {
+    return { ok: false, code: 'DSH_RUNTIME_INSTALL_INCOMPLETE', error: 'runtime entry missing after install' };
+  }
+  const installedVersion = packageVersion(moduleEntry);
+  if (installedVersion !== version) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
+      error: `installed Crew runtime is ${installedVersion ?? 'unknown version'} but ${version} is required`,
+      installed: installedVersion ?? null,
+      target: version,
+    };
+  }
+  return { ok: true, root, version: installedVersion };
+}
+
 // Staged cohort migration: install the target cohort into a versioned
 // directory WITHOUT touching the live runtime/, verify its manifest, then
 // report the staged root for an atomic switch by the caller (stop owned
 // 3210 -> swap directories -> clean restart -> identity check). Never
 // upgrades a live runtime in place.
+//
+// NOTE: pnpm trees embed absolute paths in .cmd shims and junctions, so a
+// staged tree CANNOT be renamed onto the live root afterwards. migrate
+//CrewDshRuntime therefore installs at the live root in place (after parking
+// the old tree); stageCrewDshRuntime remains for callers that consume the
+// stage dir at its fixed versioned path (tests, dry runs, audits).
 export function stageCrewDshRuntime({
   home = homedir(),
   version = TARGET_DSH_VERSION,
@@ -310,34 +378,29 @@ export function stageCrewDshRuntime({
   read = readFileSync,
 } = {}) {
   const stagedRoot = crewDshRuntimeVersionDir({ home, version });
-  const pnpm = pnpmCommand ?? findCommand('pnpm');
-  const npm = npmCommand ?? findCommand('npm');
-  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
   // Clean/recreate the versioned stage dir: a failed older attempt must
   // never contaminate the next staging.
   try { rmSync(stagedRoot, { recursive: true, force: true }); } catch {}
-  mkdirSync(stagedRoot, { recursive: true });
-  const packageManager = pnpm
-    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
-    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
-  const packageArgs = pnpm
-    ? ['add', '--dir', stagedRoot, '--ignore-scripts', packageSpec]
-    : ['install', '--prefix', stagedRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
-  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
-  const result = runner(invocation.command, invocation.args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: invocation.shell,
-    env: { ...env },
+  const installed = installDshInto({
+    root: stagedRoot,
+    version,
+    packageSpec,
+    npmCommand,
+    pnpmCommand,
+    findCommand,
+    exists,
+    runner,
+    platform,
+    comspec,
+    env,
   });
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      code: 'DSH_RUNTIME_STAGE_FAILED',
-      error: 'staged Crew runtime install failed',
-      status: result.status ?? -1,
-      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
-    };
+  if (!installed.ok) {
+    const code = installed.code === 'DSH_RUNTIME_INSTALL_FAILED'
+      ? 'DSH_RUNTIME_STAGE_FAILED'
+      : installed.code === 'DSH_RUNTIME_INSTALL_INCOMPLETE'
+        ? 'DSH_RUNTIME_STAGE_INCOMPLETE'
+        : installed.code;
+    return { ...installed, code, error: code === 'DSH_RUNTIME_STAGE_FAILED' ? 'staged Crew runtime install failed' : installed.error };
   }
   const stagedModule = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
   if (!exists(stagedModule)) {
@@ -357,9 +420,11 @@ export function stageCrewDshRuntime({
 }
 
 // Full cohort migration transaction (caller holds the update lock):
-// stage -> stop owned 3210 -> swap live runtime -> restart -> identity
-// verify -> rollback on any failure. Directory swaps use unique attempt
-// dirs so a failed older attempt can never contaminate the next one.
+// stop owned 3210 -> park the live tree (rename to prev, its shims stay
+// valid because the tree returns to the same path on rollback) -> install
+// the target cohort AT THE LIVE ROOT (pnpm shims are absolute-path, so the
+// tree must be born at its final resting path; a renamed pnpm tree has
+// dangling shims) -> restart -> identity verify -> rollback on any failure.
 // stopOwned/startOwned/verifyOwned have NO defaults: a missing callback
 // fails closed instead of pretending an unverified step succeeded.
 export async function migrateCrewDshRuntime({
@@ -377,28 +442,20 @@ export async function migrateCrewDshRuntime({
   }
   const liveRoot = crewDshRuntimeRoot({ home });
   const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const attemptRoot = join(crewDshHome({ home }), `runtime-stage-${version}-${nonce}`);
   const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
-  const staged = stageCrewDshRuntime({ home, version, ...stageOptions });
-  if (!staged.ok) return staged;
-  // Relocate the verified stage to a unique attempt dir so retries never
-  // reuse a contaminated versioned directory.
-  try {
-    rename(staged.stagedRoot, attemptRoot);
-  } catch (error) {
-    return { ok: false, code: 'DSH_RUNTIME_STAGE_RELOCATE_FAILED', error: String(error?.message ?? error) };
-  }
   const stop = await stopOwned();
   if (!stop.ok) {
     return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
   }
   let liveMoved = false;
   try {
-    if (existsSync(liveRoot)) rename(liveRoot, prevRoot);
-    liveMoved = true;
-    rename(attemptRoot, liveRoot);
+    if (existsSync(liveRoot)) {
+      rename(liveRoot, prevRoot);
+      liveMoved = true;
+    }
+    mkdirSync(liveRoot, { recursive: true });
   } catch (error) {
-    // Second rename failed: restore prev BEFORE reporting, then restart it.
+    // Park failed: restore the live tree before reporting.
     let recovery = { ok: false };
     try {
       if (liveMoved && existsSync(prevRoot) && !existsSync(liveRoot)) rename(prevRoot, liveRoot);
@@ -407,16 +464,23 @@ export async function migrateCrewDshRuntime({
     } catch (recoveryError) {
       recovery = { ok: false, code: 'DSH_RUNTIME_SWAP_RECOVERY_FAILED', error: String(recoveryError?.message ?? recoveryError) };
     }
-    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), recovery };
+    return { ok: false, code: 'DSH_RUNTIME_PARK_FAILED', error: String(error?.message ?? error), recovery };
+  }
+  // Install the target cohort AT the live root so every pnpm shim/junction
+  // carries the correct final absolute path.
+  const installed = installDshInto({ root: liveRoot, version, ...stageOptions });
+  if (!installed.ok) {
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
+    return { ok: false, code: installed.code ?? 'DSH_RUNTIME_INSTALL_FAILED', error: installed.error ?? 'runtime install at live root failed', recovery };
   }
   const start = await startOwned();
   if (!start.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
-    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed', recovery };
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after install failed', recovery };
   }
   const verified = await verifyOwned();
   if (!verified.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
     return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed', recovery };
   }
   // Retain the prior cohort under retained-runtimes/<version> instead of
@@ -425,12 +489,11 @@ export async function migrateCrewDshRuntime({
   // not fail the migration), and an existing retained copy of the same
   // version is replaced so the retained set always holds the newest tree.
   retainPriorRuntime({ home, prevRoot });
-  try { rmSync(staged.stagedRoot, { recursive: true, force: true }); } catch {}
   log(`- runtime cohort migrated to ${version}`);
   return { ok: true, version, liveRoot };
 }
 
-async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename = renameSync }) {
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename = renameSync }) {
   const recovery = { stoppedCandidate: false, restore: false, restart: false };
   // The failed candidate 3210 may still be running against the tree we are
   // about to replace: stop it FIRST, otherwise the swap races a live
@@ -454,7 +517,6 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned,
   } catch (error) {
     recovery.restoreError = String(error?.message ?? error);
   }
-  try { rmSync(attemptRoot, { recursive: true, force: true }); } catch {}
   try {
     const restarted = await startOwned();
     recovery.restart = restarted?.ok === true;

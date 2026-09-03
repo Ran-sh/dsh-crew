@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
-import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, stageCrewDshRuntime, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import { createCrewSidecarSupervisor } from '../official-web-bridge.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -1505,11 +1505,6 @@ export async function performCoordinatedCohortUpdate({
   const verifyFn = verifyOwned ?? ((crewVersion, dshVersion) => verifyRollbackTarget({ crewVersion, dshVersion }));
   const activateFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer }));
 
-  // Stage the target cohort WITHOUT touching the live runtime.
-  const stagedRuntime = stageCrewDshRuntime({ home, version: candidateDshVersion, ...stageOptions });
-  if (!stagedRuntime.ok) {
-    return { ok: false, code: stagedRuntime.code ?? 'COORDINATED_RUNTIME_STAGE_FAILED', error: stagedRuntime.error ?? 'could not stage target DSH cohort' };
-  }
   const liveRoot = crewDshRuntimeRoot({ home });
   const retainedRoot = join(crewDshHome({ home }), 'retained-runtimes');
   // Plan the prior-tree parking path BEFORE any destructive step and persist
@@ -1530,7 +1525,6 @@ export async function performCoordinatedCohortUpdate({
       state: 'staged',
       liveRoot,
       priorRoot: prevPath,
-      candidateRoot: stagedRuntime.stagedRoot,
       priorVersion: priorDshVersion,
       candidateVersion: candidateDshVersion,
       retainedRoot,
@@ -1576,12 +1570,13 @@ export async function performCoordinatedCohortUpdate({
   }
 
   try {
-    // Stop ONCE, swap runtime, activate payload, start ONCE.
+    // Stop ONCE, install the target cohort AT the live root (pnpm shims are
+    // absolute-path; the tree must be born at its final resting path),
+    // activate payload, start ONCE.
     const stopped = await stopFn();
     if (!stopped.ok) {
       // Nothing was swapped yet; just clear the journal (no activation ran).
       clearUpdateJournal({ home });
-      try { rmSync(stagedRuntime.stagedRoot, { recursive: true, force: true }); } catch {}
       return { ok: false, code: stopped.code ?? 'COORDINATED_STOP_FAILED', error: stopped.error ?? 'could not stop owned 3210' };
     }
     let liveMoved = false;
@@ -1593,15 +1588,28 @@ export async function performCoordinatedCohortUpdate({
         renameSync(liveRoot, prevPath);
         liveMoved = true;
       }
-      renameSync(stagedRuntime.stagedRoot, liveRoot);
+      mkdirSync(liveRoot, { recursive: true });
     } catch (error) {
-      // Swap failed: restore live tree before anything else.
+      // Park failed: restore live tree before anything else.
       try {
         if (liveMoved && !existsSync(liveRoot) && prevPath && existsSync(prevPath)) renameSync(prevPath, liveRoot);
       } catch { /* best effort */ }
       const comp = await compensate();
       clearUpdateJournal({ home });
-      return { ok: false, code: 'COORDINATED_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), compensated: comp.ok === true };
+      return { ok: false, code: 'COORDINATED_RUNTIME_PARK_FAILED', error: String(error?.message ?? error), compensated: comp.ok === true };
+    }
+    // Install the target cohort at the live root. On failure, roll back the
+    // parked prior tree and compensate the payload.
+    const installed = installDshInto({ root: liveRoot, version: candidateDshVersion, ...stageOptions });
+    if (!installed.ok) {
+      let comp = { ok: false };
+      try {
+        rmSync(liveRoot, { recursive: true, force: true });
+        if (liveMoved && existsSync(prevPath)) renameSync(prevPath, liveRoot);
+        comp = await compensate();
+      } catch { /* compensate below already reports */ }
+      clearUpdateJournal({ home });
+      return { ok: false, code: installed.code ?? 'COORDINATED_RUNTIME_INSTALL_FAILED', error: installed.error ?? 'runtime install at live root failed', compensated: comp.ok === true };
     }
     // Runtime now on candidate cohort; live tree preserved at prevPath.
     const activated = await activateFn({ releaseDir: stageDir, manifest: candidateManifest });
