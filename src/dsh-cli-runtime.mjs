@@ -254,6 +254,17 @@ export function ensureCrewDshRuntime({
       stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
     };
   }
+  // Fail closed when the installed cohort drifts from the pinned target
+  // (registry race, hoisted pollution, partial install).
+  if (cli.version !== TARGET_DSH_VERSION) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
+      error: `installed Crew runtime is ${cli.version ?? 'unknown version'} but ${TARGET_DSH_VERSION} is required`,
+      installed: cli.version ?? null,
+      target: TARGET_DSH_VERSION,
+    };
+  }
   return { ok: true, cli, reused: false, version: cli.version, runtimeRoot };
 }
 

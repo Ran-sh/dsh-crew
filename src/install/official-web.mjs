@@ -59,33 +59,15 @@ function makeBackup({ home, profileManifest, previous }) {
   return backupFile;
 }
 
+export const OFFICIAL_WEB_READ_ONLY_CODE = 'OFFICIAL_WEB_PROFILE_READ_ONLY';
+
+// The official ~/.dsh/profiles/web tree is a read-only boundary. Crew must
+// never install, update, register, unlink, repair, or mutate anything under
+// ~/.dsh; the isolated 3210 Crew backend is the only runtime Crew owns.
+// ensure/remove therefore fail closed instead of writing the official
+// profile. Status probing stays read-only.
 export function ensureOfficialWebIntegration({ home = homedir(), releaseDir } = {}) {
-  let resolvedRelease;
-  try { resolvedRelease = realpathSync(releaseDir); } catch { return { ok: false, code: 'RELEASE_NOT_FOUND' }; }
-  const bridgeRoot = join(resolvedRelease, 'official-web-bridge');
-  const profileRoot = officialWebProfileDir({ home });
-  const profileManifest = join(profileRoot, 'package.json');
-  const profile = validOfficialManifest(profileManifest);
-  if (!profile.ok) return profile;
-  const previous = readState(home);
-  const backupFile = makeBackup({ home, profileManifest, previous });
-  const registration = ensurePluginRegistration({
-    profileRoot,
-    root: bridgeRoot,
-    name: OFFICIAL_BRIDGE_PACKAGE,
-    createProfile: false,
-  });
-  if (!registration.ok) {
-    return { ok: false, code: registration.code === 'CREW_PROFILE_METADATA_INVALID' ? 'OFFICIAL_WEB_PROFILE_INVALID' : registration.code };
-  }
-  const stateChanged = previous?.enabled !== true || previous?.release_dir !== resolvedRelease || previous?.backup_file !== backupFile;
-  writeState(home, {
-    enabled: true,
-    release_dir: resolvedRelease,
-    backup_file: backupFile,
-    package: OFFICIAL_BRIDGE_PACKAGE,
-  });
-  return { ...registration, changed: registration.changed || stateChanged, backupFile };
+  return { ok: false, code: OFFICIAL_WEB_READ_ONLY_CODE };
 }
 
 export function officialWebIntegrationStatus({ home = homedir(), releaseDir } = {}) {
@@ -108,25 +90,5 @@ export function officialWebIntegrationStatus({ home = homedir(), releaseDir } = 
 }
 
 export function removeOfficialWebIntegration({ home = homedir(), remember = true, preserveIntent = false } = {}) {
-  const profileRoot = officialWebProfileDir({ home });
-  const profileManifest = join(profileRoot, 'package.json');
-  const profile = validOfficialManifest(profileManifest);
-  if (!profile.ok && profile.code !== 'OFFICIAL_WEB_PROFILE_NOT_FOUND') return profile;
-  let removed = false;
-  if (profile.ok) {
-    const result = removeCrewPluginRegistration({ home, name: OFFICIAL_BRIDGE_PACKAGE, profileRoot });
-    if (!result.ok) return { ok: false, code: result.code === 'CREW_PROFILE_METADATA_INVALID' ? 'OFFICIAL_WEB_PROFILE_INVALID' : result.code };
-    removed = result.removed;
-  }
-  const previous = readState(home);
-  if (remember) writeState(home, {
-    ...(previous ?? {}),
-    enabled: preserveIntent ? previous?.enabled === true : false,
-    package: OFFICIAL_BRIDGE_PACKAGE,
-  });
-  else {
-    const stateFile = officialWebIntegrationStateFile({ home });
-    if (existsSync(stateFile)) unlinkSync(stateFile);
-  }
-  return { ok: true, removed };
+  return { ok: false, code: OFFICIAL_WEB_READ_ONLY_CODE };
 }

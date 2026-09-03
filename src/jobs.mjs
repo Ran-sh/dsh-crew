@@ -3,11 +3,10 @@
 // JSON file so the Claude Code statusline (and anything else) can render it.
 //
 // alpha.5 SDK surface: DeepSeekHarness takes HarnessClientOptions at the top
-// level (no `launch` wrapper). The runtime is the installed same-version dsh
-// CLI booted on the `sdk-minimal` profile, with the worker overlay applied as
-// a --patch. `@deepseek-ai/dsh` and `@deepseek-ai/dsh-sdk-client` must be the
-// same version (enforced inside the SDK client; dsh-crew also asserts it via
-// the Crew runtime module so a custom dshBin cannot bypass the check).
+// level (no `launch` wrapper). The SDK resolves the installed same-version
+// dsh CLI itself and enforces the same-version manifest check, so dsh-crew
+// never passes an explicit dshBin that would bypass it. The worker rides the
+// `sdk-minimal` profile with the Crew overlay applied as a --patch.
 
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
 import { readFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -15,7 +14,6 @@ import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { createRequire } from 'node:module';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
@@ -27,17 +25,6 @@ const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREW_DSH_HOME = join(homedir(), '.config', 'dsh-crew', 'harness');
 const STATUS_FILE = join(CONFIG_DIR, 'status.json');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
-
-// The worker composition rides the installed same-version dsh CLI on the
-// `sdk` profile as a --patch overlay (alpha.5 SDK surface). The CLI entry is
-// resolved from the installed @deepseek-ai/dsh package; the legacy
-// dsh-sdk-jsonrpc-demo bin no longer exists.
-const requireAgents = createRequire(import.meta.url);
-let DSH_BIN = null;
-for (const spec of ['@deepseek-ai/dsh/lib/bin.js']) {
-  try { DSH_BIN = requireAgents.resolve(spec); break; } catch {}
-}
-if (!DSH_BIN) DSH_BIN = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 
 export const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
@@ -124,8 +111,7 @@ export function startJob({
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
   if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
-  if (!existsSync(DSH_BIN)) throw new Error(`dsh CLI not installed at ${DSH_BIN}; run pnpm install in ${ROOT}`);
-  if (!existsSync(CORDIS)) throw new Error(`worker composition not found at ${CORDIS}`);
+  if (!existsSync(CORDIS)) throw new Error(`worker overlay not found at ${CORDIS}`);
   const workspace = resolve(cwd ?? process.cwd());
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
@@ -138,7 +124,6 @@ export function startJob({
   }
 
   const harness = new DeepSeekHarness({
-    dshBin: DSH_BIN,
     profile: 'sdk-minimal',
     patches: [CORDIS],
     dshHome: CREW_DSH_HOME,
