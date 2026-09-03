@@ -571,3 +571,52 @@ test('production migration builder uses one supervisor instance', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('cohort verifier reads dsh_version domain, never Crew runtime_version', async () => {
+  const { verifyCrewDshCohort, verifyCrewRuntimeIdentity } = await import('../src/install/npx-lifecycle.mjs');
+  const crewBody = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3', dsh_version: '0.1.2-alpha.5' } } };
+  const fetchOk = async () => ({ ok: true, json: async () => crewBody });
+  const r1 = await verifyCrewDshCohort('0.1.2-alpha.5', fetchOk);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.dsh_version, '0.1.2-alpha.5');
+  const r2 = await verifyCrewDshCohort('0.1.2-rc.1', fetchOk);
+  assert.equal(r2.ok, false);
+  assert.equal(r2.code, 'DSH_COHORT_MISMATCH');
+  // A Hub reporting Crew release 1.0.3 as dsh_version must NOT match alpha.5.
+  const confused = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3', dsh_version: '1.0.3' } } };
+  const r3 = await verifyCrewRuntimeIdentity('0.1.2-alpha.5', async () => ({ ok: true, json: async () => confused }));
+  assert.equal(r3.ok, false);
+  // Null dsh_version fails closed.
+  const nodomain = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3' } } };
+  const r4 = await verifyCrewDshCohort('0.1.2-alpha.5', async () => ({ ok: true, json: async () => nodomain }));
+  assert.equal(r4.ok, false);
+  assert.equal(r4.code, 'DSH_COHORT_UNKNOWN');
+});
+
+test('rollback holds update lock and avoids the 3080 bridge', async () => {
+  const { npxRollback, updateLockFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-rb-'));
+  try {
+    // A held update lock must block rollback with UPDATE_IN_PROGRESS.
+    mkdirSync(join(dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(updateLockFile({ home: dir }), JSON.stringify({ pid: process.pid, started_at: '2026-09-03T00:00:00+00:00', nonce: 'live-owner' }) + '\n');
+    const blocked = await npxRollback({ home: dir, version: '9.9.9', log: () => {} });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /another update is in progress/);
+    // Default rollback wiring must not reference the 3080 bridge endpoint.
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../src/install/npx-lifecycle.mjs', import.meta.url), 'utf8');
+    const start = src.indexOf('async function npxRollbackInner');
+    const end = src.indexOf('// ---- commands ----', start);
+    const rollbackSection = src.slice(start, end === -1 ? undefined : end);
+    assert.doesNotMatch(rollbackSection, /http:\/\/127\.0\.0\.1:3080/);
+    assert.doesNotMatch(rollbackSection, /supervisor\/restart/);
+    assert.ok(existsSync(updateLockFile({ home: dir })), 'failed rollback must not consume a foreign lock');
+  } finally {
+    const { rmSync } = await import('node:fs');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -372,7 +372,7 @@ try {
     throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
   }
   if (-not (Test-Path -LiteralPath (Join-Path $officialHome 'profiles\web\package.json') -PathType Leaf)) {
-    throw "The official web profile is missing under $officialHome. Run: dsh-crew integrate"
+    throw "The official web profile is missing under $officialHome. Repair or install the official DeepSeek Harness web profile outside dsh-crew; dsh-crew never mutates the official profile."
   }
 
   if ($Mode -eq 'watch') {

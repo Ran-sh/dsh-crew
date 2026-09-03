@@ -98,3 +98,4 @@ discovering what the current environment actually supports.
 - Never use direct pnpm/npm/dsh plugin operations against the official web profile.
 - Preparing a Harness upgrade must not restart 3080 or 3210.
 - Standalone workers launch through the official DSH SDK profile contract; dsh-sdk-jsonrpc-demo is obsolete.
+- Legacy 3080 bridge must never be used for 3210 lifecycle/restart/rollback.

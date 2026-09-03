@@ -994,9 +994,32 @@ async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
     : { ok: false, code: 'RUNTIME_VERSION_MISMATCH' };
 }
 
+// Cohort verifier: compares the TARGET DSH cohort against the Hub's
+// dsh_version domain (the installed @deepseek-ai/dsh package), NEVER
+// against Crew's own runtime_version (the dsh-crew release). A null
+// dsh_version means unknown cohort and fails closed.
+export async function verifyCrewDshCohort(version, fetchImpl = globalThis.fetch) {
+  let body = null;
+  try {
+    const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+    body = await response.json();
+    if (!response.ok) return { ok: false, code: 'DSH_COHORT_UNREACHABLE' };
+  } catch (error) {
+    return { ok: false, code: 'DSH_COHORT_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const dshVersion = body?.extension?.runtime?.dsh_version ?? body?.runtime?.dsh_version ?? null;
+  if (typeof dshVersion !== 'string' || dshVersion.length === 0) {
+    return { ok: false, code: 'DSH_COHORT_UNKNOWN' };
+  }
+  return dshVersion === version
+    ? { ok: true, dsh_version: dshVersion }
+    : { ok: false, code: 'DSH_COHORT_MISMATCH', installed: dshVersion, target: version };
+}
+
 // Full Crew-owned 3210 identity check: service + execution plane + profile
-// + port + non-empty runtime_id, plus the exact target cohort version.
-// Used by production cohort migration instead of a version-only probe.
+// + port + non-empty runtime_id, plus the exact target COHORT version read
+// from the dsh_version domain (the installed @deepseek-ai/dsh package).
+// Never compares the cohort against Crew's own runtime_version.
 export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.fetch) {
   let body = null;
   try {
@@ -1016,11 +1039,9 @@ export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.
     typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim().length > 0,
   ];
   if (!checks.every(Boolean)) return { ok: false, code: 'RUNTIME_IDENTITY_MISMATCH' };
-  const extVersion = body?.extension?.runtime?.runtime_version ?? null;
-  void extVersion;
-  const versioned = await verifyRuntimeVersion(version, fetchImpl);
-  if (!versioned.ok) return versioned;
-  return { ok: true, runtime_id: runtime.runtime_id, runtime_version: versioned.runtime_version };
+  const cohort = await verifyCrewDshCohort(version, fetchImpl);
+  if (!cohort.ok) return cohort;
+  return { ok: true, runtime_id: runtime.runtime_id, dsh_version: cohort.dsh_version };
 }
 
 // Crew-owned stop/start for cohort migration come from the sidecar
@@ -1046,11 +1067,25 @@ export async function npxRollback({
   ensureRuntime,
   validatePayload = validateInstalledPayload,
   activate,
-  restart = () => restartOwnedRuntime(),
-  verifyRuntime = (targetVersion) => verifyRuntimeVersion(targetVersion),
+  restart,
+  verifyRuntime,
+  supervisorFactory = crewSupervisor,
 } = {}) {
   const targetVersion = typeof version === 'string' ? version.trim() : '';
   if (!targetVersion) return { ok: false, error: 'rollback requires a target version' };
+  // Rollback shares the update mutual-exclusion lock: it mutates the same
+  // pointer/registration/runtime surfaces as install/update, and the watch
+  // supervisor must observe-only while it runs.
+  const updateLock = acquireUpdateLock({ home });
+  if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  try {
+    return await npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory });
+  } finally {
+    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+  }
+}
+
+async function npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory }) {
   const current = readCurrentPointer({ home });
   if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };
   const target = listManagedReleases({ home }).find((release) => release.version === targetVersion);
@@ -1061,15 +1096,33 @@ export async function npxRollback({
   if (!validation.ok) return { ok: false, error: 'target release failed payload validation' };
   const previousManifest = readManifest(current.path);
   const activateReleaseFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer, ensureRuntime }));
+  // Direct-owned restart/verify through ONE supervisor instance. No legacy
+  // 3080 bridge: rollback must work with the bridge fully absent.
+  const supervisor = supervisorFactory({ home });
+  const restartFn = restart ?? (async () => {
+    const stopped = await supervisor.stopOwnedBackend();
+    if (!stopped.ok) return stopped;
+    return supervisor.startOwnedBackend();
+  });
+  const verifyFn = verifyRuntime ?? (async () => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION));
+  // Journal the rollback intent BEFORE switching the pointer so a crash
+  // is reconcilable by reconcileUpdateJournal.
+  writeUpdateJournal({
+    home,
+    stage: 'rollback',
+    prior: { name: current.name, version: current.version, path: current.path },
+    candidate: { name: target.name, version: target.version, stageDir: target.path },
+  });
   const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
   try {
     switchPointer(target);
     if (!await activateReleaseFn({ releaseDir: target.path, manifest: targetManifest })) throw new Error('target release activation failed');
-    const restarted = await restart(target.version);
+    const restarted = await restartFn(target.version);
     if (restarted?.ok === false) throw Object.assign(new Error('target runtime restart failed'), { code: restarted.code });
-    const runtime = await verifyRuntime(target.version);
-    if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_VERSION_MISMATCH' });
+    const runtime = await verifyFn(target.version);
+    if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_IDENTITY_MISMATCH' });
     log(`✓ rolled back Crew payload to ${target.version}`);
+    clearUpdateJournal({ home });
     return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
   } catch (error) {
     const prior = { name: current.name, version: current.version, path: current.path };
@@ -1079,15 +1132,16 @@ export async function npxRollback({
       if (!previousManifest) throw Object.assign(new Error('previous release manifest unavailable'), { stage: 'activation' });
       const activated = await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
       if (activated !== true) throw Object.assign(new Error('previous release activation failed'), { stage: 'activation' });
-      const restarted = await restart(prior.version);
+      const restarted = await restartFn(prior.version);
       if (restarted?.ok !== true) throw Object.assign(new Error('previous runtime restart failed'), { stage: 'restart' });
-      const runtime = await verifyRuntime(prior.version);
+      const runtime = await verifyFn(prior.version);
       if (runtime?.ok !== true) throw Object.assign(new Error('previous runtime verification failed'), { stage: 'verification' });
       const restoredPointer = readCurrentPointer({ home });
       if (restoredPointer?.path !== prior.path || restoredPointer.version !== prior.version) {
         throw Object.assign(new Error('previous release pointer was not restored'), { stage: 'pointer' });
       }
       recovery = { ok: true, version: prior.version, path: prior.path };
+      clearUpdateJournal({ home });
     } catch (recoveryError) {
       recovery = {
         ok: false,
@@ -1772,8 +1826,8 @@ export const USAGE = `usage: dsh-crew <command> [--purge] [--candidate <path>]
 
 Commands:
   install     persist the candidate package into Crew-owned state and register it
-  integrate   show Crew inside the official 3080 UI; backend stays isolated on 3210
-  detach      remove only the official 3080 bridge; isolated 3210 mode remains available
+  integrate   disabled: the official web profile is read-only (legacy bridge retired)
+  detach      disabled: the official web profile is read-only (legacy bridge retired)
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
