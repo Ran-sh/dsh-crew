@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.4 — 2026-09-03
+
+- Upgrades the pinned DeepSeek Harness cohort from 0.1.2-alpha.5 to
+  0.1.2-rc.1 (single source of truth in src/dsh-cohort.mjs).
+- Makes cross-cohort payload updates a coordinated payload + runtime
+  transaction: the 3210 never runs an unsupported payload/cohort pair, and
+  the swap is covered by the durable update journal with synchronous
+  crash recovery.
+- Retains swapped-out runtime cohorts under retained-runtimes/ so rollback
+  across cohorts (rc.1 -> alpha.5) restores offline without a registry
+  round-trip.
+- Derives the rollback target cohort from the retained payload manifest
+  instead of the running code's TARGET.
+- Hardens the Windows supervisor health check to require the hub's reported
+  dsh_version to match the disk runtime cohort (no stale-process boot).
+- Makes scripts/setup.mjs fail closed when a Crew runtime cohort does not
+  match the source tree.
+- Retires the legacy official-bridge E2E as a release gate (diagnostic only).
+
 ## 1.0.3 — 2026-09-02
 
 - Makes profile-to-user Provider migration recoverable and exposes native

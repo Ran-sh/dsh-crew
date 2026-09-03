@@ -12,7 +12,9 @@ import {
   readCurrentPointer,
   beginReleaseActivation,
   commitActivatedRelease,
+  crewReleasesDir,
 } from '../src/install/npx-lifecycle.mjs';
+import { crewDshHome } from '../src/install/install.mjs';
 import {
   crewDshRuntimeVersionDir,
   stageCrewDshRuntime,
@@ -84,8 +86,8 @@ test('journal reconcile is a no-op without a journal', () => {
 test('staged runtime version dir is versioned and separate from live runtime', () => {
   const t = tempHome();
   try {
-    const staged = crewDshRuntimeVersionDir({ home: t.dir, version: '0.1.2-alpha.5' });
-    assert.ok(staged.includes('runtime-0.1.2-alpha.5'));
+    const staged = crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION });
+    assert.ok(staged.includes(`runtime-${TARGET_DSH_VERSION}`));
     assert.notEqual(staged, join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'));
   } finally { t.cleanup(); }
 });
@@ -574,21 +576,23 @@ test('production migration builder uses one supervisor instance', async () => {
 
 test('cohort verifier reads dsh_version domain, never Crew runtime_version', async () => {
   const { verifyCrewDshCohort, verifyCrewRuntimeIdentity } = await import('../src/install/npx-lifecycle.mjs');
-  const crewBody = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3', dsh_version: '0.1.2-alpha.5' } } };
+  const { TARGET_DSH_VERSION: currentCohort } = await import('../src/dsh-cohort.mjs');
+  const staleCohort = '0.1.2-alpha.5'; // the pre-rc.1 cohort dsh-crew 1.0.3 pinned
+  const crewBody = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.4', dsh_version: currentCohort } } };
   const fetchOk = async () => ({ ok: true, json: async () => crewBody });
-  const r1 = await verifyCrewDshCohort('0.1.2-alpha.5', fetchOk);
+  const r1 = await verifyCrewDshCohort(currentCohort, fetchOk);
   assert.equal(r1.ok, true);
-  assert.equal(r1.dsh_version, '0.1.2-alpha.5');
-  const r2 = await verifyCrewDshCohort('0.1.2-rc.1', fetchOk);
+  assert.equal(r1.dsh_version, currentCohort);
+  const r2 = await verifyCrewDshCohort(staleCohort, fetchOk);
   assert.equal(r2.ok, false);
   assert.equal(r2.code, 'DSH_COHORT_MISMATCH');
-  // A Hub reporting Crew release 1.0.3 as dsh_version must NOT match alpha.5.
-  const confused = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3', dsh_version: '1.0.3' } } };
-  const r3 = await verifyCrewRuntimeIdentity('0.1.2-alpha.5', async () => ({ ok: true, json: async () => confused }));
+  // A Hub reporting Crew release 1.0.4 as dsh_version must NOT match the cohort.
+  const confused = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.4', dsh_version: '1.0.4' } } };
+  const r3 = await verifyCrewRuntimeIdentity(currentCohort, async () => ({ ok: true, json: async () => confused }));
   assert.equal(r3.ok, false);
   // Null dsh_version fails closed.
-  const nodomain = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.3' } } };
-  const r4 = await verifyCrewDshCohort('0.1.2-alpha.5', async () => ({ ok: true, json: async () => nodomain }));
+  const nodomain = { ok: true, extension: { runtime: { service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1', runtime_version: '1.0.4' } } };
+  const r4 = await verifyCrewDshCohort(currentCohort, async () => ({ ok: true, json: async () => nodomain }));
   assert.equal(r4.ok, false);
   assert.equal(r4.code, 'DSH_COHORT_UNKNOWN');
 });
@@ -678,4 +682,195 @@ test('rollback pre-commit crash preserves retained target release', async () => 
     const { rmSync } = await import('node:fs');
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- 1.0.4/rc.1 cohort upgrade: coordinated transaction + retention + rollback ----
+
+// Helper: build a fake staged runtime tree at the versioned dir the staged
+// runner would produce, returning the runner that "installs" it. The runner
+// must (re)create the tree because stageCrewDshRuntime wipes the stage dir
+// before invoking the package-manager runner.
+function fakeStagedRuntime({ home, version, marker }) {
+  const root = crewDshRuntimeVersionDir({ home, version });
+  const runner = () => {
+    const pkgDir = join(root, 'node_modules', '@deepseek-ai', 'dsh');
+    mkdirSync(join(pkgDir, 'lib'), { recursive: true });
+    writeFileSync(join(pkgDir, 'lib', 'bin.js'), `// ${version}\n`);
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
+    writeFileSync(join(root, 'marker.txt'), marker);
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  return { root, runner };
+}
+
+// Helper: materialize a "live" runtime tree at harness/runtime with a dsh version.
+function materializeLiveRuntime({ home, version }) {
+  const live = join(crewDshHome({ home }), 'runtime');
+  mkdirSync(join(live, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+  writeFileSync(join(live, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${version}\n`);
+  writeFileSync(join(live, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
+  writeFileSync(join(live, 'marker.txt'), `live-${version}`);
+  return live;
+}
+
+function liveRuntimeVersion({ home }) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(crewDshHome({ home }), 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'));
+    return pkg.version ?? null;
+  } catch { return null; }
+}
+
+function fakePayloadRelease({ home, name, version, dshVersion }) {
+  const dir = join(crewReleasesDir({ home }), name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({
+    name: '@ran-sh/dsh-crew', version,
+    peerDependencies: { '@deepseek-ai/dsh': dshVersion },
+  }));
+  mkdirSync(join(dir, 'node_modules'), { recursive: true });
+  writeFileSync(join(dir, 'node_modules', '.keep'), '');
+  return dir;
+}
+
+test('coordinated update migrates payload + runtime together and retains the prior cohort', async () => {
+  const { performCoordinatedCohortUpdate, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const appDir = join(t.dir, '.config', 'dsh-crew', 'app');
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    // prior release 1.0.3 pins ALPHA; live runtime is ALPHA.
+    const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: ALPHA });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir }));
+    materializeLiveRuntime({ home: t.dir, version: ALPHA });
+    // candidate 1.0.4 pins the current TARGET (rc.1).
+    const candDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
+    const calls = [];
+    const staged = fakeStagedRuntime({ home: t.dir, version: TARGET_DSH_VERSION, marker: 'candidate' });
+    const r = await performCoordinatedCohortUpdate({
+      home: t.dir,
+      log: () => {},
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
+      priorDshVersion: ALPHA,
+      candidateManifest: { name: '@ran-sh/dsh-crew', version: '1.0.4' },
+      candidateDshVersion: TARGET_DSH_VERSION,
+      stageDir: candDir,
+      installer: {},
+      stageOptions: { runner: staged.runner },
+      activate: async ({ releaseDir }) => { calls.push(['activate', releaseDir]); return true; },
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async (crewVersion, dshVersion) => {
+        calls.push(['verify', crewVersion, dshVersion]);
+        const live = liveRuntimeVersion({ home: t.dir });
+        return live === TARGET_DSH_VERSION && crewVersion === '1.0.4' && dshVersion === TARGET_DSH_VERSION
+          ? { ok: true }
+          : { ok: false, code: 'VERIFY_FAILED', live };
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.dsh_version, TARGET_DSH_VERSION);
+    assert.equal(liveRuntimeVersion({ home: t.dir }), TARGET_DSH_VERSION, 'live runtime is now rc.1');
+    // Prior cohort retained under retained-runtimes/alpha.5 for offline rollback.
+    const retainedDir = join(crewDshHome({ home: t.dir }), 'retained-runtimes', ALPHA);
+    assert.equal(existsSync(join(retainedDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')), true, 'prior cohort retained');
+    // Journal cleared (transaction committed).
+    assert.equal(existsSync(join(appDir, 'update-journal.json')), false, 'journal cleared');
+    // verify used the CANDIDATE crew version + cohort together (no unsupported pair).
+    assert.ok(calls.some(([op, v]) => op === 'verify' && v === '1.0.4'), JSON.stringify(calls));
+  } finally { t.cleanup(); }
+});
+
+test('cross-cohort rollback derives the target cohort from the payload manifest', async () => {
+  const { npxRollback, readCurrentPointer, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    // current: 1.0.4 pins rc.1; target retained: 1.0.3 pins alpha.5.
+    const currentDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
+    const targetDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: ALPHA });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.4', path: currentDir }));
+    materializeLiveRuntime({ home: t.dir, version: TARGET_DSH_VERSION });
+    // retained alpha.5 tree present so the offline restore path works.
+    const retainedDir = join(crewDshHome({ home: t.dir }), 'retained-runtimes', ALPHA);
+    mkdirSync(join(retainedDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retainedDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: ALPHA }));
+    writeFileSync(join(retainedDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${ALPHA}\n`);
+    const calls = [];
+    const r = await npxRollback({
+      home: t.dir,
+      version: '1.0.3',
+      log: () => {},
+      validatePayload: () => ({ ok: true }),
+      activate: async ({ releaseDir }) => { calls.push(['activate', releaseDir]); return true; },
+      supervisorFactory: () => ({
+        stopOwnedBackend: async () => { calls.push('stop'); return { ok: true }; },
+        startOwnedBackend: async () => { calls.push('start'); return { ok: true }; },
+      }),
+      verifyRuntime: async (crewVersion, dshVersion) => {
+        calls.push(['verify', crewVersion, dshVersion]);
+        const live = liveRuntimeVersion({ home: t.dir });
+        // Cross-cohort: after rollback, runtime must be ALPHA (restored offline).
+        return live === ALPHA && crewVersion === '1.0.3' && dshVersion === ALPHA
+          ? { ok: true }
+          : { ok: false, code: 'VERIFY_FAILED', live, crewVersion, dshVersion };
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '1.0.3');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), ALPHA, 'runtime restored offline to alpha.5');
+    assert.ok(calls.some(([op, v, d]) => op === 'verify' && v === '1.0.3' && d === ALPHA), `verify used target cohort: ${JSON.stringify(calls)}`);
+  } finally { t.cleanup(); }
+});
+
+test('rollback compensation restores prior cohort when target verification fails', async () => {
+  const { npxRollback, readCurrentPointer, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    const currentDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
+    const targetDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: ALPHA });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.4', path: currentDir }));
+    materializeLiveRuntime({ home: t.dir, version: TARGET_DSH_VERSION });
+    // retained alpha.5 exists for offline restore; also keep a retained rc.1
+    // so prior-cohort compensation can restore rc.1 offline.
+    const retainedAlpha = join(crewDshHome({ home: t.dir }), 'retained-runtimes', ALPHA);
+    mkdirSync(join(retainedAlpha, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retainedAlpha, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: ALPHA }));
+    writeFileSync(join(retainedAlpha, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${ALPHA}\n`);
+    const retainedRc1 = join(crewDshHome({ home: t.dir }), 'retained-runtimes', TARGET_DSH_VERSION);
+    mkdirSync(join(retainedRc1, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retainedRc1, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+    writeFileSync(join(retainedRc1, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${TARGET_DSH_VERSION}\n`);
+    let failTargetVerify = true;
+    const r = await npxRollback({
+      home: t.dir,
+      version: '1.0.3',
+      log: () => {},
+      validatePayload: () => ({ ok: true }),
+      activate: async ({ releaseDir }) => { if (releaseDir === targetDir) return false; return true; },
+      supervisorFactory: () => ({
+        stopOwnedBackend: async () => ({ ok: true }),
+        startOwnedBackend: async () => ({ ok: true }),
+      }),
+      verifyRuntime: async (crewVersion, dshVersion) => {
+        const live = liveRuntimeVersion({ home: t.dir });
+        if (failTargetVerify && crewVersion === '1.0.3') {
+          failTargetVerify = false; // fail only the FIRST target verification
+          return { ok: false, code: 'TARGET_VERIFY_FAILED', live };
+        }
+        return live === dshVersion ? { ok: true } : { ok: false, code: 'VERIFY_FAILED', live };
+      },
+    });
+    // Compensation restored prior 1.0.4 + rc.1.
+    assert.equal(r.ok, false);
+    assert.equal(r.restored, true, JSON.stringify(r));
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '1.0.4');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), TARGET_DSH_VERSION, 'prior runtime restored');
+  } finally { t.cleanup(); }
 });

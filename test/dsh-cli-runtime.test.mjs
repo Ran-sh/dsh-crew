@@ -189,7 +189,7 @@ test('offline Crew registration replaces a stale link while preserving unrelated
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       name: 'dsh-profile-dsh-crew',
       private: true,
-      dependencies: { '@deepseek-ai/dsh-base': '0.1.2-alpha.5', '@ran-test/other': '1.0.0' },
+      dependencies: { '@deepseek-ai/dsh-base': '9.8.7-preserve-me', '@ran-test/other': '1.0.0' },
       dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@ran-test/other'] } },
     }, null, 2));
     const first = ensureCrewPluginRegistration({ home: t.dir, root: firstRoot });
@@ -198,7 +198,7 @@ test('offline Crew registration replaces a stale link while preserving unrelated
     assert.equal(second.ok, true, JSON.stringify(second));
     assert.equal(realpathSync(second.linkPath), realpathSync(secondRoot));
     const profile = JSON.parse(readFileSync(second.profileManifest, 'utf8'));
-    assert.equal(profile.dependencies['@deepseek-ai/dsh-base'], '0.1.2-alpha.5');
+    assert.equal(profile.dependencies['@deepseek-ai/dsh-base'], '9.8.7-preserve-me');
     assert.equal(profile.dependencies['@ran-test/other'], '1.0.0');
     assert.deepEqual(profile.dsh.profile.bundles.slice(0, 2), ['@deepseek-ai/dsh-base', '@ran-test/other']);
     assert.equal(profile.dsh.profile.bundles.filter((name) => name === '@ran-test/dsh-crew').length, 1);

@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
-import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, stageCrewDshRuntime, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import { createCrewSidecarSupervisor } from '../official-web-bridge.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -357,8 +357,18 @@ function readUpdateJournal({ home = homedir() } = {}) {
   return raw;
 }
 
-function writeUpdateJournal({ home, stage, prior = null, candidate = null, verified = false }) {
+// Synchronously read the @deepseek-ai/dsh version a runtime tree ships.
+function readRuntimeTreeVersionSync(root) {
+  if (!root || typeof root !== 'string') return null;
+  try {
+    const parsed = JSON.parse(readFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'));
+    return typeof parsed.version === 'string' && parsed.version.length > 0 ? parsed.version : null;
+  } catch { return null; }
+}
+
+function writeUpdateJournal({ home, stage, prior = null, candidate = null, verified = false, runtime = null }) {
   const record = { stage, prior, candidate, verified: verified === true, updated_at: isoNow() };
+  if (runtime && typeof runtime === 'object') record.runtime = runtime;
   writeFileAtomic(updateJournalFile({ home }), JSON.stringify(record, null, 2) + '\n');
   return record;
 }
@@ -367,14 +377,14 @@ function writeUpdateJournal({ home, stage, prior = null, candidate = null, verif
 // identity matches the expected stage/prior/candidate. A crash between
 // verification success and this write leaves the journal unverified, so
 // reconcile refuses to finalize it.
-export function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null } = {}) {
+export function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null, runtime = null } = {}) {
   const current = readUpdateJournal({ home });
   if (!current || current.malformed) return { ok: false, code: 'JOURNAL_NOT_FOUND' };
   const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
   if (current.stage !== stage || !same(current.prior, prior) || !same(current.candidate, candidate)) {
     return { ok: false, code: 'JOURNAL_IDENTITY_MISMATCH' };
   }
-  writeUpdateJournal({ home, stage, prior, candidate, verified: true });
+  writeUpdateJournal({ home, stage, prior, candidate, verified: true, runtime });
   return { ok: true };
 }
 
@@ -511,6 +521,22 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
   if (journal.stage === 'rollback' && pointerMatchesCandidate && journal.verified !== true) {
     return { ok: false, code: 'JOURNAL_ROLLBACK_UNVERIFIED', stage: journal.stage, error: 'rollback journal not marked verified; refusing finalize' };
   }
+  if (journal.stage === 'coordinated-update' && pointerMatchesCandidate && journal.verified !== true) {
+    return { ok: false, code: 'JOURNAL_COORDINATED_UNVERIFIED', stage: journal.stage, error: 'coordinated-update journal not marked verified; refusing finalize' };
+  }
+  if (journal.stage === 'coordinated-update' && pointerMatchesCandidate) {
+    // Coordinated commit also requires the live runtime to report the
+    // candidate cohort. We cannot reach the network synchronously here, so
+    // verify against the journal's recorded runtime roots: the live tree must
+    // BE the candidate runtime (candidateRoot moved onto liveRoot).
+    const rt = journal.runtime ?? null;
+    if (rt?.candidateVersion && rt?.liveRoot) {
+      const liveVersion = readRuntimeTreeVersionSync(rt.liveRoot);
+      if (liveVersion !== rt.candidateVersion) {
+        return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_MISMATCH', stage: journal.stage, error: `live runtime is ${liveVersion ?? 'unknown'} but coordinated journal expects ${rt.candidateVersion}; refusing finalize` };
+      }
+    }
+  }
   if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
       return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
@@ -542,17 +568,61 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
   // surfaces back at prior (a crash between activation and pointer write
   // leaves them on the candidate), then drop the candidate. A rollback
   // journal's candidate is a RETAINED release, never an orphan stage: it
-  // must be preserved even when the pointer still references prior.
+  // must be preserved even when the pointer still references prior. A
+  // coordinated-update journal additionally carries a runtime segment: a
+  // crash mid-swap may have left the live runtime on the CANDIDATE cohort
+  // while the pointer (and payload) still reference prior — that unsupported
+  // combination must be restored to the prior cohort synchronously here.
   if (priorPath) {
     if (!existsSync(journal.prior.path)) {
       return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
+    }
+    const rt = journal.stage === 'coordinated-update' ? journal.runtime ?? null : null;
+    if (rt?.priorVersion && rt?.liveRoot) {
+      const liveVersion = readRuntimeTreeVersionSync(rt.liveRoot);
+      if (liveVersion !== rt.priorVersion) {
+        // Move the parked prior tree back onto liveRoot. This is a pure
+        // directory swap: no network, no registry, safe under a stale lock.
+        const parked = rt.priorRoot && existsSync(rt.priorRoot) ? rt.priorRoot : null;
+        if (!parked && rt.candidateRoot && existsSync(rt.candidateRoot)) {
+          // Fall back: liveRoot may hold the candidate tree and the prior
+          // tree may have been consumed into retained-runtimes. Attempt the
+          // retained path next.
+        }
+        if (parked) {
+          try {
+            rmSync(rt.liveRoot, { recursive: true, force: true });
+            renameSync(parked, rt.liveRoot);
+          } catch (error) {
+            return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_RESTORE_FAILED', stage: journal.stage, error: `prior runtime restore failed: ${error?.message ?? error}` };
+          }
+        } else {
+          // No parked tree: try the retained-runtimes/<priorVersion> copy.
+          const retainedDir = rt.retainedRoot ? join(rt.retainedRoot, rt.priorVersion) : null;
+          let restored = false;
+          if (retainedDir && existsSync(retainedDir)) {
+            try {
+              rmSync(rt.liveRoot, { recursive: true, force: true });
+              renameSync(retainedDir, rt.liveRoot);
+              restored = true;
+            } catch { /* fall through to fail closed */ }
+          }
+          if (!restored) {
+            return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_RESTORE_FAILED', stage: journal.stage, error: 'prior runtime tree unavailable for synchronous recovery; run update --candidate to re-migrate' };
+          }
+        }
+        log(`- coordinated recovery: restored prior DSH runtime (@${rt.priorVersion})`);
+      }
     }
     const priorManifest = readManifest(journal.prior.path);
     const compensated = compensateActivationSync({ home, prior: journal.prior, manifest: priorManifest, log, installer });
     if (!compensated.ok) {
       return { ok: false, code: 'JOURNAL_COMPENSATE_FAILED', stage: journal.stage, error: compensated.error ?? compensated.code };
     }
-    if (journal.stage !== 'rollback' && candidateDir && existsSync(candidateDir)) {
+    if (journal.stage !== 'rollback' && journal.stage !== 'coordinated-update' && candidateDir && existsSync(candidateDir)) {
+      // A coordinated-update candidate stage is consumed into the runtime
+      // swap already; if it still exists it is an orphan of the failed swap
+      // and may be removed. (rollback candidates are retained releases.)
       try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
     }
     clearUpdateJournal({ home });
@@ -1157,24 +1227,39 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
   const validation = validatePayload(target.path, { expectedName: targetManifest?.name, expectedVersion: targetManifest?.version });
   if (!validation.ok) return { ok: false, error: 'target release failed payload validation' };
   const previousManifest = readManifest(current.path);
+  // Cross-cohort rollback: derive the DSH cohort each payload pins from its
+  // own manifest (exact @deepseek-ai/dsh spec). Never assume the running
+  // code's TARGET: 1.0.4/rc.1 rolling back to 1.0.3 must restore alpha.5,
+  // not verify against rc.1. The production path (no injected verifyRuntime)
+  // fails closed when a manifest does not pin an exact cohort; callers that
+  // inject their own verifier/restart mocks (tests, custom drivers) own the
+  // cohort contract and may leave it unset, in which case no runtime swap is
+  // attempted and the injected verifyRuntime receives the Crew version only.
+  const productionVerify = typeof verifyRuntime !== 'function';
+  const targetDshVersion = payloadDshVersion(targetManifest);
+  const priorDshVersion = payloadDshVersion(previousManifest);
+  const cohortKnown = typeof targetDshVersion === 'string' && typeof priorDshVersion === 'string';
+  if (productionVerify && !cohortKnown) {
+    return { ok: false, code: 'RELEASE_DSH_COHORT_UNKNOWN', error: 'release manifest does not pin an exact @deepseek-ai/dsh cohort' };
+  }
   const activateReleaseFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer, ensureRuntime }));
   // Direct-owned restart/verify through ONE supervisor instance. No legacy
   // 3080 bridge: rollback must work with the bridge fully absent.
   const supervisor = supervisorFactory({ home });
+  const stopFn = () => supervisor.stopOwnedBackend();
   const restartFn = restart ?? (async () => {
     const stopped = await supervisor.stopOwnedBackend();
     if (!stopped.ok) return stopped;
     return supervisor.startOwnedBackend();
   });
   // Dual-domain post-restart verification: the restarted 3210 must report
-  // BOTH the target Crew release (runtime_version) AND the target DSH
-  // cohort (dsh_version). A stale old-Crew process on the right cohort
-  // (or vice versa) fails closed. The verifier is version-parametric:
-  // target verification checks the TARGET Crew version, compensation
-  // verification checks the PRIOR Crew version. A closure fixed on the
-  // target version would mis-verify the restored prior runtime.
-  const verifyFn = verifyRuntime ?? ((crewVersion) => verifyRollbackTarget({ crewVersion, dshVersion: TARGET_DSH_VERSION }));
-  // Journal the rollback intent BEFORE switching the pointer. The rollback
+  // BOTH the target Crew release (runtime_version) AND the cohort that
+  // release pins (dsh_version). A stale old-Crew process on the wrong
+  // cohort (or vice versa) fails closed. The verifier is version-parametric
+  // in BOTH domains: target verification checks target crew+cohort,
+  // compensation verification checks prior crew+cohort.
+  const verifyFn = verifyRuntime ?? ((crewVersion, dshVersion) => verifyRollbackTarget({ crewVersion, dshVersion }));
+  // Journal the rollback intent BEFORE switching anything. The rollback
   // journal carries an explicit verified flag: pointer==target alone does
   // NOT mean committed until activation + restart + dual verification all
   // succeed and the journal is marked verified.
@@ -1185,12 +1270,42 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
     candidate: { name: target.name, version: target.version, stageDir: target.path },
   });
   const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
+  // Cohort switch for cross-cohort rollback: when the payload we are rolling
+  // back to pins a different DSH cohort than the one currently live, swap
+  // the runtime BEFORE activating the older payload so the 3210 never runs
+  // an unsupported payload/cohort combination. Prefer the retained offline
+  // tree; fall back to a staged migration (registry) only when retention
+  // is unavailable.
+  async function ensureTargetCohort() {
+    if (!cohortKnown) return { ok: true, changed: false, unknown: true };
+    // Decide from the DISK runtime tree, never a live 3210 fetch: the hub
+    // may be down, mid-restart, or a stale process (the very condition the
+    // supervisor cohort check exists to catch). The tree that the next boot
+    // will load is the source of truth for whether a swap is needed.
+    const liveDsh = readRuntimeTreeVersionSync(crewDshRuntimeRoot({ home }));
+    if (liveDsh === targetDshVersion) return { ok: true, changed: false };
+    const restored = await restoreRetainedRuntime({
+      home,
+      version: targetDshVersion,
+      stopOwned: stopFn,
+      startOwned: () => supervisor.startOwnedBackend(),
+      verifyOwned: () => verifyFn(target.version, targetDshVersion),
+      log,
+    });
+    if (restored.ok) return { ok: true, changed: true, offline: true, version: targetDshVersion };
+    return { ok: false, code: 'ROLLBACK_RUNTIME_RESTORE_FAILED', error: `cohort ${targetDshVersion} is not retained and cannot be restored offline`, detail: restored };
+  }
   try {
+    const cohort = await ensureTargetCohort();
+    if (!cohort.ok) throw Object.assign(new Error(cohort.error), { code: cohort.code });
     switchPointer(target);
     if (!await activateReleaseFn({ releaseDir: target.path, manifest: targetManifest })) throw new Error('target release activation failed');
-    const restarted = await restartFn(target.version);
-    if (restarted?.ok === false) throw Object.assign(new Error('target runtime restart failed'), { code: restarted.code });
-    const runtime = await verifyFn(target.version);
+    let restarted = null;
+    if (!cohort.changed) {
+      restarted = await restartFn(target.version);
+      if (restarted?.ok === false) throw Object.assign(new Error('target runtime restart failed'), { code: restarted.code });
+    }
+    const runtime = await verifyFn(target.version, cohortKnown ? targetDshVersion : undefined);
     if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_IDENTITY_MISMATCH' });
     log(`✓ rolled back Crew payload to ${target.version}`);
     // Persist verification BEFORE clearing: a crash between verify
@@ -1203,18 +1318,44 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
     });
     if (!marked.ok) throw Object.assign(new Error('rollback journal mark-verified failed'), { code: marked.code ?? 'JOURNAL_MARK_FAILED' });
     clearUpdateJournal({ home });
-    return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
+    return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: cohort.changed ? { ok: true, offline: true } : restarted, runtime };
   } catch (error) {
     const prior = { name: current.name, version: current.version, path: current.path };
     let recovery;
     try {
+      // Restore the prior payload AND its cohort before restarting, so the
+      // 3210 never boots a mismatched pair. When the cohort contract is
+      // unknown (injected mocks own it), skip the runtime swap and restore
+      // the payload only.
+      if (cohortKnown) {
+        const priorCohortOk = await restoreRetainedRuntime({
+          home,
+          version: priorDshVersion,
+          stopOwned: stopFn,
+          startOwned: () => supervisor.startOwnedBackend(),
+          verifyOwned: () => verifyFn(prior.version, priorDshVersion),
+          log,
+        });
+        if (!priorCohortOk.ok) {
+          // Fall back to re-staging the prior cohort from the registry.
+          const m = await migrateCrewDshRuntime({
+            home,
+            version: priorDshVersion,
+            stopOwned: stopFn,
+            startOwned: () => supervisor.startOwnedBackend(),
+            verifyOwned: () => verifyFn(prior.version, priorDshVersion),
+            log,
+          });
+          if (!m.ok) throw Object.assign(new Error('prior cohort could not be restored'), { stage: 'cohort' });
+        }
+      }
       switchPointer(prior);
       if (!previousManifest) throw Object.assign(new Error('previous release manifest unavailable'), { stage: 'activation' });
       const activated = await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
       if (activated !== true) throw Object.assign(new Error('previous release activation failed'), { stage: 'activation' });
       const restarted = await restartFn(prior.version);
       if (restarted?.ok !== true) throw Object.assign(new Error('previous runtime restart failed'), { stage: 'restart' });
-      const runtime = await verifyFn(prior.version);
+      const runtime = await verifyFn(prior.version, cohortKnown ? priorDshVersion : undefined);
       if (runtime?.ok !== true) throw Object.assign(new Error('previous runtime verification failed'), { stage: 'verification' });
       const restoredPointer = readCurrentPointer({ home });
       if (restoredPointer?.path !== prior.path || restoredPointer.version !== prior.version) {
@@ -1226,7 +1367,7 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
       recovery = {
         ok: false,
         code: 'RELEASE_ROLLBACK_RECOVERY_FAILED',
-        stage: ['activation', 'restart', 'verification', 'pointer'].includes(recoveryError?.stage) ? recoveryError.stage : 'unknown',
+        stage: ['cohort', 'activation', 'restart', 'verification', 'pointer'].includes(recoveryError?.stage) ? recoveryError.stage : 'unknown',
       };
     }
     return {
@@ -1315,6 +1456,209 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
   }
   log(`✗ reusable Crew DSH runtime unavailable: ${r?.error ?? 'unknown error'}`);
   return false;
+}
+
+// ---- coordinated payload + cohort transaction ---------------------------------
+
+// Perform an update whose candidate payload pins a DIFFERENT DSH cohort than
+// the currently live one (e.g. 1.0.3/alpha.5 -> 1.0.4/rc.1). The payload
+// activation and the runtime swap are one transaction so the 3210 never runs
+// an unsupported payload/cohort combination:
+//
+//   1. stage candidate payload            (caller did)
+//   2. stage target DSH cohort            (no live touch)
+//   3. write durable journal              (runtime segment included)
+//   4. stop owned 3210 ONCE
+//   5. swap runtime live -> retained-prior, staged -> live
+//   6. activate candidate Crew payload
+//   7. start owned 3210 ONCE
+//   8. dual verify: runtime_version == candidate version AND
+//                   dsh_version     == candidate cohort
+//   9. mark journal verified
+//  10. write current.json LAST (commit point)
+//  11. clear journal
+//
+// Any failure before step 10 compensates: restore prior payload + prior
+// cohort (retained offline tree first, registry re-stage as fallback) and
+// restart, verifying the prior dual identity before clearing the journal.
+export async function performCoordinatedCohortUpdate({
+  home = homedir(),
+  log = console.log,
+  prior,                 // current pointer record
+  priorDshVersion,       // cohort pinned by the prior payload
+  candidateManifest,     // candidate payload manifest
+  candidateDshVersion,   // cohort pinned by the candidate payload
+  stageDir,              // validated candidate payload stage dir
+  installer = realInstaller,
+  activate = null,       // injectable activation (tests)
+  stopOwned,
+  startOwned,
+  verifyOwned,
+  supervisorFactory = crewSupervisor,
+  stageOptions = {},
+} = {}) {
+  if (!candidateManifest?.name || !candidateManifest?.version) return { ok: false, error: 'candidate manifest invalid' };
+  if (!prior?.path || !existsSync(prior.path)) return { ok: false, error: 'prior payload missing for coordinated update' };
+  const supervisor = supervisorFactory({ home });
+  const stopFn = stopOwned ?? (() => supervisor.stopOwnedBackend());
+  const startFn = startOwned ?? (() => supervisor.startOwnedBackend());
+  const verifyFn = verifyOwned ?? ((crewVersion, dshVersion) => verifyRollbackTarget({ crewVersion, dshVersion }));
+  const activateFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer }));
+
+  // Stage the target cohort WITHOUT touching the live runtime.
+  const stagedRuntime = stageCrewDshRuntime({ home, version: candidateDshVersion, ...stageOptions });
+  if (!stagedRuntime.ok) {
+    return { ok: false, code: stagedRuntime.code ?? 'COORDINATED_RUNTIME_STAGE_FAILED', error: stagedRuntime.error ?? 'could not stage target DSH cohort' };
+  }
+  const liveRoot = crewDshRuntimeRoot({ home });
+  const retainedRoot = join(crewDshHome({ home }), 'retained-runtimes');
+  // Plan the prior-tree parking path BEFORE any destructive step and persist
+  // it in the journal so a crash mid-swap is synchronously recoverable by
+  // reconcileUpdateJournal (it can move priorRoot back onto liveRoot without
+  // needing to know any in-memory nonce).
+  const prevPath = join(crewDshHome({ home }), `runtime-prev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
+
+  // Journal the full coordinated intent BEFORE any destructive step. The
+  // journal carries prior+candidate dshVersion plus runtime roots so a crash
+  // at any point is recoverable by reconcileUpdateJournal.
+  writeUpdateJournal({
+    home,
+    stage: 'coordinated-update',
+    prior: { name: prior.name, version: prior.version, path: prior.path, dshVersion: priorDshVersion },
+    candidate: { name: candidateManifest.name, version: candidateManifest.version, stageDir, dshVersion: candidateDshVersion },
+    runtime: {
+      state: 'staged',
+      liveRoot,
+      priorRoot: prevPath,
+      candidateRoot: stagedRuntime.stagedRoot,
+      priorVersion: priorDshVersion,
+      candidateVersion: candidateDshVersion,
+      retainedRoot,
+    },
+  });
+
+  const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
+  const priorRelease = { name: prior.name, version: prior.version, path: prior.path };
+  const candidateRelease = { name: candidateManifest.name, version: candidateManifest.version, path: stageDir };
+
+  async function compensate() {
+    // Restore prior cohort (retained offline first, registry fallback), then
+    // prior payload, then restart and dual-verify prior identity.
+    const priorCohortOk = await restoreRetainedRuntime({
+      home,
+      version: priorDshVersion,
+      stopOwned: stopFn,
+      startOwned: startFn,
+      verifyOwned: () => verifyFn(prior.version, priorDshVersion),
+      log,
+    });
+    if (!priorCohortOk.ok) {
+      const migrated = await migrateCrewDshRuntime({
+        home,
+        version: priorDshVersion,
+        stopOwned: stopFn,
+        startOwned: startFn,
+        verifyOwned: () => verifyFn(prior.version, priorDshVersion),
+        log,
+      });
+      if (!migrated.ok) {
+        return { ok: false, code: 'COORDINATED_COMPENSATE_COHORT_FAILED', error: migrated.error ?? 'prior cohort restore failed' };
+      }
+    }
+    const activated = await activateFn({ releaseDir: prior.path, manifest: readManifest(prior.path) });
+    if (activated !== true) return { ok: false, code: 'COORDINATED_COMPENSATE_ACTIVATION_FAILED' };
+    const restarted = await startFn();
+    if (restarted?.ok !== true) return { ok: false, code: restarted?.code ?? 'COORDINATED_COMPENSATE_RESTART_FAILED' };
+    const verified = await verifyFn(prior.version, priorDshVersion);
+    if (verified?.ok !== true) return { ok: false, code: verified?.code ?? 'COORDINATED_COMPENSATE_VERIFY_FAILED' };
+    switchPointer(priorRelease);
+    return { ok: true };
+  }
+
+  try {
+    // Stop ONCE, swap runtime, activate payload, start ONCE.
+    const stopped = await stopFn();
+    if (!stopped.ok) {
+      // Nothing was swapped yet; just clear the journal (no activation ran).
+      clearUpdateJournal({ home });
+      try { rmSync(stagedRuntime.stagedRoot, { recursive: true, force: true }); } catch {}
+      return { ok: false, code: stopped.code ?? 'COORDINATED_STOP_FAILED', error: stopped.error ?? 'could not stop owned 3210' };
+    }
+    let liveMoved = false;
+    try {
+      // Move live runtime aside, retaining its tree for offline rollback.
+      if (existsSync(liveRoot)) {
+        // prevPath is unique per attempt and already recorded in the journal.
+        try { rmSync(prevPath, { recursive: true, force: true }); } catch {}
+        renameSync(liveRoot, prevPath);
+        liveMoved = true;
+      }
+      renameSync(stagedRuntime.stagedRoot, liveRoot);
+    } catch (error) {
+      // Swap failed: restore live tree before anything else.
+      try {
+        if (liveMoved && !existsSync(liveRoot) && prevPath && existsSync(prevPath)) renameSync(prevPath, liveRoot);
+      } catch { /* best effort */ }
+      const comp = await compensate();
+      clearUpdateJournal({ home });
+      return { ok: false, code: 'COORDINATED_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), compensated: comp.ok === true };
+    }
+    // Runtime now on candidate cohort; live tree preserved at prevPath.
+    const activated = await activateFn({ releaseDir: stageDir, manifest: candidateManifest });
+    if (activated !== true) {
+      const comp = await compensate();
+      clearUpdateJournal({ home });
+      return { ok: false, error: 'candidate activation failed', compensated: comp.ok === true };
+    }
+    const started = await startFn();
+    if (started?.ok !== true) {
+      const comp = await compensate();
+      clearUpdateJournal({ home });
+      return { ok: false, code: started?.code ?? 'COORDINATED_START_FAILED', error: started?.error ?? 'restart after coordinated update failed', compensated: comp.ok === true };
+    }
+    const verified = await verifyFn(candidateManifest.version, candidateDshVersion);
+    if (verified?.ok !== true) {
+      const comp = await compensate();
+      clearUpdateJournal({ home });
+      return { ok: false, code: verified?.code ?? 'COORDINATED_VERIFY_FAILED', error: verified?.error ?? 'dual identity verification failed', compensated: comp.ok === true };
+    }
+
+    // Commit point: pointer write LAST, then verified journal, then clear.
+    switchPointer(candidateRelease);
+    const marked = markJournalVerified({
+      home,
+      stage: 'coordinated-update',
+      prior: { name: prior.name, version: prior.version, path: prior.path, dshVersion: priorDshVersion },
+      candidate: { name: candidateManifest.name, version: candidateManifest.version, stageDir, dshVersion: candidateDshVersion },
+      runtime: {
+        state: 'verified',
+        liveRoot,
+        candidateRoot: liveRoot,
+        priorVersion: priorDshVersion,
+        candidateVersion: candidateDshVersion,
+        retainedRoot,
+      },
+    });
+    if (!marked.ok) throw new Error('coordinated journal mark-verified failed');
+
+    // Retain the swapped-out prior cohort tree for offline rollback.
+    if (prevPath && existsSync(prevPath)) {
+      try {
+        const retainedDir = join(retainedRoot, priorDshVersion);
+        mkdirSync(retainedRoot, { recursive: true });
+        if (existsSync(retainedDir)) rmSync(retainedDir, { recursive: true, force: true });
+        renameSync(prevPath, retainedDir);
+      } catch { try { rmSync(prevPath, { recursive: true, force: true }); } catch {} }
+    }
+
+    clearUpdateJournal({ home });
+    log(`✓ coordinated update committed: Crew ${candidateManifest.version} + DSH ${candidateDshVersion}`);
+    return { ok: true, version: candidateManifest.version, path: stageDir, dsh_version: candidateDshVersion, restarted: started };
+  } catch (error) {
+    const comp = await compensate().catch(() => ({ ok: false }));
+    clearUpdateJournal({ home });
+    return { ok: false, error: error?.message ?? 'coordinated update failed', compensated: comp.ok === true };
+  }
 }
 
 // ---- commands -----------------------------------------------------------------
@@ -1696,6 +2040,36 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
     // anywhere before the pointer write leaves the prior release
     // authoritative for reconcileUpdateJournal.
     const prior = readCurrentPointer({ home });
+    const priorManifest = prior?.path ? readManifest(prior.path) : null;
+    const candidateDsh = payloadDshVersion(manifest);
+    const priorDsh = priorManifest ? payloadDshVersion(priorManifest) : null;
+    const needsCohortSwap = candidateDsh !== null && priorDsh !== null && candidateDsh !== priorDsh;
+
+    if (needsCohortSwap) {
+      // Cross-cohort update: payload activation and runtime swap are ONE
+      // coordinated transaction so the 3210 never runs an unsupported
+      // payload/cohort combination.
+      log(`- cross-cohort update: DSH ${priorDsh} -> ${candidateDsh}; running coordinated payload+runtime transaction`);
+      const coordinated = await performCoordinatedCohortUpdate({
+        home,
+        log,
+        prior,
+        priorDshVersion: priorDsh,
+        candidateManifest: manifest,
+        candidateDshVersion: candidateDsh,
+        stageDir: staged.stageDir,
+        installer,
+      });
+      if (!coordinated.ok) {
+        return { ok: false, error: `coordinated cohort update failed${coordinated.code ? ` (${coordinated.code})` : ''}`, compensated: coordinated.compensated === true };
+      }
+      noteLauncherDivergence({ log, home });
+      log('');
+      log('Done.');
+      log('Restart DeepSeek Harness and Codex Desktop.');
+      return { ok: true, updated: true, version: manifest.version, path: staged.stageDir, coordinated: true, dsh_version: candidateDsh };
+    }
+
     if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
 
     beginReleaseActivation({ stageDir: staged.stageDir, manifest, home, prior });

@@ -31,16 +31,31 @@ function Write-LaunchLog {
 }
 
 function Get-HealthState {
-  param([pscustomobject] $Service)
+  param([pscustomObject] $Service)
   # Crew-owned 3210 answers the Crew extension contract. The official 3080
   # is an external dependency: probe only its native web root, never the
   # Crew bridge endpoint, so a missing legacy bridge cannot fail 3080 health.
   if ($Service.CrewOwned) {
     try {
       $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
-      $version = $response.extension.runtime.runtime_version
-      if ($response.ok -eq $true -and $version) {
+      $runtime = $response.extension.runtime
+      $version = $runtime.runtime_version
+      # A stale 3210 process (booted before the runtime tree was swapped) can
+      # keep serving from memory while the disk tree is a different cohort.
+      # Require the reported dsh_version to equal the installed disk
+      # @deepseek-ai/dsh version so supervisor never treats a
+      # disk-rc.1/memory-alpha.5 (or vice versa) process as healthy.
+      $expectedDshVersion = $null
+      $runtimeManifest = Join-Path $crewHome 'runtime\node_modules\@deepseek-ai\dsh\package.json'
+      if (Test-Path -LiteralPath $runtimeManifest -PathType Leaf) {
+        try { $expectedDshVersion = (Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json).version } catch { $expectedDshVersion = $null }
+      }
+      $cohortMatches = $null -eq $expectedDshVersion -or $runtime.dsh_version -eq $expectedDshVersion
+      if ($response.ok -eq $true -and $version -and $cohortMatches) {
         return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
+      }
+      if ($version -and -not $cohortMatches) {
+        return [pscustomobject]@{ Ready = $false; Version = [string] $version; Error = ('runtime cohort mismatch: hub reports dsh_version={0} but disk runtime is {1}' -f $runtime.dsh_version, $expectedDshVersion) }
       }
       return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Response did not contain a ready runtime contract.' }
     } catch {
