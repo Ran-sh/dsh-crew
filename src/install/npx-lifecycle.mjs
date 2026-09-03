@@ -479,8 +479,10 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
 
   // Committed side: pointer must match the FULL journal candidate identity
   // (name + version + path), and the candidate manifest is verified against
-  // the JOURNAL candidate name/version (not its own). Anything else is not
-  // a commit: fall through to the diverged check below.
+  // the JOURNAL candidate name/version (not its own). A rollback journal
+  // additionally requires explicit verification: pointer==target alone
+  // never means a verified rollback commit (activation + restart +
+  // dual-domain verification may never have completed).
   const candidateIdent = journal.candidate ?? null;
   const pointerMatchesCandidate = candidateDir !== null
     && pointer?.path === candidateDir
@@ -490,6 +492,9 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     && pointer.version === candidateIdent?.version;
   if (candidateDir && pointer?.path === candidateDir && !pointerMatchesCandidate) {
     return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: 'pointer path matches candidate but name/version do not; refusing recovery' };
+  }
+  if (journal.stage === 'rollback' && pointerMatchesCandidate && journal.verified !== true) {
+    return { ok: false, code: 'JOURNAL_ROLLBACK_UNVERIFIED', stage: journal.stage, error: 'rollback journal not marked verified; refusing finalize' };
   }
   if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
@@ -1044,6 +1049,41 @@ export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.
   return { ok: true, runtime_id: runtime.runtime_id, dsh_version: cohort.dsh_version };
 }
 
+// Dual-domain post-restart verifier for rollback: the restarted 3210 must
+// report BOTH the expected Crew release version (runtime_version domain)
+// AND the expected DSH cohort (dsh_version domain), alongside full 3210
+// identity. A stale old-Crew process on the right cohort (or vice versa)
+// fails closed instead of reporting rollback success.
+export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl = globalThis.fetch } = {}) {
+  let body = null;
+  try {
+    const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+    body = await response.json();
+    if (!response.ok) return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE' };
+  } catch (error) {
+    return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const runtime = body?.extension?.runtime ?? null;
+  const checks = [
+    body?.ok === true,
+    runtime?.service === 'dsh-crew-hub',
+    runtime?.execution_plane === 'hub-3210',
+    runtime?.profile === 'dsh-crew',
+    Number(runtime?.listen_port) === 3210,
+    typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim().length > 0,
+  ];
+  if (!checks.every(Boolean)) return { ok: false, code: 'RUNTIME_IDENTITY_MISMATCH' };
+  if (typeof crewVersion === 'string' && runtime?.runtime_version !== crewVersion) {
+    return { ok: false, code: 'CREW_VERSION_MISMATCH', installed: runtime?.runtime_version ?? null, target: crewVersion };
+  }
+  if (typeof dshVersion === 'string') {
+    const cohort = await verifyCrewDshCohort(dshVersion, fetchImpl);
+    if (!cohort.ok) return cohort;
+    return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null, dsh_version: cohort.dsh_version };
+  }
+  return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null };
+}
+
 // Crew-owned stop/start for cohort migration come from the sidecar
 // supervisor (PID-identity verified, no legacy bridge). The supervisor
 // module owns the 3210 child lifecycle; the installer only drives its
@@ -1086,6 +1126,11 @@ export async function npxRollback({
 }
 
 async function npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory }) {
+  // Journal-aware entry: refuse to overwrite a journal left by a crashed
+  // transaction. Reconcile it first (or fail closed) instead of silently
+  // replacing it with the rollback intent.
+  const pending = reconcileUpdateJournal({ home, log });
+  if (!pending.ok) return { ok: false, error: `refusing rollback with unreconciled journal (${pending.code ?? 'unknown'})` };
   const current = readCurrentPointer({ home });
   if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };
   const target = listManagedReleases({ home }).find((release) => release.version === targetVersion);
@@ -1104,9 +1149,15 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
     if (!stopped.ok) return stopped;
     return supervisor.startOwnedBackend();
   });
-  const verifyFn = verifyRuntime ?? (async () => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION));
-  // Journal the rollback intent BEFORE switching the pointer so a crash
-  // is reconcilable by reconcileUpdateJournal.
+  // Dual-domain post-restart verification: the restarted 3210 must report
+  // BOTH the target Crew release (runtime_version) AND the target DSH
+  // cohort (dsh_version). A stale old-Crew process on the right cohort
+  // (or vice versa) fails closed.
+  const verifyFn = verifyRuntime ?? (async () => verifyRollbackTarget({ crewVersion: targetVersion, dshVersion: TARGET_DSH_VERSION }));
+  // Journal the rollback intent BEFORE switching the pointer. The rollback
+  // journal carries an explicit verified flag: pointer==target alone does
+  // NOT mean committed until activation + restart + dual verification all
+  // succeed and the journal is marked verified.
   writeUpdateJournal({
     home,
     stage: 'rollback',
@@ -1122,6 +1173,13 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
     const runtime = await verifyFn(target.version);
     if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_IDENTITY_MISMATCH' });
     log(`✓ rolled back Crew payload to ${target.version}`);
+    writeUpdateJournal({
+      home,
+      stage: 'rollback',
+      verified: true,
+      prior: { name: current.name, version: current.version, path: current.path },
+      candidate: { name: target.name, version: target.version, stageDir: target.path },
+    });
     clearUpdateJournal({ home });
     return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
   } catch (error) {

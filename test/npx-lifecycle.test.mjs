@@ -880,15 +880,19 @@ test('release rollback switches to a validated retained payload and restarts the
     writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
     writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
     const calls = [];
+    const supervisorFactory = () => ({
+      stopOwnedBackend: async () => { calls.push(['stop']); return { ok: true }; },
+      startOwnedBackend: async () => { calls.push(['start']); return { ok: true }; },
+    });
     const result = await npxRollback({
       home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
       activate: async ({ releaseDir }) => { calls.push(['activate', releaseDir]); return true; },
-      restart: async () => { calls.push(['restart']); return { ok: true }; },
-      verifyRuntime: async (version) => { calls.push(['verify', version]); return { ok: true, runtime_version: version }; },
+      supervisorFactory,
+      verifyRuntime: async () => { calls.push(['verify']); return { ok: true }; },
     });
     assert.equal(result.ok, true);
     assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.6');
-    assert.deepEqual(calls, [['activate', oldDir], ['restart'], ['verify', '0.5.6']]);
+    assert.deepEqual(calls, [['activate', oldDir], ['stop'], ['start'], ['verify']]);
   } finally { t.cleanup(); }
 });
 
@@ -905,8 +909,9 @@ test('release rollback restores the previous pointer when activation fails', asy
     writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
     const result = await npxRollback({
       home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
-      activate: async () => false, restart: async () => ({ ok: true }),
-      verifyRuntime: async () => ({ ok: true, runtime_version: '0.5.6' }),
+      activate: async () => false,
+      supervisorFactory: () => ({ stopOwnedBackend: async () => ({ ok: true }), startOwnedBackend: async () => ({ ok: true }) }),
+      verifyRuntime: async () => ({ ok: true }),
     });
     assert.equal(result.ok, false);
     assert.equal(readCurrentPointer({ home: t.dir }).version, '0.5.7');
@@ -926,14 +931,16 @@ test('release rollback reports compensation failure instead of claiming restored
       writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
       writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
       writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+      const supervisorFactory = () => ({
+        stopOwnedBackend: async () => label === 'prior restart' ? { ok: false, code: 'PRIOR_RESTART_FAILED' } : ({ ok: true }),
+        startOwnedBackend: async () => label === 'prior restart' ? { ok: false, code: 'PRIOR_RESTART_FAILED' } : ({ ok: true }),
+      });
       const result = await npxRollback({
         home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
         activate: async ({ releaseDir }) => releaseDir === oldDir || label !== 'prior activation',
-        restart: async (version) => version === '0.5.6'
-          ? { ok: false, code: 'TARGET_RESTART_FAILED' }
-          : label === 'prior restart' ? { ok: false, code: 'PRIOR_RESTART_FAILED' } : { ok: true },
-        verifyRuntime: async (version) => version === '0.5.7' && label === 'prior verification'
-          ? { ok: false, code: 'PRIOR_VERIFY_FAILED' } : { ok: true, runtime_version: version },
+        supervisorFactory,
+        verifyRuntime: async (v) => (label === 'prior verification' || v === '0.5.6')
+          ? { ok: false, code: 'VERIFY_FAILED' } : ({ ok: true }),
       });
       assert.equal(result.ok, false, label);
       assert.equal(result.restored, false, label);
@@ -954,11 +961,17 @@ test('release rollback reports restored only after complete compensation', async
     writeFileSync(join(oldDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.6' }));
     writeFileSync(join(currentDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.5.7' }));
     writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '0.5.7', path: currentDir }));
+    const supervisorFactory = () => ({
+      stopOwnedBackend: async () => ({ ok: true, stopped: true }),
+      startOwnedBackend: async () => ({ ok: true, started: true }),
+    });
     const result = await npxRollback({
       home: t.dir, version: '0.5.6', log: () => {}, validatePayload: () => ({ ok: true }),
       activate: async () => true,
-      restart: async (version) => version === '0.5.6' ? { ok: false, code: 'TARGET_RESTART_FAILED' } : { ok: true },
-      verifyRuntime: async (version) => version === '0.5.7' ? { ok: true, runtime_version: version } : { ok: false, code: 'TARGET_VERIFY_FAILED' },
+      supervisorFactory,
+      verifyRuntime: async (v) => v === '0.5.6'
+        ? { ok: false, code: 'TARGET_VERIFY_FAILED' }
+        : { ok: true },
     });
     assert.equal(result.ok, false);
     assert.equal(result.restored, true);
