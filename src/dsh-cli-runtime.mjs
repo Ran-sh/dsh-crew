@@ -13,6 +13,8 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -339,6 +341,69 @@ export function stageCrewDshRuntime({
     };
   }
   return { ok: true, stagedRoot, version: stagedVersion };
+}
+
+// Full cohort migration transaction (caller holds the update lock):
+// stage -> stop owned 3210 -> swap live runtime -> restart -> identity
+// verify -> rollback on any failure. Directory swaps use unique attempt
+// dirs so a failed older attempt can never contaminate the next one.
+export async function migrateCrewDshRuntime({
+  home = homedir(),
+  version = TARGET_DSH_VERSION,
+  stageOptions = {},
+  stopOwned = async () => ({ ok: true }),
+  startOwned = async () => ({ ok: true }),
+  verifyOwned = async () => ({ ok: true }),
+  log = () => {},
+} = {}) {
+  const liveRoot = crewDshRuntimeRoot({ home });
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const attemptRoot = join(crewDshHome({ home }), `runtime-stage-${version}-${nonce}`);
+  const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
+  const staged = stageCrewDshRuntime({ home, version, ...stageOptions });
+  if (!staged.ok) return staged;
+  // Relocate the verified stage to a unique attempt dir so retries never
+  // reuse a contaminated versioned directory.
+  try {
+    renameSync(staged.stagedRoot, attemptRoot);
+  } catch (error) {
+    return { ok: false, code: 'DSH_RUNTIME_STAGE_RELOCATE_FAILED', error: String(error?.message ?? error) };
+  }
+  const stop = await stopOwned();
+  if (!stop.ok) {
+    return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
+  }
+  let swapped = false;
+  try {
+    if (existsSync(liveRoot)) renameSync(liveRoot, prevRoot);
+    renameSync(attemptRoot, liveRoot);
+    swapped = true;
+  } catch (error) {
+    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error) };
+  }
+  const start = await startOwned();
+  if (!start.ok) {
+    await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed, prior runtime restored' };
+  }
+  const verified = await verifyOwned();
+  if (!verified.ok) {
+    await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed, prior runtime restored' };
+  }
+  try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
+  try { rmSync(staged.stagedRoot, { recursive: true, force: true }); } catch {}
+  log(`- runtime cohort migrated to ${version}`);
+  return { ok: true, version, liveRoot };
+}
+
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned }) {
+  try { rmSync(liveRoot, { recursive: true, force: true }); } catch {}
+  try {
+    if (existsSync(prevRoot)) renameSync(prevRoot, liveRoot);
+  } catch {}
+  try { rmSync(attemptRoot, { recursive: true, force: true }); } catch {}
+  try { await startOwned(); } catch {}
 }
 
 function isObject(value) {

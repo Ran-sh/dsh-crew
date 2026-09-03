@@ -10,10 +10,13 @@ import {
   updateJournalFile,
   updateLockFile,
   readCurrentPointer,
+  beginReleaseActivation,
+  commitActivatedRelease,
 } from '../src/install/npx-lifecycle.mjs';
 import {
   crewDshRuntimeVersionDir,
   stageCrewDshRuntime,
+  migrateCrewDshRuntime,
   TARGET_DSH_VERSION,
 } from '../src/dsh-cli-runtime.mjs';
 
@@ -106,5 +109,101 @@ test('stageCrewDshRuntime verifies staged cohort version', () => {
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH');
+  } finally { t.cleanup(); }
+});
+
+test('dead lock owner is reclaimed, live owner is kept', () => {
+  const t = tempHome();
+  try {
+    const first = acquireUpdateLock({ home: t.dir });
+    assert.equal(first.ok, true);
+    // Simulate a dead owner by writing a nonexistent PID record.
+    writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: 'dead-owner' }) + '\n');
+    const reclaimed = acquireUpdateLock({ home: t.dir });
+    assert.equal(reclaimed.ok, true);
+    assert.equal(reclaimed.reclaimed, true);
+    // Live owner (this process) cannot be stolen.
+    const kept = acquireUpdateLock({ home: t.dir });
+    assert.equal(kept.ok, false);
+    assert.equal(kept.code, 'UPDATE_IN_PROGRESS');
+  } finally { t.cleanup(); }
+});
+
+test('malformed journal fails closed and is retained', () => {
+  const t = tempHome();
+  try {
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(updateJournalFile({ home: t.dir }), '{truncated');
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_MALFORMED');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
+test('first-install crash removes orphan candidate pointer', () => {
+  const t = tempHome();
+  try {
+    const orphanDir = join(t.dir, 'orphan-stage');
+    mkdirSync(orphanDir, { recursive: true });
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9', path: orphanDir }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: null,
+      candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: orphanDir },
+    }));
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, true);
+    assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json')), false);
+    assert.equal(existsSync(orphanDir), false);
+  } finally { t.cleanup(); }
+});
+
+test('begin/commit keeps pointer authoritative only after activation', () => {
+  const t = tempHome();
+  try {
+    const stageDir = join(t.dir, 'candidate');
+    mkdirSync(stageDir, { recursive: true });
+    const manifest = { name: '@ran-sh/dsh-crew', version: '9.9.9' };
+    beginReleaseActivation({ stageDir, manifest, home: t.dir, prior: null });
+    // Pointer must NOT switch at begin time.
+    assert.equal(readCurrentPointer({ home: t.dir }), null);
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
+    commitActivatedRelease({ stageDir, manifest, home: t.dir, prior: null });
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(pointer?.path, stageDir);
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), false);
+  } finally { t.cleanup(); }
+});
+
+test('migrateCrewDshRuntime rolls back when verify fails', async () => {
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    writeFileSync(join(liveRoot, 'marker.txt'), 'live');
+    const calls = [];
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => ({ ok: false, code: 'IDENTITY_MISMATCH' }),
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'IDENTITY_MISMATCH');
+    assert.deepEqual(calls, ['stop', 'start', 'start']);
+    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
   } finally { t.cleanup(); }
 });

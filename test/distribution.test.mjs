@@ -58,8 +58,8 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
   assert.match(helper, /CrewOwned/);
   assert.doesNotMatch(helper, /ManagedByBridge/);
   assert.match(helper, /Test-LegacyBridgeAvailable/);
-  assert.match(helper, /Start-BridgedCrewService/);
-  assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 3);
+  assert.doesNotMatch(helper, /Start-BridgedCrewService/);
+  assert.equal((helper.match(/@\(\$services \| Where-Object State -eq 'starting'\)\.Count/g) ?? []).length, 2);
   assert.doesNotMatch(helper, /(?:while|if) \(\(\$services \| Where-Object State -eq 'starting'\)\.Count/);
   assert.match(startup, /__LAUNCHER__/);
   assert.match(startup, /--watch/);

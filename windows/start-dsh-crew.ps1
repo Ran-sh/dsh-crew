@@ -49,7 +49,7 @@ function Get-HealthState {
   }
   try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $Service.Url -TimeoutSec 2
-    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
       return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
     }
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = ('Official UI returned HTTP {0}.' -f $response.StatusCode) }
@@ -67,17 +67,6 @@ function Test-LegacyBridgeAvailable {
     return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300)
   } catch {
     return $false
-  }
-}
-
-function Start-BridgedCrewService {  try {
-    $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/ping' -TimeoutSec 5
-    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
-      return [pscustomobject]@{ Ready = $true; Error = $null }
-    }
-    return [pscustomobject]@{ Ready = $false; Error = ('3080 bridge returned HTTP {0}.' -f $response.StatusCode) }
-  } catch {
-    return [pscustomobject]@{ Ready = $false; Error = ('3080 bridge could not start the supervised 3210 backend: {0}' -f $_.Exception.Message) }
   }
 }
 
@@ -247,14 +236,11 @@ function Ensure-CrewServices {
       continue
     }
 
-    # The Crew launcher owns 3210 directly. The legacy 3080 bridge is only an
-    # optional compatibility path: when 3210 is unreachable but a legacy
-    # bridge answers, let it claim 3210 once instead of failing the boot.
+    # The Crew launcher owns 3210 directly and always boots it below.
+    # A legacy 3080 bridge is diagnostic-only: it never gates, delays, or
+    # claims 3210. Its presence is logged for operator awareness.
     if ($service.CrewOwned -and (Test-LegacyBridgeAvailable)) {
-      $service.LastError = $health.Error
-      $service.ConsecutiveFailures += 1
-      $service.State = 'pending'
-      continue
+      Write-LaunchLog 'Legacy 3080 bridge detected; ignoring it, Crew launcher owns 3210 directly.'
     }
 
     $service.LastError = $health.Error
@@ -294,23 +280,6 @@ function Ensure-CrewServices {
   }
 
   Wait-CrewServices
-
-  # Optional legacy compatibility: a 3080 that still hosts the Crew bridge
-  # may claim 3210 on old machines. The Crew launcher never depends on it:
-  # 3210 boots directly above, and this probe only lets a legacy bridge
-  # finish claiming 3210 when it already answers.
-  foreach ($service in ($services | Where-Object CrewOwned -eq $true | Where-Object State -ne 'ready')) {
-    if (-not (Test-LegacyBridgeAvailable)) { continue }
-    $bridge = Start-BridgedCrewService
-    if (-not $bridge.Ready) {
-      $service.LastError = $bridge.Error
-      throw $bridge.Error
-    }
-    $service.State = 'starting'
-    $service.ConsecutiveFailures = 0
-    $service.LastError = $null
-  }
-  if (@($services | Where-Object State -eq 'starting').Count -gt 0) { Wait-CrewServices }
 }
 
 function Start-ServiceSupervisor {
