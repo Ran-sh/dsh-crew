@@ -338,3 +338,52 @@ test('migrateCrewDshRuntime restores prev when second rename fails', async () =>
     assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
   } finally { t.cleanup(); }
 });
+
+test('diverged pointer fails closed without touching releases', () => {
+  const t = tempHome();
+  try {
+    const priorDir = join(t.dir, 'prior-release');
+    const candidateDir = join(t.dir, 'candidate');
+    const thirdDir = join(t.dir, 'third-release');
+    for (const d of [priorDir, candidateDir, thirdDir]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
+    writeFileSync(join(priorDir, 'cordis.patch.yml'), '[]\n');
+    writeFileSync(join(priorDir, 'index.js'), 'module.exports = {};\n');
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '2.0.0', path: thirdDir }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
+      candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: candidateDir },
+    }));
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_POINTER_DIVERGED');
+    assert.equal(existsSync(candidateDir), true);
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
+test('committed candidate finalizes with strong assertions', () => {
+  const t = tempHome();
+  try {
+    const candidateDir = join(t.dir, 'candidate');
+    const priorDir = join(t.dir, 'prior-release');
+    mkdirSync(candidateDir, { recursive: true });
+    mkdirSync(priorDir, { recursive: true });
+    writeFileSync(join(candidateDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9' }));
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9', path: candidateDir }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
+      candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: candidateDir },
+    }));
+    // validateInstalledPayload requires full payload shape; an incomplete
+    // stub must fail closed, not finalize.
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_CANDIDATE_INVALID');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});

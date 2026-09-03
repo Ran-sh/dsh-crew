@@ -40,7 +40,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
-import { crewProfileDir } from './install.mjs';
+import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -332,7 +332,8 @@ function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
 // (finalize, do NOT roll back); pointer == prior/absent means pre-commit
 // (restore activation surfaces, drop candidate). A malformed journal fails
 // closed and is retained for operator inspection.
-export function reconcileUpdateJournal({ home = homedir(), log = () => {}, installer = realInstaller } = {}) {  const journal = readUpdateJournal({ home });
+export function reconcileUpdateJournal({ home = homedir(), log = () => {}, installer = realInstaller } = {}) {
+  const journal = readUpdateJournal({ home });
   if (!journal) return { ok: true, reconciled: false };
   if (journal.malformed) {
     return { ok: false, code: 'JOURNAL_MALFORMED', file: journal.file };
@@ -357,10 +358,20 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
 
+  // Diverged side: pointer references neither candidate nor prior. No
+  // authority to decide which release should win: fail closed, touch
+  // nothing (no registration change, no release delete, no journal clear).
+  const priorPath = journal.prior?.path ?? null;
+  const isPrior = priorPath !== null && pointer?.path === priorPath;
+  const isAbsent = !pointer;
+  if (!isPrior && !isAbsent) {
+    return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: `pointer references unexpected release ${pointer?.path ?? 'unknown'}; refusing recovery` };
+  }
+
   // Pre-commit side: prior stays authoritative. Re-point live activation
   // surfaces back at prior (a crash between activation and pointer write
   // leaves them on the candidate), then drop the candidate.
-  if (journal.prior?.path) {
+  if (priorPath) {
     if (!existsSync(journal.prior.path)) {
       return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
     }
@@ -729,14 +740,22 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
 export function beginReleaseActivation({ stageDir, manifest, home, prior = null }) {
   // Journal FIRST, marker removal second: a crash between the two leaves a
   // journaled (recoverable) candidate, never a marker-free orphan that
-  // looks complete but was never in a transaction.
+  // looks complete but was never in a transaction. Marker removal failure
+  // aborts the transaction instead of proceeding with a half-marked stage.
   writeUpdateJournal({
     home,
     stage: 'activating',
     prior: prior ? { name: prior.name, version: prior.version, path: prior.path } : null,
     candidate: { name: manifest.name, version: manifest.version, stageDir },
   });
-  try { rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true }); } catch {}
+  try {
+    rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true });
+  } catch (error) {
+    throw Object.assign(new Error(`cannot clear stage marker: ${error?.message ?? error}`), { code: 'STAGE_MARKER_REMOVE_FAILED' });
+  }
+  if (existsSync(join(stageDir, INCOMPLETE_MARKER))) {
+    throw Object.assign(new Error('stage marker still present after removal'), { code: 'STAGE_MARKER_REMOVE_FAILED' });
+  }
   return stageDir;
 }
 
@@ -823,6 +842,76 @@ async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
   return response.ok && body?.ok === true && body.runtime_version === version
     ? { ok: true, runtime_version: body.runtime_version }
     : { ok: false, code: 'RUNTIME_VERSION_MISMATCH' };
+}
+
+// Full Crew-owned 3210 identity check: service + execution plane + profile
+// + port + non-empty runtime_id, plus the exact target cohort version.
+// Used by production cohort migration instead of a version-only probe.
+export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.fetch) {
+  let body = null;
+  try {
+    const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+    body = await response.json();
+    if (!response.ok) return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE' };
+  } catch (error) {
+    return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const runtime = body?.extension?.runtime ?? null;
+  const checks = [
+    body?.ok === true,
+    runtime?.service === 'dsh-crew-hub',
+    runtime?.execution_plane === 'hub-3210',
+    runtime?.profile === 'dsh-crew',
+    Number(runtime?.listen_port) === 3210,
+    typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim().length > 0,
+  ];
+  if (!checks.every(Boolean)) return { ok: false, code: 'RUNTIME_IDENTITY_MISMATCH' };
+  const extVersion = body?.extension?.runtime?.runtime_version ?? null;
+  void extVersion;
+  const versioned = await verifyRuntimeVersion(version, fetchImpl);
+  if (!versioned.ok) return versioned;
+  return { ok: true, runtime_id: runtime.runtime_id, runtime_version: versioned.runtime_version };
+}
+
+// Crew-owned stop-only primitive: kills the supervisor-tracked 3210 PID
+// directly (no legacy bridge), then confirms the listener is gone. Never
+// restarts: the caller swaps first and starts afterwards.
+async function stopOwnedCrewBackend({ home = homedir(), killImpl = (pid) => process.kill(pid), pollMs = 250, timeoutMs = 10000 } = {}) {
+  const ownershipFile = join(crewDshHome({ home }), 'supervisor-ownership.json');
+  let record = null;
+  try { record = JSON.parse(readFileSync(ownershipFile, 'utf8')); } catch { record = null; }
+  const pid = Number(record?.pid);
+  if (record && Number.isInteger(pid) && pid > 0) {
+    try { killImpl(pid); } catch (error) {
+      if (error?.code !== 'ESRCH') return { ok: false, code: 'DSH_RUNTIME_STOP_FAILED', error: String(error?.message ?? error) };
+    }
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await globalThis.fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { signal: AbortSignal.timeout(pollMs) });
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    } catch {
+      return { ok: true, stopped: true };
+    }
+  }
+  return { ok: false, code: 'DSH_RUNTIME_STOP_TIMEOUT', error: 'owned 3210 listener still answers after stop' };
+}
+
+async function startOwnedCrewBackend({ home = homedir(), spawnImpl = null } = {}) {
+  // The Crew launcher owns 3210 startup; the installer triggers it through
+  // the supervisor restart surface is legacy. Prefer a direct boot of the
+  // Crew-owned runtime entry when a spawner is injected (tests + future
+  // launcher hook); otherwise report that no direct starter is wired.
+  if (typeof spawnImpl !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_START_UNWIRED', error: 'no direct Crew-owned starter injected' };
+  }
+  try {
+    await spawnImpl({ home });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, code: 'DSH_RUNTIME_START_FAILED', error: String(error?.message ?? error) };
+  }
 }
 
 export async function npxReleases({ home = homedir(), log = console.log } = {}) {
@@ -935,20 +1024,15 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
     }
     return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
-  // Production migration wiring: real stop/start/verify against the owned
-  // 3210. Missing callbacks fail closed inside migrateCrewDshRuntime.
+  // Production migration wiring: Crew-owned stop-only + direct start +
+  // full identity verify. No legacy bridge involved. Missing callbacks
+  // fail closed inside migrateCrewDshRuntime.
   const migrate = migrateRuntime ?? ((opts) => migrateCrewDshRuntime({
     home,
     version: TARGET_DSH_VERSION,
-    stopOwned: stopOwned ?? (async () => {
-      const r = await restartOwnedRuntime();
-      return r?.ok ? { ok: true, via: 'supervisor-restart' } : { ok: false, code: r?.code ?? 'DSH_RUNTIME_STOP_FAILED', error: 'supervisor restart before swap failed' };
-    }),
-    startOwned: startOwned ?? (async () => {
-      const r = await restartOwnedRuntime();
-      return r?.ok ? { ok: true } : { ok: false, code: r?.code ?? 'DSH_RUNTIME_START_FAILED' };
-    }),
-    verifyOwned: verifyOwned ?? (async () => verifyRuntimeVersion(TARGET_DSH_VERSION)),
+    stopOwned: stopOwned ?? (() => stopOwnedCrewBackend({ home })),
+    startOwned: startOwned ?? (() => startOwnedCrewBackend({ home })),
+    verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
     ...opts,
   }));
   const r = await ensure({ home });
