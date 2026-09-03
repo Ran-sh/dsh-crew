@@ -1,16 +1,11 @@
 import {
-  copyFileSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   realpathSync,
-  unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { ensurePluginRegistration, removeCrewPluginRegistration } from '../dsh-cli-runtime.mjs';
+import { join } from 'node:path';
 
 export const OFFICIAL_BRIDGE_PACKAGE = '@ran-sh/dsh-crew-web-bridge';
 const STATE_FILENAME = 'official-web.json';
@@ -30,12 +25,6 @@ function readState(home) {
   } catch { return null; }
 }
 
-function writeState(home, value) {
-  const file = officialWebIntegrationStateFile({ home });
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
-}
-
 function validOfficialManifest(file) {
   if (!existsSync(file)) return { ok: false, code: 'OFFICIAL_WEB_PROFILE_NOT_FOUND' };
   try {
@@ -48,15 +37,6 @@ function validOfficialManifest(file) {
     }
     return { ok: true, raw, manifest };
   } catch { return { ok: false, code: 'OFFICIAL_WEB_PROFILE_INVALID' }; }
-}
-
-function makeBackup({ home, profileManifest, previous }) {
-  if (previous?.backup_file && existsSync(previous.backup_file)) return previous.backup_file;
-  const backupDir = join(home, '.config', 'dsh-crew', 'backups');
-  mkdirSync(backupDir, { recursive: true });
-  const backupFile = join(backupDir, `official-web-package-${Date.now()}.json`);
-  copyFileSync(profileManifest, backupFile);
-  return backupFile;
 }
 
 export const OFFICIAL_WEB_READ_ONLY_CODE = 'OFFICIAL_WEB_PROFILE_READ_ONLY';
