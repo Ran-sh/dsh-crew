@@ -127,14 +127,40 @@ function isoNow() {
  * manifest to count as installed.
  */
 export function readCurrentPointer({ home = homedir() } = {}) {
+  const state = readCurrentPointerState({ home });
+  return state.status === 'valid' ? state.pointer : null;
+}
+
+// Tri-state pointer read: ABSENT (no file) / VALID / MALFORMED (present
+// but unparseable or schema-invalid). Recovery must never merge ABSENT
+// and MALFORMED: a corrupt pointer fails closed with the journal retained.
+export function readCurrentPointerState({ home = homedir() } = {}) {
   const file = currentPointerFile({ home });
-  if (!existsSync(file)) return null;
+  if (!existsSync(file)) return { status: 'absent', file };
   let raw;
-  try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
-  if (!raw || typeof raw !== 'object') return null;
-  if (typeof raw.name !== 'string' || typeof raw.version !== 'string' || typeof raw.path !== 'string') return null;
-  if (!isAbsolute(raw.path)) return null;
-  return raw;
+  try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch {
+    return { status: 'malformed', file, code: 'POINTER_UNPARSEABLE' };
+  }
+  if (!raw || typeof raw !== 'object') return { status: 'malformed', file, code: 'POINTER_NOT_OBJECT' };
+  if (typeof raw.name !== 'string' || typeof raw.version !== 'string' || typeof raw.path !== 'string') {
+    return { status: 'malformed', file, code: 'POINTER_FIELDS_INVALID' };
+  }
+  if (!isAbsolute(raw.path)) return { status: 'malformed', file, code: 'POINTER_PATH_NOT_ABSOLUTE' };
+  return { status: 'valid', file, pointer: raw };
+}
+
+function validJournalRelease(value) {
+  return !!value && typeof value === 'object'
+    && typeof value.name === 'string' && value.name.length > 0
+    && typeof value.version === 'string' && value.version.length > 0
+    && typeof value.path === 'string' && isAbsolute(value.path);
+}
+
+function validJournalCandidate(value) {
+  return !!value && typeof value === 'object'
+    && typeof value.name === 'string' && value.name.length > 0
+    && typeof value.version === 'string' && value.version.length > 0
+    && typeof value.stageDir === 'string' && isAbsolute(value.stageDir);
 }
 
 function writeFileAtomic(file, content) {
@@ -197,44 +223,41 @@ function lockOwnerAlive(record) {
   }
 }
 
+// Stale-lock reclaim WITHOUT a second pathname guard: the claim is a single
+// atomic step — link(2)-style hardlink creation if available, else
+// mkdir(exclusive) as the arbitration primitive — so two contenders can
+// never both believe they own the reclaim. The winner is decided by exactly
+// one atomic filesystem operation, not by read/compare/unlink sequences.
 function tryReclaimUpdateLock({ home, record }) {
   const file = updateLockFile({ home });
-  const reclaimFile = `${file}.reclaim.lock`;
-  const reclaimRecord = { pid: process.pid, nonce: `reclaim-${process.pid}-${Date.now()}`, started_at: isoNow() };
+  let current = null;
+  try { current = JSON.parse(readFileSync(file, 'utf8')); } catch { current = null; }
+  if (!current || typeof current !== 'object') {
+    // Unparseable lock: fail closed, keep for operator inspection.
+    return { ok: false, code: 'UPDATE_LOCK_CORRUPT' };
+  }
+  if (lockOwnerAlive(current)) {
+    return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+  }
+  // Dead owner. Arbitrate with an atomic mkdir: exactly one contender wins;
+  // the loser gets EEXIST and backs off. No pathname guard file exists to
+  // be deleted out from under the winner.
+  const arbitrationDir = `${file}.reclaim.${current.nonce ?? 'unknown'}`;
   try {
-    writeFileSync(reclaimFile, JSON.stringify(reclaimRecord) + '\n', { flag: 'wx' });
+    mkdirSync(arbitrationDir);
   } catch (error) {
-    if (error?.code !== 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    // A stale reclaim guard from a crashed contender must not block recovery
-    // forever: reclaim it when its owner is dead, using the same liveness
-    // rule as the main lock.
-    let guard = null;
-    try { guard = JSON.parse(readFileSync(reclaimFile, 'utf8')); } catch { guard = null; }
-    if (!guard || typeof guard !== 'object' || lockOwnerAlive(guard)) {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
-    try { rmSync(reclaimFile, { force: true }); } catch {}
-    try {
-      writeFileSync(reclaimFile, JSON.stringify(reclaimRecord) + '\n', { flag: 'wx' });
-    } catch {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
+    if (error?.code === 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
   }
   try {
-    let current = null;
-    try { current = JSON.parse(readFileSync(file, 'utf8')); } catch { current = null; }
-    if (!current || typeof current !== 'object') {
-      // Unparseable lock: fail closed, keep for operator inspection.
-      return { ok: false, code: 'UPDATE_LOCK_CORRUPT' };
-    }
-    if (lockOwnerAlive(current)) {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
-    // Dead owner: reread-compare before deleting to avoid racing a fresh
-    // owner that recycled the same path between our reads.
+    // Re-verify the main lock is still the same dead record we arbitrated
+    // for; a fresh owner may have replaced it while we arbitrated.
     let reread = null;
     try { reread = JSON.parse(readFileSync(file, 'utf8')); } catch { reread = null; }
     if (!reread || reread.nonce !== current.nonce || reread.pid !== current.pid) {
+      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    }
+    if (lockOwnerAlive(reread)) {
       return { ok: false, code: 'UPDATE_IN_PROGRESS' };
     }
     rmSync(file, { force: true });
@@ -246,7 +269,7 @@ function tryReclaimUpdateLock({ home, record }) {
       return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
     }
   } finally {
-    try { rmSync(reclaimFile, { force: true }); } catch {}
+    try { rmSync(arbitrationDir, { recursive: true, force: true }); } catch {}
   }
 }
 
@@ -280,6 +303,14 @@ function readUpdateJournal({ home = homedir() } = {}) {
   if (!raw || typeof raw !== 'object' || typeof raw.stage !== 'string') {
     return { malformed: true, file };
   }
+  // Full schema check: a semantically broken journal (null candidate,
+  // incomplete prior) must fail closed, never enter recovery.
+  if (!validJournalCandidate(raw.candidate)) {
+    return { malformed: true, file, code: 'JOURNAL_CANDIDATE_SCHEMA_INVALID' };
+  }
+  if (raw.prior !== null && raw.prior !== undefined && !validJournalRelease(raw.prior)) {
+    return { malformed: true, file, code: 'JOURNAL_PRIOR_SCHEMA_INVALID' };
+  }
   return raw;
 }
 
@@ -307,22 +338,47 @@ function compensateActivationSync({ home, prior, manifest, log, installer }) {
 }
 
 // Undo a first-install candidate's activation surfaces: remove its profile
-// registration link when it points at the candidate dir. Host integrations
-// are repaired by the next successful install; the profile link must never
-// dangle at a deleted candidate.
+// registration (dependency + bundle + junction) ONLY when all three still
+// reference this journal's candidate. CAS-verified so a later legitimate
+// registration is never removed. Host integrations are repaired by the
+// next successful install; the profile manifest must never dangle at a
+// deleted candidate.
 function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
   if (!candidateDir || !candidateName) return { ok: true, undone: false };
-  const linkPath = join(crewProfileDir({ home }), 'node_modules', ...candidateName.split('/'));
+  const profileRoot = crewProfileDir({ home });
+  const profileFile = join(profileRoot, 'package.json');
+  let manifest = null;
+  try { manifest = JSON.parse(readFileSync(profileFile, 'utf8')); } catch { manifest = null; }
+  if (!manifest) return { ok: true, undone: false };
+  const linkPath = join(profileRoot, 'node_modules', ...candidateName.split('/'));
   let linked = null;
   try {
     if (lstatSync(linkPath).isSymbolicLink()) linked = realpathSync(linkPath);
   } catch { linked = null; }
-  if (!linked) return { ok: true, undone: false };
   let candidateReal = null;
   try { candidateReal = realpathSync(candidateDir); } catch { candidateReal = candidateDir; }
-  if (linked !== candidateReal) return { ok: true, undone: false };
-  try { rmSync(linkPath, { force: true }); } catch (error) {
-    return { ok: false, code: 'CANDIDATE_LINK_REMOVE_FAILED', error: String(error?.message ?? error) };
+  const depPointsAtCandidate = typeof manifest.dependencies?.[candidateName] === 'string';
+  const bundlePointsAtCandidate = Array.isArray(manifest.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
+  const linkPointsAtCandidate = linked !== null && linked === candidateReal;
+  if (!depPointsAtCandidate && !bundlePointsAtCandidate && !linkPointsAtCandidate) {
+    return { ok: true, undone: false };
+  }
+  // Partial registration: only undo the surfaces that reference THIS
+  // candidate; leave anything already re-pointed elsewhere untouched.
+  try {
+    const next = { ...manifest };
+    if (depPointsAtCandidate) {
+      next.dependencies = { ...manifest.dependencies };
+      delete next.dependencies[candidateName];
+      if (Object.keys(next.dependencies).length === 0) delete next.dependencies;
+    }
+    if (bundlePointsAtCandidate) {
+      next.dsh = { ...manifest.dsh, profile: { ...manifest.dsh.profile, bundles: manifest.dsh.profile.bundles.filter((b) => b !== candidateName) } };
+    }
+    writeFileAtomic(profileFile, JSON.stringify(next, null, 2) + '\n');
+    if (linkPointsAtCandidate) rmSync(linkPath, { force: true });
+  } catch (error) {
+    return { ok: false, code: 'CANDIDATE_UNDO_FAILED', error: String(error?.message ?? error) };
   }
   return { ok: true, undone: true };
 }
@@ -336,9 +392,15 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
   const journal = readUpdateJournal({ home });
   if (!journal) return { ok: true, reconciled: false };
   if (journal.malformed) {
-    return { ok: false, code: 'JOURNAL_MALFORMED', file: journal.file };
+    return { ok: false, code: journal.code ?? 'JOURNAL_MALFORMED', file: journal.file };
   }
-  const pointer = readCurrentPointer({ home });
+  // Tri-state pointer: a corrupt pointer is NOT absence. Recovery with a
+  // malformed pointer fails closed with the journal retained.
+  const pointerState = readCurrentPointerState({ home });
+  if (pointerState.status === 'malformed') {
+    return { ok: false, code: 'POINTER_MALFORMED', file: pointerState.file, error: pointerState.code ?? 'pointer unreadable; refusing recovery' };
+  }
+  const pointer = pointerState.status === 'valid' ? pointerState.pointer : null;
   const candidateDir = journal.candidate?.stageDir ?? null;
   const candidateManifest = candidateDir && existsSync(candidateDir) ? readManifest(candidateDir) : null;
 

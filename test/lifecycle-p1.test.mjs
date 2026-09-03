@@ -242,13 +242,14 @@ test('stale reclaim guard is recovered, live guard blocks', () => {
     const first = acquireUpdateLock({ home: t.dir });
     assert.equal(first.ok, true);
     releaseUpdateLock({ home: t.dir });
-    // Simulate a crashed contender: dead-PID reclaim guard left behind.
-    const reclaimFile = `${updateLockFile({ home: t.dir })}.reclaim.lock`;
-    writeFileSync(reclaimFile, JSON.stringify({ pid: 2147483647, nonce: 'stale-guard' }) + '\n');
+    // Simulate a crashed owner: dead-PID main lock left behind. The new
+    // atomic-mkdir arbitration must reclaim it without any guard file.
     writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: 'dead-owner-2' }) + '\n');
     const reclaimed = acquireUpdateLock({ home: t.dir });
     assert.equal(reclaimed.ok, true);
     assert.equal(reclaimed.reclaimed, true);
+    // No guard file may linger after arbitration.
+    assert.equal(existsSync(`${updateLockFile({ home: t.dir })}.reclaim.lock`), false);
   } finally { t.cleanup(); }
 });
 
@@ -385,5 +386,37 @@ test('committed candidate finalizes with strong assertions', () => {
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_CANDIDATE_INVALID');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
+test('concurrent reclaim contenders yield exactly one owner', async () => {
+  const t = tempHome();
+  try {
+    const { spawn } = await import('node:child_process');
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    const gate = join(t.dir, 'go.signal');
+    const worker = `import { acquireUpdateLock } from ${JSON.stringify(new URL('../src/install/npx-lifecycle.mjs', import.meta.url).href)}; import fs from 'node:fs'; while (!fs.existsSync(${JSON.stringify(gate)})) { await new Promise((r) => setTimeout(r, 5)); } const r = acquireUpdateLock({ home: ${JSON.stringify(t.dir)} }); console.log(JSON.stringify({ ok: r.ok, nonce: r.nonce ?? null }));`;
+    const runAsync = () => new Promise((resolve) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', worker], { encoding: 'utf8' });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.on('close', () => resolve(out));
+    });
+    let owners = 0;
+    for (let round = 0; round < 5; round += 1) {
+      try { rmSync(gate, { force: true }); } catch {}
+      writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: `dead-${round}` }) + '\n');
+      const pending = [runAsync(), runAsync()];
+      await new Promise((r) => setTimeout(r, 300));
+      writeFileSync(gate, 'go');
+      const [a, b] = await Promise.all(pending);
+      const pa = JSON.parse((a || '').trim().split('\n').pop() || '{}');
+      const pb = JSON.parse((b || '').trim().split('\n').pop() || '{}');
+      const wins = [pa.ok === true, pb.ok === true].filter(Boolean).length;
+      assert.ok(wins <= 1, `round ${round}: at most one owner, got ${JSON.stringify([pa, pb])}`);
+      if (wins === 1) owners += 1;
+      try { releaseUpdateLock({ home: t.dir }); } catch {}
+    }
+    assert.ok(owners >= 1, 'at least one round must produce an owner');
   } finally { t.cleanup(); }
 });
