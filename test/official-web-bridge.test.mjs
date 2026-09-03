@@ -347,7 +347,7 @@ test('stopOwnedBackend never kills on null or mismatched ownership identity', as
   }
 });
 
-test('official bridge registers a status endpoint and the Crew API prefix', () => {
+test('official bridge registers quick-status and the narrow quick allowlist', () => {
   const registrations = [];
   const ctx = {
     inject(deps, setup) {
@@ -356,11 +356,17 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
     },
   };
   registerOfficialWebBridge(ctx, { ensureBackend: async () => ({ ok: true }) });
-  assert.deepEqual(registrations.map(({ kind, path }) => ({ kind, path })), [
-    { kind: 'exact', path: '/_dsh/dsh-crew/bridge-status' },
-    { kind: 'exact', path: '/_dsh/dsh-crew/supervisor/restart' },
-    { kind: 'prefix', path: CREW_BRIDGE_PREFIX },
+  const paths = registrations.map(({ kind, path }) => `${kind}:${path}`);
+  assert.deepEqual(paths, [
+    'exact:/_dsh/dsh-crew/bridge-status',
+    'exact:/_dsh/dsh-crew/supervisor/restart',
+    'exact:/_dsh/dsh-crew/quick-config',
+    'exact:/_dsh/dsh-crew/quick-status',
+    'exact:/_dsh/dsh-crew/runtime/restart-request',
+    'exact:/_dsh/dsh-crew/runtime/restart-status',
   ]);
+  // NO prefix proxy: the full Crew API must not be reachable from 3080.
+  assert.equal(registrations.some((entry) => entry.kind === 'prefix'), false);
   const response = responseRecorder();
   registrations[0].handler({
     headers: { host: '127.0.0.1:3080' },
@@ -369,36 +375,28 @@ test('official bridge registers a status endpoint and the Crew API prefix', () =
   assert.equal(response.status, 200);
   assert.deepEqual(JSON.parse(response.body), {
     ok: true,
-    mode: 'official-3080-isolated-3210',
+    mode: 'official-3080-quick-controls',
     surface: 'official-bridge',
-    ui_role: 'control-plane',
+    ui_role: 'quick-controls',
     execution_plane: 'hub-3210',
     listen_port: 3210,
+    full_control_plane_url: 'http://127.0.0.1:3210/',
   });
 });
 
-test('bridge restart endpoint requires confirmation and uses only the owned supervisor', async () => {
+test('bridge restart endpoint reports 410 Gone pointing at the 3210 control channel', async () => {
   const registrations = [];
-  let restarts = 0;
   const ctx = { inject(_deps, setup) { return setup({ webServer: { register(value) { registrations.push(value); return () => {}; } } }); } };
-  registerOfficialWebBridge(ctx, {
-    supervisor: { restartOwnedBackend: async () => { restarts += 1; return { ok: true, restarted: true }; } },
-  });
+  registerOfficialWebBridge(ctx, {});
   const handler = registrations.find((entry) => entry.path.endsWith('/supervisor/restart')).handler;
-  const deniedReq = Readable.from([Buffer.from('{}')]);
-  Object.assign(deniedReq, { method: 'POST', url: '/_dsh/dsh-crew/supervisor/restart', headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } });
-  const denied = responseRecorder();
-  await handler(deniedReq, denied);
-  assert.equal(denied.status, 400);
-  assert.equal(restarts, 0);
-
   const req = Readable.from([Buffer.from('{"confirm":true}')]);
-  Object.assign(req, { method: 'POST', url: '/_dsh/dsh-crew/supervisor/restart', headers: { host: '127.0.0.1:3080', 'content-type': 'application/json' }, socket: { remoteAddress: '127.0.0.1' } });
+  Object.assign(req, { method: 'POST', url: '/_dsh/dsh-crew/supervisor/restart', headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } });
   const res = responseRecorder();
   await handler(req, res);
-  assert.equal(res.status, 200);
-  assert.equal(restarts, 1);
-  assert.equal(JSON.parse(res.body).restarted, true);
+  assert.equal(res.status, 410);
+  const body = JSON.parse(res.body);
+  assert.equal(body.code, 'SUPERVISOR_ENDPOINT_MOVED');
+  assert.equal(body.control_plane, 'http://127.0.0.1:3210/');
 });
 
 test('Cordis apply registers the bridge without returning an invalid injected effect', async () => {
@@ -409,5 +407,5 @@ test('Cordis apply registers the bridge without returning an invalid injected ef
     },
   };
   assert.equal(await apply(ctx), undefined);
-  assert.equal(registrations.length, 3);
+  assert.equal(registrations.length, 6);
 });

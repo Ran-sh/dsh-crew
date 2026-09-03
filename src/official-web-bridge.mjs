@@ -322,9 +322,26 @@ export function createCrewSidecarSupervisor({
 
 const processSupervisor = createCrewSidecarSupervisor();
 
+// The 3080 quick surface must NEVER spawn or own the 3210 process: recovery
+// authority belongs exclusively to the Windows launcher supervisor. The
+// default backend gate therefore only PROBES 3210 health and fails closed.
+async function probeCrewBackend(fetchImpl = globalThis.fetch, bridgeTarget = resolveCrewBridgeTarget()) {
+  try {
+    const response = await fetchImpl(`${bridgeTarget}${CREW_BRIDGE_PREFIX}/runtime`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) return { ok: false, code: 'CREW_BACKEND_UNREACHABLE' };
+    const body = await response.json();
+    return body?.ok === true ? { ok: true } : { ok: false, code: 'CREW_BACKEND_UNREADY' };
+  } catch (error) {
+    return { ok: false, code: 'CREW_BACKEND_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+}
+
 export async function proxyCrewRequest(req, res, {
   fetchImpl = globalThis.fetch,
-  ensureBackend = () => processSupervisor.ensure(),
+  ensureBackend = () => probeCrewBackend(fetchImpl, resolveCrewBridgeTarget()),
   bridgeTarget = resolveCrewBridgeTarget(),
 } = {}) {
   if (!isTrustedLocalRequest(req)) {
@@ -373,7 +390,6 @@ export async function proxyCrewRequest(req, res, {
 
 export function registerOfficialWebBridge(ctx, options = {}) {
   return ctx.inject(['webServer'], (webCtx) => {
-    const supervisor = options.supervisor ?? processSupervisor;
     const disposeStatus = webCtx.webServer.register({
       kind: 'exact',
       path: `${CREW_BRIDGE_PREFIX}/bridge-status`,
@@ -381,33 +397,46 @@ export function registerOfficialWebBridge(ctx, options = {}) {
         if (!isTrustedLocalRequest(req)) return sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
         return sendJson(res, 200, {
           ok: true,
-          mode: 'official-3080-isolated-3210',
+          mode: 'official-3080-quick-controls',
           surface: 'official-bridge',
-          ui_role: 'control-plane',
+          ui_role: 'quick-controls',
           execution_plane: 'hub-3210',
           listen_port: 3210,
+          full_control_plane_url: 'http://127.0.0.1:3210/',
         });
       },
     });
+    // The legacy supervisor endpoint moved to the durable 3210 restart-
+    // request channel executed by the Windows launcher. Report 410 Gone so
+    // stale callers learn the new contract instead of failing opaquely.
     const disposeRestart = webCtx.webServer.register({
       kind: 'exact',
       path: `${CREW_BRIDGE_PREFIX}/supervisor/restart`,
-      handler: async (req, res) => {
+      handler: (req, res) => {
         if (!isTrustedLocalRequest(req)) return sendJson(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
-        if (String(req.method ?? 'GET').toUpperCase() !== 'POST') return sendJson(res, 405, { ok: false, code: 'POST_ONLY' });
-        let body;
-        try { body = JSON.parse((await readBoundedBody(req, 8 * 1024)).toString('utf8') || '{}'); } catch { return sendJson(res, 400, { ok: false, code: 'SUPERVISOR_REQUEST_INVALID' }); }
-        if (body?.confirm !== true) return sendJson(res, 400, { ok: false, code: 'SUPERVISOR_RESTART_CONFIRM_REQUIRED' });
-        const result = await supervisor.restartOwnedBackend();
-        return sendJson(res, result?.ok === true ? 200 : 409, { ...result });
+        return sendJson(res, 410, { ok: false, code: 'SUPERVISOR_ENDPOINT_MOVED', control_plane: 'http://127.0.0.1:3210/' });
       },
     });
-    const disposeProxy = webCtx.webServer.register({
-      kind: 'prefix',
-      path: CREW_BRIDGE_PREFIX,
-      handler: (req, res) => proxyCrewRequest(req, res, options),
-    });
-    return () => { disposeProxy?.(); disposeRestart?.(); disposeStatus?.(); };
+    // Least-privilege allowlist: the 3080 quick-controls surface may reach
+    // ONLY the narrow quick endpoints on 3210. Full Crew API (providers,
+    // credentials, install, workspaces, migration, rollback, quarantine)
+    // is no longer proxied here — the native 3210 page is the full control
+    // plane.
+    const QUICK_ALLOWLIST = new Set([
+      '/quick-config',
+      '/quick-status',
+      '/runtime/restart-request',
+      '/runtime/restart-status',
+    ]);
+    const disposers = [];
+    for (const path of QUICK_ALLOWLIST) {
+      disposers.push(webCtx.webServer.register({
+        kind: 'exact',
+        path: `${CREW_BRIDGE_PREFIX}${path}`,
+        handler: (req, res) => proxyCrewRequest(req, res, options),
+      }));
+    }
+    return () => { for (const dispose of disposers) dispose?.(); disposeRestart?.(); disposeStatus?.(); };
   });
 }
 
