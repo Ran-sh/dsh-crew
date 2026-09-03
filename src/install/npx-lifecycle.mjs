@@ -357,10 +357,25 @@ function readUpdateJournal({ home = homedir() } = {}) {
   return raw;
 }
 
-function writeUpdateJournal({ home, stage, prior = null, candidate = null }) {
-  const record = { stage, prior, candidate, updated_at: isoNow() };
+function writeUpdateJournal({ home, stage, prior = null, candidate = null, verified = false }) {
+  const record = { stage, prior, candidate, verified: verified === true, updated_at: isoNow() };
   writeFileAtomic(updateJournalFile({ home }), JSON.stringify(record, null, 2) + '\n');
   return record;
+}
+
+// Atomically mark the current journal verified AFTER re-checking its
+// identity matches the expected stage/prior/candidate. A crash between
+// verification success and this write leaves the journal unverified, so
+// reconcile refuses to finalize it.
+export function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null } = {}) {
+  const current = readUpdateJournal({ home });
+  if (!current || current.malformed) return { ok: false, code: 'JOURNAL_NOT_FOUND' };
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  if (current.stage !== stage || !same(current.prior, prior) || !same(current.candidate, candidate)) {
+    return { ok: false, code: 'JOURNAL_IDENTITY_MISMATCH' };
+  }
+  writeUpdateJournal({ home, stage, prior, candidate, verified: true });
+  return { ok: true };
 }
 
 function clearUpdateJournal({ home = homedir() } = {}) {
@@ -479,8 +494,10 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
 
   // Committed side: pointer must match the FULL journal candidate identity
   // (name + version + path), and the candidate manifest is verified against
-  // the JOURNAL candidate name/version (not its own). Anything else is not
-  // a commit: fall through to the diverged check below.
+  // the JOURNAL candidate name/version (not its own). A rollback journal
+  // additionally requires explicit verification: pointer==target alone
+  // never means a verified rollback commit (activation + restart +
+  // dual-domain verification may never have completed).
   const candidateIdent = journal.candidate ?? null;
   const pointerMatchesCandidate = candidateDir !== null
     && pointer?.path === candidateDir
@@ -490,6 +507,9 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     && pointer.version === candidateIdent?.version;
   if (candidateDir && pointer?.path === candidateDir && !pointerMatchesCandidate) {
     return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: 'pointer path matches candidate but name/version do not; refusing recovery' };
+  }
+  if (journal.stage === 'rollback' && pointerMatchesCandidate && journal.verified !== true) {
+    return { ok: false, code: 'JOURNAL_ROLLBACK_UNVERIFIED', stage: journal.stage, error: 'rollback journal not marked verified; refusing finalize' };
   }
   if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
@@ -520,7 +540,9 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
 
   // Pre-commit side: prior stays authoritative. Re-point live activation
   // surfaces back at prior (a crash between activation and pointer write
-  // leaves them on the candidate), then drop the candidate.
+  // leaves them on the candidate), then drop the candidate. A rollback
+  // journal's candidate is a RETAINED release, never an orphan stage: it
+  // must be preserved even when the pointer still references prior.
   if (priorPath) {
     if (!existsSync(journal.prior.path)) {
       return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
@@ -530,7 +552,7 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     if (!compensated.ok) {
       return { ok: false, code: 'JOURNAL_COMPENSATE_FAILED', stage: journal.stage, error: compensated.error ?? compensated.code };
     }
-    if (candidateDir && existsSync(candidateDir)) {
+    if (journal.stage !== 'rollback' && candidateDir && existsSync(candidateDir)) {
       try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
     }
     clearUpdateJournal({ home });
@@ -994,9 +1016,32 @@ async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
     : { ok: false, code: 'RUNTIME_VERSION_MISMATCH' };
 }
 
+// Cohort verifier: compares the TARGET DSH cohort against the Hub's
+// dsh_version domain (the installed @deepseek-ai/dsh package), NEVER
+// against Crew's own runtime_version (the dsh-crew release). A null
+// dsh_version means unknown cohort and fails closed.
+export async function verifyCrewDshCohort(version, fetchImpl = globalThis.fetch) {
+  let body = null;
+  try {
+    const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+    body = await response.json();
+    if (!response.ok) return { ok: false, code: 'DSH_COHORT_UNREACHABLE' };
+  } catch (error) {
+    return { ok: false, code: 'DSH_COHORT_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const dshVersion = body?.extension?.runtime?.dsh_version ?? body?.runtime?.dsh_version ?? null;
+  if (typeof dshVersion !== 'string' || dshVersion.length === 0) {
+    return { ok: false, code: 'DSH_COHORT_UNKNOWN' };
+  }
+  return dshVersion === version
+    ? { ok: true, dsh_version: dshVersion }
+    : { ok: false, code: 'DSH_COHORT_MISMATCH', installed: dshVersion, target: version };
+}
+
 // Full Crew-owned 3210 identity check: service + execution plane + profile
-// + port + non-empty runtime_id, plus the exact target cohort version.
-// Used by production cohort migration instead of a version-only probe.
+// + port + non-empty runtime_id, plus the exact target COHORT version read
+// from the dsh_version domain (the installed @deepseek-ai/dsh package).
+// Never compares the cohort against Crew's own runtime_version.
 export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.fetch) {
   let body = null;
   try {
@@ -1016,11 +1061,44 @@ export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.
     typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim().length > 0,
   ];
   if (!checks.every(Boolean)) return { ok: false, code: 'RUNTIME_IDENTITY_MISMATCH' };
-  const extVersion = body?.extension?.runtime?.runtime_version ?? null;
-  void extVersion;
-  const versioned = await verifyRuntimeVersion(version, fetchImpl);
-  if (!versioned.ok) return versioned;
-  return { ok: true, runtime_id: runtime.runtime_id, runtime_version: versioned.runtime_version };
+  const cohort = await verifyCrewDshCohort(version, fetchImpl);
+  if (!cohort.ok) return cohort;
+  return { ok: true, runtime_id: runtime.runtime_id, dsh_version: cohort.dsh_version };
+}
+
+// Dual-domain post-restart verifier for rollback: the restarted 3210 must
+// report BOTH the expected Crew release version (runtime_version domain)
+// AND the expected DSH cohort (dsh_version domain), alongside full 3210
+// identity. A stale old-Crew process on the right cohort (or vice versa)
+// fails closed instead of reporting rollback success.
+export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl = globalThis.fetch } = {}) {
+  let body = null;
+  try {
+    const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+    body = await response.json();
+    if (!response.ok) return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE' };
+  } catch (error) {
+    return { ok: false, code: 'RUNTIME_IDENTITY_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const runtime = body?.extension?.runtime ?? null;
+  const checks = [
+    body?.ok === true,
+    runtime?.service === 'dsh-crew-hub',
+    runtime?.execution_plane === 'hub-3210',
+    runtime?.profile === 'dsh-crew',
+    Number(runtime?.listen_port) === 3210,
+    typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim().length > 0,
+  ];
+  if (!checks.every(Boolean)) return { ok: false, code: 'RUNTIME_IDENTITY_MISMATCH' };
+  if (typeof crewVersion === 'string' && runtime?.runtime_version !== crewVersion) {
+    return { ok: false, code: 'CREW_VERSION_MISMATCH', installed: runtime?.runtime_version ?? null, target: crewVersion };
+  }
+  if (typeof dshVersion === 'string') {
+    const cohort = await verifyCrewDshCohort(dshVersion, fetchImpl);
+    if (!cohort.ok) return cohort;
+    return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null, dsh_version: cohort.dsh_version };
+  }
+  return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null };
 }
 
 // Crew-owned stop/start for cohort migration come from the sidecar
@@ -1046,11 +1124,30 @@ export async function npxRollback({
   ensureRuntime,
   validatePayload = validateInstalledPayload,
   activate,
-  restart = () => restartOwnedRuntime(),
-  verifyRuntime = (targetVersion) => verifyRuntimeVersion(targetVersion),
+  restart,
+  verifyRuntime,
+  supervisorFactory = crewSupervisor,
 } = {}) {
   const targetVersion = typeof version === 'string' ? version.trim() : '';
   if (!targetVersion) return { ok: false, error: 'rollback requires a target version' };
+  // Rollback shares the update mutual-exclusion lock: it mutates the same
+  // pointer/registration/runtime surfaces as install/update, and the watch
+  // supervisor must observe-only while it runs.
+  const updateLock = acquireUpdateLock({ home });
+  if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  try {
+    return await npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory });
+  } finally {
+    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+  }
+}
+
+async function npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory }) {
+  // Journal-aware entry: refuse to overwrite a journal left by a crashed
+  // transaction. Reconcile it first (or fail closed) instead of silently
+  // replacing it with the rollback intent.
+  const pending = reconcileUpdateJournal({ home, log });
+  if (!pending.ok) return { ok: false, error: `refusing rollback with unreconciled journal (${pending.code ?? 'unknown'})` };
   const current = readCurrentPointer({ home });
   if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };
   const target = listManagedReleases({ home }).find((release) => release.version === targetVersion);
@@ -1061,15 +1158,51 @@ export async function npxRollback({
   if (!validation.ok) return { ok: false, error: 'target release failed payload validation' };
   const previousManifest = readManifest(current.path);
   const activateReleaseFn = activate ?? (({ releaseDir, manifest }) => activateRelease({ home, releaseDir, manifest, log, installer, ensureRuntime }));
+  // Direct-owned restart/verify through ONE supervisor instance. No legacy
+  // 3080 bridge: rollback must work with the bridge fully absent.
+  const supervisor = supervisorFactory({ home });
+  const restartFn = restart ?? (async () => {
+    const stopped = await supervisor.stopOwnedBackend();
+    if (!stopped.ok) return stopped;
+    return supervisor.startOwnedBackend();
+  });
+  // Dual-domain post-restart verification: the restarted 3210 must report
+  // BOTH the target Crew release (runtime_version) AND the target DSH
+  // cohort (dsh_version). A stale old-Crew process on the right cohort
+  // (or vice versa) fails closed. The verifier is version-parametric:
+  // target verification checks the TARGET Crew version, compensation
+  // verification checks the PRIOR Crew version. A closure fixed on the
+  // target version would mis-verify the restored prior runtime.
+  const verifyFn = verifyRuntime ?? ((crewVersion) => verifyRollbackTarget({ crewVersion, dshVersion: TARGET_DSH_VERSION }));
+  // Journal the rollback intent BEFORE switching the pointer. The rollback
+  // journal carries an explicit verified flag: pointer==target alone does
+  // NOT mean committed until activation + restart + dual verification all
+  // succeed and the journal is marked verified.
+  writeUpdateJournal({
+    home,
+    stage: 'rollback',
+    prior: { name: current.name, version: current.version, path: current.path },
+    candidate: { name: target.name, version: target.version, stageDir: target.path },
+  });
   const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
   try {
     switchPointer(target);
     if (!await activateReleaseFn({ releaseDir: target.path, manifest: targetManifest })) throw new Error('target release activation failed');
-    const restarted = await restart(target.version);
+    const restarted = await restartFn(target.version);
     if (restarted?.ok === false) throw Object.assign(new Error('target runtime restart failed'), { code: restarted.code });
-    const runtime = await verifyRuntime(target.version);
-    if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_VERSION_MISMATCH' });
+    const runtime = await verifyFn(target.version);
+    if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_IDENTITY_MISMATCH' });
     log(`✓ rolled back Crew payload to ${target.version}`);
+    // Persist verification BEFORE clearing: a crash between verify
+    // success and journal clear must still finalize on recovery.
+    const marked = markJournalVerified({
+      home,
+      stage: 'rollback',
+      prior: { name: current.name, version: current.version, path: current.path },
+      candidate: { name: target.name, version: target.version, stageDir: target.path },
+    });
+    if (!marked.ok) throw Object.assign(new Error('rollback journal mark-verified failed'), { code: marked.code ?? 'JOURNAL_MARK_FAILED' });
+    clearUpdateJournal({ home });
     return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
   } catch (error) {
     const prior = { name: current.name, version: current.version, path: current.path };
@@ -1079,15 +1212,16 @@ export async function npxRollback({
       if (!previousManifest) throw Object.assign(new Error('previous release manifest unavailable'), { stage: 'activation' });
       const activated = await activateReleaseFn({ releaseDir: prior.path, manifest: previousManifest });
       if (activated !== true) throw Object.assign(new Error('previous release activation failed'), { stage: 'activation' });
-      const restarted = await restart(prior.version);
+      const restarted = await restartFn(prior.version);
       if (restarted?.ok !== true) throw Object.assign(new Error('previous runtime restart failed'), { stage: 'restart' });
-      const runtime = await verifyRuntime(prior.version);
+      const runtime = await verifyFn(prior.version);
       if (runtime?.ok !== true) throw Object.assign(new Error('previous runtime verification failed'), { stage: 'verification' });
       const restoredPointer = readCurrentPointer({ home });
       if (restoredPointer?.path !== prior.path || restoredPointer.version !== prior.version) {
         throw Object.assign(new Error('previous release pointer was not restored'), { stage: 'pointer' });
       }
       recovery = { ok: true, version: prior.version, path: prior.path };
+      clearUpdateJournal({ home });
     } catch (recoveryError) {
       recovery = {
         ok: false,
@@ -1772,8 +1906,8 @@ export const USAGE = `usage: dsh-crew <command> [--purge] [--candidate <path>]
 
 Commands:
   install     persist the candidate package into Crew-owned state and register it
-  integrate   show Crew inside the official 3080 UI; backend stays isolated on 3210
-  detach      remove only the official 3080 bridge; isolated 3210 mode remains available
+  integrate   disabled: the official web profile is read-only (legacy bridge retired)
+  detach      disabled: the official web profile is read-only (legacy bridge retired)
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit

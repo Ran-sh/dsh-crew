@@ -5,10 +5,18 @@
 // - HUB_PROTOCOL_VERSION changes only when Hub <-> MCP wire semantics become
 //   incompatible.
 //
+// The Harness/DSH cohort version (e.g. 0.1.2-alpha.5) is a THIRD, independent
+// domain: it identifies the installed @deepseek-ai/dsh package generation,
+// never the Crew release. Verifiers must compare the cohort against
+// dsh_version, never against runtime_version.
+//
 // Keep this module dependency-light so Hub, MCP and tests all use the exact
 // same compatibility rules.
 
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // Production Crew execution is intentionally bound to the isolated 3210 Hub.
 // These fields are public provenance only; no credential or session secret is
@@ -80,6 +88,7 @@ export function getHubRuntimeIdentity() {
     surface: 'native-crew-harness',
     ui_role: 'runtime',
     runtime_version: RUNTIME_VERSION,
+    dsh_version: readCrewDshVersion(),
     protocol_version: HUB_PROTOCOL_VERSION,
     execution_plane: PRODUCTION_EXECUTION_PLANE,
     profile: PRODUCTION_PROFILE,
@@ -87,6 +96,19 @@ export function getHubRuntimeIdentity() {
     runtime_id: RUNTIME_ID,
     capabilities: [...HUB_CAPABILITIES],
   };
+}
+
+// Installed Harness cohort version (the @deepseek-ai/dsh package under the
+// Crew-owned DSH home). Null when unreadable: callers treat null as
+// "unknown cohort", never as a match. This is the ONLY field cohort
+// verifiers may compare against TARGET_DSH_VERSION.
+export function readCrewDshVersion({ home = homedir() } = {}) {
+  try {
+    const file = join(home, '.config', 'dsh-crew', 'harness', 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
+    if (!existsSync(file)) return null;
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return typeof parsed?.version === 'string' && parsed.version.length > 0 ? parsed.version : null;
+  } catch { return null; }
 }
 
 /**
