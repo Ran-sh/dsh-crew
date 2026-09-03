@@ -15,8 +15,8 @@ $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
 $services = @(
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; ManagedByBridge = $false; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; ManagedByBridge = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
+  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; CrewOwned = $false; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; CrewOwned = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -32,20 +32,45 @@ function Write-LaunchLog {
 
 function Get-HealthState {
   param([pscustomobject] $Service)
-  try {
-    $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
-    $version = $response.extension.runtime.runtime_version
-    if ($response.ok -eq $true -and $version) {
-      return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
+  # Crew-owned 3210 answers the Crew extension contract. The official 3080
+  # is an external dependency: probe only its native web root, never the
+  # Crew bridge endpoint, so a missing legacy bridge cannot fail 3080 health.
+  if ($Service.CrewOwned) {
+    try {
+      $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
+      $version = $response.extension.runtime.runtime_version
+      if ($response.ok -eq $true -and $version) {
+        return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
+      }
+      return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Response did not contain a ready runtime contract.' }
+    } catch {
+      return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
     }
-    return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Response did not contain a ready runtime contract.' }
+  }
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri $Service.Url -TimeoutSec 2
+    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+      return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
+    }
+    return [pscustomobject]@{ Ready = $false; Version = $null; Error = ('Official UI returned HTTP {0}.' -f $response.StatusCode) }
   } catch {
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
   }
 }
 
-function Start-BridgedCrewService {
+# Optional legacy compatibility probe: returns true only when a 3080 that
+# still hosts the Crew bridge answers its ping endpoint. The Crew launcher
+# never depends on it; 3210 always boots directly first.
+function Test-LegacyBridgeAvailable {
   try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/ping' -TimeoutSec 3
+    return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300)
+  } catch {
+    return $false
+  }
+}
+
+function Start-BridgedCrewService {  try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/ping' -TimeoutSec 5
     if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
       return [pscustomobject]@{ Ready = $true; Error = $null }
@@ -187,7 +212,7 @@ function Wait-CrewServices {
       if ($health.Ready) {
         $service.State = 'ready'
         $service.ConsecutiveFailures = 0
-        if (-not $service.ManagedByBridge) { [void] (Set-TrackedListenerIdentity -Service $service) }
+        if ($service.CrewOwned) { [void] (Set-TrackedListenerIdentity -Service $service) }
         Write-LaunchLog ('{0} ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       } elseif ($service.Process -and $service.Process.HasExited) {
         throw ('{0} exited before becoming ready; PID={1}; exit={2}; last health error: {3}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode, $health.Error)
@@ -197,7 +222,7 @@ function Wait-CrewServices {
   }
 
   $notReady = @($services | Where-Object {
-    $_.State -ne 'ready' -and -not ($_.ManagedByBridge -and $_.State -eq 'pending')
+    $_.State -ne 'ready'
   })
   if ($notReady.Count -gt 0) {
     $details = ($notReady | ForEach-Object { '{0}:{1} ({2})' -f $_.Profile, $_.Port, $_.LastError }) -join '; '
@@ -207,30 +232,25 @@ function Wait-CrewServices {
 
 function Ensure-CrewServices {
   param([switch] $QuietHealthy)
-  $officialRestarted = $false
 
   foreach ($service in $services) {
     $health = Get-HealthState $service
-    if ($service.ManagedByBridge -and $officialRestarted) {
-      # A restarted 3080 process must re-establish ownership of 3210 through
-      # its own sidecar, even if an old detached listener still answers.
-      $service.State = 'pending'
-      $service.LastError = 'Waiting for the restarted 3080 bridge to claim 3210.'
-      continue
-    }
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
       $service.State = 'ready'
       $service.ConsecutiveFailures = 0
       $service.LastError = $null
-      if (-not $service.ManagedByBridge -and -not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
+      if ($service.CrewOwned -and -not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
       if (-not $QuietHealthy -or -not $wasReady) {
         Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       }
       continue
     }
 
-    if ($service.ManagedByBridge) {
+    # The Crew launcher owns 3210 directly. The legacy 3080 bridge is only an
+    # optional compatibility path: when 3210 is unreachable but a legacy
+    # bridge answers, let it claim 3210 once instead of failing the boot.
+    if ($service.CrewOwned -and (Test-LegacyBridgeAvailable)) {
       $service.LastError = $health.Error
       $service.ConsecutiveFailures += 1
       $service.State = 'pending'
@@ -271,14 +291,16 @@ function Ensure-CrewServices {
       Write-LaunchLog ('Supervisor detected {0} unavailable on {1}; restarting it.' -f $service.Name, $service.Port) 'WARN'
     }
     Start-CrewService $service
-    if (-not $service.ManagedByBridge) { $officialRestarted = $true }
   }
 
   Wait-CrewServices
 
-  # The 3080 official bridge is the sole owner of the 3210 child. Trigger it
-  # only after 3080 is healthy, then wait on the direct 3210 runtime contract.
-  foreach ($service in ($services | Where-Object ManagedByBridge -eq $true | Where-Object State -ne 'ready')) {
+  # Optional legacy compatibility: a 3080 that still hosts the Crew bridge
+  # may claim 3210 on old machines. The Crew launcher never depends on it:
+  # 3210 boots directly above, and this probe only lets a legacy bridge
+  # finish claiming 3210 when it already answers.
+  foreach ($service in ($services | Where-Object CrewOwned -eq $true | Where-Object State -ne 'ready')) {
+    if (-not (Test-LegacyBridgeAvailable)) { continue }
     $bridge = Start-BridgedCrewService
     if (-not $bridge.Ready) {
       $service.LastError = $bridge.Error
@@ -307,12 +329,21 @@ function Start-ServiceSupervisor {
 
     Write-LaunchLog 'Supervisor active; monitoring 3080 and 3210 every 10 seconds.'
     $lastRecoveryError = $null
+    $updateLockFile = Join-Path $crewHome '..\app\update-in-progress.lock'
     while ($true) {
       try {
-        Ensure-CrewServices -QuietHealthy
-        if ($lastRecoveryError) {
-          Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'
+        # An installer-held update lock suspends recovery restarts: the tree
+        # under Crew-owned state may be mid-migration, and a restart now
+        # would boot a half-installed runtime/profile.
+        if (Test-Path -LiteralPath $updateLockFile -PathType Leaf) {
+          Write-LaunchLog 'Update in progress; supervisor observing only, no restarts.'
           $lastRecoveryError = $null
+        } else {
+          Ensure-CrewServices -QuietHealthy
+          if ($lastRecoveryError) {
+            Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'
+            $lastRecoveryError = $null
+          }
         }
       } catch {
         $recoveryError = $_.Exception.Message

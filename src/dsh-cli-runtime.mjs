@@ -63,6 +63,10 @@ export function crewDshRuntimeRoot({ home = homedir() } = {}) {
   return join(crewDshHome({ home }), CREW_DSH_RUNTIME_DIRNAME);
 }
 
+export function crewDshRuntimeVersionDir({ home = homedir(), version = TARGET_DSH_VERSION } = {}) {
+  return join(crewDshHome({ home }), `runtime-${version}`);
+}
+
 export function crewDshRuntimeEntry({ home = homedir(), platform = process.platform } = {}) {
   const suffix = platform === 'win32' ? '.cmd' : '';
   return join(crewDshRuntimeRoot({ home }), 'node_modules', '.bin', `dsh${suffix}`);
@@ -272,6 +276,69 @@ export function describeDshCli(cli) {
   if (!cli) return 'unavailable';
   const version = cli.version ? `@${cli.version}` : '';
   return `${cli.kind}${version}`;
+}
+
+// Staged cohort migration: install the target cohort into a versioned
+// directory WITHOUT touching the live runtime/, verify its manifest, then
+// report the staged root for an atomic switch by the caller (stop owned
+// 3210 -> swap directories -> clean restart -> identity check). Never
+// upgrades a live runtime in place.
+export function stageCrewDshRuntime({
+  home = homedir(),
+  version = TARGET_DSH_VERSION,
+  packageSpec = `${DSH_CLI_PACKAGE}@${version}`,
+  npmCommand = null,
+  pnpmCommand = null,
+  findCommand = defaultFindCommand,
+  exists = defaultExists,
+  runner = spawnSync,
+  platform = process.platform,
+  comspec = process.env.ComSpec ?? 'cmd.exe',
+  env = process.env,
+  read = readFileSync,
+} = {}) {
+  const stagedRoot = crewDshRuntimeVersionDir({ home, version });
+  const pnpm = pnpmCommand ?? findCommand('pnpm');
+  const npm = npmCommand ?? findCommand('npm');
+  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
+  mkdirSync(stagedRoot, { recursive: true });
+  const packageManager = pnpm
+    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
+    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
+  const packageArgs = pnpm
+    ? ['add', '--dir', stagedRoot, '--ignore-scripts', packageSpec]
+    : ['install', '--prefix', stagedRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
+  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const result = runner(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: invocation.shell,
+    env: { ...env },
+  });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_STAGE_FAILED',
+      error: 'staged Crew runtime install failed',
+      status: result.status ?? -1,
+      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  const stagedModule = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  if (!exists(stagedModule)) {
+    return { ok: false, code: 'DSH_RUNTIME_STAGE_INCOMPLETE', error: 'staged runtime entry missing' };
+  }
+  const stagedVersion = packageVersion(stagedModule, read);
+  if (stagedVersion !== version) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
+      error: `staged Crew runtime is ${stagedVersion ?? 'unknown version'} but ${version} is required`,
+      installed: stagedVersion ?? null,
+      target: version,
+    };
+  }
+  return { ok: true, stagedRoot, version: stagedVersion };
 }
 
 function isObject(value) {

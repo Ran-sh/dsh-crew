@@ -143,6 +143,79 @@ function writeCurrentPointer({ home, name, version, path }) {
   return pointer;
 }
 
+export const UPDATE_JOURNAL_FILENAME = 'update-journal.json';
+export const UPDATE_LOCK_FILENAME = 'update-in-progress.lock';
+
+export function updateJournalFile({ home = homedir() } = {}) {
+  return join(crewAppRoot({ home }), UPDATE_JOURNAL_FILENAME);
+}
+
+export function updateLockFile({ home = homedir() } = {}) {
+  return join(crewAppRoot({ home }), UPDATE_LOCK_FILENAME);
+}
+
+export function acquireUpdateLock({ home = homedir() } = {}) {
+  const file = updateLockFile({ home });
+  mkdirSync(dirname(file), { recursive: true });
+  try {
+    writeFileSync(file, JSON.stringify({ pid: process.pid, started_at: isoNow() }) + '\n', { flag: 'wx' });
+    return { ok: true, owner: true };
+  } catch (error) {
+    if (error?.code === 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+  }
+}
+
+export function releaseUpdateLock({ home = homedir() } = {}) {
+  try { rmSync(updateLockFile({ home }), { force: true }); } catch {}
+}
+
+function readUpdateJournal({ home = homedir() } = {}) {
+  const file = updateJournalFile({ home });
+  if (!existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    if (!raw || typeof raw !== 'object' || typeof raw.stage !== 'string') return null;
+    return raw;
+  } catch { return null; }
+}
+
+function writeUpdateJournal({ home, stage, prior = null, candidate = null }) {
+  mkdirSync(dirname(updateJournalFile({ home })), { recursive: true });
+  const record = { stage, prior, candidate, updated_at: isoNow() };
+  writeFileSync(updateJournalFile({ home }), JSON.stringify(record, null, 2) + '\n');
+  return record;
+}
+
+function clearUpdateJournal({ home = homedir() } = {}) {
+  try { rmSync(updateJournalFile({ home }), { force: true }); } catch {}
+}
+
+// Reconcile a leftover journal from a crashed update/install: the pointer
+// switches only at the final commit point, so any journal left behind means
+// the candidate never became authoritative. Restore the prior pointer when
+// one was recorded, drop the orphan staged dir, and report what happened.
+export function reconcileUpdateJournal({ home = homedir(), log = () => {} } = {}) {
+  const journal = readUpdateJournal({ home });
+  if (!journal) return { ok: true, reconciled: false };
+  const pointer = readCurrentPointer({ home });
+  if (journal.prior?.path && existsSync(journal.prior.path)
+    && (!pointer || pointer.path !== journal.prior.path)) {
+    try {
+      writeCurrentPointer({ home, name: journal.prior.name, version: journal.prior.version, path: journal.prior.path });
+      log(`- recovered update journal at stage ${journal.stage}: restored prior release ${journal.prior.version}`);
+    } catch (error) {
+      return { ok: false, code: 'JOURNAL_RECOVERY_FAILED', stage: journal.stage, error: String(error?.message ?? error) };
+    }
+  }
+  if (journal.candidate?.stageDir && existsSync(journal.candidate.stageDir)
+    && (!pointer || pointer.path !== journal.candidate.stageDir)) {
+    try { rmSync(journal.candidate.stageDir, { recursive: true, force: true }); } catch {}
+  }
+  clearUpdateJournal({ home });
+  return { ok: true, reconciled: true, stage: journal.stage };
+}
+
 // ---- dependency tree materialization ----------------------------------------
 
 function listPackageEdges(manifest) {
@@ -468,10 +541,20 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
 }
 
 // ---- release commit / activation ---------------------------------------------
-
-function commitStagedRelease({ stageDir, manifest, home }) {
+// Transactional commit: the journal records the intent BEFORE the pointer
+// switches, so a crash between the two can be reconciled on the next run.
+// The pointer write itself is the single commit point; gc only runs after
+// activation succeeds so a failed candidate never deletes the prior release.
+function commitStagedRelease({ stageDir, manifest, home, prior = null }) {
   rmSync(join(stageDir, INCOMPLETE_MARKER));
+  writeUpdateJournal({
+    home,
+    stage: 'pointer-switch',
+    prior: prior ? { name: prior.name, version: prior.version, path: prior.path } : null,
+    candidate: { name: manifest.name, version: manifest.version, stageDir },
+  });
   writeCurrentPointer({ home, name: manifest.name, version: manifest.version, path: stageDir });
+  clearUpdateJournal({ home });
   gcOldReleases({ home });
   return stageDir;
 }
@@ -744,6 +827,18 @@ export async function npxInstall({
   npmInstaller,
 } = {}) {
   log('DSH Crew installer (npx-managed)');
+  const updateLock = acquireUpdateLock({ home });
+  if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  try {
+    return await npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller });
+  } finally {
+    releaseUpdateLock({ home });
+  }
+}
+
+async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller }) {
+  const reconciled = reconcileUpdateJournal({ home, log });
+  if (!reconciled.ok) return { ok: false, error: `update journal recovery failed (${reconciled.code ?? 'unknown'})` };
   const candidateRoot = sourceRoot ?? runningPackageRoot();
   const manifest = readManifest(candidateRoot);
   if (!manifest?.name || !manifest?.version) return { ok: false, error: 'candidate package manifest invalid' };
@@ -769,17 +864,21 @@ export async function npxInstall({
 
   // Runtime cohort gates the commit: a stale runtime must be migrated before
   // the new payload becomes authoritative. The pointer switches only after
-  // activation succeeds; any failure restores the prior pointer.
+  // activation succeeds; any failure restores the prior pointer. A first
+  // install has no prior release, so an activation failure must also remove
+  // the just-written pointer instead of leaving a broken authoritative one.
   const prior = readCurrentPointer({ home });
   if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
 
-  const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
+  const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home, prior });
   log(`✓ durable release committed under Crew-owned state`);
 
   const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
   if (!activated) {
     if (prior?.path) {
       try { writeCurrentPointer({ home, name: prior.name, version: prior.version, path: prior.path }); } catch {}
+    } else {
+      try { rmSync(currentPointerFile({ home }), { force: true }); } catch {}
     }
     return { ok: false, error: 'activation failed' };
   }
@@ -938,6 +1037,18 @@ export async function npxUpdate({
   runner = spawnSync,
 } = {}) {
   log('DSH Crew updater');
+  const updateLock = acquireUpdateLock({ home });
+  if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  try {
+    return await npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner });
+  } finally {
+    releaseUpdateLock({ home });
+  }
+}
+
+async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner = spawnSync }) {
+  const journalRecovery = reconcileUpdateJournal({ home, log });
+  if (!journalRecovery.ok) return { ok: false, error: `update journal recovery failed (${journalRecovery.code ?? 'unknown'})` };
   // Candidate resolution: explicit path/dir override > a newer validated
   // running launcher > configured npm registry (@latest). This makes the
   // supported legacy bootstrap (`npm install -g ...@latest`, then `update`)
@@ -1002,19 +1113,22 @@ export async function npxUpdate({
     }
     log(`✓ candidate payload staged and validated (${manifest.version})`);
 
-    // Commit boundary: runtime cohort first, pointer switch only after
-    // activation. Any post-switch failure restores the prior pointer so the
-    // persisted payload and the live runtime can never split-brain.
+    // Commit boundary: runtime cohort first, journal records intent, pointer
+    // switch only after activation. Any post-switch failure restores the
+    // prior pointer so the persisted payload and the live runtime can never
+    // split-brain.
     const prior = readCurrentPointer({ home });
     if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
 
-    const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
+    const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home, prior });
     log('✓ durable release committed under Crew-owned state');
 
     const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
     if (!activated) {
       if (prior?.path) {
         try { writeCurrentPointer({ home, name: prior.name, version: prior.version, path: prior.path }); } catch {}
+      } else {
+        try { rmSync(currentPointerFile({ home }), { force: true }); } catch {}
       }
       return { ok: false, error: 'activation failed' };
     }
