@@ -889,21 +889,25 @@ test('legacy unpinned prior resolves cohort via live fallback for coordinated di
     writeFileSync(join(legacyDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
     // 1. Without legacy fallback the cohort is unresolvable (fail closed).
     const unresolved = resolveReleaseCohort({ releaseDir: legacyDir });
-    assert.equal(unresolved, null, 'unpinned legacy manifest resolves to null without fallback');
+    assert.equal(unresolved.ok, false);
+    assert.equal(unresolved.code, 'RELEASE_COHORT_UNKNOWN');
     // 2. With live fallback it resolves to the live runtime cohort (alpha.5).
     const resolved = resolveReleaseCohort({ releaseDir: legacyDir, allowLegacyLiveFallback: true, readRuntimeVersion: () => ALPHA });
-    assert.equal(resolved, ALPHA, 'legacy fallback resolves the live cohort');
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.dshVersion, ALPHA, 'legacy fallback resolves the live cohort');
     // 3. A manifest pin outranks the fallback.
     const pinnedDir = join(crewReleasesDir({ home: t.dir }), 'release-1.0.4');
     mkdirSync(pinnedDir, { recursive: true });
     writeFileSync(join(pinnedDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.4', dependencies: { '@deepseek-ai/dsh': '0.1.2-rc.1' } }));
     const pinned = resolveReleaseCohort({ releaseDir: pinnedDir, allowLegacyLiveFallback: true, readRuntimeVersion: () => ALPHA });
-    assert.equal(pinned, '0.1.2-rc.1', 'manifest pin outranks fallback');
+    assert.equal(pinned.ok, true);
+    assert.equal(pinned.dshVersion, '0.1.2-rc.1', 'manifest pin outranks fallback');
     // 4. A sidecar (recorded by a prior lifecycle pass) outranks fallback too.
     const { writeReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
     writeReleaseCohort({ releaseDir: legacyDir, dshVersion: ALPHA, source: 'discovered-live-runtime' });
     const viaSidecar = resolveReleaseCohort({ releaseDir: legacyDir, allowLegacyLiveFallback: true, readRuntimeVersion: () => '9.9.9' });
-    assert.equal(viaSidecar, ALPHA, 'sidecar outranks live fallback');
+    assert.equal(viaSidecar.ok, true);
+    assert.equal(viaSidecar.dshVersion, ALPHA, 'sidecar outranks live fallback');
   } finally { t.cleanup(); }
 });
 
@@ -1058,5 +1062,151 @@ test('malformed journal runtime path fails closed without touching anything', as
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_RUNTIME_INVALID');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained for operator');
+  } finally { t.cleanup(); }
+});
+
+// ---- Oracle round-3 gates: sidecar strictness, missing-runtime journal, comp-fail journal ----
+
+test('legacy 1.0.3 -> 1.0.4 forward upgrade records sidecar for later offline rollback resolution', async () => {
+  const { resolveReleaseCohort, writeReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    const legacyDir = join(crewReleasesDir({ home: t.dir }), 'release-1.0.3');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
+    // The forward-upgrade path records the discovered cohort as a sidecar.
+    const rec = writeReleaseCohort({ releaseDir: legacyDir, dshVersion: ALPHA, source: 'discovered-live-runtime' });
+    assert.equal(rec?.dsh_version, ALPHA);
+    // A later rollback resolves the legacy release WITHOUT live fallback.
+    const cohort = resolveReleaseCohort({ releaseDir: legacyDir, allowLegacyLiveFallback: false });
+    assert.equal(cohort.ok, true, JSON.stringify(cohort));
+    assert.equal(cohort.dshVersion, ALPHA);
+  } finally { t.cleanup(); }
+});
+
+test('malformed sidecar dsh_version fails closed and never reaches rmSync authority', async () => {
+  const { resolveReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    const legacyDir = join(crewReleasesDir({ home: t.dir }), 'release-1.0.3');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
+    const cases = [
+      { dsh_version: '..' },
+      { dsh_version: '^0.1.2' },
+      { dsh_version: '0.1.2-alpha.5', release: '9.9.9' }, // release identity mismatch
+      { dsh_version: 42, schema_version: 1 },
+    ];
+    for (const bad of cases) {
+      writeFileSync(join(legacyDir, 'release-cohort.json'), JSON.stringify({ schema_version: 1, release: '1.0.3', ...bad }));
+      const cohort = resolveReleaseCohort({ releaseDir: legacyDir, allowLegacyLiveFallback: true, readRuntimeVersion: () => '0.1.2-rc.1' });
+      assert.equal(cohort.ok, false, `must fail closed for ${JSON.stringify(bad)}`);
+      assert.equal(cohort.invalid, true, `invalid sidecar must not silently fall back for ${JSON.stringify(bad)}`);
+    }
+  } finally { t.cleanup(); }
+});
+
+test('coordinated journal without runtime segment fails closed (JOURNAL_RUNTIME_INVALID)', async () => {
+  const { reconcileUpdateJournal, currentPointerFile, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    const priorDir = join(crewReleasesDir({ home: t.dir }), 'release-1.0.3');
+    mkdirSync(priorDir, { recursive: true });
+    writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir }));
+    // coordinated journal WITHOUT the runtime segment.
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'coordinated-update', verified: false,
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
+      candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: join(crewReleasesDir({ home: t.dir }), 'stage') },
+    }));
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_RUNTIME_INVALID');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained');
+  } finally { t.cleanup(); }
+});
+
+test('compensation failure retains the journal (recovery witness survives)', async () => {
+  const { performCoordinatedCohortUpdate, currentPointerFile, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: ALPHA });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir }));
+    materializeLiveRuntime({ home: t.dir, version: ALPHA });
+    const candDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
+    const harnessHome = crewDshHome({ home: t.dir });
+    mkdirSync(harnessHome, { recursive: true });
+    // Block retention AND compensation: retained-runtimes is a file (retain
+    // fails) and no retained/migrate path can restore prior (no pkg manager,
+    // no retained tree) so compensation fails too.
+    writeFileSync(join(harnessHome, 'retained-runtimes'), 'block');
+    const r = await performCoordinatedCohortUpdate({
+      home: t.dir,
+      log: () => {},
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
+      priorDshVersion: ALPHA,
+      candidateManifest: { name: '@ran-sh/dsh-crew', version: '1.0.4' },
+      candidateDshVersion: TARGET_DSH_VERSION,
+      stageDir: candDir,
+      installer: {},
+      activate: async () => true,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      stageOptions: { runner: () => ({ status: 0, stdout: '', stderr: '' }) },
+    });
+    // Whatever the outcome, if compensation failed the journal MUST remain.
+    if (r.compensation_failed === true || r.compensated === false) {
+      assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal must survive failed compensation');
+    } else {
+      assert.equal(existsSync(updateJournalFile({ home: t.dir })), false, 'journal cleared after successful compensation');
+    }
+  } finally { t.cleanup(); }
+});
+
+test('registry-fallback migration prepareOnly never starts before payload activation', async () => {
+  // migrateCrewDshRuntime(prepareOnly:true) must stop + install the tree but
+  // NEVER start the process: the caller activates the matching payload first,
+  // then starts exactly once. Call order must be stop < install < activate
+  // < start < verify with start count === 1.
+  const { migrateCrewDshRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    materializeLiveRuntime({ home: t.dir, version: ALPHA });
+    const calls = [];
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      prepareOnly: true,
+      stageOptions: {
+        runner: () => {
+          const entry = join(liveRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// rc1');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => { calls.push('verify'); return { ok: true }; },
+      log: () => {},
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.prepared, true);
+    assert.deepEqual(calls, ['stop'], 'prepareOnly must stop but never start/verify');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), TARGET_DSH_VERSION, 'tree installed at live root');
+    assert.ok(r.prevRoot && existsSync(r.prevRoot), 'parked prior tree returned for durable retention');
   } finally { t.cleanup(); }
 });

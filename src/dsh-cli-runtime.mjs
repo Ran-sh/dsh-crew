@@ -427,6 +427,11 @@ export function stageCrewDshRuntime({
 // dangling shims) -> restart -> identity verify -> rollback on any failure.
 // stopOwned/startOwned/verifyOwned have NO defaults: a missing callback
 // fails closed instead of pretending an unverified step succeeded.
+//
+// prepareOnly=true stops + swaps the tree but NEVER starts the process:
+// the caller (a pair-ordered rollback/compensation) will activate the
+// matching Crew payload and start exactly once itself. The parked prior
+// tree is returned as prevRoot for durable retention by the caller.
 export async function migrateCrewDshRuntime({
   home = homedir(),
   version = TARGET_DSH_VERSION,
@@ -436,11 +441,15 @@ export async function migrateCrewDshRuntime({
   verifyOwned,
   rename = renameSync,
   log = () => {},
+  prepareOnly = false,
 } = {}) {
-  if (typeof stopOwned !== 'function' || typeof startOwned !== 'function' || typeof verifyOwned !== 'function') {
-    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop/start/verify callbacks are required' };
-  }
   const liveRoot = crewDshRuntimeRoot({ home });
+  if (typeof stopOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop callback is required' };
+  }
+  if (!prepareOnly && (typeof startOwned !== 'function' || typeof verifyOwned !== 'function')) {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'start/verify callbacks are required unless prepareOnly' };
+  }
   const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
   const stop = await stopOwned();
@@ -459,8 +468,12 @@ export async function migrateCrewDshRuntime({
     let recovery = { ok: false };
     try {
       if (liveMoved && existsSync(prevRoot) && !existsSync(liveRoot)) rename(prevRoot, liveRoot);
-      const restarted = await startOwned();
-      recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+      if (!prepareOnly) {
+        const restarted = await startOwned();
+        recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+      } else {
+        recovery = { ok: true };
+      }
     } catch (recoveryError) {
       recovery = { ok: false, code: 'DSH_RUNTIME_SWAP_RECOVERY_FAILED', error: String(recoveryError?.message ?? recoveryError) };
     }
@@ -470,8 +483,12 @@ export async function migrateCrewDshRuntime({
   // carries the correct final absolute path.
   const installed = installDshInto({ root: liveRoot, version, ...stageOptions });
   if (!installed.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename, prepareOnly });
     return { ok: false, code: installed.code ?? 'DSH_RUNTIME_INSTALL_FAILED', error: installed.error ?? 'runtime install at live root failed', recovery };
+  }
+  if (prepareOnly) {
+    log(`- runtime tree prepared at live root (@${version}); process not started`);
+    return { ok: true, version, liveRoot, prevRoot, prepared: true };
   }
   const start = await startOwned();
   if (!start.ok) {
@@ -493,7 +510,7 @@ export async function migrateCrewDshRuntime({
   return { ok: true, version, liveRoot };
 }
 
-async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename = renameSync }) {
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename = renameSync, prepareOnly = false }) {
   const recovery = { stoppedCandidate: false, restore: false, restart: false };
   // The failed candidate 3210 may still be running against the tree we are
   // about to replace: stop it FIRST, otherwise the swap races a live
@@ -516,6 +533,10 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, 
     if (existsSync(prevRoot)) { rename(prevRoot, liveRoot); recovery.restore = true; }
   } catch (error) {
     recovery.restoreError = String(error?.message ?? error);
+  }
+  if (prepareOnly) {
+    recovery.ok = recovery.restore === true;
+    return recovery;
   }
   try {
     const restarted = await startOwned();
