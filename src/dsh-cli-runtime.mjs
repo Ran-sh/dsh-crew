@@ -23,14 +23,16 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node
 import { homedir } from 'node:os';
 import { crewDshHome, crewProfileDir } from './install/install.mjs';
 import { reconcileProviderDesiredState } from './provider-desired-state.mjs';
+import {
+  DSH_CLI_PACKAGE,
+  TARGET_DSH_VERSION,
+  TARGET_DSH_SPEC,
+  RETAINED_RUNTIMES_DIRNAME,
+} from './dsh-cohort.mjs';
 
-export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
-// Pinned Harness cohort for this dsh-crew release. The Crew runtime, the SDK
-// client, and the worker composition must all resolve to this exact version;
-// a custom dshBin bypasses the SDK's own same-version check, so the resolver
-// asserts the cohort itself before returning a reusable descriptor.
-export const TARGET_DSH_VERSION = '0.1.2-alpha.5';
-export const TARGET_DSH_SPEC = `${DSH_CLI_PACKAGE}@${TARGET_DSH_VERSION}`;
+// Re-exported so existing importers keep working while the cohort value now
+// lives in exactly one place (src/dsh-cohort.mjs).
+export { DSH_CLI_PACKAGE, TARGET_DSH_VERSION, TARGET_DSH_SPEC };
 export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
 const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 const PROFILE_PATCH_TEMPLATE = '[]\n';
@@ -202,10 +204,17 @@ export function runResolvedDsh(cli, args = [], {
 /**
  * Install a reusable DSH CLI into Crew-owned state. This is the only helper
  * that may invoke a package manager, and callers must explicitly opt into it.
+ *
+ * The caller-supplied `version` defaults to the pinned TARGET. Reuse happens
+ * only when the live runtime already matches `version`; a mismatch is
+ * reported as DSH_RUNTIME_COHORT_MISMATCH and NEVER upgraded in place.
+ * Callers that intend an upgrade must interpret that code as needsMigration
+ * and run the staged transactional path — there is deliberately no `force`.
  */
 export function ensureCrewDshRuntime({
   home = homedir(),
-  packageSpec = TARGET_DSH_SPEC,
+  version = TARGET_DSH_VERSION,
+  packageSpec = `${DSH_CLI_PACKAGE}@${version}`,
   npmCommand = null,
   pnpmCommand = null,
   findCommand = defaultFindCommand,
@@ -216,19 +225,20 @@ export function ensureCrewDshRuntime({
   env = process.env,
 } = {}) {
   const existing = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false });
-  // Reuse only when the installed runtime already matches the pinned cohort.
-  // A stale cohort (e.g. an online 0.1.1-rc.2 runtime) must never be mistaken
-  // for the target, and it must never be upgraded in place under a live hub.
-  if (existing?.kind === 'crew-runtime' && existing?.version === TARGET_DSH_VERSION) {
+  // Reuse only when the installed runtime already matches the requested
+  // cohort. A stale cohort (e.g. an online 0.1.1-rc.2 runtime) must never be
+  // mistaken for the target, and it must never be upgraded in place under a
+  // live hub.
+  if (existing?.kind === 'crew-runtime' && existing?.version === version) {
     return { ok: true, cli: existing, reused: true };
   }
   if (existing?.kind === 'crew-runtime') {
     return {
       ok: false,
       code: 'DSH_RUNTIME_COHORT_MISMATCH',
-      error: `Crew runtime is ${existing.version ?? 'unknown version'} but ${TARGET_DSH_VERSION} is required; refusing in-place upgrade of a live runtime`,
+      error: `Crew runtime is ${existing.version ?? 'unknown version'} but ${version} is required; refusing in-place upgrade of a live runtime`,
       installed: existing.version ?? null,
-      target: TARGET_DSH_VERSION,
+      target: version,
     };
   }
 
@@ -260,15 +270,15 @@ export function ensureCrewDshRuntime({
       stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
     };
   }
-  // Fail closed when the installed cohort drifts from the pinned target
+  // Fail closed when the installed cohort drifts from the requested target
   // (registry race, hoisted pollution, partial install).
-  if (cli.version !== TARGET_DSH_VERSION) {
+  if (cli.version !== version) {
     return {
       ok: false,
       code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
-      error: `installed Crew runtime is ${cli.version ?? 'unknown version'} but ${TARGET_DSH_VERSION} is required`,
+      error: `installed Crew runtime is ${cli.version ?? 'unknown version'} but ${version} is required`,
       installed: cli.version ?? null,
-      target: TARGET_DSH_VERSION,
+      target: version,
     };
   }
   return { ok: true, cli, reused: false, version: cli.version, runtimeRoot };
@@ -280,11 +290,79 @@ export function describeDshCli(cli) {
   return `${cli.kind}${version}`;
 }
 
+// Shared pnpm/npm install of the pinned DSH cohort into a specific root
+// directory. pnpm materializes ABSOLUTE-path .cmd shims and junctions that
+// point at the install root's own .pnpm store, so the tree must be installed
+// at its FINAL resting path: renaming a pnpm tree breaks every shim. Callers
+// that need an atomic swap must install at the live root only after moving
+// the old tree aside.
+export function installDshInto({
+  root,
+  version,
+  packageSpec = `${DSH_CLI_PACKAGE}@${version}`,
+  npmCommand = null,
+  pnpmCommand = null,
+  findCommand = defaultFindCommand,
+  exists = defaultExists,
+  runner = spawnSync,
+  platform = process.platform,
+  comspec = process.env.ComSpec ?? 'cmd.exe',
+  env = process.env,
+}) {
+  const pnpm = pnpmCommand ?? findCommand('pnpm');
+  const npm = npmCommand ?? findCommand('npm');
+  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
+  mkdirSync(root, { recursive: true });
+  const packageManager = pnpm
+    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
+    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
+  const packageArgs = pnpm
+    ? ['add', '--dir', root, '--ignore-scripts', packageSpec]
+    : ['install', '--prefix', root, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
+  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const result = runner(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: invocation.shell,
+    env: { ...env },
+  });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_FAILED',
+      error: 'Crew runtime install failed',
+      status: result.status ?? -1,
+      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  const moduleEntry = join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  if (!exists(moduleEntry)) {
+    return { ok: false, code: 'DSH_RUNTIME_INSTALL_INCOMPLETE', error: 'runtime entry missing after install' };
+  }
+  const installedVersion = packageVersion(moduleEntry);
+  if (installedVersion !== version) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
+      error: `installed Crew runtime is ${installedVersion ?? 'unknown version'} but ${version} is required`,
+      installed: installedVersion ?? null,
+      target: version,
+    };
+  }
+  return { ok: true, root, version: installedVersion };
+}
+
 // Staged cohort migration: install the target cohort into a versioned
 // directory WITHOUT touching the live runtime/, verify its manifest, then
 // report the staged root for an atomic switch by the caller (stop owned
 // 3210 -> swap directories -> clean restart -> identity check). Never
 // upgrades a live runtime in place.
+//
+// NOTE: pnpm trees embed absolute paths in .cmd shims and junctions, so a
+// staged tree CANNOT be renamed onto the live root afterwards. migrate
+//CrewDshRuntime therefore installs at the live root in place (after parking
+// the old tree); stageCrewDshRuntime remains for callers that consume the
+// stage dir at its fixed versioned path (tests, dry runs, audits).
 export function stageCrewDshRuntime({
   home = homedir(),
   version = TARGET_DSH_VERSION,
@@ -300,34 +378,29 @@ export function stageCrewDshRuntime({
   read = readFileSync,
 } = {}) {
   const stagedRoot = crewDshRuntimeVersionDir({ home, version });
-  const pnpm = pnpmCommand ?? findCommand('pnpm');
-  const npm = npmCommand ?? findCommand('npm');
-  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
   // Clean/recreate the versioned stage dir: a failed older attempt must
   // never contaminate the next staging.
   try { rmSync(stagedRoot, { recursive: true, force: true }); } catch {}
-  mkdirSync(stagedRoot, { recursive: true });
-  const packageManager = pnpm
-    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
-    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
-  const packageArgs = pnpm
-    ? ['add', '--dir', stagedRoot, '--ignore-scripts', packageSpec]
-    : ['install', '--prefix', stagedRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
-  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
-  const result = runner(invocation.command, invocation.args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: invocation.shell,
-    env: { ...env },
+  const installed = installDshInto({
+    root: stagedRoot,
+    version,
+    packageSpec,
+    npmCommand,
+    pnpmCommand,
+    findCommand,
+    exists,
+    runner,
+    platform,
+    comspec,
+    env,
   });
-  if (result.status !== 0) {
-    return {
-      ok: false,
-      code: 'DSH_RUNTIME_STAGE_FAILED',
-      error: 'staged Crew runtime install failed',
-      status: result.status ?? -1,
-      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
-    };
+  if (!installed.ok) {
+    const code = installed.code === 'DSH_RUNTIME_INSTALL_FAILED'
+      ? 'DSH_RUNTIME_STAGE_FAILED'
+      : installed.code === 'DSH_RUNTIME_INSTALL_INCOMPLETE'
+        ? 'DSH_RUNTIME_STAGE_INCOMPLETE'
+        : installed.code;
+    return { ...installed, code, error: code === 'DSH_RUNTIME_STAGE_FAILED' ? 'staged Crew runtime install failed' : installed.error };
   }
   const stagedModule = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
   if (!exists(stagedModule)) {
@@ -347,11 +420,18 @@ export function stageCrewDshRuntime({
 }
 
 // Full cohort migration transaction (caller holds the update lock):
-// stage -> stop owned 3210 -> swap live runtime -> restart -> identity
-// verify -> rollback on any failure. Directory swaps use unique attempt
-// dirs so a failed older attempt can never contaminate the next one.
+// stop owned 3210 -> park the live tree (rename to prev, its shims stay
+// valid because the tree returns to the same path on rollback) -> install
+// the target cohort AT THE LIVE ROOT (pnpm shims are absolute-path, so the
+// tree must be born at its final resting path; a renamed pnpm tree has
+// dangling shims) -> restart -> identity verify -> rollback on any failure.
 // stopOwned/startOwned/verifyOwned have NO defaults: a missing callback
 // fails closed instead of pretending an unverified step succeeded.
+//
+// prepareOnly=true stops + swaps the tree but NEVER starts the process:
+// the caller (a pair-ordered rollback/compensation) will activate the
+// matching Crew payload and start exactly once itself. The parked prior
+// tree is returned as prevRoot for durable retention by the caller.
 export async function migrateCrewDshRuntime({
   home = homedir(),
   version = TARGET_DSH_VERSION,
@@ -361,61 +441,76 @@ export async function migrateCrewDshRuntime({
   verifyOwned,
   rename = renameSync,
   log = () => {},
+  prepareOnly = false,
 } = {}) {
-  if (typeof stopOwned !== 'function' || typeof startOwned !== 'function' || typeof verifyOwned !== 'function') {
-    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop/start/verify callbacks are required' };
-  }
   const liveRoot = crewDshRuntimeRoot({ home });
-  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const attemptRoot = join(crewDshHome({ home }), `runtime-stage-${version}-${nonce}`);
-  const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
-  const staged = stageCrewDshRuntime({ home, version, ...stageOptions });
-  if (!staged.ok) return staged;
-  // Relocate the verified stage to a unique attempt dir so retries never
-  // reuse a contaminated versioned directory.
-  try {
-    rename(staged.stagedRoot, attemptRoot);
-  } catch (error) {
-    return { ok: false, code: 'DSH_RUNTIME_STAGE_RELOCATE_FAILED', error: String(error?.message ?? error) };
+  if (typeof stopOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop callback is required' };
   }
+  if (!prepareOnly && (typeof startOwned !== 'function' || typeof verifyOwned !== 'function')) {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'start/verify callbacks are required unless prepareOnly' };
+  }
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
   const stop = await stopOwned();
   if (!stop.ok) {
     return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
   }
   let liveMoved = false;
   try {
-    if (existsSync(liveRoot)) rename(liveRoot, prevRoot);
-    liveMoved = true;
-    rename(attemptRoot, liveRoot);
+    if (existsSync(liveRoot)) {
+      rename(liveRoot, prevRoot);
+      liveMoved = true;
+    }
+    mkdirSync(liveRoot, { recursive: true });
   } catch (error) {
-    // Second rename failed: restore prev BEFORE reporting, then restart it.
+    // Park failed: restore the live tree before reporting.
     let recovery = { ok: false };
     try {
       if (liveMoved && existsSync(prevRoot) && !existsSync(liveRoot)) rename(prevRoot, liveRoot);
-      const restarted = await startOwned();
-      recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+      if (!prepareOnly) {
+        const restarted = await startOwned();
+        recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+      } else {
+        recovery = { ok: true };
+      }
     } catch (recoveryError) {
       recovery = { ok: false, code: 'DSH_RUNTIME_SWAP_RECOVERY_FAILED', error: String(recoveryError?.message ?? recoveryError) };
     }
-    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), recovery };
+    return { ok: false, code: 'DSH_RUNTIME_PARK_FAILED', error: String(error?.message ?? error), recovery };
+  }
+  // Install the target cohort AT the live root so every pnpm shim/junction
+  // carries the correct final absolute path.
+  const installed = installDshInto({ root: liveRoot, version, ...stageOptions });
+  if (!installed.ok) {
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename, prepareOnly });
+    return { ok: false, code: installed.code ?? 'DSH_RUNTIME_INSTALL_FAILED', error: installed.error ?? 'runtime install at live root failed', recovery };
+  }
+  if (prepareOnly) {
+    log(`- runtime tree prepared at live root (@${version}); process not started`);
+    return { ok: true, version, liveRoot, prevRoot, prepared: true };
   }
   const start = await startOwned();
   if (!start.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
-    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed', recovery };
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after install failed', recovery };
   }
   const verified = await verifyOwned();
   if (!verified.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename });
     return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed', recovery };
   }
-  try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
-  try { rmSync(staged.stagedRoot, { recursive: true, force: true }); } catch {}
+  // Retain the prior cohort under retained-runtimes/<version> instead of
+  // deleting it: a later cross-cohort rollback can restore it offline with
+  // no registry round-trip. Retention is best-effort (a failure here must
+  // not fail the migration), and an existing retained copy of the same
+  // version is replaced so the retained set always holds the newest tree.
+  retainPriorRuntime({ home, prevRoot });
   log(`- runtime cohort migrated to ${version}`);
   return { ok: true, version, liveRoot };
 }
 
-async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename = renameSync }) {
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, rename = renameSync, prepareOnly = false }) {
   const recovery = { stoppedCandidate: false, restore: false, restart: false };
   // The failed candidate 3210 may still be running against the tree we are
   // about to replace: stop it FIRST, otherwise the swap races a live
@@ -439,7 +534,10 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned,
   } catch (error) {
     recovery.restoreError = String(error?.message ?? error);
   }
-  try { rmSync(attemptRoot, { recursive: true, force: true }); } catch {}
+  if (prepareOnly) {
+    recovery.ok = recovery.restore === true;
+    return recovery;
+  }
   try {
     const restarted = await startOwned();
     recovery.restart = restarted?.ok === true;
@@ -449,6 +547,160 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned,
   }
   recovery.ok = recovery.restore === true && recovery.restart === true;
   return recovery;
+}
+
+// ---- retained runtime cohorts -------------------------------------------------
+
+function retainedRuntimesRoot({ home }) {
+  return join(crewDshHome({ home }), RETAINED_RUNTIMES_DIRNAME);
+}
+
+function retainedRuntimeDir({ home, version }) {
+  return join(retainedRuntimesRoot({ home }), version);
+}
+
+// Probe the dsh package version inside a runtime tree (live or prev/retained).
+function runtimeTreeVersion(root, read = readFileSync) {
+  if (!root) return null;
+  try {
+    const file = join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
+    const parsed = JSON.parse(read(file, 'utf8'));
+    return typeof parsed.version === 'string' && parsed.version.length > 0 ? parsed.version : null;
+  } catch { return null; }
+}
+
+// Best-effort retention of the swapped-out prior runtime tree. Never throws
+// and never fails the caller: retention is an optimization for offline
+// rollback, not a correctness requirement of the migration itself.
+function retainPriorRuntime({ home, prevRoot, rename = renameSync }) {
+  try {
+    if (!existsSync(prevRoot)) return { ok: true, retained: false };
+    const version = runtimeTreeVersion(prevRoot);
+    if (!version) {
+      // No version to key retention on; the tree is unreadable junk.
+      try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
+      return { ok: true, retained: false, reason: 'prior tree version unreadable; removed' };
+    }
+    const retainedRoot = retainedRuntimesRoot({ home });
+    const target = retainedRuntimeDir({ home, version });
+    mkdirSync(retainedRoot, { recursive: true });
+    if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+    rename(prevRoot, target);
+    return { ok: true, retained: true, version, path: target };
+  } catch (error) {
+    // A failed retain must not fail an otherwise-successful migration, and it
+    // must NOT delete the parked prior tree: that tree is the only offline
+    // rollback copy of the previous cohort. Leave it in place (a later
+    // operator/GC pass can retry or reap it) and report the failure loudly.
+    return { ok: false, retained: false, prevRoot, error: String(error?.message ?? error) };
+  }
+}
+
+// Locate a usable retained cohort tree. Returns the retained path when one
+// exists and its manifest reports the requested version; otherwise null.
+export function findRetainedRuntime({ home = homedir(), version, exists = existsSync, read = readFileSync } = {}) {
+  if (typeof version !== 'string' || version.length === 0) return null;
+  const dir = retainedRuntimeDir({ home, version });
+  if (!exists(dir)) return null;
+  if (runtimeTreeVersion(dir, read) !== version) return null;
+  return dir;
+}
+
+// Offline cohort restore for cross-cohort rollback: move the retained tree
+// back onto live runtime/. The caller must hold the update lock.
+//
+// Pair-ordering contract: with prepareOnly=false this helper ALSO starts and
+// verifies the 3210, which is only safe when the caller has already
+// activated the matching Crew payload. Callers that must activate the
+// payload FIRST (rollback/compensation pair transition) pass prepareOnly=true
+// to swap the tree WITHOUT starting the process, then activate the payload,
+// then start once and dual-verify. On success the retained copy is consumed
+// (moved), so a subsequent rollback to the same cohort re-stages from the
+// registry.
+export async function restoreRetainedRuntime({
+  home = homedir(),
+  version,
+  stopOwned,
+  startOwned,
+  verifyOwned,
+  rename = renameSync,
+  log = () => {},
+  prepareOnly = false,
+} = {}) {
+  const retained = findRetainedRuntime({ home, version });
+  if (!retained) {
+    return { ok: false, code: 'DSH_RUNTIME_RETAINED_MISSING', error: `no retained runtime for cohort ${version}` };
+  }
+  if (typeof stopOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop callback is required' };
+  }
+  if (!prepareOnly && (typeof startOwned !== 'function' || typeof verifyOwned !== 'function')) {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'start/verify callbacks are required unless prepareOnly' };
+  }
+  const liveRoot = crewDshRuntimeRoot({ home });
+  const stop = await stopOwned();
+  if (!stop.ok) {
+    return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
+  }
+  try {
+    if (existsSync(liveRoot)) rmSync(liveRoot, { recursive: true, force: true });
+    rename(retained, liveRoot);
+  } catch (error) {
+    // Restore the pre-existing live tree is impossible (it was replaced only
+    // on success above); report and let the caller reconcile.
+    return { ok: false, code: 'DSH_RUNTIME_RESTORE_SWAP_FAILED', error: String(error?.message ?? error) };
+  }
+  if (prepareOnly) {
+    log(`- runtime tree prepared offline from retained tree (@${version}); process not started`);
+    return { ok: true, version, liveRoot, prepared: true };
+  }
+  const start = await startOwned();
+  if (!start.ok) {
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after restore failed', restored: true };
+  }
+  const verified = await verifyOwned();
+  if (!verified.ok) {
+    return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check after restore failed', restored: true };
+  }
+  log(`- runtime cohort restored offline from retained tree (@${version})`);
+  return { ok: true, version, liveRoot };
+}
+
+// GC retained runtimes that no release pins. A retained cohort is needed only
+// while some managed release (current or retained) declares it as its exact
+// @deepseek-ai/dsh dependency. Best-effort; never throws.
+export function gcRetainedRuntimes({ home = homedir(), releases = [], log = () => {} } = {}) {
+  const root = retainedRuntimesRoot({ home });
+  if (!existsSync(root)) return [];
+  const needed = new Set();
+  for (const release of releases) {
+    const spec = payloadDshSpec(release);
+    if (spec && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(spec)) needed.add(spec);
+  }
+  const removed = [];
+  for (const name of readdirSync(root)) {
+    const dir = join(root, name);
+    if (!needed.has(name)) {
+      try { rmSync(dir, { recursive: true, force: true }); removed.push(name); } catch { /* best effort */ }
+    }
+  }
+  return removed;
+}
+
+// Read the exact @deepseek-ai/dsh pin from a payload manifest (dependencies
+// first, then peerDependencies). Exact pins only: a range or absence yields
+// null so callers fail closed instead of guessing a cohort.
+function payloadDshSpec(manifest) {
+  if (!manifest || typeof manifest !== 'object') return null;
+  const direct = manifest.dependencies?.['@deepseek-ai/dsh'];
+  if (typeof direct === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(direct)) return direct;
+  const peer = manifest.peerDependencies?.['@deepseek-ai/dsh'];
+  if (typeof peer === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(peer)) return peer;
+  return null;
+}
+
+export function payloadDshVersion(manifest) {
+  return payloadDshSpec(manifest);
 }
 
 function isObject(value) {

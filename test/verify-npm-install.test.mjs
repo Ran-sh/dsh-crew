@@ -100,9 +100,10 @@ async function withTempRoot(packageJson, fn) {
   }
 }
 
-test('cohort range evaluator accepts the official alpha.5 cohort and rejects rc.2', () => {
-  assert.equal(satisfiesCohortRange(supportedDshVersion, '^0.1.2-alpha.5'), true);
-  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.2-alpha.5'), true);
+test('cohort range evaluator accepts the supported rc.1 cohort and rejects stale alpha.5', () => {
+  assert.equal(satisfiesCohortRange(supportedDshVersion, `^${supportedDshVersion}`), true);
+  assert.equal(satisfiesCohortRange(supportedDshVersion, supportedDshVersion), true);
+  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.2-alpha.5'), false);
   assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.1-rc.2'), false);
   assert.equal(satisfiesCohortRange(supportedDshVersion, '*'), false);
 });

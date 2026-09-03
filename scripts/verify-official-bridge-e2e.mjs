@@ -18,6 +18,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { npxInstall, npxIntegrate } from '../src/install/npx-lifecycle.mjs';
 
+// RETIRED as a release gate: the legacy 3080 -> 3210 bridge is retired and
+// npxIntegrate()/npxDetach() always return OFFICIAL_WEB_PROFILE_READ_ONLY, so
+// the bridge journey this script asserts can no longer pass on current code.
+// Kept only as an operator diagnostic: run with --diagnostic-only to skip the
+// retired integrate assertion and report the read-only policy explicitly.
+const diagnosticOnly = process.argv.includes('--diagnostic-only');
+if (diagnosticOnly) {
+  console.log('[diagnostic] legacy official-bridge e2e retired; official web profile is read-only; nothing to verify.');
+  process.exit(0);
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const candidateVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 if (typeof candidateVersion !== 'string' || candidateVersion === '') throw new Error('candidate package version is unavailable');
@@ -128,7 +139,7 @@ try {
       const target = join(harnessHome, 'runtime');
       mkdirSync(dirname(target), { recursive: true });
       symlinkSync(realpathSync(runtimeRoot), target, process.platform === 'win32' ? 'junction' : 'dir');
-      return { ok: true, version: '0.1.2-alpha.5' };
+      return { ok: true, version: '0.1.2-rc.1' };
     },
   });
   assert(installed.ok, `disposable install failed: ${logs.join(' | ')}`);

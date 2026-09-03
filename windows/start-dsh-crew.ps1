@@ -31,16 +31,40 @@ function Write-LaunchLog {
 }
 
 function Get-HealthState {
-  param([pscustomobject] $Service)
+  param([pscustomObject] $Service)
   # Crew-owned 3210 answers the Crew extension contract. The official 3080
   # is an external dependency: probe only its native web root, never the
   # Crew bridge endpoint, so a missing legacy bridge cannot fail 3080 health.
   if ($Service.CrewOwned) {
     try {
       $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
-      $version = $response.extension.runtime.runtime_version
-      if ($response.ok -eq $true -and $version) {
+      $runtime = $response.extension.runtime
+      $version = $runtime.runtime_version
+      # A stale 3210 process (booted before the runtime tree was swapped) can
+      # keep serving from memory while the disk tree is a different cohort.
+      # Require the reported dsh_version to equal the installed disk
+      # @deepseek-ai/dsh version so supervisor never treats a
+      # disk-rc.1/memory-alpha.5 (or vice versa) process as healthy.
+      # FAIL CLOSED: an unreadable/missing disk manifest is NOT healthy —
+      # the process cannot be proven to match the tree it will next boot.
+      $expectedDshVersion = $null
+      $diskReadable = $false
+      $runtimeManifest = Join-Path $crewHome 'runtime\node_modules\@deepseek-ai\dsh\package.json'
+      if (Test-Path -LiteralPath $runtimeManifest -PathType Leaf) {
+        try {
+          $expectedDshVersion = (Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json).version
+          if ($expectedDshVersion) { $diskReadable = $true }
+        } catch { $expectedDshVersion = $null }
+      }
+      $cohortMatches = $diskReadable -and $runtime.dsh_version -eq $expectedDshVersion
+      if ($response.ok -eq $true -and $version -and $cohortMatches) {
         return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
+      }
+      if (-not $diskReadable) {
+        return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'disk runtime manifest unreadable; cannot prove cohort identity' }
+      }
+      if ($version -and -not $cohortMatches) {
+        return [pscustomobject]@{ Ready = $false; Version = [string] $version; Error = ('runtime cohort mismatch: hub reports dsh_version={0} but disk runtime is {1}' -f $runtime.dsh_version, $expectedDshVersion) }
       }
       return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Response did not contain a ready runtime contract.' }
     } catch {
@@ -48,12 +72,25 @@ function Get-HealthState {
     }
   }
   try {
+    # The official 3080 UI may require a token (HTTP 401/403 on the bare
+    # root) or redirect to the web entry (3xx). Accept exactly those; any
+    # other status (e.g. 404 from a foreign HTTP service squatting on 3080)
+    # is NOT healthy.
     $response = Invoke-WebRequest -UseBasicParsing -Uri $Service.Url -TimeoutSec 2
     if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
       return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
     }
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = ('Official UI returned HTTP {0}.' -f $response.StatusCode) }
   } catch {
+    # Invoke-WebRequest surfaces 401/403 as exceptions; those prove the web
+    # service is alive and answering (token gate present).
+    $status = $null
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+      $status = [int] $_.Exception.Response.StatusCode
+    }
+    if ($status -eq 401 -or $status -eq 403) {
+      return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
+    }
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
   }
 }

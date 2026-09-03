@@ -19,6 +19,7 @@ import {
   runResolvedDsh,
   describeDshCli,
   removeCrewPluginRegistration,
+  TARGET_DSH_VERSION,
 } from '../src/dsh-cli-runtime.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -181,6 +182,17 @@ export async function setupInstall({
   // available, install a reusable copy under Crew state before falling back to
   // the transient download path. Dry-run never provisions or downloads.
   let dsh = detectDsh({ allowDownload: false, home });
+  // A reusable Crew runtime pinned to a DIFFERENT cohort than this source
+  // tree must never be silently reused (and never upgraded in place by the
+  // installer): a stale runtime would boot the wrong @deepseek-ai/dsh. The
+  // transactional update path owns cohort migration. Dry-run never mutates
+  // and must not be blocked by the machine's current cohort state.
+  if (!dryRun && dsh?.kind === 'crew-runtime' && dsh.version && dsh.version !== TARGET_DSH_VERSION) {
+    return {
+      ok: false,
+      error: `Crew runtime ${dsh.version} does not match ${TARGET_DSH_VERSION}; use the transactional update path (dsh-crew update) to migrate the cohort`,
+    };
+  }
   if (!dryRun && (!dsh || dsh.kind === 'npx-local')) {
     const boot = ensureCrewDshRuntime({ home });
     if (boot.ok) dsh = boot.cli;

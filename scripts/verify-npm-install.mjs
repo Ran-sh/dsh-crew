@@ -14,10 +14,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { TARGET_DSH_VERSION } from '../src/dsh-cohort.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const registry = process.env.NPM_REGISTRY ?? 'https://registry.npmjs.org/';
-export const supportedDshVersion = '0.1.2-alpha.5';
+export const supportedDshVersion = TARGET_DSH_VERSION;
 const verifyOfficialDsh = process.argv.includes('--with-official-dsh');
 const DSH_PACKAGE = '@deepseek-ai/dsh';
 const DSH_PREFIX = '@deepseek-ai/dsh-';
