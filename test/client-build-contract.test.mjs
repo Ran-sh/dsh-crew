@@ -77,7 +77,9 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /credentialRefs/);
   assert.match(panelSource, /sectionId=["']harnessProviders["']/);
   assert.match(panelSource, /delete-plan/);
-  assert.match(panelSource, /supervisor\/restart/);
+  assert.match(panelSource, /runtime\/restart-request/);
+  assert.match(panelSource, /runtime\/restart-status/);
+  assert.doesNotMatch(panelSource, /127\.0\.0\.1:3080\/_dsh\/dsh-crew\/supervisor\/restart/);
   assert.match(panelSource, /verify-delete/);
   assert.match(panelSource, /migrate-plan/);
   assert.match(panelSource, /verify-migration/);

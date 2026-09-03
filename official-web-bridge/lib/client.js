@@ -1740,6 +1740,34 @@ function WorkersPanel({ ctx }) {
 		get,
 		copy
 	]);
+	/** Request a Crew 3210 restart through the durable supervisor channel
+	*  (hub writes the request; the Windows watcher executes it). Polls until
+	*  VERIFIED or a terminal failure. Same-origin against the 3210 API — the
+	*  legacy 3080 supervisor endpoint is retired. */
+	const requestRestart = (0, react.useCallback)(async (reason) => {
+		const created = await post("/runtime/restart-request", {
+			confirm: true,
+			reason: reason ?? "configuration change"
+		});
+		if (!created.ok) throw new Error(created.code ?? created.error ?? copy.providerLifecycleError);
+		const requestId = created.request_id;
+		const deadline = Date.now() + 9e4;
+		for (;;) {
+			await new Promise((resolve) => setTimeout(resolve, 1e3));
+			if (Date.now() > deadline) throw new Error("Crew restart timed out");
+			const status = await get(`/runtime/restart-status?id=${encodeURIComponent(requestId)}`);
+			if (!status.ok) continue;
+			if (status.state === "VERIFIED") return {
+				ok: true,
+				...status
+			};
+			if (status.state !== "RESTART_REQUESTED") throw new Error(status.state ?? "Crew restart failed");
+		}
+	}, [
+		post,
+		get,
+		copy
+	]);
 	/** Selects & checkboxes: apply immediately. */
 	const field = (key, value) => {
 		setConfig((c) => ({
@@ -2039,13 +2067,7 @@ function WorkersPanel({ ctx }) {
 			}), path);
 			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
 			if (result.restart_required === true && result.result?.state === "RESTART_PENDING") {
-				const restartPath = "http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart";
-				const restarted = await readJson(await fetch(restartPath, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ confirm: true })
-				}), restartPath);
-				if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+				await requestRestart("provider delete");
 				const verified = await post(`/providers/${encoded}/verify-delete`, {
 					transaction_id: planned.plan.plan_id,
 					confirm: true
@@ -2084,13 +2106,7 @@ function WorkersPanel({ ctx }) {
 			});
 			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
 			if (result.restart_required === true && result.result?.state === "RESTART_PENDING") {
-				const restartPath = "http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart";
-				const restarted = await readJson(await fetch(restartPath, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ confirm: true })
-				}), restartPath);
-				if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+				await requestRestart("provider migrate");
 				const verified = await post(`/providers/${encoded}/verify-migration`, {
 					transaction_id: planned.plan.plan_id,
 					confirm: true
@@ -2119,15 +2135,7 @@ function WorkersPanel({ ctx }) {
 				confirm: true
 			});
 			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
-			if (result.restart_required === true) {
-				const restartPath = "http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart";
-				const restarted = await readJson(await fetch(restartPath, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ confirm: true })
-				}), restartPath);
-				if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
-			}
+			if (result.restart_required === true) await requestRestart("provider migrate");
 			setNotice(copy.saved);
 			await refreshProviderInventory();
 		} catch (error) {
@@ -2172,13 +2180,7 @@ function WorkersPanel({ ctx }) {
 			});
 			if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
 			if (result.restart_required === true && result.state === "ROLLBACK_PENDING") {
-				const restartPath = "http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart";
-				const restarted = await readJson(await fetch(restartPath, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ confirm: true })
-				}), restartPath);
-				if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+				await requestRestart("provider migrate");
 				const verified = await post(`/providers/${encoded}/verify-rollback`, {
 					transaction_id: transactionId,
 					confirm: true

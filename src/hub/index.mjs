@@ -1482,10 +1482,71 @@ export async function apply(ctx) {
       },
     }));
 
-    // Durable restart-request protocol: the hub writes a request the Windows
-    // supervisor executes. The hub NEVER spawns itself. A fresh supervisor
-    // heartbeat is required so a request is never left to be discovered days
-    // later by a watcher that is not actually running.
+    // Quick-config: the narrow, capability-projected write surface used by
+    // the official 3080 quick-controls panel. Only the user-facing toggles
+    // and model-priority lists are writable here; the FULL config endpoint
+    // remains the single authority for everything else. This is a projection
+    // over writeGlobalConfig, never a second config store.
+    const QUICK_CONFIG_KEYS = new Set([
+      'subagents_enabled',
+      'flash_model_priority',
+      'pro_model_priority',
+      'vision_enabled',
+      'imagegen_enabled',
+      'vision_provider',
+      'imagegen_provider',
+    ]);
+    const projectQuickConfig = (config) => Object.fromEntries(
+      [...QUICK_CONFIG_KEYS].map((key) => [key, config[key]]),
+    );
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/quick-config`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        try {
+          const { readGlobalConfig, writeGlobalConfig } = await import(`../install/install.mjs?t=${Date.now()}`);
+          if (req.method === 'GET') {
+            return sendJson(res, 200, { ok: true, config: projectQuickConfig(readGlobalConfig()) });
+          }
+          if (req.method === 'POST') {
+            const body = await readBody(req);
+            const patch = {};
+            for (const [key, value] of Object.entries(body ?? {})) {
+              if (!QUICK_CONFIG_KEYS.has(key)) {
+                return sendJson(res, 403, { ok: false, code: 'QUICK_CONFIG_KEY_FORBIDDEN', error: `key not writable from the quick surface: ${key}` });
+              }
+              patch[key] = value;
+            }
+            const next = writeGlobalConfig(patch);
+            return sendJson(res, 200, { ok: true, config: projectQuickConfig(next) });
+          }
+          return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/quick-status`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const { readGlobalConfig } = await import(`../install/install.mjs?t=${Date.now()}`);
+          const runtime = getHubRuntimeIdentity();
+          return sendJson(res, 200, {
+            ok: true,
+            ready: true,
+            runtime: { runtime_version: runtime.runtime_version, dsh_version: runtime.dsh_version ?? null, runtime_id: runtime.runtime_id },
+            config: projectQuickConfig(readGlobalConfig()),
+          });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
     disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/runtime/restart-request`,
       handler: async (req, res) => {

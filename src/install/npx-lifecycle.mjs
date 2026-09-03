@@ -1129,14 +1129,65 @@ export function listManagedReleases({ home = homedir() } = {}) {
     .sort((a, b) => compareVersions(b.version, a.version) || b.path.localeCompare(a.path));
 }
 
+// Unified restart client: request a Crew 3210 restart through the durable
+// supervisor control channel. The hub (3210) writes a restart request; the
+// Windows supervisor executes it and writes a VERIFIED result. This polls
+// until the result arrives (or the timeout elapses). NEVER talks to the
+// legacy 3080 supervisor endpoint.
+export async function requestCrewRuntimeRestart({
+  reason = null,
+  fetchImpl = globalThis.fetch,
+  pollIntervalMs = 1_000,
+  timeoutMs = 90_000,
+  log = () => {},
+} = {}) {
+  const base = 'http://127.0.0.1:3210/_dsh/dsh-crew/runtime';
+  let created;
+  try {
+    const response = await fetchImpl(`${base}/restart-request`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true, reason }),
+    });
+    created = await response.json();
+    if (!response.ok || created?.ok !== true) {
+      return { ok: false, code: created?.code ?? 'CREW_3210_RESTART_REQUEST_FAILED', error: created?.error ?? `restart request failed (HTTP ${response.status})` };
+    }
+  } catch (error) {
+    return { ok: false, code: 'CREW_3210_RESTART_REQUEST_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const requestId = created.request_id;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    if (Date.now() > deadline) {
+      return { ok: false, code: 'CREW_3210_RESTART_TIMEOUT', error: `restart request ${requestId} not verified within ${timeoutMs}ms`, request_id: requestId };
+    }
+    try {
+      const statusResponse = await fetchImpl(`${base}/restart-status?id=${encodeURIComponent(requestId)}`, { headers: { accept: 'application/json' } });
+      const status = await statusResponse.json();
+      if (!statusResponse.ok || status?.ok !== true) {
+        // 404 while the watcher has not yet picked the request up is normal.
+        if (statusResponse.status === 404) continue;
+        return { ok: false, code: status?.code ?? 'CREW_3210_RESTART_STATUS_FAILED', error: status?.error ?? 'restart status query failed', request_id: requestId };
+      }
+      if (status.state === 'VERIFIED') {
+        log(`- Crew 3210 restart verified (request ${requestId})`);
+        return { ok: true, state: 'VERIFIED', request_id: requestId, detail: status.detail ?? null };
+      }
+      if (status.state === 'RESTART_REQUEST_EXPIRED' || status.state === 'SUPERVISOR_OWNERSHIP_CONFLICT' || status.state === 'SUPERVISOR_STOP_FAILED' || status.state === 'VERIFY_FAILED') {
+        return { ok: false, code: `CREW_3210_RESTART_${status.state}`, error: `restart ended in state ${status.state}`, request_id: requestId, detail: status.detail ?? null };
+      }
+      // RESTART_REQUESTED: still pending; keep polling.
+    } catch (error) {
+      // Hub may be briefly down mid-restart; keep polling until the deadline.
+      log(`- restart poll transient error: ${String(error?.message ?? error)}`);
+    }
+  }
+}
+
 async function restartOwnedRuntime(fetchImpl = globalThis.fetch) {
-  const response = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ confirm: true }),
-  });
-  const body = await response.json();
-  return response.ok && body?.ok === true ? body : { ok: false, code: body?.code ?? 'CREW_3210_RESTART_FAILED' };
+  return requestCrewRuntimeRestart({ fetchImpl, reason: 'lifecycle restart' });
 }
 
 async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
@@ -2805,13 +2856,8 @@ export async function npxProviders({
   let body = await response.json();
   if (!response.ok || body?.ok === false) throw new Error(body?.code ?? body?.error ?? 'Crew provider API unavailable');
   if (action === 'delete' && body?.restart_required === true && body?.result?.state === 'RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-delete`;
     const verifyResponse = await fetchImpl(verifyUrl, {
       method: 'POST',
@@ -2823,11 +2869,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'migrate' && body?.restart_required === true && body?.result?.state === 'RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyResponse = await fetchImpl(`${base}/${encodeURIComponent(id)}/verify-migration`, {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
     });
@@ -2836,11 +2879,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'rollback-migration' && body?.restart_required === true && body?.state === 'ROLLBACK_RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyResponse = await fetchImpl(`${base}/${encodeURIComponent(id)}/verify-rollback-migration`, {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
     });
@@ -2849,13 +2889,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'rollback' && body?.restart_required === true && body?.state === 'ROLLBACK_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-rollback`;
     const verifyResponse = await fetchImpl(verifyUrl, {
       method: 'POST',

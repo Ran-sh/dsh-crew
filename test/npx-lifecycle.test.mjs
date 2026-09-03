@@ -1041,6 +1041,8 @@ test('providers CLI exposes explicit layer migration actions on 3210', async () 
       status: 200,
       json: async () => ({ ok: true, service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['provider-inventory', 'provider-layer-migration-v1'] }),
     };
+    if (url.endsWith('/runtime/restart-request')) return { ok: true, status: 202, json: async () => ({ ok: true, state: 'RESTART_REQUESTED', request_id: 'req-1' }) };
+    if (url.includes('/runtime/restart-status')) return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED', request_id: 'req-1' }) };
     return { ok: true, json: async () => (url.includes('rollback-migration')
       ? { ok: true, state: 'ROLLBACK_RESTART_PENDING', restart_required: true, plan: { plan_id: 'migration-1' } }
       : { ok: true, plan: { plan_id: 'migration-1' }, restart_required: true, result: { state: 'RESTART_PENDING' } }) };
@@ -1050,7 +1052,7 @@ test('providers CLI exposes explicit layer migration actions on 3210', async () 
   assert.match(calls.at(-1)[0], /providers\/custom\/migrate-plan$/);
   await npxProviders({ ...common, args: ['migrate', 'custom'], planId: 'migration-1', confirm: true });
   assert.equal(calls.some(([url]) => url.endsWith('/providers/custom/migrate')), true);
-  assert.equal(calls.some(([url]) => url.includes('3080/_dsh/dsh-crew/supervisor/restart')), true);
+  assert.equal(calls.some(([url]) => url.includes('3210/_dsh/dsh-crew/runtime/restart-request')), true);
   await npxProviders({ ...common, args: ['rollback-migration', 'custom'], planId: 'migration-1', confirm: true });
   assert.equal(calls.some(([url]) => url.endsWith('/providers/custom/verify-rollback-migration')), true);
 });
@@ -1097,7 +1099,8 @@ test('providers CLI completes the deferred delete through the owned 3080 supervi
         capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
     };
     if (url.endsWith('/providers/opencode-go')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, result: { state: 'RESTART_PENDING', transaction_id: 'plan-1' } }) };
-    if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true, mode: 'official-3080-isolated-3210', execution_plane: 'hub-3210', listen_port: 3210 }) };
+    if (url.endsWith('/runtime/restart-request')) return { ok: true, status: 202, json: async () => ({ ok: true, state: 'RESTART_REQUESTED', request_id: 'req-1' }) };
+    if (url.includes('/runtime/restart-status')) return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED', request_id: 'req-1' }) };
     return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED' }) };
   };
   const result = await npxProviders({
@@ -1105,9 +1108,10 @@ test('providers CLI completes the deferred delete through the owned 3080 supervi
     log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
   });
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 4);
-  assert.match(calls[2][0], /127\.0\.0\.1:3080\/\_dsh\/dsh-crew\/supervisor\/restart/);
-  assert.match(calls[3][0], /providers\/opencode-go\/verify-delete/);
+  assert.equal(calls.length, 5);
+  assert.equal(calls.some(([url]) => url.includes('3210/_dsh/dsh-crew/runtime/restart-request')), true);
+  assert.equal(calls.some(([url]) => url.includes('/runtime/restart-status')), true);
+  assert.equal(calls.some(([url]) => url.endsWith('/providers/opencode-go/verify-delete')), true);
 });
 
 test('providers CLI completes the deferred rollback through the owned 3080 supervisor', async () => {
@@ -1121,7 +1125,8 @@ test('providers CLI completes the deferred rollback through the owned 3080 super
         capabilities: ['provider-inventory', 'provider-lifecycle-v1'] }),
     };
     if (url.endsWith('/providers/opencode-go/rollback')) return { ok: true, status: 202, json: async () => ({ ok: true, restart_required: true, state: 'ROLLBACK_PENDING', transaction_id: 'plan-1' }) };
-    if (url.includes('/supervisor/restart')) return { ok: true, status: 200, json: async () => ({ ok: true, restarted: true }) };
+    if (url.endsWith('/runtime/restart-request')) return { ok: true, status: 202, json: async () => ({ ok: true, state: 'RESTART_REQUESTED', request_id: 'req-1' }) };
+    if (url.includes('/runtime/restart-status')) return { ok: true, status: 200, json: async () => ({ ok: true, state: 'VERIFIED', request_id: 'req-1' }) };
     return { ok: true, status: 200, json: async () => ({ ok: true, state: 'ROLLED_BACK' }) };
   };
   const result = await npxProviders({
@@ -1129,8 +1134,9 @@ test('providers CLI completes the deferred rollback through the owned 3080 super
     log: () => {}, readConfig: () => ({ hub_url: 'http://127.0.0.1:3210' }), fetchImpl,
   });
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 4);
-  assert.match(calls[3][0], /providers\/opencode-go\/verify-rollback/);
+  assert.equal(calls.length, 5);
+  assert.equal(calls.some(([url]) => url.includes('3210/_dsh/dsh-crew/runtime/restart-request')), true);
+  assert.equal(calls.some(([url]) => url.endsWith('/providers/opencode-go/verify-rollback')), true);
 });
 
 test('credentials CLI exposes an independent plan-and-confirm purge flow', async () => {
