@@ -130,13 +130,15 @@ export function createCrewSidecarSupervisor({
     } catch {}
   }
 
-  function persistOwnership(pid, identity = null) {
+  function persistOwnership(pid, identity = null, { state = 'owned' } = {}) {
     if (!Number.isInteger(pid) || pid < 1) return false;
+    if (state === 'owned' && !(typeof identity?.runtime_id === 'string' && identity.runtime_id.length > 0)) return false;
     try {
       mkdirSync(dshHome, { recursive: true });
       const temp = `${ownershipFile}.${process.pid}.${Date.now()}.tmp`;
       writeFileSync(temp, JSON.stringify({
         schema_version: 1,
+        state,
         pid,
         profile: 'dsh-crew',
         execution_plane: 'hub-3210',
@@ -173,8 +175,16 @@ export function createCrewSidecarSupervisor({
       if (record) clearOwnership(record.pid);
       return false;
     }
+    // Kill authority requires a persisted non-empty runtime_id AND an exact
+    // match with the live identity. A record without runtime_id (crash
+    // between spawn and identity persistence, or PID reuse afterwards)
+    // can never authorize a kill.
+    if (typeof record.runtime_id !== 'string' || record.runtime_id.length === 0) {
+      clearOwnership(record.pid);
+      return false;
+    }
     const identity = await runtimeIdentity();
-    if (!identity || (record.runtime_id && identity.runtime_id !== record.runtime_id)) {
+    if (!identity || identity.runtime_id !== record.runtime_id) {
       clearOwnership(record.pid);
       return false;
     }
@@ -201,7 +211,7 @@ export function createCrewSidecarSupervisor({
         windowsHide: true,
       });
       const ownedChild = runningChild;
-      if (Number.isInteger(ownedChild?.pid) && !persistOwnership(ownedChild.pid)) {
+      if (Number.isInteger(ownedChild?.pid) && !persistOwnership(ownedChild.pid, null, { state: 'starting' })) {
         try { ownedChild.kill?.(); } catch {}
         runningChild = null;
         return { ok: false, code: 'SUPERVISOR_OWNERSHIP_PERSIST_FAILED' };
@@ -258,6 +268,41 @@ export function createCrewSidecarSupervisor({
     return started.ok ? { ...started, restarted: true } : started;
   }
 
+  // Stop-only primitive for cohort migration: kills the owned 3210 child
+  // (PID-identity verified) and waits until health disappears. Never
+  // restarts: the caller swaps the runtime tree first, then calls
+  // startOwnedBackend. Returns the stopped PID for audit.
+  async function stopOwnedBackend() {
+    let owned = runningChild;
+    let childAlive = owned && owned.killed !== true && owned.exitCode == null;
+    if (!childAlive && await healthCheck()) {
+      if (await adoptPersistedChild()) {
+        owned = runningChild;
+        childAlive = true;
+      } else {
+        return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
+      }
+    }
+    if (!childAlive) return { ok: true, stopped: false, pid: null };
+    const pid = owned.pid;
+    if (typeof owned.kill !== 'function' || owned.kill() !== true) {
+      return { ok: false, code: 'CREW_BACKEND_STOP_UNAVAILABLE' };
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (!await healthCheck()) return { ok: true, stopped: true, pid };
+      await wait(pollInterval);
+    }
+    return { ok: false, code: 'CREW_BACKEND_STOP_TIMEOUT' };
+  }
+
+  // Start-only primitive for cohort migration: boots the Crew-owned 3210
+  // from the CURRENT live runtime tree and waits for health + identity.
+  // Never stops anything first: the caller stops before swapping.
+  async function startOwnedBackend() {
+    const started = await start();
+    return started.ok ? { ...started, started: true } : started;
+  }
+
   return {
     execution_plane: 'hub-3210',
     profile: 'dsh-crew',
@@ -270,6 +315,8 @@ export function createCrewSidecarSupervisor({
       if (!restarting) restarting = restartOwnedBackend().finally(() => { restarting = null; });
       return restarting;
     },
+    stopOwnedBackend,
+    startOwnedBackend,
   };
 }
 

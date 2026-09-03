@@ -13,6 +13,8 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -61,6 +63,10 @@ function packageVersion(entry, read = readFileSync) {
 
 export function crewDshRuntimeRoot({ home = homedir() } = {}) {
   return join(crewDshHome({ home }), CREW_DSH_RUNTIME_DIRNAME);
+}
+
+export function crewDshRuntimeVersionDir({ home = homedir(), version = TARGET_DSH_VERSION } = {}) {
+  return join(crewDshHome({ home }), `runtime-${version}`);
 }
 
 export function crewDshRuntimeEntry({ home = homedir(), platform = process.platform } = {}) {
@@ -272,6 +278,177 @@ export function describeDshCli(cli) {
   if (!cli) return 'unavailable';
   const version = cli.version ? `@${cli.version}` : '';
   return `${cli.kind}${version}`;
+}
+
+// Staged cohort migration: install the target cohort into a versioned
+// directory WITHOUT touching the live runtime/, verify its manifest, then
+// report the staged root for an atomic switch by the caller (stop owned
+// 3210 -> swap directories -> clean restart -> identity check). Never
+// upgrades a live runtime in place.
+export function stageCrewDshRuntime({
+  home = homedir(),
+  version = TARGET_DSH_VERSION,
+  packageSpec = `${DSH_CLI_PACKAGE}@${version}`,
+  npmCommand = null,
+  pnpmCommand = null,
+  findCommand = defaultFindCommand,
+  exists = defaultExists,
+  runner = spawnSync,
+  platform = process.platform,
+  comspec = process.env.ComSpec ?? 'cmd.exe',
+  env = process.env,
+  read = readFileSync,
+} = {}) {
+  const stagedRoot = crewDshRuntimeVersionDir({ home, version });
+  const pnpm = pnpmCommand ?? findCommand('pnpm');
+  const npm = npmCommand ?? findCommand('npm');
+  if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
+  // Clean/recreate the versioned stage dir: a failed older attempt must
+  // never contaminate the next staging.
+  try { rmSync(stagedRoot, { recursive: true, force: true }); } catch {}
+  mkdirSync(stagedRoot, { recursive: true });
+  const packageManager = pnpm
+    ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })
+    : descriptor({ kind: 'npm', command: npm, source: 'npm' });
+  const packageArgs = pnpm
+    ? ['add', '--dir', stagedRoot, '--ignore-scripts', packageSpec]
+    : ['install', '--prefix', stagedRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
+  const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const result = runner(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: invocation.shell,
+    env: { ...env },
+  });
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_STAGE_FAILED',
+      error: 'staged Crew runtime install failed',
+      status: result.status ?? -1,
+      stderrTail: String(result.stderr || result.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  const stagedModule = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  if (!exists(stagedModule)) {
+    return { ok: false, code: 'DSH_RUNTIME_STAGE_INCOMPLETE', error: 'staged runtime entry missing' };
+  }
+  const stagedVersion = packageVersion(stagedModule, read);
+  if (stagedVersion !== version) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_VERSION_MISMATCH',
+      error: `staged Crew runtime is ${stagedVersion ?? 'unknown version'} but ${version} is required`,
+      installed: stagedVersion ?? null,
+      target: version,
+    };
+  }
+  return { ok: true, stagedRoot, version: stagedVersion };
+}
+
+// Full cohort migration transaction (caller holds the update lock):
+// stage -> stop owned 3210 -> swap live runtime -> restart -> identity
+// verify -> rollback on any failure. Directory swaps use unique attempt
+// dirs so a failed older attempt can never contaminate the next one.
+// stopOwned/startOwned/verifyOwned have NO defaults: a missing callback
+// fails closed instead of pretending an unverified step succeeded.
+export async function migrateCrewDshRuntime({
+  home = homedir(),
+  version = TARGET_DSH_VERSION,
+  stageOptions = {},
+  stopOwned,
+  startOwned,
+  verifyOwned,
+  rename = renameSync,
+  log = () => {},
+} = {}) {
+  if (typeof stopOwned !== 'function' || typeof startOwned !== 'function' || typeof verifyOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop/start/verify callbacks are required' };
+  }
+  const liveRoot = crewDshRuntimeRoot({ home });
+  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const attemptRoot = join(crewDshHome({ home }), `runtime-stage-${version}-${nonce}`);
+  const prevRoot = join(crewDshHome({ home }), `runtime-prev-${nonce}`);
+  const staged = stageCrewDshRuntime({ home, version, ...stageOptions });
+  if (!staged.ok) return staged;
+  // Relocate the verified stage to a unique attempt dir so retries never
+  // reuse a contaminated versioned directory.
+  try {
+    rename(staged.stagedRoot, attemptRoot);
+  } catch (error) {
+    return { ok: false, code: 'DSH_RUNTIME_STAGE_RELOCATE_FAILED', error: String(error?.message ?? error) };
+  }
+  const stop = await stopOwned();
+  if (!stop.ok) {
+    return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
+  }
+  let liveMoved = false;
+  try {
+    if (existsSync(liveRoot)) rename(liveRoot, prevRoot);
+    liveMoved = true;
+    rename(attemptRoot, liveRoot);
+  } catch (error) {
+    // Second rename failed: restore prev BEFORE reporting, then restart it.
+    let recovery = { ok: false };
+    try {
+      if (liveMoved && existsSync(prevRoot) && !existsSync(liveRoot)) rename(prevRoot, liveRoot);
+      const restarted = await startOwned();
+      recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+    } catch (recoveryError) {
+      recovery = { ok: false, code: 'DSH_RUNTIME_SWAP_RECOVERY_FAILED', error: String(recoveryError?.message ?? recoveryError) };
+    }
+    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), recovery };
+  }
+  const start = await startOwned();
+  if (!start.ok) {
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed', recovery };
+  }
+  const verified = await verifyOwned();
+  if (!verified.ok) {
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename });
+    return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed', recovery };
+  }
+  try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
+  try { rmSync(staged.stagedRoot, { recursive: true, force: true }); } catch {}
+  log(`- runtime cohort migrated to ${version}`);
+  return { ok: true, version, liveRoot };
+}
+
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned, rename = renameSync }) {
+  const recovery = { stoppedCandidate: false, restore: false, restart: false };
+  // The failed candidate 3210 may still be running against the tree we are
+  // about to replace: stop it FIRST, otherwise the swap races a live
+  // process (and on Windows the live handles can fail the rename/delete).
+  if (typeof stopOwned === 'function') {
+    try {
+      const stopped = await stopOwned();
+      recovery.stoppedCandidate = stopped?.ok === true;
+      if (!recovery.stoppedCandidate) recovery.stopError = stopped?.code ?? stopped?.error ?? 'candidate stop failed';
+    } catch (error) {
+      recovery.stopError = String(error?.message ?? error);
+    }
+    if (!recovery.stoppedCandidate) {
+      recovery.ok = false;
+      return recovery;
+    }
+  }
+  try { rmSync(liveRoot, { recursive: true, force: true }); } catch {}
+  try {
+    if (existsSync(prevRoot)) { rename(prevRoot, liveRoot); recovery.restore = true; }
+  } catch (error) {
+    recovery.restoreError = String(error?.message ?? error);
+  }
+  try { rmSync(attemptRoot, { recursive: true, force: true }); } catch {}
+  try {
+    const restarted = await startOwned();
+    recovery.restart = restarted?.ok === true;
+    if (!recovery.restart) recovery.restartCode = restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED';
+  } catch (error) {
+    recovery.restartError = String(error?.message ?? error);
+  }
+  recovery.ok = recovery.restore === true && recovery.restart === true;
+  return recovery;
 }
 
 function isObject(value) {
