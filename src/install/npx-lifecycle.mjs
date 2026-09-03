@@ -715,49 +715,24 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
   }
   log('✓ Claude Code integration');
 
+  // The official ~/.dsh/profiles/web tree is read-only: activation never
+  // repairs or mutates the official bridge. The isolated 3210 Crew backend
+  // is the only runtime Crew owns.
   const official = officialWebIntegrationStatus({ home });
   if (official.enabled) {
-    const repaired = ensureOfficialWebIntegration({ home, releaseDir });
-    if (!repaired.ok) {
-      log(`✗ official 3080 bridge repair failed (${repaired.code ?? 'unknown'})`);
-      return false;
-    }
-    log('✓ official 3080 UI bridge → isolated Crew backend on 3210');
+    log('- official 3080 bridge left untouched (official web profile is read-only)');
   }
   return true;
 }
 
 export async function npxIntegrate({ home = homedir(), log = console.log } = {}) {
-  const pointer = readCurrentPointer({ home });
-  if (!pointer || !existsSync(pointer.path)) {
-    log('✗ install DSH Crew before enabling the official 3080 integration');
-    return { ok: false, error: 'DSH Crew is not installed' };
-  }
-  const validated = validateInstalledPayload(pointer.path, { expectedName: pointer.name, expectedVersion: pointer.version });
-  if (!validated.ok) {
-    log('✗ installed DSH Crew payload is damaged; run dsh-crew update first');
-    return { ok: false, error: 'installed payload invalid' };
-  }
-  const result = ensureOfficialWebIntegration({ home, releaseDir: pointer.path });
-  if (!result.ok) {
-    log(`✗ official 3080 integration failed (${result.code ?? 'unknown'})`);
-    return { ok: false, error: result.code ?? 'integration failed' };
-  }
-  log(result.changed
-    ? '✓ official 3080 UI connected to the isolated Crew backend on 3210'
-    : '- official 3080 UI integration already healthy');
-  log(`  backup: ${result.backupFile}`);
-  return { ok: true, changed: result.changed, backupFile: result.backupFile };
+  log('✗ official 3080 integration is disabled: the official web profile is read-only');
+  return { ok: false, error: 'OFFICIAL_WEB_PROFILE_READ_ONLY' };
 }
 
 export async function npxDetach({ home = homedir(), log = console.log } = {}) {
-  const result = removeOfficialWebIntegration({ home });
-  if (!result.ok) {
-    log(`✗ official 3080 integration removal failed (${result.code ?? 'unknown'})`);
-    return { ok: false, error: result.code ?? 'detach failed' };
-  }
-  log(result.removed ? '✓ official 3080 bridge removed; isolated 3210 mode remains available' : '- official 3080 bridge already absent');
-  return { ok: true, removed: result.removed };
+  log('✗ official 3080 detach is disabled: the official web profile is read-only');
+  return { ok: false, error: 'OFFICIAL_WEB_PROFILE_READ_ONLY' };
 }
 
 export async function npxInstall({
@@ -792,13 +767,22 @@ export async function npxInstall({
   }
   log(`✓ candidate payload staged (${manifest.version})`);
 
+  // Runtime cohort gates the commit: a stale runtime must be migrated before
+  // the new payload becomes authoritative. The pointer switches only after
+  // activation succeeds; any failure restores the prior pointer.
+  const prior = readCurrentPointer({ home });
+  if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+
   const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
   log(`✓ durable release committed under Crew-owned state`);
 
   const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
-  if (!activated) return { ok: false, error: 'activation failed' };
-
-  if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+  if (!activated) {
+    if (prior?.path) {
+      try { writeCurrentPointer({ home, name: prior.name, version: prior.version, path: prior.path }); } catch {}
+    }
+    return { ok: false, error: 'activation failed' };
+  }
 
   log('');
   log('Done.');
@@ -1018,13 +1002,22 @@ export async function npxUpdate({
     }
     log(`✓ candidate payload staged and validated (${manifest.version})`);
 
+    // Commit boundary: runtime cohort first, pointer switch only after
+    // activation. Any post-switch failure restores the prior pointer so the
+    // persisted payload and the live runtime can never split-brain.
+    const prior = readCurrentPointer({ home });
+    if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+
     const releaseDir = commitStagedRelease({ stageDir: staged.stageDir, manifest, home });
     log('✓ durable release committed under Crew-owned state');
 
     const activated = await activateRelease({ home, releaseDir, manifest, log, installer });
-    if (!activated) return { ok: false, error: 'activation failed' };
-
-    if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
+    if (!activated) {
+      if (prior?.path) {
+        try { writeCurrentPointer({ home, name: prior.name, version: prior.version, path: prior.path }); } catch {}
+      }
+      return { ok: false, error: 'activation failed' };
+    }
 
     noteLauncherDivergence({ log, home });
     log('');
@@ -1181,7 +1174,8 @@ export async function npxUninstall({
   else if (startup?.supported) log('✓ Windows login startup removed');
 
   const official = removeOfficialWebIntegration({ home, preserveIntent: !purge, remember: !purge });
-  if (!official.ok) fail(`official 3080 bridge removal failed (${official.code ?? 'unknown'})`);
+  if (!official.ok && official.code !== 'OFFICIAL_WEB_PROFILE_READ_ONLY') fail(`official 3080 bridge removal failed (${official.code ?? 'unknown'})`);
+  else if (official.code === 'OFFICIAL_WEB_PROFILE_READ_ONLY') log('- official 3080 bridge left untouched (official web profile is read-only)');
   else log(official.removed ? '✓ official 3080 bridge removed' : '- official 3080 bridge already absent');
 
   if (name) {

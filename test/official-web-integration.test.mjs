@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
+  OFFICIAL_WEB_READ_ONLY_CODE,
   ensureOfficialWebIntegration,
-  officialWebIntegrationStateFile,
   officialWebIntegrationStatus,
   removeOfficialWebIntegration,
 } from '../src/install/official-web.mjs';
@@ -38,29 +38,14 @@ function fixture() {
   return { home, releaseDir, bridgeRoot, profileRoot, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
-test('integration adds only the lightweight bridge, preserves official state, and is idempotent', () => {
+test('integration refuses to write the read-only official profile', () => {
   const t = fixture();
   try {
+    const before = readFileSync(join(t.profileRoot, 'package.json'), 'utf8');
     const first = ensureOfficialWebIntegration({ home: t.home, releaseDir: t.releaseDir });
-    assert.equal(first.ok, true, JSON.stringify(first));
-    assert.equal(first.changed, true);
-    const official = JSON.parse(readFileSync(join(t.profileRoot, 'package.json'), 'utf8'));
-    assert.equal(official.dependencies['keep-me'], '7.0.0');
-    assert.equal(official.custom.untouched, true);
-    assert.equal(official.dependencies['@ran-sh/dsh-crew'], undefined, 'full Hub must stay out of official web');
-    assert.match(official.dependencies[OFFICIAL_BRIDGE_PACKAGE], /^link:/);
-    assert.equal(official.dsh.profile.bundles.filter((name) => name === OFFICIAL_BRIDGE_PACKAGE).length, 1);
-    assert.equal(realpathSync(first.linkPath), realpathSync(t.bridgeRoot));
-    assert.equal(existsSync(first.backupFile), true);
-    const state = JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.home }), 'utf8'));
-    assert.equal(state.enabled, true);
-    assert.equal(state.release_dir, realpathSync(t.releaseDir));
-
-    const second = ensureOfficialWebIntegration({ home: t.home, releaseDir: t.releaseDir });
-    assert.equal(second.ok, true, JSON.stringify(second));
-    assert.equal(second.changed, false);
-    assert.equal(second.backupFile, first.backupFile);
-    assert.equal(officialWebIntegrationStatus({ home: t.home, releaseDir: t.releaseDir }).healthy, true);
+    assert.equal(first.ok, false);
+    assert.equal(first.code, OFFICIAL_WEB_READ_ONLY_CODE);
+    assert.equal(readFileSync(join(t.profileRoot, 'package.json'), 'utf8'), before);
   } finally { t.cleanup(); }
 });
 
@@ -71,26 +56,19 @@ test('integration fails closed for malformed or missing official profiles', () =
     const before = readFileSync(join(malformed.profileRoot, 'package.json'), 'utf8');
     const result = ensureOfficialWebIntegration({ home: malformed.home, releaseDir: malformed.releaseDir });
     assert.equal(result.ok, false);
-    assert.equal(result.code, 'OFFICIAL_WEB_PROFILE_INVALID');
+    assert.equal(result.code, OFFICIAL_WEB_READ_ONLY_CODE);
     assert.equal(readFileSync(join(malformed.profileRoot, 'package.json'), 'utf8'), before);
-    assert.equal(existsSync(officialWebIntegrationStateFile({ home: malformed.home })), false);
   } finally { malformed.cleanup(); }
 });
 
-test('detach removes only the bridge and keeps the opt-out state for later updates', () => {
+test('detach refuses to write the read-only official profile', () => {
   const t = fixture();
   try {
-    const installed = ensureOfficialWebIntegration({ home: t.home, releaseDir: t.releaseDir });
+    const before = readFileSync(join(t.profileRoot, 'package.json'), 'utf8');
     const removed = removeOfficialWebIntegration({ home: t.home });
-    assert.equal(removed.ok, true, JSON.stringify(removed));
-    assert.equal(removed.removed, true);
-    const official = JSON.parse(readFileSync(join(t.profileRoot, 'package.json'), 'utf8'));
-    assert.equal(official.dependencies[OFFICIAL_BRIDGE_PACKAGE], undefined);
-    assert.equal(official.dependencies['keep-me'], '7.0.0');
-    assert.equal(official.dsh.profile.bundles.includes(OFFICIAL_BRIDGE_PACKAGE), false);
-    assert.equal(existsSync(installed.linkPath), false);
-    const state = JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.home }), 'utf8'));
-    assert.equal(state.enabled, false);
+    assert.equal(removed.ok, false);
+    assert.equal(removed.code, OFFICIAL_WEB_READ_ONLY_CODE);
+    assert.equal(readFileSync(join(t.profileRoot, 'package.json'), 'utf8'), before);
     assert.equal(officialWebIntegrationStatus({ home: t.home }).enabled, false);
   } finally { t.cleanup(); }
 });

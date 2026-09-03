@@ -538,38 +538,65 @@ test('update is idempotent when already current and healthy', async () => {
   } finally { t.cleanup(); }
 });
 
-test('integrate opts into official 3080 and idempotent update repairs its bridge to the active release', async () => {
+test('integrate refuses to write the read-only official web profile', async () => {
   const t = tempHome();
   try {
     makeOfficialWebProfile(t.dir);
+    const before = readFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), 'utf8');
     const rec = recordingInstaller();
     await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
     const integrated = await npxIntegrate({ home: t.dir, log: () => {} });
-    assert.equal(integrated.ok, true, JSON.stringify(integrated));
-    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
-
-    const statusBefore = officialWebIntegrationStatus({ home: t.dir });
-    rmSync(statusBefore.linkPath, { recursive: true, force: true });
-    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, false);
-
-    const updated = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
-    assert.equal(updated.ok, true);
-    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
+    assert.equal(integrated.ok, false);
+    assert.equal(integrated.error, 'OFFICIAL_WEB_PROFILE_READ_ONLY');
+    const after = readFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), 'utf8');
+    assert.equal(after, before);
   } finally { t.cleanup(); }
 });
 
-test('detach is idempotent and prevents later updates from re-registering the bridge', async () => {
+test('detach refuses to write the read-only official web profile', async () => {
   const t = tempHome();
   try {
     makeOfficialWebProfile(t.dir);
+    const before = readFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), 'utf8');
     const rec = recordingInstaller();
     await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
-    await npxIntegrate({ home: t.dir, log: () => {} });
-    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).ok, true);
-    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).ok, true);
-    assert.equal(JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.dir }), 'utf8')).enabled, false);
-    await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
-    assert.equal(officialWebIntegrationStatus({ home: t.dir }).enabled, false);
+    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).ok, false);
+    assert.equal((await npxDetach({ home: t.dir, log: () => {} })).error, 'OFFICIAL_WEB_PROFILE_READ_ONLY');
+    const after = readFileSync(join(t.dir, '.dsh', 'profiles', 'web', 'package.json'), 'utf8');
+    assert.equal(after, before);
+  } finally { t.cleanup(); }
+});
+
+test('update restores the prior pointer when activation fails', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const prior = readCurrentPointer({ home: t.dir });
+
+    const failingInstaller = { ...rec.installer, installCodex: () => ({ ok: false, actions: ['boom'] }) };
+    const r = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: failingInstaller, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(r.ok, false);
+    const restored = readCurrentPointer({ home: t.dir });
+    assert.equal(restored.path, prior.path);
+    assert.equal(restored.version, prior.version);
+  } finally { t.cleanup(); }
+});
+
+test('update refuses to commit when the runtime cohort gate fails', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    const prior = readCurrentPointer({ home: t.dir });
+    const before = releaseCount(t.dir);
+
+    const badRuntime = async () => ({ ok: false, error: 'DSH_RUNTIME_COHORT_MISMATCH' });
+    const r = await npxUpdate({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: badRuntime });
+    assert.equal(r.ok, false);
+    const kept = readCurrentPointer({ home: t.dir });
+    assert.equal(kept.path, prior.path);
+    assert.equal(releaseCount(t.dir), before);
   } finally { t.cleanup(); }
 });
 
@@ -672,21 +699,16 @@ test('uninstall removes payload, registration, and integrations but preserves co
   } finally { t.cleanup(); }
 });
 
-test('uninstall removes the official bridge but preserves enabled intent for reinstall repair', async () => {
+test('uninstall leaves the read-only official profile byte-identical', async () => {
   const t = tempHome();
   try {
     const profileRoot = makeOfficialWebProfile(t.dir);
+    const before = readFileSync(join(profileRoot, 'package.json'), 'utf8');
     const rec = recordingInstaller();
     await npxInstall({ home: t.dir, sourceRoot: makeCandidate(t.dir), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
-    await npxIntegrate({ home: t.dir, log: () => {} });
     await npxUninstall({ home: t.dir, installer: rec.installer, log: () => {} });
-    const official = JSON.parse(readFileSync(join(profileRoot, 'package.json'), 'utf8'));
-    assert.equal(official.dependencies[OFFICIAL_BRIDGE_PACKAGE], undefined);
-    assert.equal(official.dependencies['keep-me'], '1.0.0');
-    assert.equal(JSON.parse(readFileSync(officialWebIntegrationStateFile({ home: t.dir }), 'utf8')).enabled, true);
-
-    await npxInstall({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
-    assert.equal(officialWebIntegrationStatus({ home: t.dir }).healthy, true);
+    const after = readFileSync(join(profileRoot, 'package.json'), 'utf8');
+    assert.equal(after, before);
   } finally { t.cleanup(); }
 });
 
