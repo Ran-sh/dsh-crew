@@ -258,6 +258,41 @@ export function createCrewSidecarSupervisor({
     return started.ok ? { ...started, restarted: true } : started;
   }
 
+  // Stop-only primitive for cohort migration: kills the owned 3210 child
+  // (PID-identity verified) and waits until health disappears. Never
+  // restarts: the caller swaps the runtime tree first, then calls
+  // startOwnedBackend. Returns the stopped PID for audit.
+  async function stopOwnedBackend() {
+    let owned = runningChild;
+    let childAlive = owned && owned.killed !== true && owned.exitCode == null;
+    if (!childAlive && await healthCheck()) {
+      if (await adoptPersistedChild()) {
+        owned = runningChild;
+        childAlive = true;
+      } else {
+        return { ok: false, code: 'PORT_OWNERSHIP_CONFLICT' };
+      }
+    }
+    if (!childAlive) return { ok: true, stopped: false, pid: null };
+    const pid = owned.pid;
+    if (typeof owned.kill !== 'function' || owned.kill() !== true) {
+      return { ok: false, code: 'CREW_BACKEND_STOP_UNAVAILABLE' };
+    }
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (!await healthCheck()) return { ok: true, stopped: true, pid };
+      await wait(pollInterval);
+    }
+    return { ok: false, code: 'CREW_BACKEND_STOP_TIMEOUT' };
+  }
+
+  // Start-only primitive for cohort migration: boots the Crew-owned 3210
+  // from the CURRENT live runtime tree and waits for health + identity.
+  // Never stops anything first: the caller stops before swapping.
+  async function startOwnedBackend() {
+    const started = await start();
+    return started.ok ? { ...started, started: true } : started;
+  }
+
   return {
     execution_plane: 'hub-3210',
     profile: 'dsh-crew',
@@ -270,6 +305,8 @@ export function createCrewSidecarSupervisor({
       if (!restarting) restarting = restartOwnedBackend().finally(() => { restarting = null; });
       return restarting;
     },
+    stopOwnedBackend,
+    startOwnedBackend,
   };
 }
 

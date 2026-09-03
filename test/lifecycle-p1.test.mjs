@@ -420,3 +420,34 @@ test('concurrent reclaim contenders yield exactly one owner', async () => {
     assert.ok(owners >= 1, 'at least one round must produce an owner');
   } finally { t.cleanup(); }
 });
+
+test('production migration path uses supervisor stop/start/verify', async () => {
+  const t = tempHome();
+  try {
+    const { npxUpdate } = await import('../src/install/npx-lifecycle.mjs');
+    void npxUpdate;
+    const { migrateCrewDshRuntime } = await import('../src/dsh-cli-runtime.mjs');
+    const calls = [];
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => { calls.push('stop'); return { ok: true, stopped: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => { calls.push('verify'); return { ok: true }; },
+      log: () => {},
+    });
+    assert.equal(r.ok, true);
+    assert.deepEqual(calls, ['stop', 'start', 'verify']);
+  } finally { t.cleanup(); }
+});

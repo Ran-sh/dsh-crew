@@ -42,6 +42,7 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { createCrewSidecarSupervisor } from '../official-web-bridge.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -142,7 +143,9 @@ export function readCurrentPointerState({ home = homedir() } = {}) {
     return { status: 'malformed', file, code: 'POINTER_UNPARSEABLE' };
   }
   if (!raw || typeof raw !== 'object') return { status: 'malformed', file, code: 'POINTER_NOT_OBJECT' };
-  if (typeof raw.name !== 'string' || typeof raw.version !== 'string' || typeof raw.path !== 'string') {
+  if (typeof raw.name !== 'string' || raw.name.length === 0
+    || typeof raw.version !== 'string' || raw.version.length === 0
+    || typeof raw.path !== 'string' || raw.path.length === 0) {
     return { status: 'malformed', file, code: 'POINTER_FIELDS_INVALID' };
   }
   if (!isAbsolute(raw.path)) return { status: 'malformed', file, code: 'POINTER_PATH_NOT_ABSOLUTE' };
@@ -224,10 +227,13 @@ function lockOwnerAlive(record) {
 }
 
 // Stale-lock reclaim WITHOUT a second pathname guard: the claim is a single
-// atomic step — link(2)-style hardlink creation if available, else
-// mkdir(exclusive) as the arbitration primitive — so two contenders can
-// never both believe they own the reclaim. The winner is decided by exactly
-// one atomic filesystem operation, not by read/compare/unlink sequences.
+// atomic step — mkdir(exclusive) as the arbitration primitive — so two
+// contenders can never both believe they own the reclaim. The winner is
+// decided by exactly one atomic filesystem operation, not by
+// read/compare/unlink sequences. The arbitration dir carries the winner's
+// owner record: a winner crash leaves a stale dir that a later contender
+// may reclaim after proving the recorded owner dead; a live owner's dir is
+// never removed.
 function tryReclaimUpdateLock({ home, record }) {
   const file = updateLockFile({ home });
   let current = null;
@@ -243,11 +249,31 @@ function tryReclaimUpdateLock({ home, record }) {
   // the loser gets EEXIST and backs off. No pathname guard file exists to
   // be deleted out from under the winner.
   const arbitrationDir = `${file}.reclaim.${current.nonce ?? 'unknown'}`;
+  const claimFile = join(arbitrationDir, 'claim.json');
+  const myClaim = { pid: process.pid, nonce: record.nonce, started_at: isoNow() };
   try {
     mkdirSync(arbitrationDir);
+    writeFileSync(join(arbitrationDir, 'claim.json'), JSON.stringify(myClaim) + '\n', { flag: 'wx' });
   } catch (error) {
-    if (error?.code === 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+    if (error?.code !== 'EEXIST') {
+      return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+    }
+    // Arbitration dir exists: recover it only when its recorded owner is
+    // provably dead; a live contender's claim is never removed.
+    let guard = null;
+    try { guard = JSON.parse(readFileSync(claimFile, 'utf8')); } catch { guard = null; }
+    if (!guard || typeof guard !== 'object' || lockOwnerAlive(guard)) {
+      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    }
+    // Dead winner: take over the arbitration dir atomically by replacing
+    // its claim file (wx on a fresh name + rename), then proceed.
+    try {
+      const takeover = join(arbitrationDir, `claim.${myClaim.nonce}.tmp`);
+      writeFileSync(takeover, JSON.stringify(myClaim) + '\n', { flag: 'wx' });
+      renameSync(takeover, claimFile);
+    } catch {
+      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    }
   }
   try {
     // Re-verify the main lock is still the same dead record we arbitrated
@@ -338,18 +364,21 @@ function compensateActivationSync({ home, prior, manifest, log, installer }) {
 }
 
 // Undo a first-install candidate's activation surfaces: remove its profile
-// registration (dependency + bundle + junction) ONLY when all three still
-// reference this journal's candidate. CAS-verified so a later legitimate
-// registration is never removed. Host integrations are repaired by the
-// next successful install; the profile manifest must never dangle at a
-// deleted candidate.
+// registration (dependency + bundle + junction) ONLY when each surface
+// still references THIS journal's candidate. The dependency must resolve
+// to exactly link:<candidateRealPath> (normalized slashes); a later
+// legitimate registration pointing elsewhere is never removed. Mixed or
+// unjudgeable state fails closed with the journal retained. When the
+// profile manifest is missing/unreadable the junction is still handled
+// independently so a "junction created, manifest never written" crash
+// cannot leave a dangling junction.
 function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
   if (!candidateDir || !candidateName) return { ok: true, undone: false };
   const profileRoot = crewProfileDir({ home });
   const profileFile = join(profileRoot, 'package.json');
   let manifest = null;
-  try { manifest = JSON.parse(readFileSync(profileFile, 'utf8')); } catch { manifest = null; }
-  if (!manifest) return { ok: true, undone: false };
+  let manifestReadable = true;
+  try { manifest = JSON.parse(readFileSync(profileFile, 'utf8')); } catch { manifest = null; manifestReadable = false; }
   const linkPath = join(profileRoot, 'node_modules', ...candidateName.split('/'));
   let linked = null;
   try {
@@ -357,9 +386,21 @@ function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
   } catch { linked = null; }
   let candidateReal = null;
   try { candidateReal = realpathSync(candidateDir); } catch { candidateReal = candidateDir; }
-  const depPointsAtCandidate = typeof manifest.dependencies?.[candidateName] === 'string';
-  const bundlePointsAtCandidate = Array.isArray(manifest.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
+  const expectedDep = `link:${String(candidateReal).replace(/\\/g, '/')}`;
+  const rawDep = manifest?.dependencies?.[candidateName];
+  const depPointsAtCandidate = typeof rawDep === 'string'
+    && rawDep.replace(/\\/g, '/') === expectedDep;
+  const bundlePointsAtCandidate = Array.isArray(manifest?.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
   const linkPointsAtCandidate = linked !== null && linked === candidateReal;
+  // Manifest unreadable but junction dangles at candidate: remove junction.
+  if (!manifestReadable) {
+    if (!linkPointsAtCandidate) return { ok: true, undone: false };
+    try { rmSync(linkPath, { force: true }); } catch (error) {
+      return { ok: false, code: 'CANDIDATE_UNDO_FAILED', error: String(error?.message ?? error) };
+    }
+    return { ok: true, undone: true };
+  }
+  if (!manifest) return { ok: true, undone: false };
   if (!depPointsAtCandidate && !bundlePointsAtCandidate && !linkPointsAtCandidate) {
     return { ok: true, undone: false };
   }
@@ -404,19 +445,31 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
   const candidateDir = journal.candidate?.stageDir ?? null;
   const candidateManifest = candidateDir && existsSync(candidateDir) ? readManifest(candidateDir) : null;
 
-  // Committed side: pointer already references the validated candidate.
-  // Finalize it (verify + clear journal + GC) instead of rolling back.
-  if (candidateDir && pointer?.path === candidateDir) {
+  // Committed side: pointer must match the FULL journal candidate identity
+  // (name + version + path), and the candidate manifest is verified against
+  // the JOURNAL candidate name/version (not its own). Anything else is not
+  // a commit: fall through to the diverged check below.
+  const candidateIdent = journal.candidate ?? null;
+  const pointerMatchesCandidate = candidateDir !== null
+    && pointer?.path === candidateDir
+    && typeof pointer?.name === 'string' && pointer.name.length > 0
+    && typeof pointer?.version === 'string' && pointer.version.length > 0
+    && pointer.name === candidateIdent?.name
+    && pointer.version === candidateIdent?.version;
+  if (candidateDir && pointer?.path === candidateDir && !pointerMatchesCandidate) {
+    return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: 'pointer path matches candidate but name/version do not; refusing recovery' };
+  }
+  if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
       return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
     }
-    const validated = validateInstalledPayload(candidateDir, { expectedName: candidateManifest.name, expectedVersion: candidateManifest.version });
+    const validated = validateInstalledPayload(candidateDir, { expectedName: candidateIdent.name, expectedVersion: candidateIdent.version });
     if (!validated.ok) {
       return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage, error: (validated.errors ?? []).join('; ') };
     }
     clearUpdateJournal({ home });
     gcOldReleases({ home, protect: journal.prior?.path ?? null });
-    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateManifest.version} already committed, finalized`);
+    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} already committed, finalized`);
     return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
 
@@ -424,9 +477,12 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
   // authority to decide which release should win: fail closed, touch
   // nothing (no registration change, no release delete, no journal clear).
   const priorPath = journal.prior?.path ?? null;
-  const isPrior = priorPath !== null && pointer?.path === priorPath;
+  const priorMatches = priorPath !== null
+    && pointer?.path === priorPath
+    && pointer?.name === journal.prior?.name
+    && pointer?.version === journal.prior?.version;
   const isAbsent = !pointer;
-  if (!isPrior && !isAbsent) {
+  if (!priorMatches && !isAbsent) {
     return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: `pointer references unexpected release ${pointer?.path ?? 'unknown'}; refusing recovery` };
   }
 
@@ -935,45 +991,13 @@ export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.
   return { ok: true, runtime_id: runtime.runtime_id, runtime_version: versioned.runtime_version };
 }
 
-// Crew-owned stop-only primitive: kills the supervisor-tracked 3210 PID
-// directly (no legacy bridge), then confirms the listener is gone. Never
-// restarts: the caller swaps first and starts afterwards.
-async function stopOwnedCrewBackend({ home = homedir(), killImpl = (pid) => process.kill(pid), pollMs = 250, timeoutMs = 10000 } = {}) {
-  const ownershipFile = join(crewDshHome({ home }), 'supervisor-ownership.json');
-  let record = null;
-  try { record = JSON.parse(readFileSync(ownershipFile, 'utf8')); } catch { record = null; }
-  const pid = Number(record?.pid);
-  if (record && Number.isInteger(pid) && pid > 0) {
-    try { killImpl(pid); } catch (error) {
-      if (error?.code !== 'ESRCH') return { ok: false, code: 'DSH_RUNTIME_STOP_FAILED', error: String(error?.message ?? error) };
-    }
-  }
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await globalThis.fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { signal: AbortSignal.timeout(pollMs) });
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-    } catch {
-      return { ok: true, stopped: true };
-    }
-  }
-  return { ok: false, code: 'DSH_RUNTIME_STOP_TIMEOUT', error: 'owned 3210 listener still answers after stop' };
-}
-
-async function startOwnedCrewBackend({ home = homedir(), spawnImpl = null } = {}) {
-  // The Crew launcher owns 3210 startup; the installer triggers it through
-  // the supervisor restart surface is legacy. Prefer a direct boot of the
-  // Crew-owned runtime entry when a spawner is injected (tests + future
-  // launcher hook); otherwise report that no direct starter is wired.
-  if (typeof spawnImpl !== 'function') {
-    return { ok: false, code: 'DSH_RUNTIME_START_UNWIRED', error: 'no direct Crew-owned starter injected' };
-  }
-  try {
-    await spawnImpl({ home });
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, code: 'DSH_RUNTIME_START_FAILED', error: String(error?.message ?? error) };
-  }
+// Crew-owned stop/start for cohort migration come from the sidecar
+// supervisor (PID-identity verified, no legacy bridge). The supervisor
+// module owns the 3210 child lifecycle; the installer only drives its
+// stop-only / start-only primitives around the runtime-tree swap.
+function crewSupervisor({ home = homedir() } = {}) {
+  const dshHome = crewDshHome({ home });
+  return createCrewSidecarSupervisor({ home, ownershipFile: join(dshHome, 'supervisor-ownership.json') });
 }
 
 export async function npxReleases({ home = homedir(), log = console.log } = {}) {
@@ -1086,14 +1110,15 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
     }
     return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
-  // Production migration wiring: Crew-owned stop-only + direct start +
-  // full identity verify. No legacy bridge involved. Missing callbacks
-  // fail closed inside migrateCrewDshRuntime.
+  // Production migration wiring: the Crew sidecar supervisor owns the
+  // 3210 child lifecycle (stop-only + start-only + identity verify).
+  // No legacy bridge involved. Missing callbacks fail closed inside
+  // migrateCrewDshRuntime.
   const migrate = migrateRuntime ?? ((opts) => migrateCrewDshRuntime({
     home,
     version: TARGET_DSH_VERSION,
-    stopOwned: stopOwned ?? (() => stopOwnedCrewBackend({ home })),
-    startOwned: startOwned ?? (() => startOwnedCrewBackend({ home })),
+    stopOwned: stopOwned ?? (() => crewSupervisor({ home }).stopOwnedBackend()),
+    startOwned: startOwned ?? (() => crewSupervisor({ home }).startOwnedBackend()),
     verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
     ...opts,
   }));
