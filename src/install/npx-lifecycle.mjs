@@ -2009,8 +2009,8 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
   // repairs or mutates the official bridge. The isolated 3210 Crew backend
   // is the only runtime Crew owns.
   const official = officialWebIntegrationStatus({ home });
-  if (official.enabled) {
-    log('- official 3080 bridge left untouched (official web profile is read-only)');
+  if (official.legacy_present) {
+    log('- legacy official 3080 bridge record present but deprecated; official web profile is read-only and untouched');
   }
   return true;
 }
@@ -2506,7 +2506,7 @@ export function npxStatus({
   const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
-  const officialWeb = !official.enabled ? 'disabled' : official.healthy ? 'installed' : 'needs repair';
+  const officialWeb = !official.legacy_present ? 'not present (native 3210 control plane)' : official.healthy ? 'legacy full bridge present (deprecated; manual cleanup available)' : 'legacy full bridge record present but unhealthy (deprecated)';
   const startupState = installer.windowsStartupStatus?.({ home });
   const windowsStartup = !startupState?.supported ? 'not supported'
     : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
