@@ -37,8 +37,11 @@ function runtimeState(runtime, readinessSnapshot) {
 }
 
 function bridgeState(surface) {
+  // The official 3080 quick surface is an OPTIONAL convenience panel. Its
+  // absence must never degrade Crew readiness: on the native 3210 control
+  // plane the bridge is simply not part of the picture.
   if (surface === 'official-bridge') return READINESS_STATES.READY;
-  if (surface === 'native-crew-harness') return READINESS_STATES.UNAVAILABLE;
+  if (surface === 'native-crew-harness') return READINESS_STATES.UNKNOWN;
   return READINESS_STATES.UNKNOWN;
 }
 

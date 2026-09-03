@@ -640,7 +640,8 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }, [get]);
 
   useEffect(() => {
-    if (surface !== CREW_UI_SURFACES.OFFICIAL) return undefined;
+    const responsibilities = surfaceResponsibilities(surface);
+    if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
     const timer = setInterval(() => {
       void Promise.all([get('/jobs'), get('/provider-health').catch(() => null)]).then(([j, health]) => {
@@ -704,11 +705,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }, [copy, locale, post, readJson, refreshProviderInventory, withLang]);
 
   useEffect(() => {
-    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshHarnessModels();
+    if (surfaceResponsibilities(surface).fullControlPlane) void refreshHarnessModels();
   }, [surface, refreshHarnessModels]);
 
   useEffect(() => {
-    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshProviderInventory();
+    if (surfaceResponsibilities(surface).fullControlPlane) void refreshProviderInventory();
   }, [surface, refreshProviderInventory]);
 
   const act = useCallback(async (target: string, confirmName?: string) => {
@@ -1841,7 +1842,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
 export function apply(ctx: any): void {
   let runningCount = 0;
-  let officialSurface: boolean | null = null;
+  let badgeSurface: boolean | null = null;
   ctx.slots.inject('settings.section', () => {
     let dispose = register();
     function register() {
@@ -1865,12 +1866,14 @@ export function apply(ctx: any): void {
     const poll = async () => {
       if (document.visibilityState !== 'visible') return;
       try {
-        if (officialSurface === null) {
-          const response = await fetch(`${API}/bridge-status`, { cache: 'no-store' });
-          const bridgeStatus = response.ok ? await response.json() : null;
-          officialSurface = classifyCrewSurface({ bridgeStatus }) === CREW_UI_SURFACES.OFFICIAL;
+        if (badgeSurface === null) {
+          const [bridgeStatus, runtime] = await Promise.all([
+            fetch(`${API}/bridge-status`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+            fetch(`${API}/runtime`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+          ]);
+          badgeSurface = surfaceResponsibilities(classifyCrewSurface({ bridgeStatus, runtime })).fullControlPlane;
         }
-        if (!officialSurface) return;
+        if (!badgeSurface) return;
         const r = await (await fetch(`${API}/jobs`, { cache: 'no-store' })).json();
         const n = r.ok ? (r.jobs ?? []).filter((j: any) => j.status === 'running').length : 0;
         if (n !== runningCount) {

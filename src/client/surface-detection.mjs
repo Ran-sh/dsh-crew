@@ -23,8 +23,21 @@ export function classifyCrewSurface({ bridgeStatus, runtime } = {}) {
   return CREW_UI_SURFACES.UNKNOWN;
 }
 
+/**
+ * Surface capability model. The NATIVE 3210 Crew harness is the single full
+ * control plane; the OFFICIAL 3080 surface is a narrow quick-controls panel
+ * (total switch, flash/pro model priority, vision/imagegen toggles) plus a
+ * deep link back to 3210. Unknown surfaces get diagnostics only — never write
+ * authority. This replaces the old binary full-vs-minimal assumption.
+ */
 export function surfaceResponsibilities(surface) {
-  const fullControlPlane = surface === CREW_UI_SURFACES.OFFICIAL;
-  return { fullControlPlane, minimalDiagnostics: !fullControlPlane };
+  switch (surface) {
+    case CREW_UI_SURFACES.NATIVE:
+      return { fullControlPlane: true, quickControlPlane: true, diagnostics: true };
+    case CREW_UI_SURFACES.OFFICIAL:
+      return { fullControlPlane: false, quickControlPlane: true, diagnostics: true };
+    default:
+      return { fullControlPlane: false, quickControlPlane: false, diagnostics: true };
+  }
 }
 

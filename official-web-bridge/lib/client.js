@@ -195,7 +195,7 @@ function runtimeState(runtime, readinessSnapshot) {
 }
 function bridgeState(surface) {
 	if (surface === "official-bridge") return READINESS_STATES.READY;
-	if (surface === "native-crew-harness") return READINESS_STATES.UNAVAILABLE;
+	if (surface === "native-crew-harness") return READINESS_STATES.UNKNOWN;
 	return READINESS_STATES.UNKNOWN;
 }
 /** Project only structured, non-secret installer/runtime evidence. */
@@ -265,12 +265,31 @@ function classifyCrewSurface({ bridgeStatus, runtime } = {}) {
 	if (runtime?.ok === true && runtime.service === "dsh-crew-hub" && (runtime.surface === CREW_UI_SURFACES.NATIVE || runtime.surface === void 0)) return CREW_UI_SURFACES.NATIVE;
 	return CREW_UI_SURFACES.UNKNOWN;
 }
+/**
+* Surface capability model. The NATIVE 3210 Crew harness is the single full
+* control plane; the OFFICIAL 3080 surface is a narrow quick-controls panel
+* (total switch, flash/pro model priority, vision/imagegen toggles) plus a
+* deep link back to 3210. Unknown surfaces get diagnostics only — never write
+* authority. This replaces the old binary full-vs-minimal assumption.
+*/
 function surfaceResponsibilities(surface) {
-	const fullControlPlane = surface === CREW_UI_SURFACES.OFFICIAL;
-	return {
-		fullControlPlane,
-		minimalDiagnostics: !fullControlPlane
-	};
+	switch (surface) {
+		case CREW_UI_SURFACES.NATIVE: return {
+			fullControlPlane: true,
+			quickControlPlane: true,
+			diagnostics: true
+		};
+		case CREW_UI_SURFACES.OFFICIAL: return {
+			fullControlPlane: false,
+			quickControlPlane: true,
+			diagnostics: true
+		};
+		default: return {
+			fullControlPlane: false,
+			quickControlPlane: false,
+			diagnostics: true
+		};
+	}
 }
 //#endregion
 //#region src/client/task-telemetry.mjs
@@ -1591,7 +1610,7 @@ function WorkersPanel({ ctx }) {
 		} catch {}
 	}, [get]);
 	(0, react.useEffect)(() => {
-		if (surface !== CREW_UI_SURFACES.OFFICIAL) return void 0;
+		if (!surfaceResponsibilities(surface).fullControlPlane) return void 0;
 		refreshAll();
 		const timer = setInterval(() => {
 			Promise.all([get("/jobs"), get("/provider-health").catch(() => null)]).then(([j, health]) => {
@@ -1675,10 +1694,10 @@ function WorkersPanel({ ctx }) {
 		withLang
 	]);
 	(0, react.useEffect)(() => {
-		if (surface === CREW_UI_SURFACES.OFFICIAL) refreshHarnessModels();
+		if (surfaceResponsibilities(surface).fullControlPlane) refreshHarnessModels();
 	}, [surface, refreshHarnessModels]);
 	(0, react.useEffect)(() => {
-		if (surface === CREW_UI_SURFACES.OFFICIAL) refreshProviderInventory();
+		if (surfaceResponsibilities(surface).fullControlPlane) refreshProviderInventory();
 	}, [surface, refreshProviderInventory]);
 	const act = (0, react.useCallback)(async (target, confirmName) => {
 		if (confirmName && !window.confirm(copy.confirmRestore(confirmName))) return;
@@ -4754,7 +4773,7 @@ function WorkersPanel({ ctx }) {
 }
 function apply$1(ctx) {
 	let runningCount = 0;
-	let officialSurface = null;
+	let badgeSurface = null;
 	ctx.slots.inject("settings.section", () => {
 		let dispose = register();
 		function register() {
@@ -4783,11 +4802,14 @@ function apply$1(ctx) {
 		const poll = async () => {
 			if (document.visibilityState !== "visible") return;
 			try {
-				if (officialSurface === null) {
-					const response = await fetch(`${API}/bridge-status`, { cache: "no-store" });
-					officialSurface = classifyCrewSurface({ bridgeStatus: response.ok ? await response.json() : null }) === CREW_UI_SURFACES.OFFICIAL;
+				if (badgeSurface === null) {
+					const [bridgeStatus, runtime] = await Promise.all([fetch(`${API}/bridge-status`, { cache: "no-store" }).then((r) => r.ok ? r.json() : null).catch(() => null), fetch(`${API}/runtime`, { cache: "no-store" }).then((r) => r.ok ? r.json() : null).catch(() => null)]);
+					badgeSurface = surfaceResponsibilities(classifyCrewSurface({
+						bridgeStatus,
+						runtime
+					})).fullControlPlane;
 				}
-				if (!officialSurface) return;
+				if (!badgeSurface) return;
 				const r = await (await fetch(`${API}/jobs`, { cache: "no-store" })).json();
 				const n = r.ok ? (r.jobs ?? []).filter((j) => j.status === "running").length : 0;
 				if (n !== runningCount) {
