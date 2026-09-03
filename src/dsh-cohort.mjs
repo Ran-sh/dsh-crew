@@ -11,3 +11,10 @@ export const TARGET_DSH_SPEC = `${DSH_CLI_PACKAGE}@${TARGET_DSH_VERSION}`;
 // cohort than the current TARGET, the old runtime is retained on disk so a
 // rollback can restore it offline (no registry round-trip).
 export const RETAINED_RUNTIMES_DIRNAME = 'retained-runtimes';
+
+// Lifecycle-owned cohort metadata for a managed release. Historical releases
+// (pre-1.0.4) did not pin @deepseek-ai/dsh in their manifest; this sidecar
+// records the runtime cohort fact the lifecycle observed for them WITHOUT
+// mutating the immutable release manifest. Resolution priority:
+//   manifest exact pin -> sidecar -> (legacy discovery) -> fail closed.
+export const RELEASE_COHORT_FILENAME = 'release-cohort.json';

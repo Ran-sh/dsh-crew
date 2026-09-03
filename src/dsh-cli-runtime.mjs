@@ -586,9 +586,16 @@ export function findRetainedRuntime({ home = homedir(), version, exists = exists
 }
 
 // Offline cohort restore for cross-cohort rollback: move the retained tree
-// back onto live runtime/. The caller must hold the update lock and have
-// stopped the owned 3210. On success the retained copy is consumed (moved),
-// so a subsequent rollback to the same cohort re-stages from the registry.
+// back onto live runtime/. The caller must hold the update lock.
+//
+// Pair-ordering contract: with prepareOnly=false this helper ALSO starts and
+// verifies the 3210, which is only safe when the caller has already
+// activated the matching Crew payload. Callers that must activate the
+// payload FIRST (rollback/compensation pair transition) pass prepareOnly=true
+// to swap the tree WITHOUT starting the process, then activate the payload,
+// then start once and dual-verify. On success the retained copy is consumed
+// (moved), so a subsequent rollback to the same cohort re-stages from the
+// registry.
 export async function restoreRetainedRuntime({
   home = homedir(),
   version,
@@ -597,13 +604,17 @@ export async function restoreRetainedRuntime({
   verifyOwned,
   rename = renameSync,
   log = () => {},
+  prepareOnly = false,
 } = {}) {
   const retained = findRetainedRuntime({ home, version });
   if (!retained) {
     return { ok: false, code: 'DSH_RUNTIME_RETAINED_MISSING', error: `no retained runtime for cohort ${version}` };
   }
-  if (typeof stopOwned !== 'function' || typeof startOwned !== 'function' || typeof verifyOwned !== 'function') {
-    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop/start/verify callbacks are required' };
+  if (typeof stopOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop callback is required' };
+  }
+  if (!prepareOnly && (typeof startOwned !== 'function' || typeof verifyOwned !== 'function')) {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'start/verify callbacks are required unless prepareOnly' };
   }
   const liveRoot = crewDshRuntimeRoot({ home });
   const stop = await stopOwned();
@@ -617,6 +628,10 @@ export async function restoreRetainedRuntime({
     // Restore the pre-existing live tree is impossible (it was replaced only
     // on success above); report and let the caller reconcile.
     return { ok: false, code: 'DSH_RUNTIME_RESTORE_SWAP_FAILED', error: String(error?.message ?? error) };
+  }
+  if (prepareOnly) {
+    log(`- runtime tree prepared offline from retained tree (@${version}); process not started`);
+    return { ok: true, version, liveRoot, prepared: true };
   }
   const start = await startOwned();
   if (!start.ok) {
