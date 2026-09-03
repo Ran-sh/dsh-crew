@@ -63,12 +63,24 @@ function Get-HealthState {
     }
   }
   try {
+    # The official 3080 UI may require a token (HTTP 401/403 on the bare
+    # root) or redirect to the web entry (3xx). Any HTTP response means the
+    # web service is up; only a connection-level failure means it is down.
     $response = Invoke-WebRequest -UseBasicParsing -Uri $Service.Url -TimeoutSec 2
-    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
+    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
       return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
     }
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = ('Official UI returned HTTP {0}.' -f $response.StatusCode) }
   } catch {
+    # Invoke-WebRequest surfaces 401/403 as exceptions; a response with a
+    # status code still proves the listener is alive and answering.
+    $status = $null
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+      $status = [int] $_.Exception.Response.StatusCode
+    }
+    if ($null -ne $status -and $status -ge 400 -and $status -lt 500) {
+      return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
+    }
     return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
   }
 }
