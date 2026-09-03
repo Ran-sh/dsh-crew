@@ -556,6 +556,7 @@ function retainPriorRuntime({ home, prevRoot, rename = renameSync }) {
     if (!existsSync(prevRoot)) return { ok: true, retained: false };
     const version = runtimeTreeVersion(prevRoot);
     if (!version) {
+      // No version to key retention on; the tree is unreadable junk.
       try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
       return { ok: true, retained: false, reason: 'prior tree version unreadable; removed' };
     }
@@ -566,9 +567,11 @@ function retainPriorRuntime({ home, prevRoot, rename = renameSync }) {
     rename(prevRoot, target);
     return { ok: true, retained: true, version, path: target };
   } catch (error) {
-    // A failed retain must not fail an otherwise-successful migration.
-    try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
-    return { ok: false, retained: false, error: String(error?.message ?? error) };
+    // A failed retain must not fail an otherwise-successful migration, and it
+    // must NOT delete the parked prior tree: that tree is the only offline
+    // rollback copy of the previous cohort. Leave it in place (a later
+    // operator/GC pass can retry or reap it) and report the failure loudly.
+    return { ok: false, retained: false, prevRoot, error: String(error?.message ?? error) };
   }
 }
 
