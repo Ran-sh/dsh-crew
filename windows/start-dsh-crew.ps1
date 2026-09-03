@@ -217,6 +217,12 @@ function Wait-CrewServices {
     $details = ($notReady | ForEach-Object { '{0}:{1} ({2})' -f $_.Profile, $_.Port, $_.LastError }) -join '; '
     throw "Startup health deadline exceeded: $details"
   }
+
+  # Non-critical diagnostic after all services are ready: log legacy bridge
+  # presence for operator awareness. Never gates, delays, or claims 3210.
+  if (Test-LegacyBridgeAvailable) {
+    Write-LaunchLog 'Diagnostic: legacy 3080 bridge still answers ping; Crew launcher owns 3210 directly, bridge ignored.'
+  }
 }
 
 function Ensure-CrewServices {
@@ -237,11 +243,8 @@ function Ensure-CrewServices {
     }
 
     # The Crew launcher owns 3210 directly and always boots it below.
-    # A legacy 3080 bridge is diagnostic-only: it never gates, delays, or
-    # claims 3210. Its presence is logged for operator awareness.
-    if ($service.CrewOwned -and (Test-LegacyBridgeAvailable)) {
-      Write-LaunchLog 'Legacy 3080 bridge detected; ignoring it, Crew launcher owns 3210 directly.'
-    }
+    # Legacy bridge presence is diagnosed only after 3210 is ready (see
+    # Wait-CrewServices tail), never on the boot path.
 
     $service.LastError = $health.Error
     $service.ConsecutiveFailures += 1
@@ -299,12 +302,36 @@ function Start-ServiceSupervisor {
     Write-LaunchLog 'Supervisor active; monitoring 3080 and 3210 every 10 seconds.'
     $lastRecoveryError = $null
     $updateLockFile = Join-Path $crewHome '..\app\update-in-progress.lock'
+    $staleLockNotified = $false
     while ($true) {
       try {
         # An installer-held update lock suspends recovery restarts: the tree
         # under Crew-owned state may be mid-migration, and a restart now
-        # would boot a half-installed runtime/profile.
+        # would boot a half-installed runtime/profile. A lock whose owner
+        # process is dead is stale: log once and resume supervision instead
+        # of staying observe-only forever.
+        $updateHeld = $false
         if (Test-Path -LiteralPath $updateLockFile -PathType Leaf) {
+          $lockAlive = $false
+          try {
+            $lockRecord = Get-Content -LiteralPath $updateLockFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $lockPid = [int] $lockRecord.pid
+            if ($lockPid -gt 0) {
+              Get-Process -Id $lockPid -ErrorAction Stop | Out-Null
+              $lockAlive = $true
+            }
+          } catch { $lockAlive = $false }
+          if ($lockAlive) {
+            $updateHeld = $true
+            $staleLockNotified = $false
+          } elseif (-not $staleLockNotified) {
+            Write-LaunchLog 'Stale update lock detected (owner process dead); resuming supervision. Re-run install/update to reconcile.' 'WARN'
+            $staleLockNotified = $true
+          }
+        } else {
+          $staleLockNotified = $false
+        }
+        if ($updateHeld) {
           Write-LaunchLog 'Update in progress; supervisor observing only, no restarts.'
           $lastRecoveryError = $null
         } else {

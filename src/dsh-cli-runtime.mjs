@@ -303,6 +303,9 @@ export function stageCrewDshRuntime({
   const pnpm = pnpmCommand ?? findCommand('pnpm');
   const npm = npmCommand ?? findCommand('npm');
   if (!pnpm && !npm) return { ok: false, code: 'DSH_RUNTIME_INSTALLER_NOT_FOUND', error: 'pnpm/npm unavailable' };
+  // Clean/recreate the versioned stage dir: a failed older attempt must
+  // never contaminate the next staging.
+  try { rmSync(stagedRoot, { recursive: true, force: true }); } catch {}
   mkdirSync(stagedRoot, { recursive: true });
   const packageManager = pnpm
     ? descriptor({ kind: 'pnpm', command: pnpm, source: 'pnpm' })

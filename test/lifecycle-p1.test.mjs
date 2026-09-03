@@ -207,3 +207,51 @@ test('migrateCrewDshRuntime rolls back when verify fails', async () => {
     assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
   } finally { t.cleanup(); }
 });
+
+test('stale reclaim guard is recovered, live guard blocks', () => {
+  const t = tempHome();
+  try {
+    const first = acquireUpdateLock({ home: t.dir });
+    assert.equal(first.ok, true);
+    releaseUpdateLock({ home: t.dir });
+    // Simulate a crashed contender: dead-PID reclaim guard left behind.
+    const reclaimFile = `${updateLockFile({ home: t.dir })}.reclaim.lock`;
+    writeFileSync(reclaimFile, JSON.stringify({ pid: 2147483647, nonce: 'stale-guard' }) + '\n');
+    writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: 'dead-owner-2' }) + '\n');
+    const reclaimed = acquireUpdateLock({ home: t.dir });
+    assert.equal(reclaimed.ok, true);
+    assert.equal(reclaimed.reclaimed, true);
+  } finally { t.cleanup(); }
+});
+
+test('migrateCrewDshRuntime cleans versioned stage dir before install', async () => {
+  const t = tempHome();
+  try {
+    const stagedRoot = crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION });
+    mkdirSync(join(stagedRoot, 'node_modules', 'stale-junk'), { recursive: true });
+    writeFileSync(join(stagedRoot, 'node_modules', 'stale-junk', 'x.js'), '// stale');
+    let sawClean = false;
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          sawClean = !existsSync(join(stagedRoot, 'node_modules', 'stale-junk', 'x.js'));
+          const entry = join(stagedRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+    assert.equal(r.ok, true);
+    assert.equal(sawClean, true);
+  } finally { t.cleanup(); }
+});

@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewProfileDir } from './install.mjs';
-import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration } from '../dsh-cli-runtime.mjs';
+import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -200,11 +200,25 @@ function lockOwnerAlive(record) {
 function tryReclaimUpdateLock({ home, record }) {
   const file = updateLockFile({ home });
   const reclaimFile = `${file}.reclaim.lock`;
-  let reclaimFd = null;
+  const reclaimRecord = { pid: process.pid, nonce: `reclaim-${process.pid}-${Date.now()}`, started_at: isoNow() };
   try {
-    reclaimFd = writeFileSync(reclaimFile, JSON.stringify({ pid: process.pid }) + '\n', { flag: 'wx' });
-  } catch {
-    return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    writeFileSync(reclaimFile, JSON.stringify(reclaimRecord) + '\n', { flag: 'wx' });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    // A stale reclaim guard from a crashed contender must not block recovery
+    // forever: reclaim it when its owner is dead, using the same liveness
+    // rule as the main lock.
+    let guard = null;
+    try { guard = JSON.parse(readFileSync(reclaimFile, 'utf8')); } catch { guard = null; }
+    if (!guard || typeof guard !== 'object' || lockOwnerAlive(guard)) {
+      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    }
+    try { rmSync(reclaimFile, { force: true }); } catch {}
+    try {
+      writeFileSync(reclaimFile, JSON.stringify(reclaimRecord) + '\n', { flag: 'wx' });
+    } catch {
+      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+    }
   }
   try {
     let current = null;
@@ -233,7 +247,6 @@ function tryReclaimUpdateLock({ home, record }) {
     }
   } finally {
     try { rmSync(reclaimFile, { force: true }); } catch {}
-    void reclaimFd;
   }
 }
 
@@ -833,21 +846,35 @@ export function sanitizedPackageManagerEnv(baseEnv = process.env) {
   return env;
 }
 
-async function ensureRuntimeStep({ home, log, ensureRuntime }) {
+async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime }) {
   const ensure = ensureRuntime ?? ((opts) => {
     const r = ensureCrewDshRuntime({ ...opts, env: sanitizedPackageManagerEnv() });
     if (!r.ok && r.stderrTail) {
       log(`  (runtime installer said: ${r.stderrTail})`);
     }
+    if (!r.ok && r.code === 'DSH_RUNTIME_COHORT_MISMATCH') {
+      return { ok: false, code: r.code, error: r.error, installed: r.installed, target: r.target, needsMigration: true };
+    }
     return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
+  const migrate = migrateRuntime ?? (async (opts) => migrateCrewDshRuntime({ home, version: TARGET_DSH_VERSION, ...opts }));
   const r = await ensure({ home });
-  if (!r?.ok) {
-    log(`✗ reusable Crew DSH runtime unavailable: ${r?.error ?? 'unknown error'}`);
-    return false;
+  if (r?.ok) {
+    log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);
+    return true;
   }
-  log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);
-  return true;
+  if (r?.needsMigration === true) {
+    log(`- runtime cohort stale (${r.installed} -> ${r.target}); migrating via staged transaction`);
+    const m = await migrate({ log });
+    if (!m?.ok) {
+      log(`✗ runtime cohort migration failed: ${m?.error ?? m?.code ?? 'unknown error'}`);
+      return false;
+    }
+    log(`✓ runtime cohort migrated (@${m.version})`);
+    return true;
+  }
+  log(`✗ reusable Crew DSH runtime unavailable: ${r?.error ?? 'unknown error'}`);
+  return false;
 }
 
 // ---- commands -----------------------------------------------------------------
@@ -907,6 +934,18 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
     log('- official 3080 bridge left untouched (official web profile is read-only)');
   }
   return true;
+}
+
+// Compensate a failed candidate activation by re-pointing live activation
+// surfaces (profile registration + host integrations) back at the prior
+// release. Rewriting current.json alone is NOT enough: a crash between
+// activation and pointer commit leaves live surfaces on the candidate.
+async function compensateActivation({ home, prior, log, installer }) {
+  if (!prior?.path || !existsSync(prior.path)) return { ok: false, code: 'PRIOR_RELEASE_MISSING' };
+  const manifest = readManifest(prior.path);
+  if (!manifest?.name || !manifest?.version) return { ok: false, code: 'PRIOR_MANIFEST_INVALID' };
+  const ok = await activateRelease({ home, releaseDir: prior.path, manifest, log, installer });
+  return ok ? { ok: true, version: manifest.version, path: prior.path } : { ok: false, code: 'PRIOR_ACTIVATION_FAILED' };
 }
 
 export async function npxIntegrate({ home = homedir(), log = console.log } = {}) {
@@ -975,7 +1014,8 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
 
   const activated = await activateRelease({ home, releaseDir: staged.stageDir, manifest, log, installer });
   if (!activated) {
-    return { ok: false, error: 'activation failed' };
+    const compensated = prior?.path ? await compensateActivation({ home, prior, log, installer }) : null;
+    return { ok: false, error: 'activation failed', compensated: compensated?.ok === true };
   }
 
   const releaseDir = commitActivatedRelease({ stageDir: staged.stageDir, manifest, home, prior });
@@ -1222,7 +1262,8 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
 
     const activated = await activateRelease({ home, releaseDir: staged.stageDir, manifest, log, installer });
     if (!activated) {
-      return { ok: false, error: 'activation failed' };
+      const compensated = prior?.path ? await compensateActivation({ home, prior, log, installer }) : null;
+      return { ok: false, error: 'activation failed', compensated: compensated?.ok === true };
     }
 
     const releaseDir = commitActivatedRelease({ stageDir: staged.stageDir, manifest, home, prior });
