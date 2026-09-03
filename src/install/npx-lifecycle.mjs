@@ -2312,10 +2312,25 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
       // coordinated transaction so the 3210 never runs an unsupported
       // payload/cohort combination.
       log(`- cross-cohort update: DSH ${priorDsh} -> ${candidateDsh}; running coordinated payload+runtime transaction`);
-      // Persist the discovered prior cohort as a sidecar BEFORE the
-      // transaction so rollback/recovery can resolve it later without
-      // re-discovery ambiguity.
-      writeReleaseCohort({ releaseDir: prior.path, dshVersion: priorDsh, source: 'discovered-live-runtime' });
+      // The discovered prior cohort must be DURABLY recorded as a sidecar
+      // BEFORE the transaction: "update complete" must imply the legacy
+      // release can later be rolled back offline. Write then READ BACK
+      // (without live fallback) — a writer that returned null OR a sidecar
+      // that does not round-trip to the discovered cohort aborts before any
+      // runtime park / payload activation / pointer mutation. A pre-existing
+      // valid sidecar for the same cohort also satisfies the read-back.
+      const persistResult = writeReleaseCohort({ releaseDir: prior.path, dshVersion: priorDsh, source: 'discovered-live-runtime' });
+      const readBack = resolveReleaseCohort({ releaseDir: prior.path, allowLegacyLiveFallback: false });
+      const sidecarDurable = persistResult !== null
+        && readBack.ok === true
+        && readBack.dshVersion === priorDsh;
+      if (!sidecarDurable) {
+        return {
+          ok: false,
+          code: 'RELEASE_COHORT_SIDECAR_PERSIST_FAILED',
+          error: `prior release cohort sidecar could not be durably persisted (${readBack.ok ? 'read-back mismatch' : readBack.error ?? 'write failed'}); refusing cross-cohort update that could not be rolled back offline`,
+        };
+      }
       const coordinated = await performCoordinatedCohortUpdate({
         home,
         log,

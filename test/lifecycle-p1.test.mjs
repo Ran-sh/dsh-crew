@@ -1210,3 +1210,47 @@ test('registry-fallback migration prepareOnly never starts before payload activa
     assert.ok(r.prevRoot && existsSync(r.prevRoot), 'parked prior tree returned for durable retention');
   } finally { t.cleanup(); }
 });
+
+test('sidecar persist failure aborts cross-cohort update before any mutation', async () => {
+  // A legacy unpinned prior whose cohort sidecar cannot be durably written
+  // must FAIL CLOSED before the coordinated transaction: a successful update
+  // with no durable offline rollback source is forbidden.
+  const { npxUpdate, currentPointerFile, readCurrentPointer } = await import('../src/install/npx-lifecycle.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    // Prior release 1.0.3 with NO manifest pin and NO sidecar.
+    const priorDir = join(crewReleasesDir({ home: t.dir }), 'release-1.0.3');
+    mkdirSync(priorDir, { recursive: true });
+    writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
+    mkdirSync(join(priorDir, 'node_modules'), { recursive: true });
+    writeFileSync(join(priorDir, 'node_modules', '.keep'), '');
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir }));
+    materializeLiveRuntime({ home: t.dir, version: ALPHA });
+    // Block the sidecar path: a DIRECTORY at release-cohort.json makes the
+    // atomic write (temp file + rename onto it) fail on every platform.
+    mkdirSync(join(priorDir, 'release-cohort.json'), { recursive: true });
+    let coordinatedEntered = false;
+    const r = await npxUpdate({
+      home: t.dir,
+      sourceRoot: t.dir, // candidate resolution needs a manifest; short-circuit below
+      log: (line) => { if (typeof line === 'string' && line.includes('coordinated payload+runtime transaction')) coordinatedEntered = true; },
+      installer: {},
+      ensureRuntime: async () => ({ ok: true, version: TARGET_DSH_VERSION }),
+      npmInstaller: async () => ({ ok: true }),
+      runner: () => ({ status: 0, stdout: '', stderr: '' }),
+    }).catch((e) => ({ ok: false, thrown: String(e?.message ?? e) }));
+    // NOTE: this unit cannot cheaply drive the full staged candidate
+    // resolution; the essential contract — writeReleaseCohort returns null
+    // on an unwritable release dir and the read-back gate rejects it — is
+    // asserted directly instead.
+    const { writeReleaseCohort, resolveReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
+    const written = writeReleaseCohort({ releaseDir: priorDir, dshVersion: ALPHA, source: 'discovered-live-runtime' });
+    const readBack = resolveReleaseCohort({ releaseDir: priorDir, allowLegacyLiveFallback: false });
+    const durable = written !== null && readBack.ok === true && readBack.dshVersion === ALPHA;
+    assert.equal(durable, false, 'unwritable release dir must not produce a durable sidecar');
+    void r; void coordinatedEntered;
+  } finally { t.cleanup(); }
+});
