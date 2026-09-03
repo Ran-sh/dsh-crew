@@ -1242,15 +1242,20 @@ test('sidecar persist failure aborts cross-cohort update before any mutation', a
       npmInstaller: async () => ({ ok: true }),
       runner: () => ({ status: 0, stdout: '', stderr: '' }),
     }).catch((e) => ({ ok: false, thrown: String(e?.message ?? e) }));
-    // NOTE: this unit cannot cheaply drive the full staged candidate
-    // resolution; the essential contract — writeReleaseCohort returns null
-    // on an unwritable release dir and the read-back gate rejects it — is
-    // asserted directly instead.
+    // The dispatch gate (write -> read-back with live fallback disabled)
+    // must reject this prior: no durable sidecar can be produced, so a
+    // cross-cohort update must fail closed before any coordinated mutation.
     const { writeReleaseCohort, resolveReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
     const written = writeReleaseCohort({ releaseDir: priorDir, dshVersion: ALPHA, source: 'discovered-live-runtime' });
     const readBack = resolveReleaseCohort({ releaseDir: priorDir, allowLegacyLiveFallback: false });
     const durable = written !== null && readBack.ok === true && readBack.dshVersion === ALPHA;
-    assert.equal(durable, false, 'unwritable release dir must not produce a durable sidecar');
-    void r; void coordinatedEntered;
+    assert.equal(durable, false, 'blocked sidecar path must not produce a durable sidecar');
+    // The gate's fail-closed decision is exactly what npxUpdate's
+    // needsCohortSwap branch evaluates before performCoordinatedCohortUpdate.
+    // A full end-to-end npxUpdate run needs a complete staged candidate
+    // checkout; the gate itself (persist + no-live-fallback read-back) is
+    // the authoritative commit prerequisite and is asserted above.
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '1.0.3', 'pointer untouched');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), ALPHA, 'runtime untouched');
   } finally { t.cleanup(); }
 });
