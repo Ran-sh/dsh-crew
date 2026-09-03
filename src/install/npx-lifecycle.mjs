@@ -282,44 +282,80 @@ function clearUpdateJournal({ home = homedir() } = {}) {
   try { rmSync(updateJournalFile({ home }), { force: true }); } catch {}
 }
 
-// Reconcile a leftover journal from a crashed update/install: the pointer
-// switches only at the final commit point, so any journal left behind means
-// the candidate never became authoritative. Restore the prior pointer when
-// one was recorded, drop the orphan staged dir, and report what happened.
-// A malformed journal fails closed and is retained for operator inspection.
-// First-install crashes (prior == null) remove a candidate-pointing pointer
-// and undo the candidate activation surfaces instead of leaving a broken
-// authoritative release.
-export function reconcileUpdateJournal({ home = homedir(), log = () => {} } = {}) {
-  const journal = readUpdateJournal({ home });
+// Synchronous profile-registration compensation for crash recovery:
+// re-point the dedicated Crew profile at the prior release. Host
+// integrations (Codex/ZCode/startup/Claude) are repaired by the next
+// successful install/update activation; the profile link is the surface
+// that must never dangle at a deleted candidate.
+function compensateActivationSync({ home, prior, manifest, log, installer }) {
+  if (!prior?.path || !existsSync(prior.path)) return { ok: false, code: 'PRIOR_RELEASE_MISSING' };
+  if (!manifest?.name) return { ok: false, code: 'PRIOR_MANIFEST_INVALID' };
+  const registration = ensureCrewPluginRegistration({ home, root: prior.path, name: manifest.name });
+  if (!registration.ok) return { ok: false, code: registration.code ?? 'PRIOR_REGISTRATION_FAILED' };
+  return { ok: true, version: manifest.version, path: prior.path };
+}
+
+// Reconcile a leftover journal from a crashed update/install. The single
+// commit point is the pointer write: pointer == candidate means committed
+// (finalize, do NOT roll back); pointer == prior/absent means pre-commit
+// (restore activation surfaces, drop candidate). A malformed journal fails
+// closed and is retained for operator inspection.
+export function reconcileUpdateJournal({ home = homedir(), log = () => {}, installer = realInstaller } = {}) {  const journal = readUpdateJournal({ home });
   if (!journal) return { ok: true, reconciled: false };
   if (journal.malformed) {
     return { ok: false, code: 'JOURNAL_MALFORMED', file: journal.file };
   }
-  let pointer = readCurrentPointer({ home });
-  if (journal.prior?.path && existsSync(journal.prior.path)
-    && (!pointer || pointer.path !== journal.prior.path)) {
-    try {
-      writeCurrentPointer({ home, name: journal.prior.name, version: journal.prior.version, path: journal.prior.path });
-      log(`- recovered update journal at stage ${journal.stage}: restored prior release ${journal.prior.version}`);
-    } catch (error) {
-      return { ok: false, code: 'JOURNAL_RECOVERY_FAILED', stage: journal.stage, error: String(error?.message ?? error) };
+  const pointer = readCurrentPointer({ home });
+  const candidateDir = journal.candidate?.stageDir ?? null;
+  const candidateManifest = candidateDir && existsSync(candidateDir) ? readManifest(candidateDir) : null;
+
+  // Committed side: pointer already references the validated candidate.
+  // Finalize it (verify + clear journal + GC) instead of rolling back.
+  if (candidateDir && pointer?.path === candidateDir) {
+    if (!candidateManifest?.name || !candidateManifest?.version) {
+      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
     }
-    pointer = readCurrentPointer({ home });
-  } else if (!journal.prior?.path && journal.candidate?.stageDir
-    && pointer?.path === journal.candidate.stageDir) {
-    try { rmSync(currentPointerFile({ home }), { force: true }); } catch {}
-    pointer = null;
-    log(`- recovered first-install journal at stage ${journal.stage}: removed orphan candidate pointer`);
-  } else if (journal.prior && !existsSync(journal.prior.path)) {
-    return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
+    const validated = validateInstalledPayload(candidateDir, { expectedName: candidateManifest.name, expectedVersion: candidateManifest.version });
+    if (!validated.ok) {
+      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage, error: (validated.errors ?? []).join('; ') };
+    }
+    clearUpdateJournal({ home });
+    gcOldReleases({ home, protect: journal.prior?.path ?? null });
+    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateManifest.version} already committed, finalized`);
+    return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
-  if (journal.candidate?.stageDir && existsSync(journal.candidate.stageDir)
-    && (!pointer || pointer.path !== journal.candidate.stageDir)) {
-    try { rmSync(journal.candidate.stageDir, { recursive: true, force: true }); } catch {}
+
+  // Pre-commit side: prior stays authoritative. Re-point live activation
+  // surfaces back at prior (a crash between activation and pointer write
+  // leaves them on the candidate), then drop the candidate.
+  if (journal.prior?.path) {
+    if (!existsSync(journal.prior.path)) {
+      return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
+    }
+    const priorManifest = readManifest(journal.prior.path);
+    const compensated = compensateActivationSync({ home, prior: journal.prior, manifest: priorManifest, log, installer });
+    if (!compensated.ok) {
+      return { ok: false, code: 'JOURNAL_COMPENSATE_FAILED', stage: journal.stage, error: compensated.error ?? compensated.code };
+    }
+    if (candidateDir && existsSync(candidateDir)) {
+      try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
+    }
+    clearUpdateJournal({ home });
+    log(`- recovered update journal at stage ${journal.stage}: restored prior release ${journal.prior.version}`);
+    return { ok: true, reconciled: true, stage: journal.stage, committed: false };
+  }
+
+  // First-install pre-commit: no prior exists. Remove any orphan candidate
+  // pointer + dir; activation surfaces were never authoritative.
+  if (candidateDir && existsSync(candidateDir)) {
+    try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
+  }
+  if (pointer && candidateDir && pointer.path === candidateDir) {
+    try { rmSync(currentPointerFile({ home }), { force: true }); } catch {}
   }
   clearUpdateJournal({ home });
-  return { ok: true, reconciled: true, stage: journal.stage };
+  log(`- recovered first-install journal at stage ${journal.stage}: removed orphan candidate`);
+  return { ok: true, reconciled: true, stage: journal.stage, committed: false };
 }
 
 // ---- dependency tree materialization ----------------------------------------

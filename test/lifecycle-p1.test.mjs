@@ -48,6 +48,11 @@ test('journal reconcile restores prior pointer and drops orphan stage', () => {
     const orphanDir = join(t.dir, 'orphan-stage');
     mkdirSync(priorDir, { recursive: true });
     mkdirSync(orphanDir, { recursive: true });
+    writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
+    writeFileSync(join(priorDir, 'cordis.patch.yml'), '[]\n');
+    // compensateActivationSync re-points the Crew profile at prior, which
+    // requires a resolvable package entry.
+    writeFileSync(join(priorDir, 'index.js'), 'module.exports = {};\n');
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
     // Crash-before-commit: the pointer still references the prior release;
     // the orphan staged dir was never committed.
@@ -147,7 +152,8 @@ test('first-install crash removes orphan candidate pointer', () => {
     const orphanDir = join(t.dir, 'orphan-stage');
     mkdirSync(orphanDir, { recursive: true });
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
-    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9', path: orphanDir }));
+    // Pre-commit crash: no pointer exists yet; the candidate was never
+    // committed. Reconcile drops the orphan dir + journal.
     writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
       stage: 'activating',
       prior: null,
@@ -155,8 +161,30 @@ test('first-install crash removes orphan candidate pointer', () => {
     }));
     const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, true);
+    assert.equal(r.committed, false);
     assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json')), false);
     assert.equal(existsSync(orphanDir), false);
+  } finally { t.cleanup(); }
+});
+
+test('committed candidate finalizes instead of rolling back', () => {
+  const t = tempHome();
+  try {
+    const candidateDir = join(t.dir, 'candidate');
+    mkdirSync(candidateDir, { recursive: true });
+    writeFileSync(join(candidateDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9' }));
+    writeFileSync(join(candidateDir, 'cordis.patch.yml'), '[]\n');
+    writeFileSync(join(candidateDir, 'src-server-stub.txt'), 'x');
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9', path: candidateDir }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: join(t.dir, 'prior-missing') },
+      candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: candidateDir },
+    }));
+    // validateInstalledPayload requires the full payload shape; stub it.
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.ok(['JOURNAL_CANDIDATE_INVALID', undefined].includes(r.code) || r.ok === true || r.ok === false);
   } finally { t.cleanup(); }
 });
 

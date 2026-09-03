@@ -217,9 +217,12 @@ function Wait-CrewServices {
     $details = ($notReady | ForEach-Object { '{0}:{1} ({2})' -f $_.Profile, $_.Port, $_.LastError }) -join '; '
     throw "Startup health deadline exceeded: $details"
   }
+}
 
-  # Non-critical diagnostic after all services are ready: log legacy bridge
-  # presence for operator awareness. Never gates, delays, or claims 3210.
+# Non-critical diagnostic, called only after Ensure-CrewServices returns:
+# logs legacy bridge presence for operator awareness. Never gates, delays,
+# or claims 3210; never runs on the boot path.
+function Write-LegacyBridgeDiagnostic {
   if (Test-LegacyBridgeAvailable) {
     Write-LaunchLog 'Diagnostic: legacy 3080 bridge still answers ping; Crew launcher owns 3210 directly, bridge ignored.'
   }
@@ -379,6 +382,7 @@ try {
   }
 
   Ensure-CrewServices
+  Write-LegacyBridgeDiagnostic
 
   if ($Mode -eq 'open') {
     Start-Process 'http://127.0.0.1:3080/' | Out-Null
