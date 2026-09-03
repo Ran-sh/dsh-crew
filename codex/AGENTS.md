@@ -90,3 +90,11 @@ discovering what the current environment actually supports.
 - Do not present delegated work as complete until validation passes, structured
   results are complete, integration is checked, and permitted review
   requirements are satisfied or transparently reported as unavailable.
+
+## Harness upgrade redlines
+
+- Never install, update, register, unlink, repair, or mutate anything under ~/.dsh.
+- DSH Crew runtime upgrades must go through the Crew-owned installer and DSH_HOME.
+- Never use direct pnpm/npm/dsh plugin operations against the official web profile.
+- Preparing a Harness upgrade must not restart 3080 or 3210.
+- Standalone workers launch through the official DSH SDK profile contract; dsh-sdk-jsonrpc-demo is obsolete.

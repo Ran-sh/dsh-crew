@@ -22,5 +22,13 @@ work only after its live capability and readiness surfaces have been checked.
 - Validate returned evidence, changed scope, tests and completion state before
   accepting delegated work. Do not expose credentials or raw provider payloads.
 
+## Harness upgrade redlines
+
+- Never install, update, register, unlink, repair, or mutate anything under ~/.dsh.
+- DSH Crew runtime upgrades must go through the Crew-owned installer and DSH_HOME.
+- Never use direct pnpm/npm/dsh plugin operations against the official web profile.
+- Preparing a Harness upgrade must not restart 3080 or 3210.
+- Standalone workers launch through the official DSH SDK profile contract; dsh-sdk-jsonrpc-demo is obsolete.
+
 This file is installed as a managed block in `~/.zcode/AGENTS.md`; user-authored
 instructions outside the block are preserved.

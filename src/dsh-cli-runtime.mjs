@@ -23,6 +23,12 @@ import { crewDshHome, crewProfileDir } from './install/install.mjs';
 import { reconcileProviderDesiredState } from './provider-desired-state.mjs';
 
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
+// Pinned Harness cohort for this dsh-crew release. The Crew runtime, the SDK
+// client, and the worker composition must all resolve to this exact version;
+// a custom dshBin bypasses the SDK's own same-version check, so the resolver
+// asserts the cohort itself before returning a reusable descriptor.
+export const TARGET_DSH_VERSION = '0.1.2-alpha.5';
+export const TARGET_DSH_SPEC = `${DSH_CLI_PACKAGE}@${TARGET_DSH_VERSION}`;
 export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
 const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 const PROFILE_PATCH_TEMPLATE = '[]\n';
@@ -193,7 +199,7 @@ export function runResolvedDsh(cli, args = [], {
  */
 export function ensureCrewDshRuntime({
   home = homedir(),
-  packageSpec = DSH_CLI_PACKAGE,
+  packageSpec = TARGET_DSH_SPEC,
   npmCommand = null,
   pnpmCommand = null,
   findCommand = defaultFindCommand,
@@ -204,7 +210,21 @@ export function ensureCrewDshRuntime({
   env = process.env,
 } = {}) {
   const existing = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false });
-  if (existing?.kind === 'crew-runtime') return { ok: true, cli: existing, reused: true };
+  // Reuse only when the installed runtime already matches the pinned cohort.
+  // A stale cohort (e.g. an online 0.1.1-rc.2 runtime) must never be mistaken
+  // for the target, and it must never be upgraded in place under a live hub.
+  if (existing?.kind === 'crew-runtime' && existing?.version === TARGET_DSH_VERSION) {
+    return { ok: true, cli: existing, reused: true };
+  }
+  if (existing?.kind === 'crew-runtime') {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_COHORT_MISMATCH',
+      error: `Crew runtime is ${existing.version ?? 'unknown version'} but ${TARGET_DSH_VERSION} is required; refusing in-place upgrade of a live runtime`,
+      installed: existing.version ?? null,
+      target: TARGET_DSH_VERSION,
+    };
+  }
 
   const pnpm = pnpmCommand ?? findCommand('pnpm');
   const npm = npmCommand ?? findCommand('npm');

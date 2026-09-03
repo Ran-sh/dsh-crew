@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   DSH_CLI_PACKAGE,
+  TARGET_DSH_SPEC,
+  TARGET_DSH_VERSION,
   crewDshRuntimeModule,
   crewDshRuntimeRoot,
   resolveDshCli,
@@ -91,17 +93,36 @@ test('ensureCrewDshRuntime installs only under the Crew home and is reusable', (
         const entry = crewDshRuntimeModule({ home: t.dir });
         mkdirSync(join(entry, '..'), { recursive: true });
         writeFileSync(entry, '// test entry\n');
-        writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: DSH_CLI_PACKAGE, version: '1.2.3-test' }));
+        writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: DSH_CLI_PACKAGE, version: TARGET_DSH_VERSION }));
         return { status: 0, stdout: '', stderr: '' };
       },
     });
     assert.equal(result.ok, true);
     assert.equal(result.cli.kind, 'crew-runtime');
-    assert.equal(result.version, '1.2.3-test');
+    assert.equal(result.version, TARGET_DSH_VERSION);
     assert.equal(invocation.args.includes(crewDshRuntimeRoot({ home: t.dir })), true);
-    assert.equal(invocation.args.at(-1), DSH_CLI_PACKAGE);
+    assert.equal(invocation.args.at(-1), TARGET_DSH_SPEC);
     assert.equal(invocation.options.env.DSH_HOME, undefined);
     assert.equal(existsSync(crewDshRuntimeRoot({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewDshRuntime refuses to reuse a stale-cohort runtime in place', () => {
+  const t = tempHome();
+  try {
+    const entry = crewDshRuntimeModule({ home: t.dir });
+    mkdirSync(join(entry, '..'), { recursive: true });
+    writeFileSync(entry, '// test entry\n');
+    writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: DSH_CLI_PACKAGE, version: '0.1.1-rc.2' }));
+    let ran = false;
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: (name) => name === 'npm' ? 'npm' : null,
+      runner: () => { ran = true; return { status: 0, stdout: '', stderr: '' }; },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'DSH_RUNTIME_COHORT_MISMATCH');
+    assert.equal(ran, false);
   } finally { t.cleanup(); }
 });
 
@@ -168,7 +189,7 @@ test('offline Crew registration replaces a stale link while preserving unrelated
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       name: 'dsh-profile-dsh-crew',
       private: true,
-      dependencies: { '@deepseek-ai/dsh-base': '0.1.1-rc.2', '@ran-test/other': '1.0.0' },
+      dependencies: { '@deepseek-ai/dsh-base': '0.1.2-alpha.5', '@ran-test/other': '1.0.0' },
       dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@ran-test/other'] } },
     }, null, 2));
     const first = ensureCrewPluginRegistration({ home: t.dir, root: firstRoot });
@@ -177,7 +198,7 @@ test('offline Crew registration replaces a stale link while preserving unrelated
     assert.equal(second.ok, true, JSON.stringify(second));
     assert.equal(realpathSync(second.linkPath), realpathSync(secondRoot));
     const profile = JSON.parse(readFileSync(second.profileManifest, 'utf8'));
-    assert.equal(profile.dependencies['@deepseek-ai/dsh-base'], '0.1.1-rc.2');
+    assert.equal(profile.dependencies['@deepseek-ai/dsh-base'], '0.1.2-alpha.5');
     assert.equal(profile.dependencies['@ran-test/other'], '1.0.0');
     assert.deepEqual(profile.dsh.profile.bundles.slice(0, 2), ['@deepseek-ai/dsh-base', '@ran-test/other']);
     assert.equal(profile.dsh.profile.bundles.filter((name) => name === '@ran-test/dsh-crew').length, 1);
