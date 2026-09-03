@@ -18,10 +18,14 @@ const verifierSource = readFileSync(join(here, '..', 'scripts', 'verify-npm-inst
 const packageManifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
 
 const directPeerNames = [
+  '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-agent-loop',
   '@deepseek-ai/dsh-agent-presets',
-  '@deepseek-ai/dsh-agent-spine-demo',
   '@deepseek-ai/dsh-bash-local',
+  '@deepseek-ai/dsh-client-locale',
+  '@deepseek-ai/dsh-client-ui-renderer',
+  '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-compaction-basic',
   '@deepseek-ai/dsh-fs-local',
   '@deepseek-ai/dsh-fs-observation-policy',
@@ -30,8 +34,8 @@ const directPeerNames = [
   '@deepseek-ai/dsh-sandbox-local',
   '@deepseek-ai/dsh-sandbox-policy',
   '@deepseek-ai/dsh-sdk-client',
-  '@deepseek-ai/dsh-sdk-jsonrpc-demo',
   '@deepseek-ai/dsh-sdk-jsonrpc-server',
+  '@deepseek-ai/dsh-sdk-minimal',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-persistence-jsonl',
   '@deepseek-ai/dsh-subprocess-local',
@@ -96,10 +100,10 @@ async function withTempRoot(packageJson, fn) {
   }
 }
 
-test('cohort range evaluator accepts the official rc.2 cohort and rejects rc.6', () => {
-  assert.equal(satisfiesCohortRange(supportedDshVersion, '^0.1.1-rc.2'), true);
-  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.1-rc.2'), true);
-  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.0-rc.6'), false);
+test('cohort range evaluator accepts the official alpha.5 cohort and rejects rc.2', () => {
+  assert.equal(satisfiesCohortRange(supportedDshVersion, '^0.1.2-alpha.5'), true);
+  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.2-alpha.5'), true);
+  assert.equal(satisfiesCohortRange(supportedDshVersion, '0.1.1-rc.2'), false);
   assert.equal(satisfiesCohortRange(supportedDshVersion, '*'), false);
 });
 
@@ -126,9 +130,9 @@ test('official cohort audit passes with a 0.3.2 manifest matching the expected c
     marker: 'PASS',
     candidate: '0.3.2',
     officialDsh: supportedDshVersion,
-    directPeerCount: 20,
-    manifestCount: 21,
-    crossCohortChecks: 21,
+    directPeerCount: 24,
+    manifestCount: 25,
+    crossCohortChecks: 25,
   });
 });
 

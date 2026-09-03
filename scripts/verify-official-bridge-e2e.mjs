@@ -128,7 +128,7 @@ try {
       const target = join(harnessHome, 'runtime');
       mkdirSync(dirname(target), { recursive: true });
       symlinkSync(realpathSync(runtimeRoot), target, process.platform === 'win32' ? 'junction' : 'dir');
-      return { ok: true, version: '0.1.1-rc.2' };
+      return { ok: true, version: '0.1.2-alpha.5' };
     },
   });
   assert(installed.ok, `disposable install failed: ${logs.join(' | ')}`);

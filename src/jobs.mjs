@@ -1,6 +1,13 @@
 // Job manager: each job runs one dsh-jsonrpc-agent runtime via the DSH SDK.
 // Progress derived from session.event notifications; status mirrored to a
 // JSON file so the Claude Code statusline (and anything else) can render it.
+//
+// alpha.5 SDK surface: DeepSeekHarness takes HarnessClientOptions at the top
+// level (no `launch` wrapper). The runtime is the installed same-version dsh
+// CLI booted on the `sdk-minimal` profile, with the worker overlay applied as
+// a --patch. `@deepseek-ai/dsh` and `@deepseek-ai/dsh-sdk-client` must be the
+// same version (enforced inside the SDK client; dsh-crew also asserts it via
+// the Crew runtime module so a custom dshBin cannot bypass the check).
 
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
 import { readFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -17,18 +24,20 @@ import { buildDirectSelectionTrace } from './model-routing.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
+const CREW_DSH_HOME = join(homedir(), '.config', 'dsh-crew', 'harness');
 const STATUS_FILE = join(CONFIG_DIR, 'status.json');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
 
-// The worker agent entry. The pnpm .bin shim on Windows is a POSIX shell
-// script that Node spawn cannot execute (ENOENT), so we always launch
-// `node <lib/bin.js> <cordis>` via process.execPath — cross-platform.
+// The worker composition rides the installed same-version dsh CLI on the
+// `sdk` profile as a --patch overlay (alpha.5 SDK surface). The CLI entry is
+// resolved from the installed @deepseek-ai/dsh package; the legacy
+// dsh-sdk-jsonrpc-demo bin no longer exists.
 const requireAgents = createRequire(import.meta.url);
-let AGENT_JS = null;
-for (const spec of ['@deepseek-ai/dsh-sdk-jsonrpc-demo/bin', '@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js']) {
-  try { AGENT_JS = requireAgents.resolve(spec); break; } catch {}
+let DSH_BIN = null;
+for (const spec of ['@deepseek-ai/dsh/lib/bin.js']) {
+  try { DSH_BIN = requireAgents.resolve(spec); break; } catch {}
 }
-if (!AGENT_JS) AGENT_JS = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-sdk-jsonrpc-demo', 'lib', 'bin.js');
+if (!DSH_BIN) DSH_BIN = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 
 export const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
@@ -115,7 +124,8 @@ export function startJob({
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
   if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
-  if (!existsSync(AGENT_JS)) throw new Error(`dsh-jsonrpc-agent not installed at ${AGENT_JS}; run pnpm install in ${ROOT}`);
+  if (!existsSync(DSH_BIN)) throw new Error(`dsh CLI not installed at ${DSH_BIN}; run pnpm install in ${ROOT}`);
+  if (!existsSync(CORDIS)) throw new Error(`worker composition not found at ${CORDIS}`);
   const workspace = resolve(cwd ?? process.cwd());
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
@@ -128,22 +138,23 @@ export function startJob({
   }
 
   const harness = new DeepSeekHarness({
-    launch: {
-      command: process.execPath,
-      args: [AGENT_JS, CORDIS],
-      cwd: workspace,
-      env: {
-        ...process.env,
-        ...dotEnv,
-        DSH_CWD: workspace,
-        DSH_SESSION_ROOT: join(CONFIG_DIR, 'sessions'),
-        DSH_REASONING_EFFORT: effort,
-      },
-      requestTimeoutMs: timeoutMs,
+    dshBin: DSH_BIN,
+    profile: 'sdk-minimal',
+    patches: [CORDIS],
+    dshHome: CREW_DSH_HOME,
+    processCwd: workspace,
+    env: {
+      ...process.env,
+      ...dotEnv,
+      DSH_CWD: workspace,
+      DSH_SESSION_ROOT: join(CONFIG_DIR, 'sessions'),
+      DSH_REASONING_EFFORT: effort,
     },
+    requestTimeoutMs: timeoutMs,
     cwd: workspace,
     provider: 'deepseek-official',
     model: tierInfo.model,
+    reasoningEffort: effort,
     maxTokens,
   });
 
