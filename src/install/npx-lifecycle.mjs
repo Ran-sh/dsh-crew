@@ -250,8 +250,19 @@ function tryReclaimUpdateLock({ home, record }) {
   }
 }
 
-export function releaseUpdateLock({ home = homedir() } = {}) {
+export function releaseUpdateLock({ home = homedir(), nonce = null } = {}) {
+  // Nonce-checked release: a stale owner finalizer must never delete a
+  // replacement owner's lock. Without an expected nonce this is best-effort
+  // legacy behavior; with one it fails closed on mismatch.
+  if (nonce !== null && nonce !== undefined) {
+    let current = null;
+    try { current = JSON.parse(readFileSync(updateLockFile({ home }), 'utf8')); } catch { current = null; }
+    if (!current || current.nonce !== nonce) {
+      return { ok: false, code: 'NOT_OWNER' };
+    }
+  }
   try { rmSync(updateLockFile({ home }), { force: true }); } catch {}
+  return { ok: true };
 }
 
 function readUpdateJournal({ home = homedir() } = {}) {
@@ -293,6 +304,27 @@ function compensateActivationSync({ home, prior, manifest, log, installer }) {
   const registration = ensureCrewPluginRegistration({ home, root: prior.path, name: manifest.name });
   if (!registration.ok) return { ok: false, code: registration.code ?? 'PRIOR_REGISTRATION_FAILED' };
   return { ok: true, version: manifest.version, path: prior.path };
+}
+
+// Undo a first-install candidate's activation surfaces: remove its profile
+// registration link when it points at the candidate dir. Host integrations
+// are repaired by the next successful install; the profile link must never
+// dangle at a deleted candidate.
+function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
+  if (!candidateDir || !candidateName) return { ok: true, undone: false };
+  const linkPath = join(crewProfileDir({ home }), 'node_modules', ...candidateName.split('/'));
+  let linked = null;
+  try {
+    if (lstatSync(linkPath).isSymbolicLink()) linked = realpathSync(linkPath);
+  } catch { linked = null; }
+  if (!linked) return { ok: true, undone: false };
+  let candidateReal = null;
+  try { candidateReal = realpathSync(candidateDir); } catch { candidateReal = candidateDir; }
+  if (linked !== candidateReal) return { ok: true, undone: false };
+  try { rmSync(linkPath, { force: true }); } catch (error) {
+    return { ok: false, code: 'CANDIDATE_LINK_REMOVE_FAILED', error: String(error?.message ?? error) };
+  }
+  return { ok: true, undone: true };
 }
 
 // Reconcile a leftover journal from a crashed update/install. The single
@@ -345,8 +377,15 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     return { ok: true, reconciled: true, stage: journal.stage, committed: false };
   }
 
-  // First-install pre-commit: no prior exists. Remove any orphan candidate
-  // pointer + dir; activation surfaces were never authoritative.
+  // First-install pre-commit: no prior exists. Undo the candidate's
+  // activation surfaces FIRST (a crash between activation and pointer
+  // write leaves the profile link on the candidate), then remove the
+  // orphan candidate pointer + dir. Journal clears only after successful
+  // compensation.
+  const undone = undoCandidateActivationSync({ home, candidateDir, candidateName: journal.candidate?.name ?? null });
+  if (!undone.ok) {
+    return { ok: false, code: 'JOURNAL_UNDO_FAILED', stage: journal.stage, error: undone.error ?? undone.code };
+  }
   if (candidateDir && existsSync(candidateDir)) {
     try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
   }
@@ -688,13 +727,16 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
 // A crash at any point before the pointer write leaves the prior release
 // authoritative and the journal behind for reconcileUpdateJournal.
 export function beginReleaseActivation({ stageDir, manifest, home, prior = null }) {
-  try { rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true }); } catch {}
+  // Journal FIRST, marker removal second: a crash between the two leaves a
+  // journaled (recoverable) candidate, never a marker-free orphan that
+  // looks complete but was never in a transaction.
   writeUpdateJournal({
     home,
     stage: 'activating',
     prior: prior ? { name: prior.name, version: prior.version, path: prior.path } : null,
     candidate: { name: manifest.name, version: manifest.version, stageDir },
   });
+  try { rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true }); } catch {}
   return stageDir;
 }
 
@@ -882,7 +924,7 @@ export function sanitizedPackageManagerEnv(baseEnv = process.env) {
   return env;
 }
 
-async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime }) {
+async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, stopOwned, startOwned, verifyOwned }) {
   const ensure = ensureRuntime ?? ((opts) => {
     const r = ensureCrewDshRuntime({ ...opts, env: sanitizedPackageManagerEnv() });
     if (!r.ok && r.stderrTail) {
@@ -893,7 +935,22 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime }) {
     }
     return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
-  const migrate = migrateRuntime ?? (async (opts) => migrateCrewDshRuntime({ home, version: TARGET_DSH_VERSION, ...opts }));
+  // Production migration wiring: real stop/start/verify against the owned
+  // 3210. Missing callbacks fail closed inside migrateCrewDshRuntime.
+  const migrate = migrateRuntime ?? ((opts) => migrateCrewDshRuntime({
+    home,
+    version: TARGET_DSH_VERSION,
+    stopOwned: stopOwned ?? (async () => {
+      const r = await restartOwnedRuntime();
+      return r?.ok ? { ok: true, via: 'supervisor-restart' } : { ok: false, code: r?.code ?? 'DSH_RUNTIME_STOP_FAILED', error: 'supervisor restart before swap failed' };
+    }),
+    startOwned: startOwned ?? (async () => {
+      const r = await restartOwnedRuntime();
+      return r?.ok ? { ok: true } : { ok: false, code: r?.code ?? 'DSH_RUNTIME_START_FAILED' };
+    }),
+    verifyOwned: verifyOwned ?? (async () => verifyRuntimeVersion(TARGET_DSH_VERSION)),
+    ...opts,
+  }));
   const r = await ensure({ home });
   if (r?.ok) {
     log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);
@@ -1008,7 +1065,7 @@ export async function npxInstall({
   try {
     return await npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller });
   } finally {
-    releaseUpdateLock({ home });
+    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
   }
 }
 
@@ -1216,7 +1273,7 @@ export async function npxUpdate({
   try {
     return await npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner });
   } finally {
-    releaseUpdateLock({ home });
+    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
   }
 }
 

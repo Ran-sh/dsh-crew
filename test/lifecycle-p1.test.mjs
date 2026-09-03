@@ -283,3 +283,58 @@ test('migrateCrewDshRuntime cleans versioned stage dir before install', async ()
     assert.equal(sawClean, true);
   } finally { t.cleanup(); }
 });
+
+test('releaseUpdateLock verifies nonce: non-owner cannot delete', () => {
+  const t = tempHome();
+  try {
+    const first = acquireUpdateLock({ home: t.dir });
+    assert.equal(first.ok, true);
+    const wrong = releaseUpdateLock({ home: t.dir, nonce: 'not-the-owner' });
+    assert.equal(wrong.ok, false);
+    assert.equal(wrong.code, 'NOT_OWNER');
+    assert.equal(existsSync(updateLockFile({ home: t.dir })), true);
+    const right = releaseUpdateLock({ home: t.dir, nonce: first.nonce });
+    assert.equal(right.ok, true);
+    assert.equal(existsSync(updateLockFile({ home: t.dir })), false);
+  } finally { t.cleanup(); }
+});
+
+test('migrateCrewDshRuntime fails closed without callbacks', async () => {
+  const t = tempHome();
+  try {
+    const r = await migrateCrewDshRuntime({ home: t.dir, version: TARGET_DSH_VERSION });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING');
+  } finally { t.cleanup(); }
+});
+
+test('migrateCrewDshRuntime restores prev when second rename fails', async () => {
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    writeFileSync(join(liveRoot, 'marker.txt'), 'live');
+    const calls = [];
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => ({ ok: false, code: 'IDENTITY_MISMATCH' }),
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'IDENTITY_MISMATCH');
+    assert.ok(r.recovery && r.recovery.restore === true, JSON.stringify(r.recovery));
+    assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
+  } finally { t.cleanup(); }
+});

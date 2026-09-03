@@ -350,15 +350,20 @@ export function stageCrewDshRuntime({
 // stage -> stop owned 3210 -> swap live runtime -> restart -> identity
 // verify -> rollback on any failure. Directory swaps use unique attempt
 // dirs so a failed older attempt can never contaminate the next one.
+// stopOwned/startOwned/verifyOwned have NO defaults: a missing callback
+// fails closed instead of pretending an unverified step succeeded.
 export async function migrateCrewDshRuntime({
   home = homedir(),
   version = TARGET_DSH_VERSION,
   stageOptions = {},
-  stopOwned = async () => ({ ok: true }),
-  startOwned = async () => ({ ok: true }),
-  verifyOwned = async () => ({ ok: true }),
+  stopOwned,
+  startOwned,
+  verifyOwned,
   log = () => {},
 } = {}) {
+  if (typeof stopOwned !== 'function' || typeof startOwned !== 'function' || typeof verifyOwned !== 'function') {
+    return { ok: false, code: 'DSH_RUNTIME_MIGRATION_CALLBACKS_MISSING', error: 'stop/start/verify callbacks are required' };
+  }
   const liveRoot = crewDshRuntimeRoot({ home });
   const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const attemptRoot = join(crewDshHome({ home }), `runtime-stage-${version}-${nonce}`);
@@ -376,23 +381,32 @@ export async function migrateCrewDshRuntime({
   if (!stop.ok) {
     return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
   }
-  let swapped = false;
+  let liveMoved = false;
   try {
     if (existsSync(liveRoot)) renameSync(liveRoot, prevRoot);
+    liveMoved = true;
     renameSync(attemptRoot, liveRoot);
-    swapped = true;
   } catch (error) {
-    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error) };
+    // Second rename failed: restore prev BEFORE reporting, then restart it.
+    let recovery = { ok: false };
+    try {
+      if (liveMoved && existsSync(prevRoot) && !existsSync(liveRoot)) renameSync(prevRoot, liveRoot);
+      const restarted = await startOwned();
+      recovery = restarted?.ok ? { ok: true } : { ok: false, code: restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED' };
+    } catch (recoveryError) {
+      recovery = { ok: false, code: 'DSH_RUNTIME_SWAP_RECOVERY_FAILED', error: String(recoveryError?.message ?? recoveryError) };
+    }
+    return { ok: false, code: 'DSH_RUNTIME_SWAP_FAILED', error: String(error?.message ?? error), recovery };
   }
   const start = await startOwned();
   if (!start.ok) {
-    await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
-    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed, prior runtime restored' };
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed', recovery };
   }
   const verified = await verifyOwned();
   if (!verified.ok) {
-    await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
-    return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed, prior runtime restored' };
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed', recovery };
   }
   try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
   try { rmSync(staged.stagedRoot, { recursive: true, force: true }); } catch {}
@@ -401,12 +415,23 @@ export async function migrateCrewDshRuntime({
 }
 
 async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned }) {
+  const recovery = { restore: false, restart: false };
   try { rmSync(liveRoot, { recursive: true, force: true }); } catch {}
   try {
-    if (existsSync(prevRoot)) renameSync(prevRoot, liveRoot);
-  } catch {}
+    if (existsSync(prevRoot)) { renameSync(prevRoot, liveRoot); recovery.restore = true; }
+  } catch (error) {
+    recovery.restoreError = String(error?.message ?? error);
+  }
   try { rmSync(attemptRoot, { recursive: true, force: true }); } catch {}
-  try { await startOwned(); } catch {}
+  try {
+    const restarted = await startOwned();
+    recovery.restart = restarted?.ok === true;
+    if (!recovery.restart) recovery.restartCode = restarted?.code ?? 'DSH_RUNTIME_RESTART_FAILED';
+  } catch (error) {
+    recovery.restartError = String(error?.message ?? error);
+  }
+  recovery.ok = recovery.restore === true && recovery.restart === true;
+  return recovery;
 }
 
 function isObject(value) {
