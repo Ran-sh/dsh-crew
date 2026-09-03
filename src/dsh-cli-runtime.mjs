@@ -400,12 +400,12 @@ export async function migrateCrewDshRuntime({
   }
   const start = await startOwned();
   if (!start.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned });
     return { ok: false, code: start.code ?? 'DSH_RUNTIME_START_FAILED', error: start.error ?? 'restart after swap failed', recovery };
   }
   const verified = await verifyOwned();
   if (!verified.ok) {
-    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned });
+    const recovery = await rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned });
     return { ok: false, code: verified.code ?? 'DSH_RUNTIME_VERIFY_FAILED', error: verified.error ?? 'identity check failed', recovery };
   }
   try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
@@ -414,8 +414,24 @@ export async function migrateCrewDshRuntime({
   return { ok: true, version, liveRoot };
 }
 
-async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, startOwned }) {
-  const recovery = { restore: false, restart: false };
+async function rollbackRuntimeSwap({ liveRoot, prevRoot, attemptRoot, stopOwned, startOwned }) {
+  const recovery = { stoppedCandidate: false, restore: false, restart: false };
+  // The failed candidate 3210 may still be running against the tree we are
+  // about to replace: stop it FIRST, otherwise the swap races a live
+  // process (and on Windows the live handles can fail the rename/delete).
+  if (typeof stopOwned === 'function') {
+    try {
+      const stopped = await stopOwned();
+      recovery.stoppedCandidate = stopped?.ok === true;
+      if (!recovery.stoppedCandidate) recovery.stopError = stopped?.code ?? stopped?.error ?? 'candidate stop failed';
+    } catch (error) {
+      recovery.stopError = String(error?.message ?? error);
+    }
+    if (!recovery.stoppedCandidate) {
+      recovery.ok = false;
+      return recovery;
+    }
+  }
   try { rmSync(liveRoot, { recursive: true, force: true }); } catch {}
   try {
     if (existsSync(prevRoot)) { renameSync(prevRoot, liveRoot); recovery.restore = true; }

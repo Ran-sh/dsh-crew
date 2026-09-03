@@ -226,77 +226,94 @@ function lockOwnerAlive(record) {
   }
 }
 
-// Stale-lock reclaim WITHOUT a second pathname guard: the claim is a single
-// atomic step — mkdir(exclusive) as the arbitration primitive — so two
-// contenders can never both believe they own the reclaim. The winner is
-// decided by exactly one atomic filesystem operation, not by
-// read/compare/unlink sequences. The arbitration dir carries the winner's
-// owner record: a winner crash leaves a stale dir that a later contender
-// may reclaim after proving the recorded owner dead; a live owner's dir is
-// never removed.
+// Stale-lock reclaim with a single atomic claim: each contender writes its
+// full claim into a UNIQUE temp dir, then renames that dir onto the fixed
+// arbitration path. Rename-onto-existing is atomic on the same filesystem:
+// exactly one contender wins; the loser gets EEXIST and backs off. No
+// shared claim.json is ever overwritten, so two contenders can never both
+// believe they own the reclaim. A crashed winner leaves a stale arbitration
+// dir: a later contender quarantines the whole dir (atomic rename away)
+// only after proving the recorded owner dead, then restarts contention
+// from the top. The winner's finally removes the arbitration dir only when
+// its claim nonce still matches (CAS), never unconditionally.
 function tryReclaimUpdateLock({ home, record }) {
   const file = updateLockFile({ home });
-  let current = null;
-  try { current = JSON.parse(readFileSync(file, 'utf8')); } catch { current = null; }
-  if (!current || typeof current !== 'object') {
-    // Unparseable lock: fail closed, keep for operator inspection.
-    return { ok: false, code: 'UPDATE_LOCK_CORRUPT' };
-  }
-  if (lockOwnerAlive(current)) {
-    return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-  }
-  // Dead owner. Arbitrate with an atomic mkdir: exactly one contender wins;
-  // the loser gets EEXIST and backs off. No pathname guard file exists to
-  // be deleted out from under the winner.
-  const arbitrationDir = `${file}.reclaim.${current.nonce ?? 'unknown'}`;
-  const claimFile = join(arbitrationDir, 'claim.json');
+  const arbitrationPath = `${file}.arbitration`;
   const myClaim = { pid: process.pid, nonce: record.nonce, started_at: isoNow() };
-  try {
-    mkdirSync(arbitrationDir);
-    writeFileSync(join(arbitrationDir, 'claim.json'), JSON.stringify(myClaim) + '\n', { flag: 'wx' });
-  } catch (error) {
-    if (error?.code !== 'EEXIST') {
-      return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+  for (let round = 0; round < 3; round += 1) {
+    let current = null;
+    try { current = JSON.parse(readFileSync(file, 'utf8')); } catch { current = null; }
+    if (!current || typeof current !== 'object') {
+      // Unparseable lock: fail closed, keep for operator inspection.
+      return { ok: false, code: 'UPDATE_LOCK_CORRUPT' };
     }
-    // Arbitration dir exists: recover it only when its recorded owner is
-    // provably dead; a live contender's claim is never removed.
-    let guard = null;
-    try { guard = JSON.parse(readFileSync(claimFile, 'utf8')); } catch { guard = null; }
-    if (!guard || typeof guard !== 'object' || lockOwnerAlive(guard)) {
+    if (lockOwnerAlive(current)) {
       return { ok: false, code: 'UPDATE_IN_PROGRESS' };
     }
-    // Dead winner: take over the arbitration dir atomically by replacing
-    // its claim file (wx on a fresh name + rename), then proceed.
+    // Single atomic claim: unique temp dir -> rename onto fixed path.
+    const tmpDir = `${arbitrationPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
     try {
-      const takeover = join(arbitrationDir, `claim.${myClaim.nonce}.tmp`);
-      writeFileSync(takeover, JSON.stringify(myClaim) + '\n', { flag: 'wx' });
-      renameSync(takeover, claimFile);
-    } catch {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
-  }
-  try {
-    // Re-verify the main lock is still the same dead record we arbitrated
-    // for; a fresh owner may have replaced it while we arbitrated.
-    let reread = null;
-    try { reread = JSON.parse(readFileSync(file, 'utf8')); } catch { reread = null; }
-    if (!reread || reread.nonce !== current.nonce || reread.pid !== current.pid) {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
-    if (lockOwnerAlive(reread)) {
-      return { ok: false, code: 'UPDATE_IN_PROGRESS' };
-    }
-    rmSync(file, { force: true });
-    try {
-      writeFileSync(file, JSON.stringify(record) + '\n', { flag: 'wx' });
-      return { ok: true, owner: true, nonce: record.nonce, reclaimed: true };
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'claim.json'), JSON.stringify(myClaim) + '\n', { flag: 'wx' });
     } catch (error) {
-      if (error?.code === 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
     }
-  } finally {
-    try { rmSync(arbitrationDir, { recursive: true, force: true }); } catch {}
+    let claimed = false;
+    try {
+      renameSync(tmpDir, arbitrationPath);
+      claimed = true;
+    } catch (error) {
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      if (error?.code !== 'EEXIST' && error?.code !== 'EPERM' && error?.code !== 'ENOTEMPTY') {
+        return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+      }
+      // Arbitration path occupied: quarantine it only when its recorded
+      // owner is provably dead; a live contender's claim is never touched.
+      let guard = null;
+      try { guard = JSON.parse(readFileSync(join(arbitrationPath, 'claim.json'), 'utf8')); } catch { guard = null; }
+      if (!guard || typeof guard !== 'object' || lockOwnerAlive(guard)) {
+        return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+      }
+      const quarantine = `${arbitrationPath}.quarantine.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+      try {
+        renameSync(arbitrationPath, quarantine);
+        try { rmSync(quarantine, { recursive: true, force: true }); } catch {}
+      } catch {
+        return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+      }
+      continue;
+    }
+    try {
+      // Winner: re-verify the main lock is still the same dead record.
+      let reread = null;
+      try { reread = JSON.parse(readFileSync(file, 'utf8')); } catch { reread = null; }
+      if (!reread || reread.nonce !== current.nonce || reread.pid !== current.pid) {
+        return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+      }
+      if (lockOwnerAlive(reread)) {
+        return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+      }
+      rmSync(file, { force: true });
+      try {
+        writeFileSync(file, JSON.stringify(record) + '\n', { flag: 'wx' });
+        return { ok: true, owner: true, nonce: record.nonce, reclaimed: true };
+      } catch (error) {
+        if (error?.code === 'EEXIST') return { ok: false, code: 'UPDATE_IN_PROGRESS' };
+        return { ok: false, code: 'UPDATE_LOCK_FAILED', error: String(error?.message ?? error) };
+      }
+    } finally {
+      // CAS cleanup: remove the arbitration dir only when its claim is
+      // still ours; never delete another contender's claim.
+      try {
+        const mine = JSON.parse(readFileSync(join(arbitrationPath, 'claim.json'), 'utf8'));
+        if (mine?.nonce === myClaim.nonce && mine?.pid === process.pid) {
+          rmSync(arbitrationPath, { recursive: true, force: true });
+        }
+      } catch {}
+    }
   }
+  return { ok: false, code: 'UPDATE_IN_PROGRESS' };
 }
 
 export function releaseUpdateLock({ home = homedir(), nonce = null } = {}) {
@@ -390,8 +407,14 @@ function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
   const rawDep = manifest?.dependencies?.[candidateName];
   const depPointsAtCandidate = typeof rawDep === 'string'
     && rawDep.replace(/\\/g, '/') === expectedDep;
-  const bundlePointsAtCandidate = Array.isArray(manifest?.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
+  const bundleNamesCandidate = Array.isArray(manifest?.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
   const linkPointsAtCandidate = linked !== null && linked === candidateReal;
+  // Bundle carries no path: it NEVER grants deletion authority by itself.
+  // It is removed only when dependency or junction proves THIS journal's
+  // candidate still owns the registration. A re-pointed dep/junction with
+  // a leftover same-name bundle fails closed (journal retained).
+  const identityEvidence = depPointsAtCandidate || linkPointsAtCandidate;
+  const bundlePointsAtCandidate = bundleNamesCandidate && identityEvidence;
   // Manifest unreadable but junction dangles at candidate: remove junction.
   if (!manifestReadable) {
     if (!linkPointsAtCandidate) return { ok: true, undone: false };
@@ -401,6 +424,15 @@ function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
     return { ok: true, undone: true };
   }
   if (!manifest) return { ok: true, undone: false };
+  // Same-name package re-pointed elsewhere (dep or junction references a
+  // different target) while the bundle still names it: mixed state that
+  // cannot prove THIS candidate owns the registration. Fail closed,
+  // retain the journal for operator inspection.
+  const depPointsElsewhere = typeof rawDep === 'string' && !depPointsAtCandidate;
+  const linkPointsElsewhere = linked !== null && !linkPointsAtCandidate;
+  if ((depPointsElsewhere || linkPointsElsewhere) && bundleNamesCandidate) {
+    return { ok: false, code: 'CANDIDATE_UNDO_AMBIGUOUS', error: 'same-name package re-pointed elsewhere; refusing bundle removal' };
+  }
   if (!depPointsAtCandidate && !bundlePointsAtCandidate && !linkPointsAtCandidate) {
     return { ok: true, undone: false };
   }
@@ -1110,18 +1142,21 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
     }
     return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
-  // Production migration wiring: the Crew sidecar supervisor owns the
-  // 3210 child lifecycle (stop-only + start-only + identity verify).
+  // Production migration wiring: ONE supervisor instance per migration,
+  // reused by stop/start/verify/rollback so child identity stays coherent.
   // No legacy bridge involved. Missing callbacks fail closed inside
   // migrateCrewDshRuntime.
-  const migrate = migrateRuntime ?? ((opts) => migrateCrewDshRuntime({
-    home,
-    version: TARGET_DSH_VERSION,
-    stopOwned: stopOwned ?? (() => crewSupervisor({ home }).stopOwnedBackend()),
-    startOwned: startOwned ?? (() => crewSupervisor({ home }).startOwnedBackend()),
-    verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
-    ...opts,
-  }));
+  const migrate = migrateRuntime ?? ((opts) => {
+    const supervisor = crewSupervisor({ home });
+    return migrateCrewDshRuntime({
+      home,
+      version: TARGET_DSH_VERSION,
+      stopOwned: stopOwned ?? (() => supervisor.stopOwnedBackend()),
+      startOwned: startOwned ?? (() => supervisor.startOwnedBackend()),
+      verifyOwned: verifyOwned ?? (() => verifyCrewRuntimeIdentity(TARGET_DSH_VERSION)),
+      ...opts,
+    });
+  });
   const r = await ensure({ home });
   if (r?.ok) {
     log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);

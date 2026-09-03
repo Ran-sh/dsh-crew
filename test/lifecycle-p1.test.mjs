@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -231,7 +231,8 @@ test('migrateCrewDshRuntime rolls back when verify fails', async () => {
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'IDENTITY_MISMATCH');
-    assert.deepEqual(calls, ['stop', 'start', 'start']);
+    assert.deepEqual(calls, ['stop', 'start', 'stop', 'start']);
+    assert.ok(r.recovery && r.recovery.restore === true && r.recovery.restart === true, JSON.stringify(r.recovery));
     assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
   } finally { t.cleanup(); }
 });
@@ -316,6 +317,12 @@ test('migrateCrewDshRuntime restores prev when second rename fails', async () =>
     mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
     writeFileSync(join(liveRoot, 'marker.txt'), 'live');
     const calls = [];
+    // Block the second rename by holding the attempt dir open is
+    // platform-specific; instead simulate a rename failure by making the
+    // attempt root disappear between stage and swap via a wrapped runner.
+    // Here we directly verify the swap-failure branch by pre-creating a
+    // FILE at the live path parent is not possible, so we test the
+    // rollback path through verify failure with stop-first ordering.
     const r = await migrateCrewDshRuntime({
       home: t.dir,
       version: TARGET_DSH_VERSION,
@@ -335,7 +342,9 @@ test('migrateCrewDshRuntime restores prev when second rename fails', async () =>
     });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'IDENTITY_MISMATCH');
-    assert.ok(r.recovery && r.recovery.restore === true, JSON.stringify(r.recovery));
+    // Rollback stops the failed candidate BEFORE touching the tree.
+    assert.deepEqual(calls, ['stop', 'start', 'stop', 'start']);
+    assert.ok(r.recovery && r.recovery.restore === true && r.recovery.restart === true, JSON.stringify(r.recovery));
     assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
   } finally { t.cleanup(); }
 });
@@ -449,5 +458,39 @@ test('production migration path uses supervisor stop/start/verify', async () => 
     });
     assert.equal(r.ok, true);
     assert.deepEqual(calls, ['stop', 'start', 'verify']);
+  } finally { t.cleanup(); }
+});
+
+test('undo refuses to remove bundle re-pointed at later release', () => {
+  const t = tempHome();
+  try {
+    const candidateDir = join(t.dir, 'candidate-A');
+    const laterDir = join(t.dir, 'candidate-B');
+    mkdirSync(candidateDir, { recursive: true });
+    mkdirSync(laterDir, { recursive: true });
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh'), { recursive: true });
+    const profileFile = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'package.json');
+    // Same-name package re-pointed at B: dep + junction reference B,
+    // bundle still names the package. Undo for journal->A must fail closed.
+    writeFileSync(join(laterDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '2.0.0' }));
+    const linkPath = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh', 'dsh-crew');
+    writeFileSync(profileFile, JSON.stringify({
+      name: 'dsh-profile-dsh-crew',
+      dependencies: { '@ran-sh/dsh-crew': 'link:' + laterDir.replace(/\\/g, '/') },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@ran-sh/dsh-crew'] } },
+    }, null, 2));
+    try { symlinkSync(laterDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir'); } catch {}
+    mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: null,
+      candidate: { name: '@ran-sh/dsh-crew', version: '1.0.0', stageDir: candidateDir },
+    }));
+    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_UNDO_FAILED');
+    const after = JSON.parse(readFileSync(profileFile, 'utf8'));
+    assert.ok(after.dsh.profile.bundles.includes('@ran-sh/dsh-crew'), 'later bundle must be preserved');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained');
   } finally { t.cleanup(); }
 });
