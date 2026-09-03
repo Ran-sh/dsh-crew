@@ -54,7 +54,11 @@ const SDK_MINIMAL_BASE_IDS = new Set([
 ]);
 
 test('worker overlay top-level rows all hit sdk-minimal base ids', () => {
-  assert.ok(overrideIds.length > 0, 'expected overlay override rows');
+  assert.deepEqual(
+    [...overrideIds].sort(),
+    ['agent-loop', 'fs-local', 'llm-deepseek', 'sandbox-policy', 'sdk-jsonrpc-server', 'sessions', 'system-prompt'],
+    'overlay overrides must be exactly the 7 sdk-minimal base rows',
+  );
   for (const id of overrideIds) {
     assert.ok(SDK_MINIMAL_BASE_IDS.has(id), `overlay row ${id} has no sdk-minimal base row to override`);
   }
@@ -67,12 +71,11 @@ test('worker overlay carries no removed-package rows', () => {
 });
 
 test('worker overlay covers the mandatory agent kernel rows', () => {
-  for (const id of ['sdk-jsonrpc-server', 'llm-deepseek', 'sandbox-policy', 'system-prompt', 'agent-loop', 'sessions']) {
-    assert.ok(overrideIds.includes(id), `overlay must override base row ${id}`);
-  }
-  for (const id of ['fs-observation-policy', 'tool-fs', 'tool-todo', 'token-meter', 'compaction-basic']) {
-    assert.ok(insertIds.includes(id), `overlay must insert Crew row ${id}`);
-  }
+  assert.deepEqual(
+    [...insertIds].sort(),
+    ['compaction-basic', 'fs-observation-policy', 'token-meter', 'tool-fs', 'tool-todo'],
+    'overlay inserts must be exactly the 5 Crew-only rows',
+  );
 });
 
 test('jobs.mjs uses SDK-native launch without explicit dshBin', () => {
