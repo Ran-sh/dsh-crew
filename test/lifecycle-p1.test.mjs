@@ -620,3 +620,62 @@ test('rollback holds update lock and avoids the 3080 bridge', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('rollback journal without verified flag never finalizes', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { reconcileUpdateJournal, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-rbrec-'));
+  try {
+    const tgt = join(dir, 'tgt-release');
+    mkdirSync(tgt, { recursive: true });
+    writeFileSync(join(tgt, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.6' }));
+    mkdirSync(join(dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.6', path: tgt }));
+    writeFileSync(updateJournalFile({ home: dir }), JSON.stringify({
+      stage: 'rollback',
+      prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: join(dir, 'prior-missing') },
+      candidate: { name: '@ran-sh/dsh-crew', version: '0.5.6', stageDir: tgt },
+    }));
+    const r = reconcileUpdateJournal({ home: dir, log: () => {} });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_ROLLBACK_UNVERIFIED');
+    assert.equal(existsSync(updateJournalFile({ home: dir })), true, 'journal retained');
+  } finally {
+    const { rmSync } = await import('node:fs');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rollback pre-commit crash preserves retained target release', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { reconcileUpdateJournal, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-rbret-'));
+  try {
+    const priorDir = join(dir, 'prior-release');
+    const targetDir = join(dir, 'target-release');
+    mkdirSync(priorDir, { recursive: true });
+    mkdirSync(targetDir, { recursive: true });
+    writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.7', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
+    writeFileSync(join(priorDir, 'cordis.patch.yml'), '[]\n');
+    writeFileSync(join(priorDir, 'index.js'), 'module.exports = {};\n');
+    writeFileSync(join(targetDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.6' }));
+    mkdirSync(join(dir, '.config', 'dsh-crew', 'app'), { recursive: true });
+    writeFileSync(join(dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.7', path: priorDir }));
+    writeFileSync(updateJournalFile({ home: dir }), JSON.stringify({
+      stage: 'rollback',
+      prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: priorDir },
+      candidate: { name: '@ran-sh/dsh-crew', version: '0.5.6', stageDir: targetDir },
+    }));
+    const r = reconcileUpdateJournal({ home: dir, log: () => {} });
+    assert.equal(r.ok, true);
+    assert.equal(existsSync(targetDir), true, 'retained rollback target must survive recovery');
+    assert.equal(JSON.parse(readFileSync(join(dir, '.config', 'dsh-crew', 'app', 'current.json'), 'utf8')).version, '0.5.7');
+  } finally {
+    const { rmSync } = await import('node:fs');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

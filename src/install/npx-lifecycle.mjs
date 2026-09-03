@@ -357,10 +357,25 @@ function readUpdateJournal({ home = homedir() } = {}) {
   return raw;
 }
 
-function writeUpdateJournal({ home, stage, prior = null, candidate = null }) {
-  const record = { stage, prior, candidate, updated_at: isoNow() };
+function writeUpdateJournal({ home, stage, prior = null, candidate = null, verified = false }) {
+  const record = { stage, prior, candidate, verified: verified === true, updated_at: isoNow() };
   writeFileAtomic(updateJournalFile({ home }), JSON.stringify(record, null, 2) + '\n');
   return record;
+}
+
+// Atomically mark the current journal verified AFTER re-checking its
+// identity matches the expected stage/prior/candidate. A crash between
+// verification success and this write leaves the journal unverified, so
+// reconcile refuses to finalize it.
+export function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null } = {}) {
+  const current = readUpdateJournal({ home });
+  if (!current || current.malformed) return { ok: false, code: 'JOURNAL_NOT_FOUND' };
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  if (current.stage !== stage || !same(current.prior, prior) || !same(current.candidate, candidate)) {
+    return { ok: false, code: 'JOURNAL_IDENTITY_MISMATCH' };
+  }
+  writeUpdateJournal({ home, stage, prior, candidate, verified: true });
+  return { ok: true };
 }
 
 function clearUpdateJournal({ home = homedir() } = {}) {
@@ -525,7 +540,9 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
 
   // Pre-commit side: prior stays authoritative. Re-point live activation
   // surfaces back at prior (a crash between activation and pointer write
-  // leaves them on the candidate), then drop the candidate.
+  // leaves them on the candidate), then drop the candidate. A rollback
+  // journal's candidate is a RETAINED release, never an orphan stage: it
+  // must be preserved even when the pointer still references prior.
   if (priorPath) {
     if (!existsSync(journal.prior.path)) {
       return { ok: false, code: 'JOURNAL_PRIOR_MISSING', stage: journal.stage, error: 'prior release disappeared; refusing silent recovery' };
@@ -535,7 +552,7 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     if (!compensated.ok) {
       return { ok: false, code: 'JOURNAL_COMPENSATE_FAILED', stage: journal.stage, error: compensated.error ?? compensated.code };
     }
-    if (candidateDir && existsSync(candidateDir)) {
+    if (journal.stage !== 'rollback' && candidateDir && existsSync(candidateDir)) {
       try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
     }
     clearUpdateJournal({ home });
@@ -1152,8 +1169,11 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
   // Dual-domain post-restart verification: the restarted 3210 must report
   // BOTH the target Crew release (runtime_version) AND the target DSH
   // cohort (dsh_version). A stale old-Crew process on the right cohort
-  // (or vice versa) fails closed.
-  const verifyFn = verifyRuntime ?? (async () => verifyRollbackTarget({ crewVersion: targetVersion, dshVersion: TARGET_DSH_VERSION }));
+  // (or vice versa) fails closed. The verifier is version-parametric:
+  // target verification checks the TARGET Crew version, compensation
+  // verification checks the PRIOR Crew version. A closure fixed on the
+  // target version would mis-verify the restored prior runtime.
+  const verifyFn = verifyRuntime ?? ((crewVersion) => verifyRollbackTarget({ crewVersion, dshVersion: TARGET_DSH_VERSION }));
   // Journal the rollback intent BEFORE switching the pointer. The rollback
   // journal carries an explicit verified flag: pointer==target alone does
   // NOT mean committed until activation + restart + dual verification all
@@ -1173,13 +1193,15 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
     const runtime = await verifyFn(target.version);
     if (runtime?.ok !== true) throw Object.assign(new Error('target runtime verification failed'), { code: runtime?.code ?? 'RUNTIME_IDENTITY_MISMATCH' });
     log(`✓ rolled back Crew payload to ${target.version}`);
-    writeUpdateJournal({
+    // Persist verification BEFORE clearing: a crash between verify
+    // success and journal clear must still finalize on recovery.
+    const marked = markJournalVerified({
       home,
       stage: 'rollback',
-      verified: true,
       prior: { name: current.name, version: current.version, path: current.path },
       candidate: { name: target.name, version: target.version, stageDir: target.path },
     });
+    if (!marked.ok) throw Object.assign(new Error('rollback journal mark-verified failed'), { code: marked.code ?? 'JOURNAL_MARK_FAILED' });
     clearUpdateJournal({ home });
     return { ok: true, rolled_back: true, version: target.version, path: target.path, restart: restarted, runtime };
   } catch (error) {
