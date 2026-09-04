@@ -328,6 +328,29 @@ test('escalation evidence is bound to the current escalation route rather than t
   assert.equal(row(matrix, 'worker_escalation_callable').status, 'PASS');
 });
 
+test('pending provider recovery fences the selected route but not unrelated providers', () => {
+  const selected = { worker: { ok: true, provider: 'current', model: 'model' } };
+  const inventory = (recoveryTransactions) => ({
+    ok: true,
+    lifecycle_evidence: { ok: true },
+    declaration_evidence: { ok: true },
+    default_evidence: { ok: true },
+    recovery_transactions: recoveryTransactions,
+    records: [{ id: 'current', desired_state: 'present', lifecycle: { installed: true, configured: true, enabled: true, catalogued: true } }],
+  });
+  const build = (recoveryTransactions) => buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerInventoryChecked: true,
+    providerInventoryBody: inventory(recoveryTransactions),
+    currentSelections: selected,
+  });
+
+  assert.equal(row(build([{ provider_id: 'current', unresolved: false }]), 'provider_lifecycle_consistent').status, 'FAIL');
+  assert.equal(row(build([{ provider_id: null, unresolved: true }]), 'provider_lifecycle_consistent').status, 'FAIL');
+  assert.equal(row(build([{ provider_id: 'other', unresolved: false }]), 'provider_lifecycle_consistent').status, 'PASS');
+});
+
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {
   for (const options of [
     { hubJobsChecked: false, hubJobsBody: { ok: true, jobs: [{ role: 'worker', status: 'done' }] } },
