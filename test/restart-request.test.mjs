@@ -13,6 +13,7 @@ import {
   readRestartResult,
   writeSupervisorHeartbeat,
   readSupervisorHeartbeat,
+  readSupervisorHeartbeatRecord,
   supervisorStateRoot,
   heartbeatFile,
 } from '../src/supervisor/restart-request.mjs';
@@ -100,16 +101,17 @@ test('supervisor heartbeat without proven process ownership is unavailable', () 
   } finally { t.cleanup(); }
 });
 
-test('legacy v1 heartbeat without the new ownership field remains explicitly identifiable', () => {
+test('legacy v1 heartbeat is identifiable but never authoritative', () => {
   const t = tempRoot();
   try {
     const now = 1_000_000;
     const hb = heartbeatFile(t.dir);
     mkdirSync(hb.replace(/[^/\\]+$/, ''), { recursive: true });
     writeFileSync(hb, JSON.stringify({ schema_version: 1, pid: 4242, last_seen: now, protocol_version: 1 }));
-    const legacy = readSupervisorHeartbeat(t.dir, { now: now + 1_000 });
-    assert.equal(legacy?.pid, 4242);
-    assert.equal(legacy?.ownership_source, 'legacy-v1');
+    const legacy = readSupervisorHeartbeatRecord(t.dir, { now: now + 1_000 });
+    assert.equal(legacy?.record?.pid, 4242);
+    assert.equal(legacy?.state, 'legacy-v1');
+    assert.equal(readSupervisorHeartbeat(t.dir, { now: now + 1_000 }), null);
   } finally { t.cleanup(); }
 });
 
