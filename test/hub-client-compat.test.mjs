@@ -85,7 +85,7 @@ test('Hub compatibility probe honors an explicit base for both handshake request
     calls.push(String(url));
     if (String(url).endsWith('/ping')) return { ok: true, status: 200, json: async () => ({ service: 'dsh-crew-hub' }) };
     return { ok: true, status: 200, json: async () => ({
-      service: 'dsh-crew-hub', runtime_version: '1.1.1', protocol_version: 1,
+      service: 'dsh-crew-hub', runtime_version: getHubRuntimeIdentity().runtime_version, protocol_version: 1,
       execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
       runtime_id: 'runtime-explicit', capabilities: getHubRuntimeIdentity().capabilities,
     }) };

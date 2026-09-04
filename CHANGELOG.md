@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Future changes go here.
+
+## 1.2.0-rc.1 — 2026-09-04
+
 - Makes Windows launcher upgrades automatic and crash-resumable: install,
   update, and rollback reserve supervisor ownership before releasing the
   payload transaction, hand off the exact watcher PID, and verify the new
