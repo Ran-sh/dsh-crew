@@ -1288,15 +1288,28 @@ export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl 
 // the PROCESS stop/start. The Node sidecar supervisor is deliberately not
 // used here: two authorities must never share the same kill rights.
 function crewSupervisor({ home = homedir() } = {}) {
+  // The ONLY Crew app root both the hub and the Windows launcher agree on.
+  // Requests written anywhere else are invisible to the supervisor.
+  const appRoot = join(home, '.config', 'dsh-crew');
   const pollMs = 1_000;
   const timeoutMs = 90_000;
-  async function writeMaintenance({ operation, lease, extra = null, log }) {
-    const { createSupervisorRequest, maintenanceRequestsDir, maintenanceResultsDir } = await import('../supervisor/restart-request.mjs');
-    const appRoot = home;
-    const identity = await fetchCrewIdentity();
-    if (!identity?.runtime_id) {
-      return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
-    }
+  // One maintenance transaction = one lease + the pre-stop identity proven
+  // live. stop() fetches the CURRENT live runtime_id (the process exists);
+  // start() reuses that proven identity + lease (the process is stopped by
+  // design and cannot re-prove itself). This pairs stop and start into a
+  // single one-shot transaction instead of two independent requests.
+  let transaction = null;
+  async function fetchCrewIdentity() {
+    try {
+      const response = await fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+      if (!response.ok) return null;
+      const body = await response.json();
+      const runtime = body?.extension?.runtime ?? null;
+      return runtime?.runtime_id ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id } : null;
+    } catch { return null; }
+  }
+  async function writeMaintenance({ operation, lease, identity, extra = null }) {
+    const { createSupervisorRequest, maintenanceResultsDir } = await import('../supervisor/restart-request.mjs');
     const created = createSupervisorRequest({
       appRoot,
       operation,
@@ -1325,18 +1338,26 @@ function crewSupervisor({ home = homedir() } = {}) {
       return { ok: false, code: `MAINTENANCE_${result.state ?? 'FAILED'}`, error: `maintenance ended in state ${result.state}`, detail: result.detail ?? null };
     }
   }
-  async function fetchCrewIdentity() {
-    try {
-      const response = await fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
-      if (!response.ok) return null;
-      const body = await response.json();
-      const runtime = body?.extension?.runtime ?? null;
-      return runtime?.runtime_id ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id } : null;
-    } catch { return null; }
-  }
   return {
-    stopOwnedBackend: async () => writeMaintenance({ operation: 'maintenance-stop', lease: `stop-${Date.now().toString(36)}` }),
-    startOwnedBackend: async (lease) => writeMaintenance({ operation: 'maintenance-start', lease: lease ?? `start-${Date.now().toString(36)}` }),
+    stopOwnedBackend: async () => {
+      const identity = await fetchCrewIdentity();
+      if (!identity?.runtime_id) {
+        return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
+      }
+      transaction = { lease: `txn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, runtime_id: identity.runtime_id };
+      return writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
+    },
+    startOwnedBackend: async () => {
+      // Reuse the proven stop-phase identity + lease: the process is stopped
+      // by design and fetching identity now would always fail.
+      if (!transaction?.lease || !transaction?.runtime_id) {
+        return { ok: false, code: 'MAINTENANCE_NO_TRANSACTION', error: 'maintenance-start requires a completed maintenance-stop in the same supervisor' };
+      }
+      const identity = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: transaction.runtime_id };
+      const result = await writeMaintenance({ operation: 'maintenance-start', lease: transaction.lease, identity });
+      transaction = null;
+      return result;
+    },
   };
 }
 
