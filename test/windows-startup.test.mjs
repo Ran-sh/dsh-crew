@@ -50,6 +50,37 @@ test('Windows startup readiness fails closed when a managed launcher asset is mi
   } finally { f.cleanup(); }
 });
 
+test('Windows startup readiness rejects marker-preserving launcher drift', () => {
+  const f = fixture();
+  try {
+    const installed = installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    writeFileSync(
+      installed.launcherFile,
+      `${readFileSync(installed.launcherFile, 'utf8').trimEnd()}\r\nrem DSH Crew Launcher local drift\r\n`,
+    );
+
+    const status = windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, false);
+  } finally { f.cleanup(); }
+});
+
+test('Windows startup readiness rejects launcher assets installed from an older payload root', () => {
+  const f = fixture();
+  try {
+    installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    const newRoot = join(f.home, 'new-payload');
+    mkdirSync(join(newRoot, 'windows'), { recursive: true });
+    writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.cmd'), '@echo off\r\nrem payload revision new\r\npowershell.exe -File "%~dp0start-dsh-crew.ps1" %*\r\n');
+    writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\n# DSHCrewServiceSupervisor\n# payload revision new\nparam([string]$Mode = "open")\n');
+    writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.vbs'), "Option Explicit\n' payload revision new\n__LAUNCHER__\n--watch\n");
+
+    const status = windowsStartupStatus({ home: f.home, root: newRoot, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, false);
+  } finally { f.cleanup(); }
+});
+
 test('Windows startup uninstall removes only managed files', () => {
   const f = fixture();
   try {

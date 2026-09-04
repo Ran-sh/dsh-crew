@@ -216,3 +216,40 @@ test('installStatus exposes ZCode independently of Codex and Claude', () => {
     assert.deepEqual(status.zcode.missing, []);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test('ZCode readiness rejects modified but nonempty managed templates and policy', () => {
+  const home = makeHome();
+  try {
+    installZCode({ home, root: ROOT });
+    const worker = join(home, '.zcode', 'agents', 'ds-worker.md');
+    const policy = join(home, '.zcode', 'AGENTS.md');
+    writeFileSync(worker, `${readFileSync(worker, 'utf8').trimEnd()}\n# local drift\n`);
+    writeFileSync(
+      policy,
+      readFileSync(policy, 'utf8').replace(
+        '<!-- DSH CREW MANAGED ZCODE POLICY:START -->',
+        '<!-- DSH CREW MANAGED ZCODE POLICY:START -->\n# local drift',
+      ),
+    );
+
+    const status = zcodeStatus({ home, root: ROOT });
+    assert.equal(status.components.worker_agent, false);
+    assert.equal(status.components.policy, false);
+    assert.equal(status.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ZCode readiness rejects stale ownership hashes even when managed files still exist', () => {
+  const home = makeHome();
+  try {
+    installZCode({ home, root: ROOT });
+    const ownershipFile = join(home, '.config', 'dsh-crew', 'integrations', 'zcode.json');
+    const ownership = readJson(ownershipFile);
+    ownership.files[0].managed_sha256 = '0'.repeat(64);
+    writeFileSync(ownershipFile, JSON.stringify(ownership, null, 2));
+
+    const status = zcodeStatus({ home, root: ROOT });
+    assert.equal(status.components.ownership, false);
+    assert.equal(status.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

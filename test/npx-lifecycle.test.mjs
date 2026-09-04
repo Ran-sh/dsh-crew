@@ -520,6 +520,53 @@ test('status reports unverifiable payloads instead of pretending success', async
   } finally { t.cleanup(); }
 });
 
+test('status reports drifted integrations as needing repair and passes the authoritative payload root', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidate(t.dir),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+    });
+    const pointer = readCurrentPointer({ home: t.dir });
+    let integrationOptions = null;
+    let startupOptions = null;
+    rec.installer.installStatus = (options) => {
+      integrationOptions = options;
+      return {
+        codex: { installed: true, ready: false },
+        zcode: { installed: true, ready: false },
+        claude: { installed: true, ready: false },
+      };
+    };
+    rec.installer.windowsStartupStatus = (options) => {
+      startupOptions = options;
+      return { supported: true, installed: true, ready: false };
+    };
+    const logs = [];
+
+    const status = npxStatus({
+      home: t.dir,
+      sourceRoot: join(t.dir, 'candidate'),
+      installer: rec.installer,
+      log: (message) => logs.push(message),
+    });
+
+    assert.equal(status.codex, 'needs repair');
+    assert.equal(status.zcode, 'needs repair');
+    assert.equal(status.claude, 'needs repair');
+    assert.equal(status.windowsStartup, 'needs repair');
+    assert.equal(integrationOptions.root, pointer.path);
+    assert.equal(startupOptions.root, pointer.path);
+    assert.match(logs.join('\n'), /Codex Desktop integration: needs repair/);
+    assert.match(logs.join('\n'), /ZCode integration: needs repair/);
+    assert.match(logs.join('\n'), /Claude Code integration: needs repair/);
+  } finally { t.cleanup(); }
+});
+
 // ---------- update ----------
 
 test('update is idempotent when already current and healthy', async () => {

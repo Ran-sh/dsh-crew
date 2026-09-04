@@ -7,15 +7,46 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { MCP_TOOLS, installCodex, installStatus, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+
+const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 function makeHome() {
   return mkdtempSync(join(tmpdir(), 'dsh-crew-codex-test-'));
 }
 function read(path) { return readFileSync(path, 'utf8'); }
+
+function makeIntegrationRoot(home, name, marker = '') {
+  const root = join(home, name);
+  cpSync(join(ROOT, 'codex'), join(root, 'codex'), { recursive: true });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'server.mjs'), `export const payload = ${JSON.stringify(name)};\n`);
+  if (marker) {
+    for (const relative of [
+      ['codex', 'AGENTS.md'],
+      ['codex', 'agents', 'ds-worker.toml'],
+      ['codex', 'agents', 'ds-reviewer.toml'],
+      ['codex', 'prompts', 'dsh-config.md'],
+      ['codex', 'prompts', 'dsh-status.md'],
+    ]) {
+      const file = join(root, ...relative);
+      writeFileSync(file, `${read(file).trimEnd()}\n${marker}\n`);
+    }
+  }
+  return root;
+}
+
+function makeClaudePluginRoot(root, marker) {
+  mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ marker }));
+  writeFileSync(join(root, '.mcp.json'), JSON.stringify({ marker }));
+  writeFileSync(join(root, 'src', 'server.mjs'), `export const marker = ${JSON.stringify(marker)};\n`);
+}
 
 test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spawn)', async () => {
   const home = makeHome();
@@ -109,6 +140,41 @@ test('Codex readiness requires Worker, Reviewer, and global MCP to use one serve
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+test('Codex readiness rejects targets, templates, and policy installed from an older payload root', () => {
+  const home = makeHome();
+  try {
+    const oldRoot = makeIntegrationRoot(home, 'old-payload');
+    const newRoot = makeIntegrationRoot(home, 'new-payload', '# payload revision: new');
+    installCodex({ home, root: oldRoot });
+
+    const status = installStatus({ home, root: newRoot }).codex;
+    assert.equal(status.installed, true);
+    assert.equal(status.ready, false);
+    assert.equal(status.components.worker_role, false);
+    assert.equal(status.components.reviewer_role, false);
+    assert.equal(status.components.config_prompt, false);
+    assert.equal(status.components.status_prompt, false);
+    assert.equal(status.components.mcp, false);
+    assert.equal(status.components.global_policy, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Codex readiness rejects modified but nonempty managed role and prompt files', () => {
+  const home = makeHome();
+  try {
+    installCodex({ home, root: ROOT });
+    const worker = join(home, '.codex', 'agents', 'ds-worker.toml');
+    const prompt = join(home, '.codex', 'prompts', 'dsh-config.md');
+    writeFileSync(worker, `${read(worker).trimEnd()}\n# local drift\n`);
+    writeFileSync(prompt, '# still nonempty, but no longer the managed prompt\n');
+
+    const status = installStatus({ home, root: ROOT }).codex;
+    assert.equal(status.components.worker_role, false);
+    assert.equal(status.components.config_prompt, false);
+    assert.equal(status.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 test('Claude readiness does not equate an enabled setting with a callable plugin', () => {
   const home = makeHome();
   try {
@@ -148,6 +214,33 @@ test('Claude readiness validates marketplace, installed snapshot, and tool permi
     assert.equal(status.installed, true);
     assert.equal(status.ready, true);
     assert.deepEqual(status.missing, []);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('Claude readiness rejects a marketplace and cached snapshot from an older payload root', () => {
+  const home = makeHome();
+  try {
+    const oldRoot = join(home, 'old-payload');
+    const newRoot = join(home, 'new-payload');
+    const oldSnapshot = join(home, '.claude', 'plugins', 'cache', 'dsh-crew', 'dsh-crew', 'old');
+    makeClaudePluginRoot(oldRoot, 'old');
+    makeClaudePluginRoot(newRoot, 'new');
+    makeClaudePluginRoot(oldSnapshot, 'old');
+    mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+      plugins: { 'dsh-crew@dsh-crew': { installPath: oldSnapshot } },
+    }));
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      enabledPlugins: { 'dsh-crew@dsh-crew': true },
+      extraKnownMarketplaces: { 'dsh-crew': { source: { source: 'directory', path: oldRoot } } },
+      permissions: { allow: MCP_TOOLS.map((tool) => `mcp__plugin_dsh-crew_dsh-crew__${tool}`) },
+    }));
+
+    const status = installStatus({ home, root: newRoot }).claude;
+    assert.equal(status.installed, true);
+    assert.equal(status.components.marketplace, false);
+    assert.equal(status.components.snapshot, false);
+    assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

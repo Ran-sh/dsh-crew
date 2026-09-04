@@ -281,3 +281,41 @@ test('setupStatus reports plugin/integration status without secrets', async () =
     assert.ok(!/key|token|secret/i.test(joined), 'status must not leak secrets');
   } finally { t.cleanup(); }
 });
+
+test('setupStatus reports drifted integrations as needing repair and passes its authoritative root', async () => {
+  const t = makeTemp();
+  const calls = [];
+  try {
+    const installer = fakeInstaller(calls);
+    installer.installStatus = (options) => {
+      calls.push(['installStatus', options]);
+      return {
+        codex: { installed: true, ready: false },
+        zcode: { installed: true, ready: false },
+        claude: { installed: true, ready: false },
+      };
+    };
+    installer.windowsStartupStatus = (options) => {
+      calls.push(['windowsStartupStatus', options]);
+      return { supported: true, installed: true, ready: false };
+    };
+    const logs = [];
+
+    const status = await setupStatus({
+      log: (message) => logs.push(message),
+      root: t.dir,
+      home: t.dir,
+      installer,
+    });
+
+    assert.equal(status.codex, 'needs repair');
+    assert.equal(status.zcode, 'needs repair');
+    assert.equal(status.claude, 'needs repair');
+    assert.equal(status.windowsStartup, 'needs repair');
+    assert.equal(calls.find(([name]) => name === 'installStatus')[1].root, t.dir);
+    assert.equal(calls.find(([name]) => name === 'windowsStartupStatus')[1].root, t.dir);
+    assert.match(logs.join('\n'), /Codex Desktop integration: needs repair/);
+    assert.match(logs.join('\n'), /ZCode integration: needs repair/);
+    assert.match(logs.join('\n'), /Claude Code integration: needs repair/);
+  } finally { t.cleanup(); }
+});
