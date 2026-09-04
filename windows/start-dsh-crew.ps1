@@ -190,7 +190,16 @@ function Invoke-CrewRestartRequests {
     }
     Write-LaunchLog ('Executing restart request {0} (reason: {1}).' -f $request.request_id, $request.reason)
     $previousRuntimeId = $request.runtime_id
-    $stopped = Stop-OwnedListener $crew
+    # Re-read the listener port right before the kill so the PID identity is
+    # fresh: Stop-OwnedListener requires a PID that equals the tracked
+    # listener and belongs to the current owned process tree.
+    $port = Get-PortState $crew.Port
+    if ($port.State -ne 'occupied' -or -not $port.Pid) {
+      Write-RestartResult $request 'SUPERVISOR_STOP_FAILED'
+      Write-LaunchLog ('Restart request {0} failed: no listener on port {1}.' -f $request.request_id, $crew.Port) 'ERROR'
+      continue
+    }
+    $stopped = Stop-OwnedListener -Service $crew -ListenerPid ([int] $port.Pid)
     if (-not $stopped) {
       Write-RestartResult $request 'SUPERVISOR_STOP_FAILED'
       Write-LaunchLog ('Restart request {0} failed to stop the owned runtime.' -f $request.request_id) 'ERROR'
@@ -213,6 +222,117 @@ function Invoke-CrewRestartRequests {
     }
   }
 }
+
+$crewMaintenanceRequestsDir = Join-Path $crewSupervisorRoot 'maintenance-requests'
+$crewMaintenanceResultsDir = Join-Path $crewSupervisorRoot 'maintenance-results'
+
+function Write-MaintenanceResult {
+  param([object] $Request, [string] $State, [object] $Detail = $null)
+  try {
+    if (-not (Test-Path -LiteralPath $crewMaintenanceResultsDir -PathType Container)) { New-Item -ItemType Directory -Path $crewMaintenanceResultsDir -Force | Out-Null }
+    $result = @{
+      schema_version = 1
+      request_id = $Request.request_id
+      operation = $Request.operation
+      state = $State
+      lease = $Request.lease
+      runtime_id = $Request.runtime_id
+      written_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      detail = $Detail
+    } | ConvertTo-Json -Depth 5
+    $file = Join-Path $crewMaintenanceResultsDir ("{0}.json" -f $Request.request_id)
+    $temp = Join-Path $crewMaintenanceResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
+    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $file -Force
+  } catch { /* best effort */ }
+  Remove-Item -LiteralPath (Join-Path $crewMaintenanceRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-CrewMaintenanceRequests {
+  # Consume maintenance transactions from npx lifecycle (cohort migration).
+  # The npx process owns the runtime TREE swap; this watcher owns the
+  # PROCESS stop/start around it. Two phases, both verified:
+  #   maintenance-stop  -> stop owned 3210, write STOPPED (+lease)
+  #   maintenance-start -> start 3210, verify new identity + cohort, VERIFIED
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if (-not (Test-Path -LiteralPath $crewMaintenanceRequestsDir -PathType Container)) { return }
+  $files = Get-ChildItem -LiteralPath $crewMaintenanceRequestsDir -Filter '*.json' -File -ErrorAction SilentlyContinue
+  foreach ($file in $files) {
+    try {
+      $request = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+      continue
+    }
+    if ($request.schema_version -ne 1 -or -not $request.request_id -or -not $request.operation) {
+      Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+      continue
+    }
+    if (($request.expires_at -as [long]) -lt $now) {
+      Write-MaintenanceResult $request 'MAINTENANCE_EXPIRED'
+      Write-LaunchLog ('Maintenance request {0} ({1}) expired; not executed.' -f $request.request_id, $request.operation) 'WARN'
+      continue
+    }
+    $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+    if (-not $crew) { continue }
+    if ($request.operation -eq 'maintenance-stop') {
+      # Authority: the request must name the SAME live runtime identity we own.
+      $liveRuntimeId = $null
+      try {
+        $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+        if ($resp.ok -eq $true) { $liveRuntimeId = $resp.extension.runtime.runtime_id }
+      } catch { $liveRuntimeId = $null }
+      if (-not $liveRuntimeId -or $liveRuntimeId -ne $request.runtime_id) {
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-stop {0} rejected: live runtime_id mismatch.' -f $request.request_id) 'WARN'
+        continue
+      }
+      $port = Get-PortState $crew.Port
+      if ($port.State -ne 'occupied' -or -not $port.Pid) {
+        Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
+        continue
+      }
+      $stopped = Stop-OwnedListener -Service $crew -ListenerPid ([int] $port.Pid)
+      if ($stopped) {
+        Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
+        Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
+      } else {
+        Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
+      }
+    } elseif ($request.operation -eq 'maintenance-start') {
+      # Pair with the matching STOPPED lease: the npx process must present
+      # the lease issued for THIS transaction.
+      $lease = $request.lease
+      $expectedCrew = $null
+      $expectedDsh = $null
+      if ($request.extra) {
+        $expectedCrew = $request.extra.expected_crew_version
+        $expectedDsh = $request.extra.expected_dsh_version
+      }
+      Start-CrewService $crew
+      Wait-CrewServices
+      $newRuntime = $null
+      try {
+        $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 5
+        if ($resp.ok -eq $true) { $newRuntime = $resp.extension.runtime }
+      } catch { $newRuntime = $null }
+      $ok = $newRuntime -and $newRuntime.runtime_id -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
+      if ($ok) {
+        Write-MaintenanceResult $request 'VERIFIED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id; runtime_version = $newRuntime.runtime_version; dsh_version = $newRuntime.dsh_version }
+        Write-LaunchLog ('Maintenance-start {0} verified: Crew {1} + DSH {2}.' -f $request.request_id, $newRuntime.runtime_version, $newRuntime.dsh_version)
+      } else {
+        $failedRuntimeId = $null
+        if ($newRuntime) { $failedRuntimeId = $newRuntime.runtime_id }
+        Write-MaintenanceResult $request 'VERIFY_FAILED' @{ lease = $lease; runtime_id = $failedRuntimeId }
+        Write-LaunchLog ('Maintenance-start {0} verification failed.' -f $request.request_id) 'ERROR'
+      }
+    } else {
+      # Unknown maintenance op: remove and report.
+      Write-MaintenanceResult $request 'MAINTENANCE_UNKNOWN_OP'
+    }
+  }
+}
+
 
 function Get-PortState {
   param([int] $Port)
@@ -484,9 +604,11 @@ function Start-ServiceSupervisor {
         } else {
           # Control protocol: publish this watcher's heartbeat and consume
           # any durable restart requests the hub wrote (3210 never spawns
-          # itself). Then run the ordinary health supervision pass.
+          # itself). Then consume maintenance transactions (npx cohort
+          # migration stop/start phases). Then run the ordinary health pass.
           Write-SupervisorHeartbeat
           Invoke-CrewRestartRequests
+          Invoke-CrewMaintenanceRequests
           Ensure-CrewServices -QuietHealthy
           if ($lastRecoveryError) {
             Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'

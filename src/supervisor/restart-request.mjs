@@ -65,24 +65,63 @@ export function createRestartRequest({
   now = Date.now(),
   ttlMs = RESTART_REQUEST_TTL_MS,
 }) {
+  return createSupervisorRequest({
+    appRoot,
+    operation: 'restart',
+    runtimeIdentity,
+    reason,
+    now,
+    ttlMs,
+  });
+}
+
+/**
+ * Create a durable supervisor request for maintenance transactions
+ * (stop/start around a runtime-tree swap). The launcher-mediated npx flow
+ * uses these instead of spawning/killing the 3210 itself: the launcher is
+ * the only process authority. `lease` binds the stop and start phases of
+ * one transaction; `extra` carries the expected versions for verification.
+ */
+export function createSupervisorRequest({
+  appRoot,
+  operation,
+  runtimeIdentity,
+  reason = null,
+  lease = randomUUID(),
+  extra = null,
+  now = Date.now(),
+  ttlMs = RESTART_REQUEST_TTL_MS,
+}) {
   const request = {
     schema_version: RESTART_REQUEST_SCHEMA,
     request_id: randomUUID(),
-    operation: 'restart',
+    operation,
     execution_plane: runtimeIdentity?.execution_plane ?? 'hub-3210',
     profile: runtimeIdentity?.profile ?? 'dsh-crew',
     port: runtimeIdentity?.listen_port ?? 3210,
     runtime_id: runtimeIdentity?.runtime_id ?? null,
+    lease,
     requested_at: now,
     expires_at: now + ttlMs,
     reason: reason ?? null,
+    extra,
   };
   if (typeof request.runtime_id !== 'string' || request.runtime_id.length === 0) {
-    return { ok: false, code: 'RUNTIME_IDENTITY_INCOMPLETE', error: 'cannot request restart without a live runtime_id' };
+    return { ok: false, code: 'RUNTIME_IDENTITY_INCOMPLETE', error: 'cannot request supervisor action without a live runtime_id' };
   }
-  const file = join(restartRequestsDir(appRoot), `${request.request_id}.json`);
+  const dir = operation.startsWith('maintenance-') ? maintenanceRequestsDir(appRoot) : restartRequestsDir(appRoot);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${request.request_id}.json`);
   writeFileAtomic(file, JSON.stringify(request, null, 2) + '\n');
   return { ok: true, request, file };
+}
+
+export function maintenanceRequestsDir(appRoot) {
+  return join(supervisorStateRoot(appRoot), 'maintenance-requests');
+}
+
+export function maintenanceResultsDir(appRoot) {
+  return join(supervisorStateRoot(appRoot), 'maintenance-results');
 }
 
 export function readRestartRequest(appRoot, requestId) {

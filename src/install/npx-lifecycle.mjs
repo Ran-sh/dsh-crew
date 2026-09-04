@@ -42,7 +42,6 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
-import { createCrewSidecarSupervisor } from '../official-web-bridge.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -1283,13 +1282,62 @@ export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl 
   return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null };
 }
 
-// Crew-owned stop/start for cohort migration come from the sidecar
-// supervisor (PID-identity verified, no legacy bridge). The supervisor
-// module owns the 3210 child lifecycle; the installer only drives its
-// stop-only / start-only primitives around the runtime-tree swap.
+// Crew-owned stop/start for cohort migration go through the Windows
+// launcher supervisor (the ONLY process authority) via durable maintenance
+// requests. The npx process owns the runtime TREE swap; the supervisor owns
+// the PROCESS stop/start. The Node sidecar supervisor is deliberately not
+// used here: two authorities must never share the same kill rights.
 function crewSupervisor({ home = homedir() } = {}) {
-  const dshHome = crewDshHome({ home });
-  return createCrewSidecarSupervisor({ home, ownershipFile: join(dshHome, 'supervisor-ownership.json') });
+  const pollMs = 1_000;
+  const timeoutMs = 90_000;
+  async function writeMaintenance({ operation, lease, extra = null, log }) {
+    const { createSupervisorRequest, maintenanceRequestsDir, maintenanceResultsDir } = await import('../supervisor/restart-request.mjs');
+    const appRoot = home;
+    const identity = await fetchCrewIdentity();
+    if (!identity?.runtime_id) {
+      return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
+    }
+    const created = createSupervisorRequest({
+      appRoot,
+      operation,
+      runtimeIdentity: identity,
+      lease,
+      extra,
+    });
+    if (!created.ok) return created;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+      if (Date.now() > deadline) {
+        return { ok: false, code: 'MAINTENANCE_TIMEOUT', error: `${operation} ${created.request.request_id} not completed within ${timeoutMs}ms` };
+      }
+      const resultFile = join(maintenanceResultsDir(appRoot), `${created.request.request_id}.json`);
+      let result = null;
+      try {
+        if (existsSync(resultFile)) {
+          result = JSON.parse(readFileSync(resultFile, 'utf8'));
+        }
+      } catch { /* not yet */ }
+      if (!result || result.request_id !== created.request.request_id) continue;
+      if (result.state === 'STOPPED' || result.state === 'VERIFIED') {
+        return { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null };
+      }
+      return { ok: false, code: `MAINTENANCE_${result.state ?? 'FAILED'}`, error: `maintenance ended in state ${result.state}`, detail: result.detail ?? null };
+    }
+  }
+  async function fetchCrewIdentity() {
+    try {
+      const response = await fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+      if (!response.ok) return null;
+      const body = await response.json();
+      const runtime = body?.extension?.runtime ?? null;
+      return runtime?.runtime_id ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id } : null;
+    } catch { return null; }
+  }
+  return {
+    stopOwnedBackend: async () => writeMaintenance({ operation: 'maintenance-stop', lease: `stop-${Date.now().toString(36)}` }),
+    startOwnedBackend: async (lease) => writeMaintenance({ operation: 'maintenance-start', lease: lease ?? `start-${Date.now().toString(36)}` }),
+  };
 }
 
 // ---- release cohort resolution -------------------------------------------------

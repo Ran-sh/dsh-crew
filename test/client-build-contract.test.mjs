@@ -138,12 +138,18 @@ test('model priority rows render fresh provider health without treating catalog 
   assert.match(panelSource, /get\('\/provider-health'\)\.catch\(\(\) => null\)/);
 });
 
-test('shared client renders a full 3080 control plane and a minimal 3210 diagnostic surface', () => {
+test('native 3210 is the full control plane; official 3080 is quick-only; unknown is diagnostics-only', async () => {
+  // Anti-drift contract: the old inverted world (full 3080 control plane +
+  // minimal 3210 diagnostics) must never come back.
   assert.match(panelSource, /classifyCrewSurface/);
   assert.match(panelSource, /surfaceResponsibilities/);
   assert.match(panelSource, /<MinimalCrewPanel\b/);
   assert.match(panelSource, /fullControlPlane/);
-  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3080\/?/);
+  const surfaceSrc = await readFile(new URL('../src/client/surface-detection.mjs', import.meta.url), 'utf8');
+  assert.match(surfaceSrc, /quickControlPlane: true/);
+  assert.match(surfaceSrc, /fullControlPlane: true/);
+  // The full console deep-links to the 3210 native harness, not 3080.
+  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3210\/?/);
 });
 
 test('client consumes the Hub extension readiness snapshot instead of recomputing Crew state', () => {

@@ -320,7 +320,11 @@ export function createCrewSidecarSupervisor({
   };
 }
 
-const processSupervisor = createCrewSidecarSupervisor();
+// NOTE: createCrewSidecarSupervisor (above) remains exported for unit
+// tests, but NO production path may spawn/kill the 3210 through it. The
+// Windows launcher supervisor (start-dsh-crew.ps1 watch mode) is the only
+// process authority; npx lifecycle reaches it through the durable
+// maintenance-request protocol (maintenance-stop/maintenance-start).
 
 // The 3080 quick surface must NEVER spawn or own the 3210 process: recovery
 // authority belongs exclusively to the Windows launcher supervisor. The

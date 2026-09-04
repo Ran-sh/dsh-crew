@@ -1558,7 +1558,9 @@ export async function apply(ctx) {
         try {
           const { createRestartRequest, readSupervisorHeartbeat, supervisorStateRoot } = await import(`../supervisor/restart-request.mjs?t=${Date.now()}`);
           const appRoot = CONFIG_DIR;
-          const heartbeat = readSupervisorHeartbeat(supervisorStateRoot(appRoot));
+          // The restart-request helpers take the Crew app root and append
+          // supervisor/ internally — do NOT pre-compose the path here.
+          const heartbeat = readSupervisorHeartbeat(appRoot);
           if (!heartbeat) {
             return sendJson(res, 503, { ok: false, code: 'CREW_SUPERVISOR_UNAVAILABLE', error: 'no fresh supervisor heartbeat; restart cannot be executed' });
           }
@@ -1586,9 +1588,9 @@ export async function apply(ctx) {
           const appRoot = CONFIG_DIR;
           const requestId = new URL(req.url, 'http://localhost').searchParams.get('id');
           if (!requestId || !/^[0-9a-f-]{36}$/i.test(requestId)) return sendJson(res, 400, { ok: false, error: 'request id required' });
-          const result = readRestartResult(supervisorStateRoot(appRoot), requestId);
+          const result = readRestartResult(appRoot, requestId);
           if (result) return sendJson(res, 200, { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null });
-          const pending = readRestartRequest(supervisorStateRoot(appRoot), requestId);
+          const pending = readRestartRequest(appRoot, requestId);
           if (pending) return sendJson(res, 200, { ok: true, state: 'RESTART_REQUESTED', request_id: pending.request_id });
           return sendJson(res, 404, { ok: false, error: 'unknown restart request' });
         } catch (err) {
