@@ -311,3 +311,21 @@ test('malformed flow collections fail closed without returning provider values',
     assert.equal(JSON.stringify(result).includes('retained-value'), false);
   }
 });
+
+test('missing flow separators fail closed across inspection and mutation entry points', () => {
+  const malformed = [
+    FLOW_SETTINGS.replace('          displayName: opencode-go-muse,', '          displayName: opencode-go-muse'),
+    FLOW_SETTINGS.replace(
+      '              { id: muse-spark-1.3-contributor, name: Muse Spark 1.3 },\n              { id: muse-spark-1.2-contributor, name: Muse Spark 1.2 }',
+      '              { id: muse-spark-1.3-contributor, name: Muse Spark 1.3 }\n              { id: muse-spark-1.2-contributor, name: Muse Spark 1.2 }',
+    ),
+  ];
+  for (const source of malformed) {
+    assert.equal(inspectProviderSettings(source).ok, false);
+    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false);
+    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false);
+    assert.equal(addProviderSettings(source, {
+      provider: { id: 'new-provider', display_name: 'New Provider', models: [{ id: 'new-model' }] },
+    }).ok, false);
+  }
+});
