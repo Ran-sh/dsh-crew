@@ -9,13 +9,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $crewHome = Join-Path $env:USERPROFILE '.config\dsh-crew\harness'
-$officialHome = Join-Path $env:USERPROFILE '.dsh'
 $dshCli = Join-Path $crewHome 'runtime\node_modules\.bin\dsh.cmd'
 $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
+$launcherProcessStartedAtUtcTicks = try { (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { $null }
 $services = @(
-  [pscustomobject]@{ Name = 'Official UI'; Profile = 'web'; Home = $officialHome; Port = 3080; Url = 'http://127.0.0.1:3080'; CrewOwned = $false; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null },
   [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; CrewOwned = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
@@ -71,28 +70,10 @@ function Get-HealthState {
       return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
     }
   }
-  try {
-    # The official 3080 UI may require a token (HTTP 401/403 on the bare
-    # root) or redirect to the web entry (3xx). Accept exactly those; any
-    # other status (e.g. 404 from a foreign HTTP service squatting on 3080)
-    # is NOT healthy.
-    $response = Invoke-WebRequest -UseBasicParsing -Uri $Service.Url -TimeoutSec 2
-    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-      return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
-    }
-    return [pscustomobject]@{ Ready = $false; Version = $null; Error = ('Official UI returned HTTP {0}.' -f $response.StatusCode) }
-  } catch {
-    # Invoke-WebRequest surfaces 401/403 as exceptions; those prove the web
-    # service is alive and answering (token gate present).
-    $status = $null
-    if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-      $status = [int] $_.Exception.Response.StatusCode
-    }
-    if ($status -eq 401 -or $status -eq 403) {
-      return [pscustomobject]@{ Ready = $true; Version = $null; Error = $null }
-    }
-    return [pscustomobject]@{ Ready = $false; Version = $null; Error = $_.Exception.Message }
-  }
+  # The launcher supervises only the Crew-owned 3210 service. Any non-Crew
+  # service is never started or health-gated here; the legacy 3080 bridge
+  # is probed only diagnostically after 3210 readiness (see Write-LegacyBridgeDiagnostic).
+  return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'Unknown service: only the Crew-owned 3210 service is supervised.' }
 }
 
 # Optional legacy compatibility probe: returns true only when a 3080 that
@@ -127,14 +108,92 @@ function Write-Utf8NoBom {
 }
 
 function Write-SupervisorHeartbeat {
+  param([bool] $OwnershipReady = $false)
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  $record = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
+  $record = @{ schema_version = 1; pid = $PID; process_started_at_utc_ticks = $launcherProcessStartedAtUtcTicks; ownership_ready = $OwnershipReady; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
   try {
     if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
     $temp = Join-Path $crewSupervisorRoot ("heartbeat.{0}.tmp" -f $PID)
     Write-Utf8NoBom -Path $temp -Content $record
     Move-Item -LiteralPath $temp -Destination $crewHeartbeatFile -Force
   } catch { /* heartbeat is best-effort */ }
+}
+
+function Get-SupervisorLaunchArguments {
+  param([string] $ScriptPath = $PSCommandPath)
+  if ([string]::IsNullOrWhiteSpace($ScriptPath) -or $ScriptPath.Contains('"')) {
+    throw 'A valid launcher script path is required.'
+  }
+  return @(
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', ('"{0}"' -f $ScriptPath),
+    '-Mode', 'watch'
+  )
+}
+
+function Get-SupervisorHeartbeatRecord {
+  param([int] $MaxAgeSeconds = 30)
+  try {
+    if (-not (Test-Path -LiteralPath $crewHeartbeatFile -PathType Leaf)) { return $null }
+    $record = Get-Content -LiteralPath $crewHeartbeatFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $lastSeen = [long] $record.last_seen
+    $age = $now - $lastSeen
+    if ($record.schema_version -ne 1 -or $record.protocol_version -ne 1 -or [int] $record.pid -le 0) { return $null }
+    if ($age -lt -5000 -or $age -gt ([long] $MaxAgeSeconds * 1000)) { return $null }
+    $process = Get-Process -Id ([int] $record.pid) -ErrorAction Stop
+    $processStartProperty = $record.PSObject.Properties['process_started_at_utc_ticks']
+    if ($null -ne $processStartProperty -and $processStartProperty.Value) {
+      $expectedTicks = [long] $processStartProperty.Value
+      if ($process.StartTime.ToUniversalTime().Ticks -ne $expectedTicks) { return $null }
+    }
+    $ownershipProperty = $record.PSObject.Properties['ownership_ready']
+    $state = if ($null -eq $ownershipProperty) { 'legacy-v1' } elseif ($ownershipProperty.Value -eq $true) { 'ready' } else { 'starting' }
+    return [pscustomobject]@{ State = $state; Record = $record }
+  } catch {
+    return $null
+  }
+}
+
+function Get-FreshSupervisorHeartbeat {
+  param([int] $MaxAgeSeconds = 30)
+  $observed = Get-SupervisorHeartbeatRecord -MaxAgeSeconds $MaxAgeSeconds
+  if ($observed -and $observed.State -eq 'ready') { return $observed.Record }
+  return $null
+}
+
+function Ensure-CrewSupervisorRunning {
+  param([int] $TimeoutSeconds = 90)
+  $watcher = $null
+  $observed = Get-SupervisorHeartbeatRecord
+  if ($observed -and $observed.State -eq 'legacy-v1') {
+    throw 'CREW_SUPERVISOR_UPGRADE_REQUIRED: a legacy watcher is active and must be handed off before interactive launch.'
+  }
+  if (-not $observed) {
+    $arguments = @(Get-SupervisorLaunchArguments -ScriptPath $PSCommandPath)
+    $watcher = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    Write-LaunchLog ('Started persistent Crew supervisor; PID={0}.' -f $watcher.Id)
+  }
+
+  $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+  if (-not $crew) { throw 'Crew-owned 3210 service definition is missing.' }
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $lastHealthError = 'not checked'
+  do {
+    $heartbeat = Get-FreshSupervisorHeartbeat
+    $health = Get-HealthState $crew
+    $lastHealthError = $health.Error
+    if ($heartbeat -and $health.Ready) {
+      Write-LaunchLog ('Persistent supervisor ready; PID={0}; 3210 runtime={1}.' -f $heartbeat.pid, $health.Version)
+      return
+    }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+
+  throw ('Persistent supervisor did not make 3210 ready within {0}s. Last health error: {1}' -f $TimeoutSeconds, $lastHealthError)
 }
 
 function Read-RestartRequests {
@@ -518,6 +577,27 @@ function Set-TrackedListenerIdentity {
   }
 }
 
+function Test-CrewServiceOwnership {
+  param(
+    [pscustomObject] $Service,
+    [pscustomObject] $PortState = $null,
+    [object[]] $ProcessTable = $null
+  )
+  if (-not $Service.ListenerPid -or -not $Service.ListenerStartedAtUtcTicks) { return $false }
+  $port = if ($null -ne $PortState) { $PortState } else { Get-PortState $Service.Port }
+  if ($port.State -ne 'occupied' -or -not $port.Pid -or [int] $port.Pid -ne [int] $Service.ListenerPid) { return $false }
+  try {
+    $tree = if ($null -ne $ProcessTable) {
+      @(Get-TrackedProcessTree -Service $Service -ProcessTable $ProcessTable)
+    } else {
+      @(Get-TrackedProcessTree -Service $Service)
+    }
+    return ([int] $port.Pid -in $tree)
+  } catch {
+    return $false
+  }
+}
+
 function Stop-OwnedListener {
   param([pscustomobject] $Service, [int] $ListenerPid)
   if ($Mode -ne 'watch' -or -not $Service.ListenerPid -or $ListenerPid -ne $Service.ListenerPid) {
@@ -573,9 +653,14 @@ function Wait-CrewServices {
       $health = Get-HealthState $service
       $service.LastError = $health.Error
       if ($health.Ready) {
+        if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service)) {
+          throw ('{0} is healthy on {1}, but this supervisor cannot prove process ownership.' -f $service.Name, $service.Port)
+        }
+        if ($service.CrewOwned -and -not (Test-CrewServiceOwnership -Service $service)) {
+          throw ('{0} is healthy on {1}, but its tracked listener identity is not owned.' -f $service.Name, $service.Port)
+        }
         $service.State = 'ready'
         $service.ConsecutiveFailures = 0
-        if ($service.CrewOwned) { [void] (Set-TrackedListenerIdentity -Service $service) }
         Write-LaunchLog ('{0} ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       } elseif ($service.Process -and $service.Process.HasExited) {
         throw ('{0} exited before becoming ready; PID={1}; exit={2}; last health error: {3}' -f $service.Name, $service.Process.Id, $service.Process.ExitCode, $health.Error)
@@ -609,8 +694,7 @@ function Ensure-CrewServices {
     # Maintenance fence: while a STOPPED maintenance session is active for
     # the Crew backend, ordinary supervision must NOT auto-start 3210 —
     # the stopped window belongs to the npx lifecycle's tree swap. Only a
-    # matching maintenance-start owns the launch right. 3080 supervision
-    # continues normally during the window.
+    # matching maintenance-start owns the launch right.
     if ($service.CrewOwned -and (Test-MaintenanceSessionActive)) {
       $service.State = 'maintenance'
       $service.LastError = $null
@@ -619,10 +703,15 @@ function Ensure-CrewServices {
     $health = Get-HealthState $service
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
+      if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service)) {
+        throw ('{0} is healthy on {1}, but this supervisor cannot prove process ownership.' -f $service.Name, $service.Port)
+      }
+      if ($service.CrewOwned -and -not (Test-CrewServiceOwnership -Service $service)) {
+        throw ('{0} is healthy on {1}, but its tracked listener identity is not owned.' -f $service.Name, $service.Port)
+      }
       $service.State = 'ready'
       $service.ConsecutiveFailures = 0
       $service.LastError = $null
-      if ($service.CrewOwned -and -not $service.ListenerPid) { [void] (Set-TrackedListenerIdentity -Service $service) }
       if (-not $QuietHealthy -or -not $wasReady) {
         Write-LaunchLog ('{0} already ready on {1}; runtime={2}' -f $service.Name, $service.Port, $health.Version)
       }
@@ -686,7 +775,7 @@ function Start-ServiceSupervisor {
       return
     }
 
-    Write-LaunchLog 'Supervisor active; monitoring 3080 and 3210 every 10 seconds.'
+    Write-LaunchLog 'Supervisor active; monitoring Crew-owned 3210 every 10 seconds.'
     $lastRecoveryError = $null
     $updateLockFile = Join-Path $crewHome '..\app\update-in-progress.lock'
     $staleLockNotified = $false
@@ -726,17 +815,20 @@ function Start-ServiceSupervisor {
           # any durable restart requests the hub wrote (3210 never spawns
           # itself). Then consume maintenance transactions (npx cohort
           # migration stop/start phases). Then run the ordinary health pass.
-          Write-SupervisorHeartbeat
           Invoke-CrewRestartRequests
           Invoke-CrewMaintenanceRequests
           Ensure-CrewServices -QuietHealthy
           if ($lastRecoveryError) {
-            Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'
+            Write-LaunchLog 'Supervisor recovery succeeded; Crew-owned 3210 is healthy.'
             $lastRecoveryError = $null
           }
         }
+        $ownedServices = @($services | Where-Object { $_.CrewOwned -and (Test-CrewServiceOwnership -Service $_) })
+        $expectedServices = @($services | Where-Object { $_.CrewOwned })
+        Write-SupervisorHeartbeat -OwnershipReady ($expectedServices.Count -gt 0 -and $ownedServices.Count -eq $expectedServices.Count)
       } catch {
         $recoveryError = $_.Exception.Message
+        Write-SupervisorHeartbeat -OwnershipReady $false
         if ($recoveryError -ne $lastRecoveryError) {
           Write-LaunchLog ('Supervisor recovery failed; will retry: {0}' -f $recoveryError) 'WARN'
           $lastRecoveryError = $recoveryError
@@ -762,9 +854,7 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $crewHome 'profiles\dsh-crew\package.json') -PathType Leaf)) {
     throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
   }
-  if (-not (Test-Path -LiteralPath (Join-Path $officialHome 'profiles\web\package.json') -PathType Leaf)) {
-    throw "The official web profile is missing under $officialHome. Repair or install the official DeepSeek Harness web profile outside dsh-crew; dsh-crew never mutates the official profile."
-  }
+  # The launcher never starts or requires the external official ~/.dsh web/3080 profile.
 
   if ($Mode -eq 'watch') {
     Start-ServiceSupervisor
@@ -772,12 +862,12 @@ try {
     exit 0
   }
 
-  Ensure-CrewServices
+  Ensure-CrewSupervisorRunning
   Write-LegacyBridgeDiagnostic
 
   if ($Mode -eq 'open') {
-    Start-Process 'http://127.0.0.1:3080/' | Out-Null
-    Write-LaunchLog 'Opened daily console at http://127.0.0.1:3080/'
+    Start-Process 'http://127.0.0.1:3210/' | Out-Null
+    Write-LaunchLog 'Opened Crew control at http://127.0.0.1:3210/'
   }
   Write-LaunchLog ('Launcher completed successfully in {0:n1}s.' -f ((Get-Date) - $startedAt).TotalSeconds)
   exit 0

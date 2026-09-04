@@ -30,7 +30,7 @@ import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspa
 import { buildExtensionContract } from '../extension-contract.mjs';
 import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
-import { buildHubExecutionRows } from '../config-readiness.mjs';
+import { buildConfigReadinessMatrix } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
 import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
@@ -273,6 +273,38 @@ export function buildProviderMigrationDeclarations(profileDeclarations = [], set
   ];
 }
 
+export function projectCatalogHealth(health, { limit = 32 } = {}) {
+  const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 128) : 32;
+  const hints = (Array.isArray(health?.hints) ? health.hints : []).map((hint) => ({
+    code: typeof hint?.code === 'string' && hint.code.trim() ? hint.code.slice(0, 128) : 'UNKNOWN',
+    level: hint?.level === 'warning' ? 'warning' : 'info',
+  }));
+  const warnings = hints.filter((hint) => hint.level === 'warning');
+  const informational = hints.filter((hint) => hint.level !== 'warning');
+  return { hints: [...warnings, ...informational].slice(0, boundedLimit) };
+}
+
+export function projectCurrentProviderHealth(healthStore, currentSelections = {}, { limit = 128 } = {}) {
+  const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 256) : 128;
+  const selected = [];
+  const selectedKeys = new Set();
+  for (const route of Object.values(currentSelections ?? {})) {
+    if (route?.ok !== true || typeof route.provider !== 'string' || typeof route.model !== 'string') continue;
+    const key = `${route.provider}\u0000${route.model}`;
+    if (selectedKeys.has(key)) continue;
+    const observation = healthStore?.get?.(route.provider, route.model);
+    if (observation?.fresh !== true) continue;
+    selectedKeys.add(key);
+    selected.push(observation);
+  }
+  const listed = healthStore?.list?.();
+  const remaining = (Array.isArray(listed) ? listed : []).filter((entry) => {
+    const key = `${entry?.provider ?? ''}\u0000${entry?.model ?? ''}`;
+    return !selectedKeys.has(key);
+  });
+  return [...selected, ...remaining].slice(0, boundedLimit);
+}
+
 async function readProviderInventorySnapshot(hub, ctx, config) {
   let catalog = { providers: [], harness_default: null };
   let catalogEvidence = { ok: false, code: 'MODEL_CATALOG_UNAVAILABLE' };
@@ -384,10 +416,12 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
     lifecycleEvidence,
     defaultEvidence,
   });
+  const catalogHealth = projectCatalogHealth(catalog?.health);
   return {
     ...inventory,
     migration,
     catalog_evidence: catalogEvidence,
+    catalog_health: catalogHealth,
     declaration_evidence: declarationEvidence,
     default_evidence: defaultEvidence,
     lifecycle_evidence: lifecycleEvidence.ok ? { ok: true } : { ok: false, code: lifecycleEvidence.code },
@@ -1427,19 +1461,81 @@ export async function apply(ctx) {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
         const config = normalizeGlobalConfig(hub.getConfig?.() ?? {});
-        let catalogStatus = { id: 'provider_catalog', status: 'NOT_RUN', reason_code: 'PROVIDER_MODE_UNKNOWN' };
-        if (normalizeWorkerProviderMode(config.worker_provider_mode) === 'deepseek-official') {
-          catalogStatus = { id: 'provider_catalog', status: 'SKIP', reason_code: 'PROVIDER_CATALOG_NOT_REQUIRED' };
-        } else {
-          try {
-            await readHarnessModelCatalog({
-              llm: ctx.llm ?? ctx.get('llm'),
-              getCurrentSelection: () => ctx.get('agentDefaultModel')?.currentSelection?.(),
+        const workerProviderMode = normalizeWorkerProviderMode(config.worker_provider_mode);
+        const runtime = getHubRuntimeIdentity();
+        // One authoritative snapshot drives both catalog and provider-lifecycle
+        // readiness. Keep only bounded, secret-free projections in the matrix.
+        let providerInventoryBody = { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
+        let providerCatalogBody = { ok: false, code: 'PROVIDER_CATALOG_UNAVAILABLE' };
+        let providerInventorySnapshot = null;
+        try {
+          providerInventorySnapshot = await readProviderInventorySnapshot(hub, ctx, config);
+          const records = Array.isArray(providerInventorySnapshot?.records) ? providerInventorySnapshot.records : [];
+          const recoveryTransactions = Array.isArray(providerInventorySnapshot?.recovery_transactions)
+            ? providerInventorySnapshot.recovery_transactions
+            : [];
+          providerInventoryBody = records.length <= 256 && recoveryTransactions.length <= 256
+            ? {
+                ok: true,
+                records,
+                lifecycle_evidence: providerInventorySnapshot.lifecycle_evidence ?? null,
+                declaration_evidence: providerInventorySnapshot.declaration_evidence ?? null,
+                default_evidence: providerInventorySnapshot.default_evidence ?? null,
+                recovery_transactions: recoveryTransactions.map((transaction) => ({
+                  provider_id: transaction?.provider_id ?? null,
+                  unresolved: transaction?.unresolved === true,
+                })),
+              }
+            : { ok: false, code: 'PROVIDER_INVENTORY_INCOMPLETE' };
+          providerCatalogBody = providerInventorySnapshot.catalog_evidence?.ok === true
+            ? { ok: true, health: providerInventorySnapshot.catalog_health ?? { hints: [] } }
+            : { ok: false, code: providerInventorySnapshot.catalog_evidence?.code ?? 'PROVIDER_CATALOG_UNAVAILABLE' };
+        } catch {
+          providerInventoryBody = { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
+        }
+        const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
+        const boundedJobs = Array.isArray(liveJobs) ? liveJobs.slice(-128) : [];
+        const currentSelections = {};
+        if (workerProviderMode === 'deepseek-official') {
+          currentSelections.worker = { ok: true, provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' };
+          currentSelections.worker_escalation = { ok: true, provider: 'deepseek-official', model: 'deepseek-v4-pro', source: 'legacy-strict' };
+          currentSelections.reviewer = { ok: true, provider: 'deepseek-official', model: 'deepseek-v4-pro', source: 'legacy-strict' };
+        } else if (providerInventorySnapshot) {
+          const routingCatalog = {
+            providers: providerInventorySnapshot.records
+              .filter((record) => record?.lifecycle?.catalogued === true)
+              .map((record) => ({
+                id: record.id,
+                name: record.display_name ?? record.id,
+                models: (Array.isArray(record.models) ? record.models : []).map((id) => ({ id })),
+              })),
+            harness_default: providerInventorySnapshot.harness_default ?? null,
+          };
+          const lifecycleState = readProviderLifecycleState();
+          for (const route of [
+            { key: 'worker', role: 'worker', attempt: 0 },
+            { key: 'worker_escalation', role: 'worker', attempt: 1 },
+            { key: 'reviewer', role: 'reviewer', attempt: 0 },
+          ]) {
+            const policy = resolveModelPolicy(config, route.role, { attempt: route.attempt });
+            currentSelections[route.key] = resolveModel({
+              role: route.role,
+              attempt: route.attempt,
+              policy,
+              catalog: routingCatalog,
+              harnessDefault: routingCatalog.harness_default,
+              healthStore: hub.healthStore,
+              healthGate: policy.health_gate ?? config.health_gate ?? config.worker?.model_policy?.health_gate,
+              allowFallback: config.allow_fallback !== false,
+              tombstones: lifecycleState.tombstones,
             });
-            catalogStatus = { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' };
-          } catch {
-            catalogStatus = { id: 'provider_catalog', status: 'FAIL', reason_code: 'PROVIDER_CATALOG_UNAVAILABLE' };
           }
+        }
+        let providerHealthBody = { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
+        try {
+          providerHealthBody = { ok: true, health: projectCurrentProviderHealth(hub.healthStore, currentSelections) };
+        } catch {
+          providerHealthBody = { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
         }
         const profiles = loadRoleProfiles();
         const requestUrl = new URL(req.url, 'http://localhost');
@@ -1449,19 +1545,33 @@ export async function apply(ctx) {
         const workspaceReadiness = requestedWorkspaceId && !requestedContext
           ? { status: 'UNAVAILABLE', reason_code: 'WORKSPACE_CONTEXT_NOT_FOUND' }
           : await assessWorkspaceReadiness({ cwd: requestedContext?.repo_root ?? null });
-        const liveJobs = typeof hub.list === 'function' ? hub.list() : [];
-        const executionRows = buildHubExecutionRows(liveJobs);
-        const readinessMatrix = { rows: [
-          { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
-          catalogStatus,
-          ...executionRows,
-        ] };
+        const readinessMatrix = buildConfigReadinessMatrix({
+          hubCompatibility: {
+            reachable: true,
+            compatible: true,
+            runtime_version: runtime.runtime_version ?? null,
+            protocol_version: runtime.protocol_version ?? null,
+          },
+          workerProviderMode,
+          providerCatalogChecked: true,
+          providerCatalogBody,
+          providerInventoryChecked: true,
+          providerInventoryBody,
+          providerHealthChecked: true,
+          providerHealthBody,
+          currentSelections,
+          hubJobsChecked: true,
+          hubJobsBody: { ok: true, jobs: boundedJobs },
+        });
         const readinessSnapshot = buildRuntimeReadinessSnapshot({
-          runtime: getHubRuntimeIdentity(),
+          runtime,
           readinessMatrix,
-          selections: { worker: liveJobs.find((job) => job?.role === 'worker') ?? null, reviewer: liveJobs.find((job) => job?.role === 'reviewer') ?? null },
-          health: hub.healthStore.list(),
-          jobs: liveJobs,
+          selections: {
+            worker: currentSelections.worker ?? null,
+            reviewer: currentSelections.reviewer ?? null,
+          },
+          health: Array.isArray(providerHealthBody?.health) ? providerHealthBody.health.slice(0, 128) : [],
+          jobs: boundedJobs,
           workspace: workspaceReadiness,
         });
         const contract = buildExtensionContract({
@@ -1470,7 +1580,7 @@ export async function apply(ctx) {
           readinessSnapshot,
           workspace: workspaceReadiness,
           profiles,
-          runtime: getHubRuntimeIdentity(),
+          runtime,
         });
         return sendJson(res, 200, { ok: true, extension: contract });
       },

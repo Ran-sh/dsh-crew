@@ -63,6 +63,7 @@ function startupTargetConflicts(resolved) {
 
 export function windowsStartupStatus({
   home = homedir(),
+  root,
   startupDir,
   platform = process.platform,
   env = process.env,
@@ -72,22 +73,24 @@ export function windowsStartupStatus({
   const installed = existsSync(resolved.startupFile)
     || existsSync(resolved.launcherFile)
     || existsSync(resolved.helperFile);
-  let ready = existsSync(resolved.startupFile)
-    && existsSync(resolved.launcherFile)
-    && existsSync(resolved.helperFile);
-  if (ready) {
+  const components = {
+    startup_entry_content: false,
+    launcher_content: false,
+    helper_content: false,
+  };
+  if (typeof root === 'string' && root.trim()) {
     try {
+      const sourceLauncher = readFileSync(join(root, 'windows', WINDOWS_LAUNCHER_FILENAME), 'utf8');
+      const sourceHelper = readFileSync(join(root, 'windows', WINDOWS_HELPER_FILENAME), 'utf8');
+      const sourceVbs = readFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'utf8');
       const startup = readFileSync(resolved.startupFile, 'utf16le').replace(/^\uFEFF/, '');
-      const launcher = readFileSync(resolved.launcherFile, 'utf8');
-      const helper = readFileSync(resolved.helperFile, 'utf8');
-      ready = startup.includes(resolved.launcherFile)
-        && startup.includes('--watch')
-        && launcher.includes(WINDOWS_HELPER_FILENAME)
-        && helper.includes('DSH Crew managed Windows launcher')
-        && helper.includes('DSHCrewServiceSupervisor');
-    } catch { ready = false; }
+      components.startup_entry_content = startup === renderVbs(sourceVbs, resolved.launcherFile);
+      components.launcher_content = readFileSync(resolved.launcherFile, 'utf8') === sourceLauncher;
+      components.helper_content = readFileSync(resolved.helperFile, 'utf8') === sourceHelper;
+    } catch { /* missing or unreadable content remains false */ }
   }
-  return { supported: true, installed, ready, ...resolved };
+  const missing = Object.entries(components).filter(([, ready]) => !ready).map(([key]) => key);
+  return { supported: true, installed, ready: missing.length === 0, components, missing, ...resolved };
 }
 
 export function installWindowsStartup({

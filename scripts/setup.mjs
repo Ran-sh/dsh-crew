@@ -220,7 +220,7 @@ export async function setupInstall({
 
   if (dryRun) mark(log, true, 'Codex Desktop integration (dry-run)');
   else {
-    const r = installer.installCodex ? installer.installCodex({ home }) : realInstaller.installCodex({ home });
+    const r = installer.installCodex ? installer.installCodex({ home, root }) : realInstaller.installCodex({ home, root });
     mark(log, r.ok !== false, r.ok === false ? `Codex Desktop integration failed: ${(r.actions ?? []).join('; ')}` : 'Codex Desktop integration');
     if (r.ok === false) return { ok: false, error: 'Codex integration failed' };
   }
@@ -252,7 +252,7 @@ export async function setupInstall({
   if (commandExists('claude')) {
     if (dryRun) mark(log, true, 'Claude Code integration (dry-run)');
     else {
-      const r = installer.installClaudeCode ? await installer.installClaudeCode({ home }) : await realInstaller.installClaudeCode({ home });
+      const r = installer.installClaudeCode ? await installer.installClaudeCode({ home, root }) : await realInstaller.installClaudeCode({ home, root });
       const ok = r.ok !== false;
       mark(log, ok, ok ? 'Claude Code integration' : 'Claude Code integration failed');
       if (!ok) return { ok: false, error: 'Claude Code integration failed' };
@@ -333,12 +333,13 @@ export async function setupUninstall({
 
 export async function setupStatus({ log = console.log, root = ROOT, home = homedir(), installer = realInstaller } = {}) {
   const st = installer.installStatus ? installer.installStatus({ home, root }) : realInstaller.installStatus({ home, root });
-  const claude = st?.claude?.installed ? 'installed' : 'not installed';
-  const codex = st?.codex?.installed ? 'installed' : 'not installed';
-  const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
+  const integrationLabel = (entry) => !entry?.installed ? 'not installed' : entry.ready === true ? 'installed' : 'needs repair';
+  const claude = integrationLabel(st?.claude);
+  const codex = integrationLabel(st?.codex);
+  const zcode = integrationLabel(st?.zcode);
   const startupState = installer.windowsStartupStatus
-    ? installer.windowsStartupStatus({ home })
-    : realInstaller.windowsStartupStatus({ home });
+    ? installer.windowsStartupStatus({ home, root })
+    : realInstaller.windowsStartupStatus({ home, root });
   const windowsStartup = !startupState.supported ? 'not supported'
     : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
   // Crew status reads ONLY the dedicated Crew profile under the Crew DSH_HOME;

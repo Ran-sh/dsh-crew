@@ -1,8 +1,11 @@
 # 3210 and 3080 UI responsibilities
 
-DSH Crew presents two different user experiences from two independently built
-client bundles. The native 3210 page is the canonical full control plane;
-the official 3080 page is an optional narrow quick-controls panel.
+Current installs expose the native 3210 page as the canonical full Crew
+control and runtime; all production model execution runs there. An older
+installation may still expose a narrow 3080 quick-controls bundle, but that
+legacy surface is external to Crew ownership, optional, and deprecated. Crew
+treats the official profile as read-only. The legacy surface
+never starts, owns, or supervises 3210.
 
 ## 3210: canonical full control plane
 
@@ -22,10 +25,10 @@ management AND model execution:
 Bundle: `lib/client.js` (module `@ran-sh/dsh-crew`), built from
 `src/client/entry.tsx`.
 
-## 3080: optional quick-controls surface
+## 3080: deprecated legacy quick-controls surface
 
-The official Harness `web` profile on `127.0.0.1:3080` may host a NARROW
-quick-controls card — and nothing else:
+An older official Harness `web` profile on `127.0.0.1:3080` may still host a
+NARROW quick-controls card — and nothing else:
 
 - master switch (`subagents_enabled`)
 - Flash / Pro model priority lists (add/remove/reorder only)
@@ -87,6 +90,8 @@ authentication.
 ## Process ownership
 
 The Windows launcher supervisor (`windows/start-dsh-crew.ps1` watch mode) is
-the ONLY process authority for 3210. The 3080 bridge never spawns, owns, or
-kills 3210. Restart and maintenance go through durable request files the hub
-writes and the launcher executes (`supervisor/restart-request.mjs`).
+the ONLY process authority for the Crew-owned 3210 service. The official 3080
+surface never starts, owns, or supervises 3210. Restart and maintenance go
+through durable request files the hub writes and the launcher executes
+(`supervisor/restart-request.mjs`). A legacy 3080 bridge is probed only
+diagnostically after 3210 readiness and never gates startup.

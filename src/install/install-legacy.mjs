@@ -2,7 +2,8 @@
 // render Codex agent roles with real paths. Called from the CLI entry or the
 // DSH settings page. All edits are backed up and idempotent.
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync, statSync, lstatSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -14,6 +15,9 @@ const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
 const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
 const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
+export const CODEX_LEGACY_POLICY_HASHES = Object.freeze([
+  '2d6f3839bb3df4bda90f481726281292b1a4b4585298b1cf9ec56215295b5c78',
+]);
 // dsh_worker_config is included so the session commands (/dsh-crew:config,
 // /dsh-config) and any orchestrator policy lookup run without an extra
 // authorization prompt.
@@ -36,10 +40,44 @@ function readText(file) {
   try { return readFileSync(file, 'utf8'); } catch { return null; }
 }
 
+function normalizedPath(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const path = resolve(value);
+    return process.platform === 'win32' ? path.toLowerCase() : path;
+  } catch { return null; }
+}
+
+function renderedCodexRole(root, file) {
+  const source = readText(join(root, 'codex', 'agents', file));
+  if (source === null) return null;
+  const renderedPath = join(root, 'src', 'server.mjs').replace(/\\/g, '/');
+  return source.replace(/args = \[.*server\.mjs"\]/, `args = ["${renderedPath}"]`);
+}
+
 function managedPolicyBlock(root) {
   const policy = readText(join(root, 'codex', 'AGENTS.md'))?.trim();
   if (!policy) return null;
   return `${POLICY_START}\n${policy}\n${POLICY_END}`;
+}
+
+export function codexLegacyPolicyDigest(text) {
+  const canonical = typeof text === 'string' ? text.replace(/\r\n/g, '\n').trim() : '';
+  return canonical ? createHash('sha256').update(canonical, 'utf8').digest('hex') : null;
+}
+
+export function stripKnownLegacyCodexPolicy(text, { knownHashes = CODEX_LEGACY_POLICY_HASHES } = {}) {
+  if (typeof text !== 'string') return text;
+  const start = POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const end = POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`${start}[\\s\\S]*?${end}`, 'm').exec(text);
+  if (!match) return text;
+  const allowed = new Set(Array.isArray(knownHashes) ? knownHashes : []);
+  const prefix = text.slice(0, match.index);
+  const suffix = text.slice(match.index + match[0].length);
+  const keptPrefix = allowed.has(codexLegacyPolicyDigest(prefix)) ? '' : prefix;
+  const keptSuffix = allowed.has(codexLegacyPolicyDigest(suffix)) ? '' : suffix;
+  return `${keptPrefix}${match[0]}${keptSuffix}`;
 }
 
 function installGlobalCodexPolicy({ home, root }) {
@@ -54,6 +92,7 @@ function installGlobalCodexPolicy({ home, root }) {
   if (managed.test(current)) next = current.replace(managed, block);
   else if (current.trim() === template) next = `${block}\n`;
   else next = `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${block}\n`;
+  next = stripKnownLegacyCodexPolicy(next);
   if (next !== current) {
     backup(file);
     writeFileSync(file, next);
@@ -125,17 +164,61 @@ function isFile(file) {
 }
 
 function claudePluginRootReady(root) {
-  return typeof root === 'string' && root.trim() !== ''
-    && isFile(join(root, '.claude-plugin', 'plugin.json'))
-    && isFile(join(root, '.mcp.json'))
-    && isFile(join(root, 'src', 'server.mjs'));
+  if (typeof root !== 'string' || !root.trim() || !isFile(join(root, 'src', 'server.mjs'))) return false;
+  const plugin = readJson(join(root, '.claude-plugin', 'plugin.json'), null);
+  const mcp = plugin?.mcpServers?.['dsh-crew'];
+  return !!plugin
+    && typeof plugin.version === 'string'
+    && mcp?.command === 'node'
+    && Array.isArray(mcp.args)
+    && mcp.args.length === 1
+    && mcp.args[0] === '${CLAUDE_PLUGIN_ROOT}/src/server.mjs';
 }
 
-function claudeSnapshotReady(home) {
+function managedClaudeFileManifest(root, { maxFiles = 512, maxBytes = 8 * 1024 * 1024 } = {}) {
+  const files = [];
+  let bytes = 0;
+  const add = (file, relativePath) => {
+    const info = lstatSync(file);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('unsupported snapshot entry');
+    const content = readFileSync(file);
+    bytes += content.length;
+    if (bytes > maxBytes || files.length >= maxFiles) throw new Error('snapshot manifest bound exceeded');
+    files.push([relativePath.replace(/\\/g, '/'), createHash('sha256').update(content).digest('hex')]);
+  };
+  const walk = (directory, relativeDirectory) => {
+    if (!existsSync(directory)) return;
+    const info = lstatSync(directory);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('unsupported snapshot directory');
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const file = join(directory, entry.name);
+      const relativePath = join(relativeDirectory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('snapshot symlink not allowed');
+      if (entry.isDirectory()) walk(file, relativePath);
+      else if (entry.isFile()) add(file, relativePath);
+      else throw new Error('unsupported snapshot entry');
+    }
+  };
+  try {
+    add(join(root, '.claude-plugin', 'plugin.json'), join('.claude-plugin', 'plugin.json'));
+    if (isFile(join(root, 'package.json'))) add(join(root, 'package.json'), 'package.json');
+    for (const directory of ['agents', 'commands', 'src']) walk(join(root, directory), directory);
+    return files;
+  } catch { return null; }
+}
+
+function sameManagedClaudeFiles(expectedRoot, snapshotRoot) {
+  if (!claudePluginRootReady(expectedRoot) || !claudePluginRootReady(snapshotRoot)) return false;
+  const expected = managedClaudeFileManifest(expectedRoot);
+  const snapshot = managedClaudeFileManifest(snapshotRoot);
+  return expected !== null && snapshot !== null && JSON.stringify(snapshot) === JSON.stringify(expected);
+}
+
+function claudeSnapshotReady(home, root) {
   const installed = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {});
   const record = installed?.plugins?.[PLUGIN_KEY];
   const entries = Array.isArray(record) ? record : [record];
-  return entries.some((entry) => claudePluginRootReady(entry?.installPath));
+  return entries.some((entry) => sameManagedClaudeFiles(root, entry?.installPath));
 }
 
 function claudePermissionsReady(settings) {
@@ -302,33 +385,43 @@ export function writeGlobalConfig(patch) {
 }
 
 /** What is currently installed where — drives the settings-page buttons. */
-export function installStatus({ home = homedir(), root } = {}) {
+export function installStatus({ home = homedir(), root = ROOT } = {}) {
   const settings = readJson(join(home, '.claude', 'settings.json'), {});
   const enabled = settings.enabledPlugins;
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
   const hudWired = typeof settings.statusLine?.command === 'string'
     && settings.statusLine.command.includes('worker-segment.sh');
+  const marketplaceRoot = settings?.extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source?.path;
+  const installedPluginRecord = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {})?.plugins?.[PLUGIN_KEY];
+  const claudeFootprint = claudeInstalled || typeof marketplaceRoot === 'string' || installedPluginRecord !== undefined;
   const claudeComponents = {
     enabled: claudeInstalled,
-    marketplace: claudePluginRootReady(settings?.extraKnownMarketplaces?.[MARKETPLACE_NAME]?.source?.path),
-    snapshot: claudeSnapshotReady(home),
+    marketplace: normalizedPath(marketplaceRoot) === normalizedPath(root) && claudePluginRootReady(root),
+    snapshot: claudeSnapshotReady(home, root),
     permissions: claudePermissionsReady(settings),
   };
   const claudeMissing = Object.entries(claudeComponents).filter(([, present]) => !present).map(([key]) => key);
   const codexRoot = join(home, '.codex');
   const configFile = join(codexRoot, 'config.toml');
   const configText = readText(configFile) ?? '';
-  const workerTarget = codexRoleTarget(join(codexRoot, 'agents', 'ds-worker.toml'), 'ds-worker');
-  const reviewerTarget = codexRoleTarget(join(codexRoot, 'agents', 'ds-reviewer.toml'), 'ds-reviewer');
+  const workerFile = join(codexRoot, 'agents', 'ds-worker.toml');
+  const reviewerFile = join(codexRoot, 'agents', 'ds-reviewer.toml');
+  const workerTarget = codexRoleTarget(workerFile, 'ds-worker');
+  const reviewerTarget = codexRoleTarget(reviewerFile, 'ds-reviewer');
   const mcpTarget = codexMcpTarget(configText);
+  const expectedTarget = normalizedPath(join(root, 'src', 'server.mjs'));
+  const expectedWorkerRole = renderedCodexRole(root, 'ds-worker.toml');
+  const expectedReviewerRole = renderedCodexRole(root, 'ds-reviewer.toml');
+  const expectedConfigPrompt = readText(join(root, 'codex', 'prompts', 'dsh-config.md'));
+  const expectedStatusPrompt = readText(join(root, 'codex', 'prompts', 'dsh-status.md'));
   const components = {
-    worker_role: !!workerTarget,
-    reviewer_role: !!reviewerTarget,
-    config_prompt: !!readText(join(codexRoot, 'prompts', 'dsh-config.md'))?.trim(),
-    status_prompt: !!readText(join(codexRoot, 'prompts', 'dsh-status.md'))?.trim(),
-    mcp: !!mcpTarget,
-    target_alignment: !!workerTarget && workerTarget === reviewerTarget && workerTarget === mcpTarget,
-    global_policy: globalCodexPolicyReady({ home }),
+    worker_role: expectedWorkerRole !== null && readText(workerFile) === expectedWorkerRole,
+    reviewer_role: expectedReviewerRole !== null && readText(reviewerFile) === expectedReviewerRole,
+    config_prompt: expectedConfigPrompt !== null && readText(join(codexRoot, 'prompts', 'dsh-config.md')) === expectedConfigPrompt,
+    status_prompt: expectedStatusPrompt !== null && readText(join(codexRoot, 'prompts', 'dsh-status.md')) === expectedStatusPrompt,
+    mcp: !!expectedTarget && mcpTarget === expectedTarget,
+    target_alignment: !!expectedTarget && workerTarget === expectedTarget && reviewerTarget === expectedTarget && mcpTarget === expectedTarget,
+    global_policy: globalCodexPolicyReady({ home, root }),
   };
   const codexInstalled = Object.values(components).some(Boolean)
     || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
@@ -336,14 +429,14 @@ export function installStatus({ home = homedir(), root } = {}) {
   const missing = Object.entries(components).filter(([, present]) => !present).map(([key]) => key);
   return {
     claude: {
-      installed: claudeInstalled,
+      installed: claudeFootprint,
       ready: claudeMissing.length === 0,
       hud: hudWired,
       components: claudeComponents,
       missing: claudeMissing,
     },
     codex: { installed: codexInstalled, ready: missing.length === 0, components, missing },
-    zcode: zcodeStatus({ home, ...(root ? { root } : {}) }),
+    zcode: zcodeStatus({ home, root }),
   };
 }
 
@@ -493,8 +586,7 @@ export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
     const dest = join(agentsDir, f);
     const bak = backup(dest);
     if (bak) actions.push(`backup: ${bak}`);
-    const rendered = readFileSync(join(srcDir, f), 'utf8')
-      .replace(/args = \[.*server\.mjs"\]/, `args = ["${renderedPath}"]`);
+    const rendered = renderedCodexRole(root, f);
     writeFileSync(dest, rendered);
     actions.push(`role: ${dest}`);
   }

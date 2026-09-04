@@ -3,7 +3,7 @@
 // The generated files make ZCode dispatch through the same dsh-crew MCP server
 // used by Codex and Claude while keeping ZCode's native config precedence.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,8 +62,10 @@ function normalizePath(value) {
 
 function serverTarget(server) {
   if (!server || typeof server !== 'object') return null;
-  if (server.command !== 'node' || !Array.isArray(server.args) || typeof server.args[0] !== 'string') return null;
-  return normalizePath(server.args[0]);
+  if (server.command !== 'node' || !Array.isArray(server.args) || server.args.length !== 1 || typeof server.args[0] !== 'string') return null;
+  const target = normalizePath(server.args[0]);
+  if (!target) return null;
+  try { return statSync(target).isFile() ? target : null; } catch { return null; }
 }
 
 function nativeServers(config) {
@@ -250,13 +252,19 @@ function installTemplates({ home, root, priorFiles = [] }) {
 function updateMcp({ home, root }) {
   const source = configSource({ home });
   const target = expectedTarget({ root });
+  const normalizedTarget = normalizePath(target);
   const current = source.servers[SERVER];
   const currentTarget = serverTarget(current);
+  const currentDeclaredTarget = Array.isArray(current?.args) && typeof current.args[0] === 'string'
+    ? normalizePath(current.args[0])
+    : null;
   const owned = ownership({ home });
-  if (current && currentTarget !== target) {
+  if (current && currentTarget !== normalizedTarget) {
     // Only an exact previously-owned entry may be repaired. Any foreign
     // command, even if it is also named dsh-crew, is a hard collision.
-    if (!(owned && owned.config_file === source.file && normalizePath(owned.target) === currentTarget)) {
+    if (!(owned
+      && normalizePath(owned.config_file) === normalizePath(source.file)
+      && normalizePath(owned.target) === currentDeclaredTarget)) {
       return { ok: false, code: 'ZCODE_MCP_COLLISION', config_file: source.file };
     }
   }
@@ -303,22 +311,53 @@ function zcodeComponents({ home = homedir(), root = ROOT } = {}) {
   const source = configSource({ home });
   const configured = serverTarget(source.servers[SERVER]);
   const owned = ownership({ home });
+  const expectedPolicy = managedPolicyBlock(root);
+  const installedPolicy = readText(join(home, '.zcode', 'AGENTS.md'));
+  const templates = templateFiles({ home, root });
+  const templateReady = (entry) => {
+    if (!entry) return false;
+    const { source: sourceFile, dest } = entry;
+    const sourceText = readText(sourceFile);
+    const installedText = readText(dest);
+    return sourceText !== null && installedText === sourceText;
+  };
+  const templateBySuffix = (suffix) => templates.find(({ dest }) => dest.endsWith(suffix));
+  const ownershipFilesReady = !!owned && templates.every(({ source: sourceFile, dest }) => {
+    const expectedText = readText(sourceFile);
+    const installedText = readText(dest);
+    const record = Array.isArray(owned.files)
+      ? owned.files.find((entry) => normalizePath(entry?.path) === normalizePath(dest))
+      : null;
+    return expectedText !== null
+      && installedText === expectedText
+      && record?.managed_sha256 === contentHash(expectedText)
+      && contentHash(installedText) === record.managed_sha256;
+  });
   const components = {
     mcp: configured === expected,
-    policy: typeof readText(join(home, '.zcode', 'AGENTS.md')) === 'string' && readText(join(home, '.zcode', 'AGENTS.md')).includes(POLICY_START),
-    worker_agent: existsSync(join(home, '.zcode', 'agents', 'ds-worker.md')),
-    reviewer_agent: existsSync(join(home, '.zcode', 'agents', 'ds-reviewer.md')),
-    config_prompt: existsSync(join(home, '.zcode', 'commands', 'dsh-config.md')),
-    status_prompt: existsSync(join(home, '.zcode', 'commands', 'dsh-status.md')),
-    ownership: !!owned && owned.config_file === source.file && normalizePath(owned.target) === expected,
+    policy: !!expectedPolicy && typeof installedPolicy === 'string' && installedPolicy.includes(expectedPolicy),
+    worker_agent: templateReady(templateBySuffix(join('agents', 'ds-worker.md'))),
+    reviewer_agent: templateReady(templateBySuffix(join('agents', 'ds-reviewer.md'))),
+    config_prompt: templateReady(templateBySuffix(join('commands', 'dsh-config.md'))),
+    status_prompt: templateReady(templateBySuffix(join('commands', 'dsh-status.md'))),
+    ownership: !!owned
+      && normalizePath(owned.config_file) === normalizePath(source.file)
+      && normalizePath(owned.target) === expected
+      && ownershipFilesReady,
   };
-  return { components, source, expected, configured, owned };
+  const policyFootprint = typeof installedPolicy === 'string'
+    && installedPolicy.includes(POLICY_START)
+    && installedPolicy.includes(POLICY_END);
+  const installed = Object.hasOwn(source.servers, SERVER)
+    || !!owned
+    || policyFootprint
+    || templates.some(({ dest }) => existsSync(dest));
+  return { components, source, expected, configured, owned, installed };
 }
 
 export function zcodeStatus({ home = homedir(), root = ROOT } = {}) {
-  const { components, source, expected, configured } = zcodeComponents({ home, root });
+  const { components, source, expected, configured, installed } = zcodeComponents({ home, root });
   const missing = Object.entries(components).filter(([, value]) => !value).map(([key]) => key);
-  const installed = Object.values(components).some(Boolean);
   return {
     installed,
     ready: missing.length === 0,

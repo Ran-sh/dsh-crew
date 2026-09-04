@@ -496,7 +496,11 @@ test('status is read-only and reports candidate/installed versions plus integrat
 
     // installStatus now reports integrations installed (as the real module would).
     const st = recordingInstaller();
-    st.installer.installStatus = () => ({ claude: { installed: true }, codex: { installed: true } });
+    st.installer.installStatus = () => ({
+      claude: { installed: true, ready: true },
+      codex: { installed: true, ready: true },
+      zcode: { installed: true, ready: true },
+    });
     const logsAfter = [];
     const after = await npxStatus({ home: t.dir, sourceRoot: join(t.dir, 'candidate'), installer: st.installer, log: (m) => logsAfter.push(m) });
     assert.equal(after.candidateVersion, '0.3.3');

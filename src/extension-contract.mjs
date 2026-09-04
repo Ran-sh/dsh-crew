@@ -42,14 +42,18 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, read
     .map((id) => row(matrix, id))
     .find((entry) => entry?.status === 'PASS');
   const catalogEvidence = row(matrix, 'provider_catalog');
+  const providerHealthEvidence = row(matrix, 'provider_health');
+  const reviewerHealthEvidence = row(matrix, 'reviewer_health');
   const lifecycleEvidence = row(matrix, 'provider_lifecycle_consistent');
-  const modelReadiness = catalogEvidence?.status === 'FAIL'
-    ? readinessFromRow(catalogEvidence)
-    : realModelEvidence
-      ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
-      : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
-        ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
-        : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
+  const modelReadiness = providerHealthEvidence?.status === 'FAIL'
+    ? readinessFromRow(providerHealthEvidence)
+    : catalogEvidence?.status === 'FAIL'
+      ? readinessFromRow(catalogEvidence)
+      : realModelEvidence
+        ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
+        : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
+          ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
+          : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
   const components = {
     harness: readinessFromRow(row(matrix, 'hub_compatibility')),
     provider_lifecycle: lifecycleEvidence
@@ -58,7 +62,9 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, read
     model: modelReadiness,
     workspace: workspaceComponent(workspace),
     reviewer: reviewerEnabled
-      ? readinessFromRow(row(matrix, 'reviewer_pipeline'))
+      ? reviewerHealthEvidence?.status === 'FAIL'
+        ? readinessFromRow(reviewerHealthEvidence)
+        : readinessFromRow(row(matrix, 'reviewer_pipeline'))
       : component('DEGRADED', 'REVIEWER_DISABLED'),
   };
   const states = Object.values(components).map((entry) => entry.status);

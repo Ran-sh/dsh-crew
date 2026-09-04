@@ -312,6 +312,24 @@ const SAFE_GLOBAL_KEYS = [
   'preset_flash', 'preset_pro',
 ];
 
+function sameHubRuntimeIdentity(status, extension, snapshot) {
+  const runtime = extension?.runtime;
+  const projected = snapshot?.runtime;
+  return status?.compatible === true
+    && extension?.schema_version === 1
+    && extension?.kind === 'dsh-crew-extension'
+    && snapshot?.schema_version === 1
+    && runtime?.runtime_id === status.runtime_id
+    && runtime?.protocol_version === status.protocol_version
+    && runtime?.execution_plane === status.execution_plane
+    && runtime?.profile === status.profile
+    && runtime?.listen_port === status.listen_port
+    && projected?.runtime_id === runtime.runtime_id
+    && projected?.execution_plane === runtime.execution_plane
+    && projected?.profile === runtime.profile
+    && projected?.listen_port === runtime.listen_port;
+}
+
 async function buildConfigReport() {
   const globalConfig = currentGlobalConfig();
   const legacy = deriveLegacyConfig(globalConfig);
@@ -324,19 +342,27 @@ async function buildConfigReport() {
   const mainAgentMode = sessionConfig.main_agent_mode ?? globalConfig.main_agent_mode;
   const runtimeControls = workflowRuntime.refreshRuntimeControls();
   const activationBoundaries = globalConfig.config_activation ?? runtimeActivationMetadata();
-  const hubCompatibility = await hubStatus({ force: true });
+  const hubCompatibility = await hubStatus({ force: true, base: globalConfig.hub_url });
   let effectiveWorkerProvider = null;
   let effectiveWorkerSelection = { flash: null, pro: null };
   let providerResolutionError;
   let providerCatalogChecked = false;
   let providerCatalogBody = null;
-  let providerInventoryChecked = false;
-  let providerInventoryBody = null;
-  let providerHealthChecked = false;
-  let providerHealthBody = null;
-  let hubJobsChecked = false;
-  let hubJobsBody = null;
+  let hubExtension = null;
+  let hubReadinessSnapshot = null;
   const workerProviderMode = globalConfig.worker_provider_mode ?? 'deepseek-official';
+  if (hubCompatibility.compatible) {
+    try {
+      const extensionRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/extension`, { signal: AbortSignal.timeout(800) });
+      const extensionBody = await extensionRes.json();
+      const candidateExtension = extensionBody?.extension;
+      const candidateSnapshot = candidateExtension?.readiness_snapshot;
+      if (extensionRes.ok && extensionBody?.ok === true && sameHubRuntimeIdentity(hubCompatibility, candidateExtension, candidateSnapshot)) {
+        hubExtension = candidateExtension;
+        hubReadinessSnapshot = candidateSnapshot;
+      }
+    } catch { /* canonical Hub readiness remains unavailable; fallback stays conservative */ }
+  }
   if (workerProviderMode === 'deepseek-official') {
     effectiveWorkerSelection = {
       flash: { provider: 'deepseek-official', model: 'deepseek-v4-flash', source: 'legacy-strict' },
@@ -369,60 +395,34 @@ async function buildConfigReport() {
   } else if (hubCompatibility.reachable) {
     providerResolutionError = hubCompatibilityMessage(hubCompatibility);
   }
-  if (hubCompatibility.compatible) {
-    try {
-      providerInventoryChecked = true;
-      const inventoryRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/providers`, { signal: AbortSignal.timeout(800) });
-      providerInventoryBody = inventoryRes.ok
-        ? await inventoryRes.json()
-        : { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
-    } catch {
-      providerInventoryChecked = true;
-      providerInventoryBody = { ok: false, code: 'PROVIDER_INVENTORY_UNAVAILABLE' };
-    }
-  }
-  if (hubCompatibility.compatible) {
-    try {
-      providerHealthChecked = true;
-      const healthRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/provider-health`, { signal: AbortSignal.timeout(800) });
-      providerHealthBody = healthRes.ok ? await healthRes.json() : { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
-    } catch {
-      providerHealthChecked = true;
-      providerHealthBody = { ok: false, code: 'PROVIDER_HEALTH_UNAVAILABLE' };
-    }
-  }
-  if (hubCompatibility.compatible) {
-    try {
-      hubJobsChecked = true;
-      const jobsRes = await fetch(`${globalConfig.hub_url}/_dsh/dsh-crew/jobs`, { signal: AbortSignal.timeout(800) });
-      hubJobsBody = await jobsRes.json();
-    } catch {
-      hubJobsChecked = true;
-    }
-  }
-  effectiveWorkerProvider = effectiveWorkerSelection.flash?.provider ?? null;
-  const readinessMatrix = buildConfigReadinessMatrix({
+  if (hubReadinessSnapshot?.worker?.selected) effectiveWorkerSelection.worker = hubReadinessSnapshot.worker.selected;
+  if (hubReadinessSnapshot?.reviewer?.selected) effectiveWorkerSelection.reviewer = hubReadinessSnapshot.reviewer.selected;
+  effectiveWorkerProvider = effectiveWorkerSelection.worker?.provider ?? effectiveWorkerSelection.flash?.provider ?? null;
+  const fallbackReadinessMatrix = buildConfigReadinessMatrix({
     hubCompatibility,
     workerProviderMode,
     providerCatalogChecked,
     providerCatalogBody,
-    providerInventoryChecked,
-    providerInventoryBody,
-    providerHealthChecked,
-    providerHealthBody,
-    hubJobsChecked,
-    hubJobsBody,
   });
+  const readinessMatrix = hubReadinessSnapshot?.readiness_matrix ?? fallbackReadinessMatrix;
   const roleProfiles = loadRoleProfiles();
   const workspaceReadiness = await assessWorkspaceReadiness({ cwd: process.cwd() });
-  const readinessSnapshot = buildRuntimeReadinessSnapshot({
-    runtime: getHubRuntimeIdentity(),
-    readinessMatrix,
-    selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
-    health: providerHealthBody?.health,
-    jobs: hubJobsBody?.jobs,
-    workspace: workspaceReadiness,
-  });
+  const readinessSnapshot = hubReadinessSnapshot
+    ? {
+        ...structuredClone(hubReadinessSnapshot),
+        readiness_matrix: readinessMatrix,
+        workspace: {
+          status: workspaceReadiness.status ?? (workspaceReadiness.ok === true ? 'READY' : 'UNAVAILABLE'),
+          reason_code: workspaceReadiness.reason_code ?? workspaceReadiness.code ?? 'WORKSPACE_NOT_CHECKED',
+        },
+      }
+    : buildRuntimeReadinessSnapshot({
+        runtime: getHubRuntimeIdentity(),
+        readinessMatrix,
+        selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
+        workspace: workspaceReadiness,
+      });
+  const extensionRuntime = hubExtension?.runtime ?? getHubRuntimeIdentity();
   const extensionContract = buildExtensionContract({
     config: {
       ...globalConfig,
@@ -435,7 +435,7 @@ async function buildConfigReport() {
     readinessSnapshot,
     workspace: workspaceReadiness,
     profiles: roleProfiles,
-    runtime: getHubRuntimeIdentity(),
+    runtime: extensionRuntime,
   });
   return {
     enabled: sessionConfig.enabled,

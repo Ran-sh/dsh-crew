@@ -212,7 +212,6 @@
     "cordis.patch.yml",
     "worker.cordis.yml",
     ".claude-plugin",
-    ".mcp.json",
     "README.md",
     "README.*.md",
     "docs/job-contracts.md",

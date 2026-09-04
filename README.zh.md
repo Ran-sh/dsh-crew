@@ -7,25 +7,39 @@ Worker/Reviewer 调度、模型优先级、任务跟踪和能力感知安全门�
 
 ## 快速开始
 
-需要 Node.js 和 Git。
+需要 Windows、Node.js 和 Git。目前受管 3210 监督仅支持 Windows；Linux 和 macOS
+暂不属于生产运行平台。
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
-dsh-crew integrate
-dsh-crew status
 ```
 
-打开 <http://127.0.0.1:3080> 进入日常控制台。Windows 安装会注册当前用户的
-登录启动项，先启动 3080 控制台，再由官方桥接启动并监管隔离的 3210 Harness。
+3210 是 canonical full Crew control and runtime。生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行。
+
+官方 3080 界面不属于 Crew，Crew 不依赖它并始终将其 profile 视为只读；
+Crew 从不启动、拥有或监管它。
+
+Windows 安装会注册登录启动项。如需立即启动并打开 Crew 控制台：
+
+```powershell
+& "$env:USERPROFILE\.config\dsh-crew\launchers\start-dsh-crew.cmd" --open
+```
+
+启动后打开 <http://127.0.0.1:3210/>。
+
+```bash
+dsh-crew status
+dsh-crew inspect
+```
 
 全新安装只包含内置 DeepSeek 路由。其他 Provider 凭据、模型优先级和可选集成需要
 在本机设置中自行配置，绝不会打包进发布版本。
 
 | 界面 | 用途 |
 | --- | --- |
-| `3080` | 日常控制台、Crew 设置、集成状态和任务 |
-| `3210` | 隔离的 Crew Harness、Provider、Harness Models 和底层设置 |
+| `3080` | Crew 之外的官方 Harness UI；Crew 不依赖它 |
+| `3210` | canonical Crew 控制台、runtime、Provider、Harness Models 和任务 |
 
 进入 **设置 → DSH Crew**，刷新 Harness Models，并分别排列 Worker 与 Reviewer
 的模型顺序。然后直接告诉 Codex、ZCode 或 Claude：
@@ -61,9 +75,9 @@ dsh-crew update           # 更新并修复已启用集成
 dsh-crew uninstall        # 移除受管文件，保留配置/备份
 ```
 
-运行时隔离在 `~/.config/dsh-crew/harness`，使用 `profile: dsh-crew`；官方 `web` profile
-只接收 3080 轻量桥接。
-生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行，3080 仅作为控制面桥接。
+运行时隔离在 `~/.config/dsh-crew/harness`，使用 `profile: dsh-crew`。官方 `web` profile
+不属于 Crew 且对 Crew 始终只读；旧版 3080 bridge 若仍存在，只会作为已弃用诊断项显示。
+生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行。
 
 ## 旧启动器迁移
 

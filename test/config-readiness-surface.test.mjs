@@ -13,7 +13,7 @@ test('dsh_worker_config consumes the Hub extension readiness snapshot as its mat
   assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/extension`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
   assert.match(serverSource, /hubStatus\(\{ force: true, base: globalConfig\.hub_url \}\)/);
   assert.match(serverSource, /sameHubRuntimeIdentity/);
-  assert.match(serverSource, /hubReadinessSnapshot\?\.schema_version === 1/);
+  assert.match(serverSource, /snapshot\?\.schema_version === 1/);
   assert.match(serverSource, /hubReadinessSnapshot/);
   assert.match(serverSource, /hubReadinessSnapshot\?\.readiness_matrix/);
   assert.match(serverSource, /readinessSnapshot/);

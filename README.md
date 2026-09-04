@@ -8,18 +8,33 @@ capability-aware safety gate.
 
 ## Quick start
 
-Requirements: Node.js and Git.
+Requirements: Windows, Node.js, and Git. Managed 3210 supervision is currently
+supported on Windows; Linux and macOS are not yet production runtime targets.
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
-dsh-crew integrate
-dsh-crew status
 ```
 
-Open <http://127.0.0.1:3080> for the daily console. On Windows, installation
-also registers login startup for the 3080 console; its official bridge starts
-and owns the isolated 3210 Harness backend.
+3210 is the canonical full Crew control and runtime. All production
+Worker/Reviewer model execution runs on the isolated 3210 Crew Harness.
+
+The official 3080 surface is outside Crew ownership and optional for Crew.
+Crew treats its profile as read-only and never starts, owns, or supervises it.
+
+On Windows, installation registers login startup. To start immediately and
+open the Crew control:
+
+```powershell
+& "$env:USERPROFILE\.config\dsh-crew\launchers\start-dsh-crew.cmd" --open
+```
+
+Or open <http://127.0.0.1:3210/> after startup.
+
+```bash
+dsh-crew status
+dsh-crew inspect
+```
 
 Fresh installs contain only the built-in DeepSeek route. Add your own provider
 credentials, model priorities, and optional integrations in the local Settings;
@@ -27,8 +42,8 @@ they are never bundled into this package.
 
 | Surface | Purpose |
 | --- | --- |
-| `3080` | Daily console, Crew settings, integrations, and jobs |
-| `3210` | Isolated Crew Harness, Providers, Harness Models, and low-level settings |
+| `3080` | Official Harness UI outside Crew ownership; optional for Crew |
+| `3210` | Canonical Crew control, runtime, providers, models, and jobs |
 
 In **Settings → DSH Crew**, refresh Harness Models and order the Worker and
 Reviewer model lists. Then ask a host agent:
@@ -66,10 +81,11 @@ dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```
 
-The runtime is isolated under `~/.config/dsh-crew/harness` with `profile: dsh-crew`;
-the official `web` profile receives only the 3080 bridge.
+The runtime is isolated under `~/.config/dsh-crew/harness` with `profile: dsh-crew`.
+The official `web` profile is outside Crew ownership and read-only to Crew;
+an old 3080 bridge, if present, is only reported as a deprecated diagnostic.
 All production Worker/Reviewer model calls are executed by the isolated 3210
-Crew Harness; 3080 is a control-plane bridge only.
+Crew Harness.
 
 ## Legacy launcher migration
 

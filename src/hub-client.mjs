@@ -23,7 +23,7 @@ const EMPTY_STATUS = Object.freeze({
   code: HUB_COMPATIBILITY_CODES.UNREACHABLE,
 });
 
-let lastProbe = { at: 0, status: EMPTY_STATUS };
+let lastProbe = { at: 0, base: null, status: EMPTY_STATUS };
 
 function withReadiness(status) {
   return {
@@ -32,14 +32,15 @@ function withReadiness(status) {
   };
 }
 
-function cacheStatus(status) {
+function cacheStatus(status, base) {
   const observed = withReadiness(status);
-  lastProbe = { at: Date.now(), status: observed };
+  lastProbe = { at: Date.now(), base, status: observed };
   return observed;
 }
 
-async function fetchJson(path) {
-  const res = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(800) });
+async function fetchJson(path, base = BASE) {
+  const api = `${String(base).replace(/\/$/, '')}/_dsh/dsh-crew`;
+  const res = await fetch(`${api}${path}`, { signal: AbortSignal.timeout(800) });
   let body;
   try { body = await res.json(); } catch { body = null; }
   return { res, body };
@@ -53,10 +54,11 @@ async function fetchJson(path) {
  * lacks /runtime is therefore reachable-but-incompatible instead of looking
  * offline or being silently treated as current.
  */
-export async function hubStatus({ force = false } = {}) {
-  if (!force && Date.now() - lastProbe.at < 10_000) return lastProbe.status;
+export async function hubStatus({ force = false, base = BASE } = {}) {
+  const normalizedBase = String(base).replace(/\/$/, '');
+  if (!force && lastProbe.base === normalizedBase && Date.now() - lastProbe.at < 10_000) return lastProbe.status;
   try {
-    const ping = await fetchJson('/ping');
+    const ping = await fetchJson('/ping', normalizedBase);
     if (!ping.res.ok) {
       return cacheStatus({
         ...EMPTY_STATUS,
@@ -64,13 +66,13 @@ export async function hubStatus({ force = false } = {}) {
         code: HUB_COMPATIBILITY_CODES.HTTP_ERROR,
         http_status: ping.res.status,
         endpoint: 'ping',
-      });
+      }, normalizedBase);
     }
     if (ping.body?.service !== 'dsh-crew-hub') {
-      return cacheStatus(evaluateHubHandshake(ping.body));
+      return cacheStatus(evaluateHubHandshake(ping.body), normalizedBase);
     }
 
-    const runtime = await fetchJson('/runtime');
+    const runtime = await fetchJson('/runtime', normalizedBase);
     if (runtime.res.status === 404) {
       return cacheStatus({
         ...EMPTY_STATUS,
@@ -78,7 +80,7 @@ export async function hubStatus({ force = false } = {}) {
         service: 'dsh-crew-hub',
         code: HUB_COMPATIBILITY_CODES.PROTOCOL_MISSING,
         endpoint: 'runtime',
-      });
+      }, normalizedBase);
     }
     if (!runtime.res.ok) {
       return cacheStatus({
@@ -88,11 +90,11 @@ export async function hubStatus({ force = false } = {}) {
         code: HUB_COMPATIBILITY_CODES.HTTP_ERROR,
         http_status: runtime.res.status,
         endpoint: 'runtime',
-      });
+      }, normalizedBase);
     }
-    return cacheStatus(evaluateHubHandshake(runtime.body, { strictProduction: true }));
+    return cacheStatus(evaluateHubHandshake(runtime.body, { strictProduction: true }), normalizedBase);
   } catch {
-    return cacheStatus(EMPTY_STATUS);
+    return cacheStatus(EMPTY_STATUS, normalizedBase);
   }
 }
 

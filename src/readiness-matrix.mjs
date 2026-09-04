@@ -31,6 +31,8 @@ const TARGET_ROWS = Object.freeze([
   ['macos_smoke', 'ci'],
   ['hub_compatibility', 'live-runtime'],
   ['provider_catalog', 'live-runtime'],
+  ['provider_health', 'live-runtime'],
+  ['reviewer_health', 'live-runtime'],
   ['model_execution', 'real-execution'],
   ['worker_primary_callable', 'real-execution'],
   ['worker_escalation_callable', 'real-execution'],
@@ -70,6 +72,9 @@ function normalizeEvidence(row, evidence) {
     evidence_source: source,
     ...(typeof evidence.evidence_ref === 'string' && evidence.evidence_ref.trim()
       ? { evidence_ref: evidence.evidence_ref.trim() }
+      : {}),
+    ...(typeof evidence.detail_code === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/u.test(evidence.detail_code)
+      ? { detail_code: evidence.detail_code }
       : {}),
   };
 }

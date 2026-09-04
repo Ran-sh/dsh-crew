@@ -9,7 +9,6 @@
   "plugins": [
     {
       "name": "dsh-crew",
-      "version": "0.1.0",
       "source": ".",
       "description": "Dispatch subtasks to DeepSeek Harness (DSH) agents as native subagents with live progress"
     }

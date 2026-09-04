@@ -170,24 +170,30 @@ export function readRestartResult(appRoot, requestId) {
   return null;
 }
 
-/**
- * Read the supervisor heartbeat. Returns null when the supervisor is not
- * actively heartbeating (absent, stale beyond tolerance, or malformed).
- */
-export function readSupervisorHeartbeat(appRoot, { now = Date.now(), staleAfterMs = 15_000 } = {}) {
+/** Observe a fresh heartbeat without granting it restart authority. */
+export function readSupervisorHeartbeatRecord(appRoot, { now = Date.now(), staleAfterMs = 15_000 } = {}) {
   try {
     const parsed = JSON.parse(readFileSync(heartbeatFile(appRoot), 'utf8'));
     if (parsed?.schema_version !== 1 || !Number.isInteger(parsed.pid) || parsed.pid < 1) return null;
-    if (typeof parsed.last_seen !== 'number' || now - parsed.last_seen > staleAfterMs) return null;
-    return parsed;
+    if (typeof parsed.last_seen !== 'number' || now - parsed.last_seen > staleAfterMs || parsed.last_seen - now > 5_000) return null;
+    const hasOwnershipField = Object.hasOwn(parsed, 'ownership_ready');
+    const state = !hasOwnershipField ? 'legacy-v1' : parsed.ownership_ready === true ? 'ready' : 'starting';
+    return { state, record: { ...parsed, ownership_source: state } };
   } catch { return null; }
 }
 
-export function writeSupervisorHeartbeat({ appRoot, pid, now = Date.now() }) {
+/** Return only an ownership-proven supervisor heartbeat. */
+export function readSupervisorHeartbeat(appRoot, options = {}) {
+  const observed = readSupervisorHeartbeatRecord(appRoot, options);
+  return observed?.state === 'ready' ? observed.record : null;
+}
+
+export function writeSupervisorHeartbeat({ appRoot, pid, now = Date.now(), ownershipReady = true }) {
   const record = {
     schema_version: 1,
     supervisor_instance_id: randomUUID(),
     pid,
+    ownership_ready: ownershipReady === true,
     last_seen: now,
     protocol_version: 1,
   };

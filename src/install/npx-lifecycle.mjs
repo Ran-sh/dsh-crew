@@ -2576,15 +2576,17 @@ export function npxStatus({
     } catch { dshPlugin = 'unknown'; }
   }
 
+  const managedRoot = pointer?.path ?? runningPackageRoot();
   const st = installer.installStatus
-    ? installer.installStatus({ home, root: pointer?.path ?? runningPackageRoot() })
-    : realInstaller.installStatus({ home, root: pointer?.path ?? runningPackageRoot() });
-  const codex = st?.codex?.installed ? 'installed' : 'not installed';
-  const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
-  const claude = st?.claude?.installed ? 'installed' : 'not installed';
+    ? installer.installStatus({ home, root: managedRoot })
+    : realInstaller.installStatus({ home, root: managedRoot });
+  const integrationLabel = (entry) => !entry?.installed ? 'not installed' : entry.ready === true ? 'installed' : 'needs repair';
+  const codex = integrationLabel(st?.codex);
+  const zcode = integrationLabel(st?.zcode);
+  const claude = integrationLabel(st?.claude);
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
   const officialWeb = !official.legacy_present ? 'not present (native 3210 control plane)' : official.healthy ? 'legacy full bridge present (deprecated; manual cleanup available)' : 'legacy full bridge record present but unhealthy (deprecated)';
-  const startupState = installer.windowsStartupStatus?.({ home });
+  const startupState = installer.windowsStartupStatus?.({ home, root: managedRoot });
   const windowsStartup = !startupState?.supported ? 'not supported'
     : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
 

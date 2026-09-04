@@ -36,6 +36,8 @@ rows remain `NOT_RUN` until a trusted higher layer supplies explicit evidence.
 - `macos_smoke`
 - `hub_compatibility`
 - `provider_catalog`
+- `provider_health`
+- `reviewer_health`
 - `model_execution`
 - `deepseek_flash`
 - `deepseek_pro`
@@ -43,6 +45,12 @@ rows remain `NOT_RUN` until a trusted higher layer supplies explicit evidence.
 - `reviewer_pipeline`
 - `cancellation_timeout_escalation`
 - `standalone_official`
+
+`provider_health` and `reviewer_health` describe only the currently resolved
+Worker and Reviewer routes. A fresh negative observation overrides historical
+success; unrelated providers and stale observations do not. Historical jobs
+count only when their provider/model matches the corresponding current route,
+with escalation evidence matched against the current escalation route.
 
 ## Provider/catalog rule
 

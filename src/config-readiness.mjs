@@ -21,8 +21,23 @@ function verifiedHubJob(job) {
     && context.runtime_id.trim().length > 0;
 }
 
-function structurallyConsistentProviderInventory(body) {
+function hasBlockingProviderRecovery(body, currentSelections) {
+  if (!Object.hasOwn(body, 'recovery_transactions')) return false;
+  if (!Array.isArray(body.recovery_transactions)) return true;
+  const selectedProviders = new Set(Object.values(currentSelections ?? {})
+    .filter((selection) => selection?.ok === true && typeof selection.provider === 'string')
+    .map((selection) => selection.provider));
+  return body.recovery_transactions.some((transaction) => transaction?.unresolved === true
+    || typeof transaction?.provider_id !== 'string'
+    || selectedProviders.has(transaction.provider_id));
+}
+
+function structurallyConsistentProviderInventory(body, currentSelections) {
   if (!body || typeof body !== 'object' || body.ok === false || !Array.isArray(body.records)) return false;
+  if ('lifecycle_evidence' in body && body.lifecycle_evidence?.ok !== true) return false;
+  if ('declaration_evidence' in body && body.declaration_evidence?.ok !== true) return false;
+  if ('default_evidence' in body && body.default_evidence?.ok !== true) return false;
+  if (hasBlockingProviderRecovery(body, currentSelections)) return false;
   return body.records.every((record) => {
     if (!record || typeof record.id !== 'string' || record.id.trim() === '') return false;
     if (!['present', 'absent'].includes(record.desired_state)) return false;
@@ -35,16 +50,69 @@ function structurallyConsistentProviderInventory(body) {
   });
 }
 
-export function buildHubExecutionRows(hubJobs = []) {
+function matchesCurrentRoute(job, currentSelections, role) {
+  if (!currentSelections) return true;
+  const selectionKey = role === 'worker'
+    && Number(job?.attempt ?? job?.selection_trace?.logical_attempt ?? 0) > 0
+    && Object.hasOwn(currentSelections, 'worker_escalation')
+    ? 'worker_escalation'
+    : role;
+  if (!Object.hasOwn(currentSelections, selectionKey)) return true;
+  const selected = currentSelections[selectionKey];
+  return selected?.ok === true
+    && job?.provider === selected.provider
+    && job?.model === selected.model;
+}
+
+function safeDetailCode(value, fallback) {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/u.test(value) ? value : fallback;
+}
+
+function currentRouteHealthEvidence({ role, currentSelections, providerHealthChecked, providerHealthBody } = {}) {
+  if (!currentSelections || !Object.hasOwn(currentSelections, role)) return null;
+  const selected = currentSelections[role];
+  if (selected?.ok === false) {
+    return {
+      status: 'FAIL',
+      reason_code: 'PROVIDER_ROUTE_UNCALLABLE',
+      evidence_source: 'model-routing',
+      detail_code: safeDetailCode(selected.code, 'MODEL_ROUTE_UNAVAILABLE'),
+    };
+  }
+  if (!selected?.provider || !selected?.model || providerHealthChecked !== true) return null;
+  if (providerHealthBody?.ok === false) {
+    return { status: 'FAIL', reason_code: 'PROVIDER_HEALTH_UNAVAILABLE', evidence_source: 'provider-health' };
+  }
+  const health = Array.isArray(providerHealthBody?.health) ? providerHealthBody.health : [];
+  const observation = health.find((entry) => entry?.provider === selected.provider
+    && entry?.model === selected.model
+    && entry?.fresh === true);
+  if (!observation || observation.state === 'unprobed') return null;
+  if (observation.state === 'callable') {
+    return { status: 'PASS', reason_code: 'PROVIDER_ROUTE_CALLABLE', evidence_source: 'provider-health' };
+  }
+  const stateCode = String(observation.state ?? '').toUpperCase().replaceAll('-', '_');
+  return {
+    status: 'FAIL',
+    reason_code: 'PROVIDER_ROUTE_UNCALLABLE',
+    evidence_source: 'provider-health',
+    detail_code: safeDetailCode(observation.reason_code, safeDetailCode(stateCode, 'PROVIDER_UNCALLABLE')),
+  };
+}
+
+export function buildHubExecutionRows(hubJobs = [], { currentSelections = null } = {}) {
   const jobs = Array.isArray(hubJobs) ? hubJobs : [];
-  const workerPassed = jobs.some((job) => job?.role === 'worker' && verifiedHubJob(job));
+  const workerPassed = jobs.some((job) => job?.role === 'worker' && matchesCurrentRoute(job, currentSelections, 'worker') && verifiedHubJob(job));
   const workerPrimaryPassed = jobs.some((job) => job?.role === 'worker'
+    && matchesCurrentRoute(job, currentSelections, 'worker')
     && verifiedHubJob(job)
     && Number(job?.attempt ?? job?.selection_trace?.logical_attempt ?? 0) === 0);
   const workerEscalationPassed = jobs.some((job) => job?.role === 'worker'
+    && matchesCurrentRoute(job, currentSelections, 'worker')
     && verifiedHubJob(job)
     && (Number(job?.attempt ?? job?.selection_trace?.logical_attempt ?? 0) > 0));
   const reviewerPassed = jobs.some((job) => job?.role === 'reviewer'
+    && matchesCurrentRoute(job, currentSelections, 'reviewer')
     && verifiedHubJob(job)
     && job?.review_verdict === 'approve');
   return [
@@ -84,6 +152,7 @@ export function buildConfigReadinessMatrix({
   providerHealthBody = null,
   hubJobsChecked = false,
   hubJobsBody = null,
+  currentSelections = null,
 } = {}) {
   const warnings = warningCodes(providerCatalogBody);
   const catalogResponseOk = !!providerCatalogBody
@@ -98,7 +167,7 @@ export function buildConfigReadinessMatrix({
     && Array.isArray(hubJobsBody?.jobs)
     ? hubJobsBody.jobs
     : [];
-  for (const row of buildHubExecutionRows(hubJobs)) {
+  for (const row of buildHubExecutionRows(hubJobs, { currentSelections })) {
     if (row.status === 'PASS') {
       evidence[row.id] = {
         status: row.status,
@@ -122,7 +191,7 @@ export function buildConfigReadinessMatrix({
   }
 
   if (providerInventoryChecked) {
-    evidence.provider_lifecycle_consistent = structurallyConsistentProviderInventory(providerInventoryBody)
+    evidence.provider_lifecycle_consistent = structurallyConsistentProviderInventory(providerInventoryBody, currentSelections)
       ? { status: 'PASS', reason_code: READINESS_REASON_CODES.PROVIDER_LIFECYCLE_CONSISTENT, evidence_source: 'provider-inventory' }
       : {
           status: 'FAIL',
@@ -133,12 +202,9 @@ export function buildConfigReadinessMatrix({
         };
   }
 
-  if (providerHealthChecked && providerHealthBody?.ok === false) {
-    evidence.provider_health = {
-      status: 'FAIL',
-      reason_code: 'PROVIDER_HEALTH_UNAVAILABLE',
-      evidence_source: 'provider-health',
-    };
+  for (const [role, rowId] of [['worker', 'provider_health'], ['reviewer', 'reviewer_health']]) {
+    const healthEvidence = currentRouteHealthEvidence({ role, currentSelections, providerHealthChecked, providerHealthBody });
+    if (healthEvidence) evidence[rowId] = healthEvidence;
   }
 
   const matrix = buildReadinessMatrix({
