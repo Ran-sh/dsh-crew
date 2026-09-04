@@ -159,7 +159,8 @@ function splitFlowItems(source) {
   return items;
 }
 
-function parseFlowObject(source) {
+function parseFlowObject(source, depth = 0) {
+  if (depth > 8) return null;
   const input = source.trim().replace(/,\s*$/u, '');
   if (!input.startsWith('{') || !input.endsWith('}')) return null;
   const items = splitFlowItems(input.slice(1, -1));
@@ -178,13 +179,38 @@ function parseFlowObject(source) {
       } else if (char === '"' || char === "'") quote = char;
       else if (char === ':') { splitAt = index; break; }
     }
-    if (splitAt < 1) return null;
+    if (splitAt < 1 || hasUnseparatedFlowMapping(item, splitAt)) return null;
     const key = item.slice(0, splitAt).trim();
     const value = item.slice(splitAt + 1).trim();
     if (!/^[A-Za-z][A-Za-z0-9_-]*$/u.test(key) || !value || fields.has(key)) return null;
+    if (value.startsWith('{') && (!value.endsWith('}') || parseFlowObject(value, depth + 1) === null)) return null;
     fields.set(key, value);
   }
   return fields;
+}
+
+function hasUnseparatedFlowMapping(item, firstColon) {
+  let braces = 0;
+  let brackets = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = firstColon + 1; index < item.length; index += 1) {
+    const char = item[index];
+    if (quote) {
+      if (quote === '"' && escaped) { escaped = false; continue; }
+      if (quote === '"' && char === '\\') { escaped = true; continue; }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '{') braces += 1;
+    else if (char === '}') braces -= 1;
+    else if (char === '[') brackets += 1;
+    else if (char === ']') brackets -= 1;
+    else if (char === ':' && braces === 0 && brackets === 0 && /\s/u.test(item[index + 1] ?? '')) return true;
+    if (braces < 0 || brackets < 0) return true;
+  }
+  return quote !== null || braces !== 0 || brackets !== 0;
 }
 
 function validFlowEntryStructure(lines, entry) {

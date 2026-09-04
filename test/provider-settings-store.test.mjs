@@ -320,13 +320,13 @@ test('missing flow separators fail closed across inspection and mutation entry p
       '              { id: muse-spark-1.3-contributor, name: Muse Spark 1.3 }\n              { id: muse-spark-1.2-contributor, name: Muse Spark 1.2 }',
     ),
   ];
-  for (const source of malformed) {
-    assert.equal(inspectProviderSettings(source).ok, false);
-    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false);
-    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false);
+  for (const [index, source] of malformed.entries()) {
+    assert.equal(inspectProviderSettings(source).ok, false, `case ${index} inspect`);
+    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false, `case ${index} materialization`);
+    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false, `case ${index} remove`);
     assert.equal(addProviderSettings(source, {
       provider: { id: 'new-provider', display_name: 'New Provider', models: [{ id: 'new-model' }] },
-    }).ok, false);
+    }).ok, false, `case ${index} add`);
   }
 });
 
@@ -341,12 +341,12 @@ test('missing inline flow-object separators fail closed across every entry point
       '{ id: muse-spark-1.3-contributor, name: Muse Spark 1.3, reasoningEfforts: { off: null high: reasoning_effort_high } }',
     ),
   ];
-  for (const source of malformed) {
-    assert.equal(inspectProviderSettings(source).ok, false);
-    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false);
-    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false);
+  for (const [index, source] of malformed.entries()) {
+    assert.equal(inspectProviderSettings(source).ok, false, `inline case ${index} inspect`);
+    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false, `inline case ${index} materialization`);
+    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false, `inline case ${index} remove`);
     assert.equal(addProviderSettings(source, {
       provider: { id: 'new-provider', display_name: 'New Provider', models: [{ id: 'new-model' }] },
-    }).ok, false);
+    }).ok, false, `inline case ${index} add`);
   }
 });
