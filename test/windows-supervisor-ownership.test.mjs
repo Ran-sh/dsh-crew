@@ -33,6 +33,28 @@ function processTree({ rootTicks, listenerTicks }) {
   return JSON.parse(result.stdout.trim());
 }
 
+function supervisedServices() {
+  const quoted = helper.replaceAll("'", "''");
+  const command = [
+    `. '${quoted}'`,
+    '$summary = @($services | ForEach-Object { [pscustomobject]@{ Profile = $_.Profile; Port = $_.Port; CrewOwned = $_.CrewOwned } })',
+    'ConvertTo-Json -InputObject $summary -Compress',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const parsed = JSON.parse(result.stdout.trim());
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+maybe('launcher supervisor owns only the isolated 3210 service', () => {
+  assert.deepEqual(supervisedServices(), [{ Profile: 'dsh-crew', Port: 3210, CrewOwned: true }]);
+});
+
 maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
   assert.deepEqual(processTree({ rootTicks: 999, listenerTicks: 200 }), [20, 30]);
 });

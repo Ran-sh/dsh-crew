@@ -141,3 +141,29 @@ test('translated READMEs do not advertise the upstream npm package as this fork'
     assert.match(doc, new RegExp(start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), file);
   }
 });
+
+test('primary docs do not instruct disabled integrate-detach and identify 3210 as canonical control surface', () => {
+  for (const file of ['README.md', 'README.zh.md', 'docs/installation.md']) {
+    const doc = read(file);
+    assert.doesNotMatch(doc, /dsh-crew\s+integrate\b/, file);
+    assert.doesNotMatch(doc, /dsh-crew\s+detach\b/, file);
+    assert.doesNotMatch(doc, /starts\s+and\s+owns/i, file);
+    assert.doesNotMatch(doc, /bridge\s+then\s+starts/i, file);
+    assert.doesNotMatch(doc, /official bridge starts/i, file);
+    assert.doesNotMatch(doc, /桥接启动|启动并监管/, file);
+    assert.match(doc, /3210[\s\S]{0,300}canonical|canonical[\s\S]{0,300}3210/i, file);
+    assert.match(doc, /canonical[\s\S]{0,300}(control|runtime)|(control|runtime)[\s\S]{0,300}canonical/i, file);
+  }
+});
+
+test('Windows launcher opens and supervises the Crew-owned 3210 surface without requiring official 3080', () => {
+  const launcher = read('windows/start-dsh-crew.cmd');
+  const helper = read('windows/start-dsh-crew.ps1');
+
+  assert.match(launcher, /--open\s+Start the Crew-owned 3210/i);
+  assert.doesNotMatch(launcher, /supervised 3210 backend|monitoring 3080 and 3210/i);
+  assert.match(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3210\/'/);
+  assert.doesNotMatch(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3080\/'/);
+  assert.doesNotMatch(helper, /profiles\\web\\package\.json/);
+  assert.doesNotMatch(helper, /Name = 'Official UI'[\s\S]{0,200}Port = 3080/);
+});

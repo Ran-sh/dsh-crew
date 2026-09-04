@@ -329,3 +329,16 @@ test('direct Reviewer completion carries its normalized verdict in canonical evi
   });
   assert.equal(events.find((event) => event.type === 'review.completed').data.verdict, 'approve');
 });
+
+test('Hub extension readiness observes authoritative provider inventory with bounded lifecycle verdict', () => {
+  const marker = 'path: `${ROUTE_BASE}/extension`';
+  const start = hubSource.indexOf(marker);
+  assert.ok(start >= 0, 'extension route must exist');
+  const end = hubSource.indexOf('disposers.push', start + marker.length);
+  const block = hubSource.slice(start, end === -1 ? undefined : end);
+  assert.match(block, /readProviderInventorySnapshot/, 'extension readiness must read the authoritative provider inventory');
+  assert.match(block, /buildConfigReadinessMatrix/, 'extension readiness must reuse the canonical readiness builder');
+  assert.match(block, /providerInventoryChecked:\s*true/, 'extension readiness must mark inventory evidence as checked');
+  assert.match(block, /providerInventoryBody/, 'extension readiness must pass bounded inventory evidence to the builder');
+  assert.doesNotMatch(block, /const readinessMatrix = \{ rows:/, 'extension must not maintain a second reduced matrix implementation');
+});
