@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
+import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, projectCatalogHealth, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,10 +86,8 @@ test('Hub advertises the extension, profile, context, evidence and event surface
   assert.match(hubSource, /parts\.length === 2 && parts\[1\] === 'events'/);
   assert.match(hubSource, /saveRoleProfiles\(await readBody\(req\)\)/);
   assert.match(hubSource, /saveWorkspaceContexts\(await readBody\(req\)\)/);
-  assert.match(hubSource, /buildHubExecutionRows\(liveJobs\)/);
-  assert.doesNotMatch(hubSource, /const \[modelExecution, reviewerExecution\] = buildHubExecutionRows\(liveJobs\)/);
-  assert.match(hubSource, /const executionRows = buildHubExecutionRows\(liveJobs\)/);
-  assert.match(hubSource, /\.\.\.executionRows/);
+  assert.match(hubSource, /buildConfigReadinessMatrix\(/);
+  assert.doesNotMatch(hubSource, /buildHubExecutionRows\(liveJobs\)/);
   assert.match(hubSource, /buildRuntimeReadinessSnapshot/);
   assert.match(hubSource, /ingress/);
 });
@@ -341,4 +339,18 @@ test('Hub extension readiness observes authoritative provider inventory with bou
   assert.match(block, /providerInventoryChecked:\s*true/, 'extension readiness must mark inventory evidence as checked');
   assert.match(block, /providerInventoryBody/, 'extension readiness must pass bounded inventory evidence to the builder');
   assert.doesNotMatch(block, /const readinessMatrix = \{ rows:/, 'extension must not maintain a second reduced matrix implementation');
+});
+
+test('bounded catalog health projection never truncates a warning behind informational hints', () => {
+  const projected = projectCatalogHealth({
+    hints: [
+      ...Array.from({ length: 32 }, (_, index) => ({ code: `INFO_${index}`, level: 'info', raw: 'secret' })),
+      { code: 'HARNESS_DEFAULT_PROVIDER_MISSING', level: 'warning', raw: 'secret' },
+    ],
+  });
+
+  assert.equal(projected.hints.length, 32);
+  assert.equal(projected.hints[0].code, 'HARNESS_DEFAULT_PROVIDER_MISSING');
+  assert.equal(projected.hints[0].level, 'warning');
+  assert.doesNotMatch(JSON.stringify(projected), /secret/);
 });
