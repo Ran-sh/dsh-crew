@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -154,6 +154,22 @@ test('primary docs do not instruct disabled integrate-detach and identify 3210 a
     assert.match(doc, /3210[\s\S]{0,300}canonical|canonical[\s\S]{0,300}3210/i, file);
     assert.match(doc, /canonical[\s\S]{0,300}(control|runtime)|(control|runtime)[\s\S]{0,300}canonical/i, file);
   }
+});
+
+test('Claude plugin metadata has one version authority and no project-scoped MCP duplicate', () => {
+  const manifest = JSON.parse(read('package.json'));
+  const plugin = JSON.parse(read('.claude-plugin/plugin.json'));
+  const marketplace = JSON.parse(read('.claude-plugin/marketplace.json'));
+  const entry = marketplace.plugins.find((candidate) => candidate.name === 'dsh-crew');
+
+  assert.equal(plugin.version, manifest.version);
+  assert.equal('version' in entry, false);
+  assert.deepEqual(plugin.mcpServers?.['dsh-crew'], {
+    command: 'node',
+    args: ['${CLAUDE_PLUGIN_ROOT}/src/server.mjs'],
+  });
+  assert.equal(existsSync(join(ROOT, '.mcp.json')), false);
+  assert.equal(manifest.files.includes('.mcp.json'), false);
 });
 
 test('primary install docs state the managed supervisor platform boundary', () => {
