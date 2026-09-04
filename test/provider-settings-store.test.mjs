@@ -216,6 +216,37 @@ test('adding a provider to a flow map preserves flow syntax and remains readable
   assert.equal(readProviderSettingsMaterialization(added.text, { providerId: 'new-provider' }).ok, true);
 });
 
+test('flow provider writer never turns an unsafe model id into a literal null model', () => {
+  const added = addProviderSettings(FLOW_SETTINGS, {
+    provider: {
+      id: 'safe-provider', display_name: 'Safe Provider',
+      models: [{ id: 'unsafe\nmodel' }, { id: 'safe-model' }],
+    },
+  });
+  assert.equal(added.ok, true);
+  const materialized = readProviderSettingsMaterialization(added.text, { providerId: 'safe-provider' });
+  assert.equal(materialized.ok, true);
+  assert.deepEqual(materialized.provider.models, [{ id: 'safe-model' }]);
+  assert.doesNotMatch(added.text, /id:\s+null/u);
+});
+
+test('flow materialization bounds provider scalars and model projections', () => {
+  const modelLines = Array.from({ length: 300 }, (_, index) => `              { id: model-${index}, name: Model ${index} }${index < 299 ? ',' : ''}`).join('\n');
+  const oversized = FLOW_SETTINGS
+    .replace('displayName: opencode-go-muse,', `displayName: ${'x'.repeat(300)},`)
+    .replace('https://opencode.ai/zen/go/v1,', `https://example.test/${'y'.repeat(2050)},`)
+    .replace(
+      '              { id: muse-spark-1.3-contributor, name: Muse Spark 1.3 },\n              { id: muse-spark-1.2-contributor, name: Muse Spark 1.2 }',
+      modelLines,
+    );
+  const result = readProviderSettingsMaterialization(oversized, { providerId: 'opencode-go-muse' });
+  assert.equal(result.ok, true);
+  assert.equal(result.provider.display_name, 'opencode-go-muse');
+  assert.equal(result.provider.base_url, undefined);
+  assert.equal(result.provider.models.length, 256);
+  assert.equal(JSON.stringify(result).includes('y'.repeat(2050)), false);
+});
+
 test('flow credential scanning still rejects inline secrets without returning them', () => {
   const unsafe = FLOW_SETTINGS.replace('apiKeyEnv: OPENCODE1_API_KEY', 'apiKey: sk-live-do-not-return');
   const result = hasInlineProviderCredentials(unsafe, { providerIds: ['opencode1'] });
