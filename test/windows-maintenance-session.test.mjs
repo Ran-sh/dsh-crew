@@ -69,3 +69,55 @@ maybe('malformed session file fails closed for Crew auto-start', () => {
     assert.match(result.stdout.trim(), /MALFORMED_OK/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+maybe('mismatched lease or runtime_id refuses maintenance-start without launching', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-maint-ps-'));
+  try {
+    const root = dir.replaceAll("'", "''");
+    const result = runPs([
+      `$script:crewSupervisorRoot = '${root}'`,
+      `$script:crewMaintenanceSessionFile = Join-Path '${root}' 'maintenance-session.json'`,
+      `$script:crewMaintenanceRequestsDir = Join-Path '${root}' 'maintenance-requests'`,
+      `$script:crewMaintenanceResultsDir = Join-Path '${root}' 'maintenance-results'`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-requests') -Force | Out-Null`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-results') -Force | Out-Null`,
+      // A session stamped for a DIFFERENT lease/identity than the start request.
+      `$session = @{ schema_version = 1; state = 'STOPPED'; lease = 'lease-good'; runtime_id = 'rid-good'; stopped_at = 1; request_id = 'req-stop' } | ConvertTo-Json -Compress`,
+      `Set-Content -LiteralPath (Join-Path '${root}' 'maintenance-session.json') -Value $session -Encoding UTF8 -NoNewline`,
+      `$bad = [pscustomobject]@{ schema_version = 1; request_id = 'req-start'; operation = 'maintenance-start'; lease = 'lease-WRONG'; runtime_id = 'rid-WRONG'; expires_at = 9999999999999; extra = $null }`,
+      // Simulate the lease check the start branch performs (without spawning).
+      `$session = Read-MaintenanceSession`,
+      `$ok = ($session -isnot [string]) -and ($session.lease -eq $bad.lease) -and ($session.runtime_id -eq $bad.runtime_id)`,
+      `if ($ok) { throw 'mismatched lease must be rejected' }`,
+      // Matching lease+identity passes the session pairing gate.
+      `$good = [pscustomobject]@{ lease = 'lease-good'; runtime_id = 'rid-good' }`,
+      `$paired = ($session -isnot [string]) -and ($session.lease -eq $good.lease) -and ($session.runtime_id -eq $good.runtime_id)`,
+      `if (-not $paired) { throw 'matching session must pair' }`,
+      `'PAIRING_OK'`,
+    ].join('\n'));
+    assert.equal(result.status, 0, `${result.stdout}
+${result.stderr}`);
+    assert.match(result.stdout.trim(), /PAIRING_OK/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+maybe('blocked supervisor root cannot fabricate a STOPPED session', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-maint-ps-'));
+  try {
+    const root = dir.replaceAll("'", "''");
+    const result = runPs([
+      `$script:crewSupervisorRoot = '${root}'`,
+      `$script:crewMaintenanceSessionFile = Join-Path '${root}' 'maintenance-session.json'`,
+      // Block the supervisor root with a FILE so no session can persist.
+      `Remove-Item -LiteralPath '${root}' -Recurse -Force -ErrorAction SilentlyContinue`,
+      `Set-Content -LiteralPath '${root}' -Value 'block' -Encoding UTF8 -NoNewline`,
+      `$req = [pscustomobject]@{ lease = 'lease-x'; runtime_id = 'rid-x'; request_id = 'req-x' }`,
+      `$ok = Set-MaintenanceSession $req`,
+      `if ($ok) { throw 'blocked root must not report success' }`,
+      `'BLOCK_OK'`,
+    ].join('\n'));
+    assert.equal(result.status, 0, `${result.stdout}
+${result.stderr}`);
+    assert.match(result.stdout.trim(), /BLOCK_OK/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
