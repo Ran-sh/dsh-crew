@@ -102,12 +102,11 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
     peerDependencies: { '@ran-fake/host-peer': '^9.0.0' },
     devDependencies: { 'build-tool': '^1.0.0' },
     files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline', 'official-web-bridge',
-      '.claude-plugin', '.mcp.json', 'cordis.patch.yml', 'worker.cordis.yml',
+      '.claude-plugin', 'cordis.patch.yml', 'worker.cordis.yml',
       'README.md', 'README.*.md', 'LICENSE'],
   }, null, 2));
   writeFileSync(join(root, 'cordis.patch.yml'), '[]\n');
   writeFileSync(join(root, 'worker.cordis.yml'), '[]\n');
-  writeFileSync(join(root, '.mcp.json'), '{}\n');
   writeFileSync(join(root, 'src', 'server.mjs'), [
     "import '@ran-fake/sdk';",
     "import '@ran-fake/host-peer';",
@@ -125,6 +124,11 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   writeFileSync(join(root, 'bin', 'dsh-crew.mjs'), "import '../lib/client.js';\n");
   writeFileSync(join(root, 'codex', 'agents', 'ds-worker.toml'), '[agent]\n');
   writeFileSync(join(root, 'codex', 'prompts', 'dsh-config.md'), '# config\n');
+  writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+    name: 'dsh-crew',
+    version,
+    mcpServers: { 'dsh-crew': { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/src/server.mjs'] } },
+  }) + '\n');
   writeFileSync(join(root, '.claude-plugin', 'marketplace.json'), '{}\n');
   writeFileSync(join(root, 'official-web-bridge', 'entry.mjs'), 'export async function apply() {}\n');
   writeFileSync(join(root, 'official-web-bridge', 'cordis.patch.yml'), `- insert:\n    - id: bridge\n      name: '${OFFICIAL_BRIDGE_PACKAGE}'\n`);

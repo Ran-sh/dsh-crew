@@ -11,7 +11,7 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { MCP_TOOLS, installCodex, installStatus, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexLegacyPolicyDigest, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -43,8 +43,11 @@ function makeIntegrationRoot(home, name, marker = '') {
 function makeClaudePluginRoot(root, marker) {
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
   mkdirSync(join(root, 'src'), { recursive: true });
-  writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ marker }));
-  writeFileSync(join(root, '.mcp.json'), JSON.stringify({ marker }));
+  writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+    version: '1.0.0',
+    marker,
+    mcpServers: { 'dsh-crew': { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/src/server.mjs'] } },
+  }));
   writeFileSync(join(root, 'src', 'server.mjs'), `export const marker = ${JSON.stringify(marker)};\n`);
 }
 
@@ -134,7 +137,7 @@ test('Codex readiness requires Worker, Reviewer, and global MCP to use one serve
     const status = installStatus({ home }).codex;
     assert.equal(status.components.worker_role, true);
     assert.equal(status.components.reviewer_role, true);
-    assert.equal(status.components.mcp, true);
+    assert.equal(status.components.mcp, false);
     assert.equal(status.components.target_alignment, false);
     assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -197,8 +200,10 @@ test('Claude readiness validates marketplace, installed snapshot, and tool permi
     for (const root of [marketplace, snapshot]) {
       mkdirSync(join(root, '.claude-plugin'), { recursive: true });
       mkdirSync(join(root, 'src'), { recursive: true });
-      writeFileSync(join(root, '.claude-plugin', 'plugin.json'), '{}\n');
-      writeFileSync(join(root, '.mcp.json'), '{}\n');
+      writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+        version: '1.0.0',
+        mcpServers: { 'dsh-crew': { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/src/server.mjs'] } },
+      }) + '\n');
       writeFileSync(join(root, 'src', 'server.mjs'), 'export {};\n');
     }
     mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
@@ -210,7 +215,7 @@ test('Claude readiness validates marketplace, installed snapshot, and tool permi
       extraKnownMarketplaces: { 'dsh-crew': { source: { source: 'directory', path: marketplace } } },
       permissions: { allow: MCP_TOOLS.map((tool) => `mcp__plugin_dsh-crew_dsh-crew__${tool}`) },
     }));
-    const status = installStatus({ home }).claude;
+    const status = installStatus({ home, root: marketplace }).claude;
     assert.equal(status.installed, true);
     assert.equal(status.ready, true);
     assert.deepEqual(status.missing, []);
@@ -300,6 +305,20 @@ test('global capability policy preserves user-authored AGENTS instructions', () 
     assert.match(removed, /Keep this sentence/);
     assert.doesNotMatch(removed, /DSH CREW MANAGED POLICY/);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('known unmarked Codex policy is removed by exact hash while modified text is preserved', () => {
+  const legacy = '# Legacy DSH policy\nExact historical content.\n';
+  const block = '<!-- DSH CREW MANAGED POLICY:START -->\ncurrent\n<!-- DSH CREW MANAGED POLICY:END -->';
+  const digest = codexLegacyPolicyDigest(legacy);
+  const cleaned = stripKnownLegacyCodexPolicy(`${legacy}\n${block}\n`, { knownHashes: [digest] });
+  assert.equal(cleaned.trim(), block);
+
+  const modified = `${legacy.trimEnd()} modified\n`;
+  const preserved = stripKnownLegacyCodexPolicy(`${modified}\n${block}\n`, { knownHashes: [digest] });
+  assert.match(preserved, /modified/);
+  assert.match(preserved, /DSH CREW MANAGED POLICY:START/);
+  assert.ok(CODEX_LEGACY_POLICY_HASHES.includes('2d6f3839bb3df4bda90f481726281292b1a4b4585298b1cf9ec56215295b5c78'));
 });
 
 test('Case 2: existing other MCP servers in config.toml are preserved', async () => {

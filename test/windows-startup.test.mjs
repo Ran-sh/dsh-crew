@@ -27,7 +27,7 @@ test('Windows startup install is durable, idempotent, and reports readiness', ()
     const second = installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
-    assert.equal(windowsStartupStatus({ home: f.home, startupDir: f.startupDir, platform: 'win32' }).ready, true);
+    assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, true);
     assert.equal(existsSync(first.launcherFile), true);
     assert.equal(existsSync(first.helperFile), true);
     assert.equal(existsSync(first.startupFile), true);
@@ -42,11 +42,11 @@ test('Windows startup readiness fails closed when a managed launcher asset is mi
   try {
     const installed = installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
     rmSync(installed.helperFile, { force: true });
-    assert.equal(windowsStartupStatus({ home: f.home, startupDir: f.startupDir, platform: 'win32' }).ready, false);
+    assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, false);
 
     installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
     writeFileSync(installed.launcherFile, '');
-    assert.equal(windowsStartupStatus({ home: f.home, startupDir: f.startupDir, platform: 'win32' }).ready, false);
+    assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, false);
   } finally { f.cleanup(); }
 });
 
