@@ -399,26 +399,42 @@ test('concurrent reclaim contenders yield exactly one owner', async () => {
     const { spawn } = await import('node:child_process');
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
     const gate = join(t.dir, 'go.signal');
-    const worker = `import { acquireUpdateLock } from ${JSON.stringify(new URL('../src/install/npx-lifecycle.mjs', import.meta.url).href)}; import fs from 'node:fs'; while (!fs.existsSync(${JSON.stringify(gate)})) { await new Promise((r) => setTimeout(r, 5)); } const r = acquireUpdateLock({ home: ${JSON.stringify(t.dir)} }); console.log(JSON.stringify({ ok: r.ok, nonce: r.nonce ?? null }));`;
-    const runAsync = () => new Promise((resolve) => {
+    const releaseGate = join(t.dir, 'release.signal');
+    const worker = `import { acquireUpdateLock } from ${JSON.stringify(new URL('../src/install/npx-lifecycle.mjs', import.meta.url).href)}; import fs from 'node:fs'; while (!fs.existsSync(${JSON.stringify(gate)})) { await new Promise((r) => setTimeout(r, 5)); } const r = acquireUpdateLock({ home: ${JSON.stringify(t.dir)} }); console.log(JSON.stringify({ ok: r.ok, nonce: r.nonce ?? null })); if (r.ok) while (!fs.existsSync(${JSON.stringify(releaseGate)})) { await new Promise((wait) => setTimeout(wait, 5)); }`;
+    const runAsync = () => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', worker], { encoding: 'utf8' });
       let out = '';
-      child.stdout.on('data', (d) => { out += d; });
-      child.on('close', () => resolve(out));
-    });
+      let lineResolved = false;
+      let resolveLine;
+      const line = new Promise((resolve) => { resolveLine = resolve; });
+      const closed = new Promise((resolve) => {
+        child.stdout.on('data', (d) => {
+          out += d;
+          if (!lineResolved && out.includes('\n')) { lineResolved = true; resolveLine(out); }
+        });
+        child.on('close', () => {
+          if (!lineResolved) { lineResolved = true; resolveLine(out); }
+          resolve();
+        });
+      });
+      return { line, closed };
+    };
     let owners = 0;
     for (let round = 0; round < 5; round += 1) {
       try { rmSync(gate, { force: true }); } catch {}
+      try { rmSync(releaseGate, { force: true }); } catch {}
       writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: `dead-${round}` }) + '\n');
       const pending = [runAsync(), runAsync()];
       await new Promise((r) => setTimeout(r, 300));
       writeFileSync(gate, 'go');
-      const [a, b] = await Promise.all(pending);
+      const [a, b] = await Promise.all(pending.map((entry) => entry.line));
       const pa = JSON.parse((a || '').trim().split('\n').pop() || '{}');
       const pb = JSON.parse((b || '').trim().split('\n').pop() || '{}');
       const wins = [pa.ok === true, pb.ok === true].filter(Boolean).length;
       assert.ok(wins <= 1, `round ${round}: at most one owner, got ${JSON.stringify([pa, pb])}`);
       if (wins === 1) owners += 1;
+      writeFileSync(releaseGate, 'release');
+      await Promise.all(pending.map((entry) => entry.closed));
       try { releaseUpdateLock({ home: t.dir }); } catch {}
     }
     assert.ok(owners >= 1, 'at least one round must produce an owner');
