@@ -88,6 +88,33 @@ function untrackedListenerOwnership() {
   return JSON.parse(result.stdout.trim());
 }
 
+function heartbeatCompatibility() {
+  const quoted = helper.replaceAll("'", "''");
+  const command = [
+    `. '${quoted}'`,
+    '$root = Join-Path $env:TEMP ("dsh-heartbeat-test-" + [guid]::NewGuid().ToString("N"))',
+    'New-Item -ItemType Directory -Path $root -Force | Out-Null',
+    '$script:crewHeartbeatFile = Join-Path $root "heartbeat.json"',
+    '$now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
+    '$legacy = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress',
+    'Write-Utf8NoBom -Path $script:crewHeartbeatFile -Content $legacy',
+    '$legacyAccepted = $null -ne (Get-FreshSupervisorHeartbeat)',
+    '$blocked = @{ schema_version = 1; pid = $PID; ownership_ready = $false; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress',
+    'Write-Utf8NoBom -Path $script:crewHeartbeatFile -Content $blocked',
+    '$explicitFalseRejected = $null -eq (Get-FreshSupervisorHeartbeat)',
+    'Remove-Item -LiteralPath $root -Recurse -Force',
+    'ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ legacy = $legacyAccepted; explicit_false = $explicitFalseRejected })',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    timeout: 20_000,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout.trim());
+}
+
 maybe('launcher supervisor owns only the isolated 3210 service', () => {
   assert.deepEqual(supervisedServices(), [{ Profile: 'dsh-crew', Port: 3210, CrewOwned: true }]);
 });
@@ -104,6 +131,10 @@ maybe('interactive launch delegates to a hidden persistent watch process', () =>
 
 maybe('healthy but untracked 3210 listener is not claimed by a new supervisor', () => {
   assert.equal(untrackedListenerOwnership(), false);
+});
+
+maybe('heartbeat compatibility accepts missing legacy field but rejects explicit false', () => {
+  assert.deepEqual(heartbeatCompatibility(), { legacy: true, explicit_false: true });
 });
 
 maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
