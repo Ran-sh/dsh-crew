@@ -296,7 +296,7 @@ test('malformed flow collections fail closed without returning provider values',
     {
       source: FLOW_SETTINGS.replace('            ]\n        },', '        },'),
       operation: (source) => readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }),
-      code: 'PROVIDER_MODEL_SCHEMA_UNSUPPORTED',
+      code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED',
     },
     {
       source: FLOW_SETTINGS.replace('          api: openai-responses,', '          unknownField: retained-value,'),

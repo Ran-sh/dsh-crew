@@ -90,6 +90,9 @@ function parseProviderMap(source) {
     for (let entryIndex = 0; entryIndex < entries.length - 1; entryIndex += 1) {
       if (!/^ {8}\},\s*$/u.test(lines[entries[entryIndex].objectClose])) return { ok: false, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' };
     }
+    if (entries.some((entry) => !validFlowEntryStructure(lines, entry))) {
+      return { ok: false, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' };
+    }
     return {
       ok: true, style: 'flow', lines, llmStart, blockEnd, providersLine,
       providersBlockEnd: flowCloseLine + 1, flowOpenLine, flowCloseLine, entries,
@@ -182,6 +185,46 @@ function parseFlowObject(source) {
     fields.set(key, value);
   }
   return fields;
+}
+
+function validFlowEntryStructure(lines, entry) {
+  const fields = [];
+  let cursor = entry.objectOpen + 1;
+  while (cursor < entry.objectClose) {
+    cursor = nextContentLine(lines, cursor, entry.objectClose);
+    if (cursor < 0) break;
+    const line = lines[cursor];
+    if (indentOf(line) !== entry.fieldIndent) return false;
+    const field = line.match(/^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/u);
+    if (!field) return false;
+    let terminator = cursor;
+    if (!field[2]) {
+      const listOpen = nextContentLine(lines, cursor + 1, entry.objectClose);
+      if (listOpen < 0 || indentOf(lines[listOpen]) !== entry.fieldIndent + 2 || !/^\s*\[\s*$/u.test(lines[listOpen])) return false;
+      const items = [];
+      let listClose = -1;
+      for (let nested = listOpen + 1; nested < entry.objectClose; nested += 1) {
+        if (!nonBlank(lines[nested])) continue;
+        if (indentOf(lines[nested]) === entry.fieldIndent + 2 && /^\s*\]\s*,?\s*$/u.test(lines[nested])) {
+          listClose = nested;
+          break;
+        }
+        if (indentOf(lines[nested]) !== entry.fieldIndent + 4 || !parseFlowObject(lines[nested])) return false;
+        items.push(nested);
+      }
+      if (listClose < 0) return false;
+      for (let index = 0; index < items.length - 1; index += 1) if (!/,\s*$/u.test(lines[items[index]])) return false;
+      terminator = listClose;
+      cursor = listClose + 1;
+    } else {
+      cursor += 1;
+    }
+    fields.push({ terminator });
+  }
+  for (let index = 0; index < fields.length - 1; index += 1) {
+    if (!/,\s*$/u.test(lines[fields[index].terminator])) return false;
+  }
+  return true;
 }
 
 function parseFlowModel(source) {
