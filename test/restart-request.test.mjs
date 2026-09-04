@@ -91,6 +91,15 @@ test('supervisor heartbeat freshness gate', () => {
   } finally { t.cleanup(); }
 });
 
+test('supervisor heartbeat without proven process ownership is unavailable', () => {
+  const t = tempRoot();
+  try {
+    const now = 1_000_000;
+    writeSupervisorHeartbeat({ appRoot: t.dir, pid: 4242, now, ownershipReady: false });
+    assert.equal(readSupervisorHeartbeat(t.dir, { now: now + 1_000 }), null);
+  } finally { t.cleanup(); }
+});
+
 test('malformed heartbeat file is treated as no supervisor', () => {
   const t = tempRoot();
   try {

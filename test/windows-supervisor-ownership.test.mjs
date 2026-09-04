@@ -68,6 +68,26 @@ function supervisorLaunchArguments() {
   return JSON.parse(result.stdout.trim());
 }
 
+function untrackedListenerOwnership() {
+  const quoted = helper.replaceAll("'", "''");
+  const command = [
+    `. '${quoted}'`,
+    '$service = [pscustomobject]@{ Port = 3210; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null }',
+    "$port = [pscustomobject]@{ State = 'occupied'; Pid = 42; Error = $null }",
+    '$table = @([pscustomobject]@{ ProcessId = 42; ParentProcessId = 1; StartTicks = 100 })',
+    '$owned = Test-CrewServiceOwnership -Service $service -PortState $port -ProcessTable $table',
+    'ConvertTo-Json -InputObject $owned -Compress',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout.trim());
+}
+
 maybe('launcher supervisor owns only the isolated 3210 service', () => {
   assert.deepEqual(supervisedServices(), [{ Profile: 'dsh-crew', Port: 3210, CrewOwned: true }]);
 });
@@ -80,6 +100,10 @@ maybe('interactive launch delegates to a hidden persistent watch process', () =>
   assert.ok(args.includes('-Mode'));
   assert.equal(args.at(-1), 'watch');
   assert.ok(args.some((value) => value.includes('C:\\Program Files\\DSH Crew\\start-dsh-crew.ps1')));
+});
+
+maybe('healthy but untracked 3210 listener is not claimed by a new supervisor', () => {
+  assert.equal(untrackedListenerOwnership(), false);
 });
 
 maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
