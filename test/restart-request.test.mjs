@@ -79,7 +79,14 @@ test('supervisor heartbeat freshness gate', () => {
     const now = 1_000_000;
     // No heartbeat yet -> unavailable.
     assert.equal(readSupervisorHeartbeat(t.dir, { now }), null);
-    writeSupervisorHeartbeat({ appRoot: t.dir, pid: 4242, now });
+    writeSupervisorHeartbeat({
+      appRoot: t.dir,
+      pid: 4242,
+      now,
+      processStartedAtUtcTicks: 123,
+      helperHash: 'a'.repeat(64),
+      supervisorInstanceId: '11111111-1111-4111-8111-111111111111',
+    });
     const fresh = readSupervisorHeartbeat(t.dir, { now: now + 5_000 });
     assert.equal(fresh?.pid, 4242);
     assert.equal(fresh.schema_version, 1);
@@ -97,6 +104,18 @@ test('supervisor heartbeat without proven process ownership is unavailable', () 
   try {
     const now = 1_000_000;
     writeSupervisorHeartbeat({ appRoot: t.dir, pid: 4242, now, ownershipReady: false });
+    assert.equal(readSupervisorHeartbeat(t.dir, { now: now + 1_000 }), null);
+  } finally { t.cleanup(); }
+});
+
+test('ownership flag without watcher identity and helper hash is not authoritative', () => {
+  const t = tempRoot();
+  try {
+    const now = 1_000_000;
+    const hb = heartbeatFile(t.dir);
+    mkdirSync(hb.replace(/[^/\\]+$/, ''), { recursive: true });
+    writeFileSync(hb, JSON.stringify({ schema_version: 1, pid: 4242, ownership_ready: true, last_seen: now, protocol_version: 1 }));
+    assert.equal(readSupervisorHeartbeatRecord(t.dir, { now: now + 1_000 })?.state, 'starting');
     assert.equal(readSupervisorHeartbeat(t.dir, { now: now + 1_000 }), null);
   } finally { t.cleanup(); }
 });

@@ -18,7 +18,7 @@ function runPs(snippet) {
   return spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 20_000,
+    timeout: 60_000,
     windowsHide: true,
   });
 }
@@ -152,5 +152,35 @@ maybe('Invoke-CrewMaintenanceRequests rejects mismatched start without launching
     assert.equal(result.status, 0, `${result.stdout}
 ${result.stderr}`);
     assert.match(result.stdout.trim(), /HANDLER_REJECT_OK/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+maybe('maintenance-start verifies the requested Crew runtime version', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-maint-ps-'));
+  try {
+    const root = dir.replaceAll("'", "''");
+    const result = runPs([
+      `$script:crewSupervisorRoot = '${root}'`,
+      `$script:crewMaintenanceRequestsDir = Join-Path '${root}' 'maintenance-requests'`,
+      `$script:crewMaintenanceResultsDir = Join-Path '${root}' 'maintenance-results'`,
+      `$script:crewMaintenanceSessionFile = Join-Path '${root}' 'maintenance-session.json'`,
+      `$script:services = @([pscustomobject]@{ Name = 'test'; CrewOwned = $true; Port = 32199; Url = 'http://127.0.0.1:32199' })`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-requests') -Force | Out-Null`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-results') -Force | Out-Null`,
+      `$session = @{ schema_version = 1; state = 'STOPPED'; lease = 'lease-good'; runtime_id = 'rid-old'; stopped_at = 1; request_id = 'req-stop' } | ConvertTo-Json -Compress`,
+      `Set-Content -LiteralPath (Join-Path '${root}' 'maintenance-session.json') -Value $session -Encoding UTF8 -NoNewline`,
+      `$start = @{ schema_version = 1; request_id = 'req-start'; operation = 'maintenance-start'; lease = 'lease-good'; runtime_id = 'rid-old'; expires_at = 9999999999999; extra = @{ expected_crew_version = '2.0.0'; expected_dsh_version = '0.1.2-rc.1' } } | ConvertTo-Json -Depth 4 -Compress`,
+      `Set-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-requests') 'req-start.json') -Value $start -Encoding UTF8 -NoNewline`,
+      `function Get-PortState { [pscustomobject]@{ State = 'free'; Pid = $null; Error = $null } }`,
+      `function Start-CrewService { }`,
+      `function Wait-CrewServices { }`,
+      `function Invoke-RestMethod { [pscustomobject]@{ ok = $true; extension = [pscustomobject]@{ runtime = [pscustomobject]@{ runtime_id = 'rid-new'; runtime_version = 'WRONG'; dsh_version = '0.1.2-rc.1' } } } }`,
+      `Invoke-CrewMaintenanceRequests`,
+      `$res = Get-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-results') 'req-start.json') -Raw | ConvertFrom-Json`,
+      `if ($res.state -ne 'VERIFY_FAILED') { throw ('expected VERIFY_FAILED, got ' + $res.state) }`,
+      `'CREW_VERSION_GATE_OK'`,
+    ].join('\n'));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout.trim(), /CREW_VERSION_GATE_OK/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

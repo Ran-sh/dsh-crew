@@ -94,18 +94,22 @@ function heartbeatCompatibility() {
     `. '${quoted}'`,
     '$root = Join-Path $env:TEMP ("dsh-heartbeat-test-" + [guid]::NewGuid().ToString("N"))',
     'New-Item -ItemType Directory -Path $root -Force | Out-Null',
-    '$script:crewHeartbeatFile = Join-Path $root "heartbeat.json"',
+    '$global:crewSupervisorRoot = $root',
+    '$global:crewHeartbeatFile = Join-Path $root "heartbeat.json"',
     '$now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
     '$legacy = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress',
-    'Write-Utf8NoBom -Path $script:crewHeartbeatFile -Content $legacy',
+    'Write-Utf8NoBom -Path $global:crewHeartbeatFile -Content $legacy',
     '$legacyRecord = Get-SupervisorHeartbeatRecord',
     '$legacyIdentified = $null -ne $legacyRecord -and $legacyRecord.State -eq "legacy-v1"',
     '$legacyRejectedAsAuthority = $null -eq (Get-FreshSupervisorHeartbeat)',
     '$blocked = @{ schema_version = 1; pid = $PID; ownership_ready = $false; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress',
-    'Write-Utf8NoBom -Path $script:crewHeartbeatFile -Content $blocked',
+    'Write-Utf8NoBom -Path $global:crewHeartbeatFile -Content $blocked',
     '$explicitFalseRejected = $null -eq (Get-FreshSupervisorHeartbeat)',
+    'Write-SupervisorHeartbeat -OwnershipReady $true',
+    '$readyRecord = Get-SupervisorHeartbeatRecord',
+    '$readyAttested = $readyRecord.State -eq "ready" -and $readyRecord.Record.helper_hash -match "^[a-f0-9]{64}$" -and $readyRecord.Record.supervisor_instance_id -and $readyRecord.Record.process_started_at_utc_ticks',
     'Remove-Item -LiteralPath $root -Recurse -Force',
-    'ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ legacy_identified = $legacyIdentified; legacy_authority_rejected = $legacyRejectedAsAuthority; explicit_false = $explicitFalseRejected })',
+    'ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ legacy_identified = $legacyIdentified; legacy_authority_rejected = $legacyRejectedAsAuthority; explicit_false = $explicitFalseRejected; ready_attested = [bool] $readyAttested })',
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
@@ -136,7 +140,7 @@ maybe('healthy but untracked 3210 listener is not claimed by a new supervisor', 
 });
 
 maybe('heartbeat compatibility identifies legacy records without granting authority', () => {
-  assert.deepEqual(heartbeatCompatibility(), { legacy_identified: true, legacy_authority_rejected: true, explicit_false: true });
+  assert.deepEqual(heartbeatCompatibility(), { legacy_identified: true, legacy_authority_rejected: true, explicit_false: true, ready_attested: true });
 });
 
 maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {

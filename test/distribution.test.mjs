@@ -193,6 +193,13 @@ test('Windows launcher opens and supervises the Crew-owned 3210 surface without 
   assert.match(helper, /function Ensure-CrewSupervisorRunning/);
   assert.match(helper, /function Test-CrewServiceOwnership/);
   assert.match(helper, /ownership_ready/);
+  assert.match(helper, /helper_hash/);
+  assert.match(helper, /supervisor_instance_id/);
+  const loopStart = helper.indexOf('$updateHeld = $false');
+  const updateGate = helper.indexOf('if ($updateHeld)', loopStart);
+  const maintenanceDispatch = helper.indexOf('Invoke-CrewMaintenanceRequests', loopStart);
+  assert.ok(loopStart >= 0 && maintenanceDispatch > loopStart && updateGate > maintenanceDispatch,
+    'maintenance requests must be processed before the update-lock recovery gate');
   assert.match(helper, /Start-Process -FilePath 'powershell\.exe'[\s\S]{0,300}-WindowStyle Hidden/);
   const main = helper.slice(helper.indexOf("if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT"));
   assert.match(main, /if \(\$Mode -eq 'watch'\)[\s\S]{0,300}Start-ServiceSupervisor/);
