@@ -24,6 +24,18 @@ function nonBlank(line) {
 function parseProviderMap(source) {
   if (typeof source !== 'string') return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
   const lines = source.split(/\r?\n/);
+  if (source.trim() === '[]') {
+    return {
+      ok: true,
+      style: 'empty-profile',
+      lines,
+      llmStart: -1,
+      blockEnd: lines.length,
+      providersLine: -1,
+      providerIndent: 0,
+      entries: [],
+    };
+  }
   const llmStart = lines.findIndex((line) => /^-\s+id:\s*llm-pi-ai\s*$/.test(line));
   if (llmStart < 0) return { ok: false, code: 'PROVIDER_PROFILE_SCHEMA_UNSUPPORTED' };
 
