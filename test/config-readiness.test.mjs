@@ -310,6 +310,24 @@ test('reviewer health and execution evidence are bound to the current reviewer r
   assert.equal(row(matrix, 'reviewer_pipeline').status, 'NOT_RUN');
 });
 
+test('escalation evidence is bound to the current escalation route rather than the primary route', () => {
+  const matrix = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    currentSelections: {
+      worker: { ok: true, provider: 'primary', model: 'primary-model' },
+      worker_escalation: { ok: true, provider: 'escalation', model: 'escalation-model' },
+    },
+    hubJobsChecked: true,
+    hubJobsBody: { ok: true, jobs: [
+      { id: 'escalated', ...HUB_CONTEXT, role: 'worker', attempt: 1, provider: 'escalation', model: 'escalation-model', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true },
+    ] },
+  });
+  assert.equal(row(matrix, 'model_execution').status, 'PASS');
+  assert.equal(row(matrix, 'worker_primary_callable').status, 'NOT_RUN');
+  assert.equal(row(matrix, 'worker_escalation_callable').status, 'PASS');
+});
+
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {
   for (const options of [
     { hubJobsChecked: false, hubJobsBody: { ok: true, jobs: [{ role: 'worker', status: 'done' }] } },

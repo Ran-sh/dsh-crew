@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, projectCatalogHealth, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
+import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, projectCatalogHealth, projectCurrentProviderHealth, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -356,4 +356,25 @@ test('bounded catalog health projection never truncates a warning behind informa
   assert.equal(projected.hints[0].code, 'HARNESS_DEFAULT_PROVIDER_MISSING');
   assert.equal(projected.hints[0].level, 'warning');
   assert.doesNotMatch(JSON.stringify(projected), /secret/);
+});
+
+test('bounded health projection retains current routes ahead of unrelated records', () => {
+  const unrelated = Array.from({ length: 128 }, (_, index) => ({
+    provider: `other-${index}`, model: 'm', state: 'callable', fresh: true,
+  }));
+  const selected = {
+    provider: 'selected', model: 'model', state: 'quota-exhausted',
+    reason_code: 'QUOTA_EXHAUSTED', observed_at: 1, expires_at: 2, fresh: true,
+  };
+  const healthStore = {
+    list: () => [...unrelated, selected],
+    get: (provider, model) => provider === selected.provider && model === selected.model ? selected : null,
+  };
+  const projected = projectCurrentProviderHealth(healthStore, {
+    worker: { ok: true, provider: selected.provider, model: selected.model },
+  });
+
+  assert.equal(projected.length, 128);
+  assert.deepEqual(projected[0], selected);
+  assert.equal(projected.some((entry) => entry.provider === selected.provider && entry.model === selected.model), true);
 });
