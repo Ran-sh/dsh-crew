@@ -225,6 +225,46 @@ function Invoke-CrewRestartRequests {
 
 $crewMaintenanceRequestsDir = Join-Path $crewSupervisorRoot 'maintenance-requests'
 $crewMaintenanceResultsDir = Join-Path $crewSupervisorRoot 'maintenance-results'
+$crewMaintenanceSessionFile = Join-Path $crewSupervisorRoot 'maintenance-session.json'
+
+function Test-MaintenanceSessionActive {
+  # True when a STOPPED maintenance session holds the Crew 3210 launch
+  # right (the npx lifecycle is mid tree-swap). Ordinary supervision must
+  # skip the Crew backend while this is set.
+  try {
+    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return $false }
+    $session = Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
+    return ($session.schema_version -eq 1 -and $session.state -eq 'STOPPED' -and $session.lease -and $session.runtime_id)
+  } catch { return $false }
+}
+
+function Set-MaintenanceSession {
+  param([object] $Request)
+  try {
+    $session = @{
+      schema_version = 1
+      state = 'STOPPED'
+      lease = $Request.lease
+      runtime_id = $Request.runtime_id
+      stopped_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      request_id = $Request.request_id
+    } | ConvertTo-Json -Compress
+    $temp = Join-Path $crewSupervisorRoot ("maintenance-session.{0}.tmp" -f $PID)
+    Set-Content -LiteralPath $temp -Value $session -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $crewMaintenanceSessionFile -Force
+  } catch { /* best effort */ }
+}
+
+function Clear-MaintenanceSession {
+  Remove-Item -LiteralPath $crewMaintenanceSessionFile -Force -ErrorAction SilentlyContinue
+}
+
+function Read-MaintenanceSession {
+  try {
+    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return $null }
+    return Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
+  } catch { return $null }
+}
 
 function Write-MaintenanceResult {
   param([object] $Request, [string] $State, [object] $Detail = $null)
@@ -294,20 +334,39 @@ function Invoke-CrewMaintenanceRequests {
       }
       $stopped = Stop-OwnedListener -Service $crew -ListenerPid ([int] $port.Pid)
       if ($stopped) {
+        # The stopped window now belongs to the npx lifecycle: persist the
+        # STOPPED session (lease + proven runtime_id) so ordinary
+        # supervision will NOT auto-start 3210 until the matching start.
+        Set-MaintenanceSession $request
         Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
         Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
       } else {
         Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
       }
     } elseif ($request.operation -eq 'maintenance-start') {
-      # Pair with the matching STOPPED lease: the npx process must present
-      # the lease issued for THIS transaction.
+      # Pair with the matching STOPPED session: the start request must carry
+      # the SAME lease and runtime_id the stop proved. A missing session,
+      # mismatched lease/identity, or a still-listening port all fail closed
+      # WITHOUT starting anything. The session is consumed on VERIFIED so
+      # the lease is one-shot (no replay).
       $lease = $request.lease
       $expectedCrew = $null
       $expectedDsh = $null
       if ($request.extra) {
         $expectedCrew = $request.extra.expected_crew_version
         $expectedDsh = $request.extra.expected_dsh_version
+      }
+      $session = Read-MaintenanceSession
+      if (-not $session -or $session.state -ne 'STOPPED' -or $session.lease -ne $lease -or $session.runtime_id -ne $request.runtime_id) {
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-start {0} rejected: no matching STOPPED session (lease/identity mismatch).' -f $request.request_id) 'WARN'
+        continue
+      }
+      $livePort = Get-PortState $crew.Port
+      if ($livePort.State -eq 'occupied') {
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-start {0} rejected: port {1} still listens; the stopped window is not clean.' -f $request.request_id, $crew.Port) 'WARN'
+        continue
       }
       Start-CrewService $crew
       Wait-CrewServices
@@ -318,6 +377,7 @@ function Invoke-CrewMaintenanceRequests {
       } catch { $newRuntime = $null }
       $ok = $newRuntime -and $newRuntime.runtime_id -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
       if ($ok) {
+        Clear-MaintenanceSession
         Write-MaintenanceResult $request 'VERIFIED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id; runtime_version = $newRuntime.runtime_version; dsh_version = $newRuntime.dsh_version }
         Write-LaunchLog ('Maintenance-start {0} verified: Crew {1} + DSH {2}.' -f $request.request_id, $newRuntime.runtime_version, $newRuntime.dsh_version)
       } else {
@@ -496,6 +556,16 @@ function Ensure-CrewServices {
   param([switch] $QuietHealthy)
 
   foreach ($service in $services) {
+    # Maintenance fence: while a STOPPED maintenance session is active for
+    # the Crew backend, ordinary supervision must NOT auto-start 3210 —
+    # the stopped window belongs to the npx lifecycle's tree swap. Only a
+    # matching maintenance-start owns the launch right. 3080 supervision
+    # continues normally during the window.
+    if ($service.CrewOwned -and (Test-MaintenanceSessionActive)) {
+      $service.State = 'maintenance'
+      $service.LastError = $null
+      continue
+    }
     $health = Get-HealthState $service
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'

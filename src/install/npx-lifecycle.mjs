@@ -1342,10 +1342,18 @@ function crewSupervisor({ home = homedir() } = {}) {
     stopOwnedBackend: async () => {
       const identity = await fetchCrewIdentity();
       if (!identity?.runtime_id) {
+        transaction = null;
         return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
       }
       transaction = { lease: `txn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, runtime_id: identity.runtime_id };
-      return writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
+      const result = await writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
+      if (!result.ok) {
+        // A failed stop must not leave a usable lease behind: clear it so a
+        // later startOwnedBackend() fails closed instead of presenting a
+        // stale transaction.
+        transaction = null;
+      }
+      return result;
     },
     startOwnedBackend: async () => {
       // Reuse the proven stop-phase identity + lease: the process is stopped
