@@ -220,6 +220,19 @@ test('provider lifecycle readiness requires a structurally consistent 3210 inven
     providerInventoryBody: { ok: true, records: [{ id: 'p', desired_state: 'present', lifecycle: {} }] },
   });
   assert.equal(row(malformed, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
+
+  const corruptState = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerInventoryChecked: true,
+    providerInventoryBody: {
+      ok: true,
+      lifecycle_evidence: { ok: false, code: 'PROVIDER_LIFECYCLE_UNAVAILABLE' },
+      records: [{ id: 'p', desired_state: 'present', lifecycle: { installed: true, configured: true, enabled: true, catalogued: true } }],
+    },
+  });
+  assert.equal(row(corruptState, 'provider_lifecycle_consistent').status, 'FAIL');
+  assert.equal(row(corruptState, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
 });
 
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {
