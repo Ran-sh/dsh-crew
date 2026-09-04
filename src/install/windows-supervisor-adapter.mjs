@@ -146,11 +146,11 @@ function portFree(port = 3210) {
   });
 }
 
-async function runtimeFromHub(fetchImpl = globalThis.fetch) {
+async function runtimeFromHub(fetchImpl = globalThis.fetch, timeoutMs = 3_000) {
   try {
     const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(3_000),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(3_000, timeoutMs))),
     });
     if (!response.ok) return null;
     const body = await response.json();
@@ -178,20 +178,55 @@ export function createWindowsSupervisorHandoffHooks({
   readAuthoritativeHeartbeat = () => readSupervisorHeartbeat(appRoot, { staleAfterMs: 30_000 }),
   runControl,
   controlScript,
-  fetchRuntime = () => runtimeFromHub(),
+  fetchRuntime = ({ timeoutMs = 3_000 } = {}) => runtimeFromHub(globalThis.fetch, timeoutMs),
   verifyPortFree = ({ port }) => portFree(port),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   readyTimeoutMs = 90_000,
+  heartbeatRecoveryAttempts = 180,
+  heartbeatRecoveryPollMs = 500,
+  now = Date.now,
 } = {}) {
   const control = runControl ?? ((request) => runWindowsSupervisorControl(request, { controlScript }));
 
   const inspect = async (expected, { allowHelperDrift = false } = {}) => control(watcherRequest(
     'inspect', target, expected, { allowHelperDrift },
   ));
-  return {
-    classifyHeartbeat: async () => {
-      const observed = readHeartbeatRecord();
-      if (!observed) return { ok: true, classification: 'absent', watcher: null, runtime_id: null };
+  const classifyHeartbeat = async ({
+    expect_target: expectTarget = false,
+    attempt = 0,
+    deadline = null,
+    live_runtime_seen: liveRuntimeSeen = false,
+  } = {}) => {
+    const cutoff = Number.isFinite(deadline) ? deadline : now() + readyTimeoutMs;
+    const remaining = () => Math.max(0, cutoff - now());
+    const fetchWithinBudget = async () => {
+      const budget = remaining();
+      return budget > 0 ? fetchRuntime({ timeoutMs: Math.min(3_000, budget) }) : null;
+    };
+    const retry = async (sawLive) => {
+      const budget = remaining();
+      if (attempt >= heartbeatRecoveryAttempts || budget <= 0) return null;
+      await sleep(Math.min(heartbeatRecoveryPollMs, budget));
+      return classifyHeartbeat({
+        expect_target: expectTarget,
+        attempt: attempt + 1,
+        deadline: cutoff,
+        live_runtime_seen: sawLive,
+      });
+    };
+    const observed = readHeartbeatRecord();
+    let runtime = null;
+    if (!observed) {
+      runtime = await fetchWithinBudget();
+      const sawLive = liveRuntimeSeen || !!runtime?.runtime_id;
+      if (sawLive || expectTarget) {
+        const retried = await retry(sawLive);
+        if (retried) return retried;
+      }
+      if (sawLive) return { ok: false, code: 'SUPERVISOR_HEARTBEAT_MISSING_WITH_LIVE_RUNTIME' };
+      if (expectTarget) return { ok: false, code: 'SUPERVISOR_TARGET_HEARTBEAT_TIMEOUT' };
+      return { ok: true, classification: 'absent', watcher: null, runtime_id: null };
+    }
       const record = observed.record ?? {};
       const expected = {
         pid: record.pid,
@@ -204,10 +239,26 @@ export function createWindowsSupervisorHandoffHooks({
         && !sameHash(expected.helper_hash, target.helper_hash);
       const inspected = await inspect(expected, { allowHelperDrift: fullyAttestedStale });
       if (inspected?.ok === false && inspected.code === 'PROCESS_NOT_FOUND') {
+        if (expectTarget) {
+          const retried = await retry(liveRuntimeSeen);
+          if (retried) return retried;
+        }
+        runtime ??= await fetchWithinBudget();
+        if (runtime?.runtime_id) {
+          return { ok: false, code: 'SUPERVISOR_HEARTBEAT_PROCESS_MISSING_WITH_LIVE_RUNTIME' };
+        }
+        if (expectTarget) {
+          return {
+            ok: false,
+            code: liveRuntimeSeen
+              ? 'SUPERVISOR_HEARTBEAT_PROCESS_MISSING_WITH_LIVE_RUNTIME'
+              : 'SUPERVISOR_TARGET_HEARTBEAT_TIMEOUT',
+          };
+        }
         return { ok: true, classification: 'absent', watcher: null, runtime_id: null };
       }
       if (inspected?.ok !== true || !inspected.watcher) return inspected ?? { ok: false, code: 'SUPERVISOR_WATCHER_UNVERIFIED' };
-      const runtime = await fetchRuntime();
+      runtime ??= await fetchWithinBudget();
       if (observed.state === 'legacy-v1') {
         return runtime?.runtime_id
           ? { ok: true, classification: 'legacy', watcher: inspected.watcher, runtime_id: runtime.runtime_id }
@@ -223,7 +274,9 @@ export function createWindowsSupervisorHandoffHooks({
       return runtime?.runtime_id
         ? { ok: true, classification: 'stale', watcher: inspected.watcher, runtime_id: runtime.runtime_id }
         : { ok: false, code: 'SUPERVISOR_RUNTIME_IDENTITY_UNAVAILABLE' };
-    },
+  };
+  return {
+    classifyHeartbeat,
     verifyExactWatcher: async ({ expected, role }) => inspect(expected, {
       allowHelperDrift: role === 'old' && !sameHash(expected?.helper_hash, target.helper_hash),
     }),
@@ -250,8 +303,8 @@ export function createWindowsSupervisorHandoffHooks({
       expectedDshVersion,
     }) ?? { ok: false, code: 'SUPERVISOR_MAINTENANCE_UNAVAILABLE' },
     verifyReady: async ({ previous_runtime_id: previousRuntimeId }) => {
-      const deadline = Date.now() + readyTimeoutMs;
-      while (Date.now() <= deadline) {
+      const deadline = now() + readyTimeoutMs;
+      while (now() <= deadline) {
         const heartbeat = readAuthoritativeHeartbeat();
         if (heartbeat && sameHash(heartbeat.helper_hash, target.helper_hash)) {
           const exact = await inspect({
@@ -259,7 +312,7 @@ export function createWindowsSupervisorHandoffHooks({
             process_started_at_utc_ticks: String(heartbeat.process_started_at_utc_ticks),
             helper_hash: heartbeat.helper_hash,
           });
-          const runtime = await fetchRuntime();
+          const runtime = await fetchRuntime({ timeoutMs: Math.max(1, Math.min(3_000, deadline - now())) });
           if (exact?.ok === true
             && exact.watcher
             && validateSupervisorRuntime(runtime, { expectedCrewVersion, expectedDshVersion })

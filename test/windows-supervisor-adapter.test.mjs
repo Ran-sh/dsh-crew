@@ -117,6 +117,96 @@ test('adapter treats a proven dead heartbeat process as absent and leaves port p
   });
 });
 
+test('adapter stabilizes a transient missing heartbeat when the 3210 runtime is still live', async () => {
+  let reads = 0;
+  const hooks = createWindowsSupervisorHandoffHooks({
+    target: TARGET,
+    readHeartbeatRecord: () => (++reads === 1 ? null : ({ state: 'legacy-v1', record: { pid: WATCHER.pid } })),
+    runControl: async () => ({ ok: true, operation: 'inspect', watcher: WATCHER }),
+    fetchRuntime: async () => ({ runtime_id: 'runtime-live' }),
+    maintenanceClient: {},
+    sleep: async () => {},
+  });
+  const observed = await hooks.classifyHeartbeat({ target: TARGET });
+  assert.equal(observed.ok, true);
+  assert.equal(observed.classification, 'legacy');
+  assert.equal(reads, 2);
+});
+
+test('adapter never calls a live 3210 runtime absent solely because its heartbeat is temporarily unreadable', async () => {
+  const hooks = createWindowsSupervisorHandoffHooks({
+    target: TARGET,
+    readHeartbeatRecord: () => null,
+    runControl: async () => { throw new Error('must not inspect without a heartbeat identity'); },
+    fetchRuntime: async () => ({ runtime_id: 'runtime-live' }),
+    maintenanceClient: {},
+    sleep: async () => {},
+  });
+  const observed = await hooks.classifyHeartbeat({ target: TARGET });
+  assert.equal(observed.ok, false);
+  assert.equal(observed.code, 'SUPERVISOR_HEARTBEAT_MISSING_WITH_LIVE_RUNTIME');
+});
+
+test('adapter waits for the launched target heartbeat to replace a dead old heartbeat', async () => {
+  const old = { pid: 111, process_started_at_utc_ticks: '638609500000000099', helper_hash: 'a'.repeat(64) };
+  let reads = 0;
+  const hooks = createWindowsSupervisorHandoffHooks({
+    target: TARGET,
+    readHeartbeatRecord: () => (++reads <= 11
+      ? ({ state: 'ready', record: old })
+      : ({ state: 'starting', record: WATCHER })),
+    runControl: async (request) => request.expected.pid === old.pid
+      ? ({ ok: false, code: 'PROCESS_NOT_FOUND' })
+      : ({ ok: true, operation: 'inspect', watcher: WATCHER }),
+    fetchRuntime: async () => null,
+    maintenanceClient: {},
+    sleep: async () => {},
+  });
+  const observed = await hooks.classifyHeartbeat({ target: TARGET, expect_target: true });
+  assert.equal(observed.ok, true);
+  assert.equal(observed.classification, 'target-starting');
+  assert.deepEqual(observed.watcher, WATCHER);
+  assert.equal(reads, 12, 'target heartbeat may arrive after the former five-second retry window');
+});
+
+test('adapter never calls a dead-heartbeat watcher absent while its 3210 runtime is still live', async () => {
+  const hooks = createWindowsSupervisorHandoffHooks({
+    target: TARGET,
+    readHeartbeatRecord: () => ({ state: 'ready', record: WATCHER }),
+    runControl: async () => ({ ok: false, code: 'PROCESS_NOT_FOUND' }),
+    fetchRuntime: async () => ({ runtime_id: 'runtime-live' }),
+    maintenanceClient: {},
+  });
+  const observed = await hooks.classifyHeartbeat({ target: TARGET });
+  assert.equal(observed.ok, false);
+  assert.equal(observed.code, 'SUPERVISOR_HEARTBEAT_PROCESS_MISSING_WITH_LIVE_RUNTIME');
+});
+
+test('heartbeat stabilization shares one absolute 90-second budget across fetch and sleep', async () => {
+  let clock = 0;
+  let fetches = 0;
+  const hooks = createWindowsSupervisorHandoffHooks({
+    target: TARGET,
+    readHeartbeatRecord: () => null,
+    runControl: async () => { throw new Error('must not inspect without heartbeat identity'); },
+    fetchRuntime: async ({ timeoutMs }) => {
+      fetches += 1;
+      clock += timeoutMs;
+      return { runtime_id: 'runtime-live' };
+    },
+    maintenanceClient: {},
+    readyTimeoutMs: 90_000,
+    heartbeatRecoveryPollMs: 500,
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  });
+  const result = await hooks.classifyHeartbeat({ target: TARGET, expect_target: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'SUPERVISOR_HEARTBEAT_MISSING_WITH_LIVE_RUNTIME');
+  assert.equal(clock <= 90_000, true, `clock exceeded deadline: ${clock}`);
+  assert.equal(fetches < 180, true, 'fetch latency must consume the same deadline as polling');
+});
+
 test('runtime verification accepts only the isolated 3210 identity and expected versions', () => {
   const runtime = {
     runtime_id: 'runtime-new', service: 'dsh-crew-hub', execution_plane: 'hub-3210', profile: 'dsh-crew',

@@ -727,7 +727,7 @@ export async function runWindowsSupervisorHandoff({
       }
 
       if (current.phase === 'new-watcher-started') {
-        const observed = await invokeHook(hooks, 'classifyHeartbeat', { target: current.target }, current.phase);
+        const observed = await invokeHook(hooks, 'classifyHeartbeat', { target: current.target, expect_target: true }, current.phase);
         if (observed?.ok !== true) {
           return hookFailure(observed?.code ?? 'SUPERVISOR_HANDOFF_HEARTBEAT_UNAVAILABLE', current.phase, observed, 'target watcher heartbeat is unavailable');
         }

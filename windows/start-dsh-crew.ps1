@@ -804,6 +804,10 @@ function Start-ServiceSupervisor {
       return
     }
 
+    # Publish process identity before any 3210 startup/health wait. Handoff
+    # callers can now distinguish a legitimate cold-starting target watcher
+    # from the stale heartbeat left by the watcher it replaced.
+    Write-SupervisorHeartbeat -OwnershipReady $false
     Write-LaunchLog 'Supervisor active; monitoring Crew-owned 3210 every 10 seconds.'
     $lastRecoveryError = $null
     $updateLockFile = Join-Path $crewHome '..\app\update-in-progress.lock'

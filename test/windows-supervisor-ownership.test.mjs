@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // The launcher under test is a Windows PowerShell script driven through
@@ -8,6 +9,14 @@ import { fileURLToPath } from 'node:url';
 const maybe = process.platform === 'win32' ? test : test.skip;
 
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
+
+test('watch mode publishes a starting heartbeat immediately after acquiring its mutex', () => {
+  const source = readFileSync(helper, 'utf8');
+  const supervisor = source.indexOf('function Start-ServiceSupervisor');
+  const firstHeartbeat = source.indexOf('Write-SupervisorHeartbeat -OwnershipReady $false', supervisor);
+  const healthLoop = source.indexOf('while ($true)', supervisor);
+  assert.equal(supervisor >= 0 && firstHeartbeat > supervisor && firstHeartbeat < healthLoop, true);
+});
 
 function processTree({ rootTicks, listenerTicks }) {
   const quoted = helper.replaceAll("'", "''");
