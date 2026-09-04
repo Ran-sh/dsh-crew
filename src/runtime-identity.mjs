@@ -26,7 +26,7 @@ export const PRODUCTION_PROFILE = 'dsh-crew';
 export const PRODUCTION_LISTEN_PORT = 3210;
 const RUNTIME_ID = randomUUID();
 
-export const RUNTIME_VERSION = '1.0.4';
+export const RUNTIME_VERSION = '1.1.0';
 export const HUB_PROTOCOL_VERSION = 1;
 
 export const HUB_CAPABILITIES = Object.freeze([
