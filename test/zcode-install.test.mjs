@@ -253,3 +253,34 @@ test('ZCode readiness rejects stale ownership hashes even when managed files sti
     assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test('ZCode readiness rejects extra MCP arguments and never counts unrelated policy text as installed', () => {
+  const home = makeHome();
+  try {
+    installZCode({ home, root: ROOT });
+    const configFile = join(home, '.zcode', 'cli', 'config.json');
+    const config = readJson(configFile);
+    config.mcp.servers['dsh-crew'].args.push('--unexpected');
+    writeFileSync(configFile, JSON.stringify(config, null, 2));
+    assert.equal(zcodeStatus({ home, root: ROOT }).components.mcp, false);
+
+    rmSync(home, { recursive: true, force: true });
+    mkdirSync(join(home, '.zcode'), { recursive: true });
+    writeFileSync(join(home, '.zcode', 'AGENTS.md'), '# unrelated user instructions\n');
+    const unrelated = zcodeStatus({ home, root: ROOT });
+    assert.equal(unrelated.installed, false);
+    assert.equal(unrelated.ready, false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ZCode installer adopts an already-correct unowned MCP entry without a Windows case collision', () => {
+  const home = makeHome();
+  try {
+    const configFile = join(home, '.zcode', 'cli', 'config.json');
+    mkdirSync(join(home, '.zcode', 'cli'), { recursive: true });
+    writeFileSync(configFile, JSON.stringify({
+      mcp: { servers: { 'dsh-crew': { command: 'node', args: [join(ROOT, 'src', 'server.mjs')] } } },
+    }));
+    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

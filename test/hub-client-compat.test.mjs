@@ -77,6 +77,28 @@ test('Hub client separates compatible, legacy, HTTP-error and unreachable states
   assert.equal(matrixRow(status, 'hub_compatibility').reason_code, READINESS_REASON_CODES.HUB_UNREACHABLE);
 });
 
+test('Hub compatibility probe honors an explicit base for both handshake requests', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith('/ping')) return { ok: true, status: 200, json: async () => ({ service: 'dsh-crew-hub' }) };
+    return { ok: true, status: 200, json: async () => ({
+      service: 'dsh-crew-hub', runtime_version: '1.1.1', protocol_version: 1,
+      execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210,
+      runtime_id: 'runtime-explicit', capabilities: getHubRuntimeIdentity().capabilities,
+    }) };
+  };
+  const status = await hubStatus({ force: true, base: 'http://127.0.0.1:3999' });
+  assert.equal(status.compatible, true);
+  assert.equal(status.runtime_id, 'runtime-explicit');
+  assert.deepEqual(calls, [
+    'http://127.0.0.1:3999/_dsh/dsh-crew/ping',
+    'http://127.0.0.1:3999/_dsh/dsh-crew/runtime',
+  ]);
+});
+
 test('Hub client surfaces protocol/capability mismatches from runtime endpoint', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
