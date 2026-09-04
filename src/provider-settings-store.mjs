@@ -241,13 +241,15 @@ function readFlowMaterialization(parsed, entry, file) {
   }
   const allowed = new Set(['displayName', 'apiKeyEnv', 'api', 'baseURL', 'models']);
   if ([...directFields].some((field) => !allowed.has(field))) return { ok: false, code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS' };
-  const displayName = scalarField(parsed.lines, entry, 'displayName') ?? entry.id;
+  const rawDisplayName = scalarField(parsed.lines, entry, 'displayName');
+  const displayName = rawDisplayName && rawDisplayName.length <= 256 && !/[\r\n]/u.test(rawDisplayName) ? rawDisplayName : entry.id;
   const rawCredentialRef = scalarField(parsed.lines, entry, 'apiKeyEnv');
   const credential = classifyCredentialReference(rawCredentialRef, { kind: 'env' });
   if (credential.redacted) return { ok: false, code: 'PROVIDER_CREDENTIAL_REFERENCE_UNSAFE' };
   const api = scalarField(parsed.lines, entry, 'api');
   if (api && (!/^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(api) || /^(?:sk|pk|rk|token|secret)[_-]/iu.test(api))) return { ok: false, code: 'PROVIDER_API_SCHEMA_UNSUPPORTED' };
-  const baseUrl = scalarField(parsed.lines, entry, 'baseURL');
+  const rawBaseUrl = scalarField(parsed.lines, entry, 'baseURL');
+  const baseUrl = rawBaseUrl && rawBaseUrl.length <= 2048 && !/[\r\n]/u.test(rawBaseUrl) ? rawBaseUrl : null;
   if (baseUrl) {
     try {
       const url = new URL(baseUrl);
@@ -276,7 +278,7 @@ function readFlowMaterialization(parsed, entry, file) {
       id: entry.id, display_name: displayName,
       ...(credential.value ? { credential_ref: credential.value } : {}),
       ...(api ? { api } : {}), ...(baseUrl ? { base_url: baseUrl } : {}),
-      models, source_file: file,
+      models: models.slice(0, 256), source_file: file,
     },
   };
 }
@@ -387,7 +389,7 @@ function flowProviderLines(provider) {
   const api = yamlScalar(provider.api, 128);
   const baseUrl = yamlScalar(provider.base_url, 2048);
   const models = Array.isArray(provider.models)
-    ? provider.models.filter((model) => model && typeof model.id === 'string' && model.id.trim() && model.id.length <= 256).slice(0, 256)
+    ? provider.models.filter((model) => model && typeof model.id === 'string' && yamlScalar(model.id, 256)).slice(0, 256)
     : [];
   const fields = [`          displayName: ${displayName}`];
   if (api) fields.push(`          api: ${api}`);

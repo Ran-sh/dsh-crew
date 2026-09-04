@@ -417,7 +417,7 @@ test('concurrent reclaim contenders yield exactly one owner', async () => {
           resolve();
         });
       });
-      return { line, closed };
+      return { child, line, closed };
     };
     let owners = 0;
     for (let round = 0; round < 5; round += 1) {
@@ -428,13 +428,27 @@ test('concurrent reclaim contenders yield exactly one owner', async () => {
       await new Promise((r) => setTimeout(r, 300));
       writeFileSync(gate, 'go');
       const [a, b] = await Promise.all(pending.map((entry) => entry.line));
-      const pa = JSON.parse((a || '').trim().split('\n').pop() || '{}');
-      const pb = JSON.parse((b || '').trim().split('\n').pop() || '{}');
-      const wins = [pa.ok === true, pb.ok === true].filter(Boolean).length;
+      let pa;
+      let pb;
+      let wins;
+      try {
+        pa = JSON.parse((a || '').trim().split('\n').pop() || '{}');
+        pb = JSON.parse((b || '').trim().split('\n').pop() || '{}');
+        wins = [pa.ok === true, pb.ok === true].filter(Boolean).length;
+      } finally {
+        writeFileSync(releaseGate, 'release');
+        const closed = Promise.all(pending.map((entry) => entry.closed));
+        const timedOut = await Promise.race([
+          closed.then(() => false),
+          new Promise((resolve) => setTimeout(() => resolve(true), 2_000)),
+        ]);
+        if (timedOut) {
+          for (const entry of pending) if (entry.child.exitCode === null) entry.child.kill();
+          await closed;
+        }
+      }
       assert.ok(wins <= 1, `round ${round}: at most one owner, got ${JSON.stringify([pa, pb])}`);
       if (wins === 1) owners += 1;
-      writeFileSync(releaseGate, 'release');
-      await Promise.all(pending.map((entry) => entry.closed));
       try { releaseUpdateLock({ home: t.dir }); } catch {}
     }
     assert.ok(owners >= 1, 'at least one round must produce an owner');
