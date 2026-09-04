@@ -157,3 +157,21 @@ test('3080 readiness matrix names every required host integration', () => {
     assert.match(panelSource, new RegExp(label));
   }
 });
+
+test('quick bundle is capability-light compared to the full bundle', async () => {
+  const quick = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
+  const full = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  // Quick surface talks only to narrow endpoints.
+  assert.match(quick, /quick-config/);
+  assert.match(quick, /restart-request/);
+  // Quick surface must NOT ship full control-plane capabilities.
+  for (const forbidden of ['credentialPurgePlan', 'rollback-migration', 'quarantine', 'install/status', 'providerLifecycleError', 'delete-plan']) {
+    assert.doesNotMatch(quick, new RegExp(forbidden));
+  }
+  // It must not hardcode the legacy 3080 supervisor endpoint either.
+  assert.doesNotMatch(quick, /127\.0\.0\.1:3080\/_dsh\/dsh-crew\/supervisor\/restart/);
+  // Full bundle keeps the complete control plane including quick API usage.
+  assert.match(full, /credentialPurgePlan/);
+  // Quick is genuinely smaller than full.
+  assert.ok(quick.length < full.length / 5, `quick ${quick.length} vs full ${full.length}`);
+});

@@ -103,6 +103,18 @@ function seedLangFromHost(ctx) {
 import { setLang } from '../i18n.mjs';
 
 const ROUTE_BASE = '/_dsh/dsh-crew';
+// Quick-config allowlist: the ONLY config keys writable from the official
+// 3080 quick-controls surface. The full /config endpoint stays the single
+// canonical authority; quick-config is a projection, never a second store.
+export const QUICK_CONFIG_KEYS = Object.freeze([
+  'subagents_enabled',
+  'flash_model_priority',
+  'pro_model_priority',
+  'vision_enabled',
+  'imagegen_enabled',
+  'vision_provider',
+  'imagegen_provider',
+]);
 const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 // Local copy (the hub must not import jobs.mjs, which pulls the DSH SDK into
 // the profile realm): a valid dispatch role set.
@@ -1487,15 +1499,6 @@ export async function apply(ctx) {
     // and model-priority lists are writable here; the FULL config endpoint
     // remains the single authority for everything else. This is a projection
     // over writeGlobalConfig, never a second config store.
-    const QUICK_CONFIG_KEYS = new Set([
-      'subagents_enabled',
-      'flash_model_priority',
-      'pro_model_priority',
-      'vision_enabled',
-      'imagegen_enabled',
-      'vision_provider',
-      'imagegen_provider',
-    ]);
     const projectQuickConfig = (config) => Object.fromEntries(
       [...QUICK_CONFIG_KEYS].map((key) => [key, config[key]]),
     );
@@ -1512,7 +1515,7 @@ export async function apply(ctx) {
             const body = await readBody(req);
             const patch = {};
             for (const [key, value] of Object.entries(body ?? {})) {
-              if (!QUICK_CONFIG_KEYS.has(key)) {
+              if (!QUICK_CONFIG_KEYS.includes(key)) {
                 return sendJson(res, 403, { ok: false, code: 'QUICK_CONFIG_KEY_FORBIDDEN', error: `key not writable from the quick surface: ${key}` });
               }
               patch[key] = value;
