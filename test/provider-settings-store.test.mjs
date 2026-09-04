@@ -198,8 +198,9 @@ test('flow provider removal preserves the sibling, default, and unrelated settin
 });
 
 test('adding a provider to a flow map preserves flow syntax and remains readable', () => {
-  const inspected = inspectProviderSettings(FLOW_SETTINGS);
-  const added = addProviderSettings(FLOW_SETTINGS, {
+  const crlf = FLOW_SETTINGS.replace(/\n/gu, '\r\n');
+  const inspected = inspectProviderSettings(crlf);
+  const added = addProviderSettings(crlf, {
     expectedRevision: inspected.revision,
     provider: {
       id: 'new-provider', display_name: 'New Provider', api: 'openai-completions',
@@ -208,6 +209,9 @@ test('adding a provider to a flow map preserves flow syntax and remains readable
     },
   });
   assert.equal(added.ok, true);
+  assert.match(added.text, /\r\n/u);
+  assert.match(added.text, /agent-default-model:\r\n  provider: opencode-go-muse/u);
+  assert.match(added.text, /permission:\r\n  defaultPreset: danger-full-access/u);
   assert.deepEqual(inspectProviderSettings(added.text).providerIds, ['opencode-go-muse', 'opencode1', 'new-provider']);
   assert.equal(readProviderSettingsMaterialization(added.text, { providerId: 'new-provider' }).ok, true);
 });
@@ -217,4 +221,62 @@ test('flow credential scanning still rejects inline secrets without returning th
   const result = hasInlineProviderCredentials(unsafe, { providerIds: ['opencode1'] });
   assert.deepEqual(result, { ok: true, inline: true });
   assert.equal(JSON.stringify(result).includes('sk-live-do-not-return'), false);
+});
+
+test('removing the final flow provider emits an empty map and updates the default atomically', () => {
+  const firstRemoval = removeProviderSettings(FLOW_SETTINGS, { providerIds: ['opencode1'] });
+  assert.equal(firstRemoval.ok, true);
+  const inspected = inspectProviderSettings(firstRemoval.text);
+  const result = mutateProviderSettings(firstRemoval.text, {
+    providerId: 'opencode-go-muse', removeProvider: true,
+    replacementDefault: 'deepseek-official', replacementModel: 'deepseek-v4-flash',
+    expectedRevision: inspected.revision,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.remaining, []);
+  assert.match(result.text, /llm-pi-ai:\n  providers: \{\}/u);
+  assert.match(result.text, /agent-default-model:\n  provider: deepseek-official\n  model: deepseek-v4-flash/u);
+  assert.match(result.text, /permission:\n  defaultPreset: danger-full-access/u);
+  assert.deepEqual(inspectProviderSettings(result.text).providerIds, []);
+});
+
+test('flow parsing is quote-aware for commas, colons, brackets, and braces', () => {
+  const quoted = FLOW_SETTINGS.replace(
+    'name: Muse Spark 1.3',
+    'name: "Muse, Spark: [1.3] {Contributor}"',
+  );
+  const result = readProviderSettingsMaterialization(quoted, { providerId: 'opencode-go-muse' });
+  assert.equal(result.ok, true);
+  assert.equal(result.provider.models[0].name, 'Muse, Spark: [1.3] {Contributor}');
+});
+
+test('malformed flow collections fail closed without returning provider values', () => {
+  const cases = [
+    {
+      source: FLOW_SETTINGS.replace('    {\n      opencode-go-muse:', '      opencode-go-muse:'),
+      operation: inspectProviderSettings,
+      code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED',
+    },
+    {
+      source: FLOW_SETTINGS.replace('        },\n      opencode1:', '        }\n      opencode1:'),
+      operation: inspectProviderSettings,
+      code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED',
+    },
+    {
+      source: FLOW_SETTINGS.replace('            ]\n        },', '        },'),
+      operation: (source) => readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }),
+      code: 'PROVIDER_MODEL_SCHEMA_UNSUPPORTED',
+    },
+    {
+      source: FLOW_SETTINGS.replace('          api: openai-responses,', '          unknownField: retained-value,'),
+      operation: (source) => readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }),
+      code: 'PROVIDER_MATERIALIZATION_UNSUPPORTED_FIELDS',
+    },
+  ];
+  for (const { source, operation, code } of cases) {
+    const result = operation(source);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, code);
+    assert.equal(JSON.stringify(result).includes('retained-value'), false);
+  }
 });
