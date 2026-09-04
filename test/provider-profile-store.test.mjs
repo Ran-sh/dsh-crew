@@ -1,12 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  hasInlineProviderCredentials,
   inspectProviderProfile,
   readProviderDeclarations,
   removeProviderDeclarations,
 } from '../src/provider-profile-store.mjs';
 
 const PROFILE = `# managed provider patch\n- id: llm-pi-ai\n  config:\n    providers:\n      opencode-go:\n        displayName: OpenCode Go\n        apiKeyEnv: OPENCODE_GO_API_KEY\n      opencode-alt:\n        displayName: Opencode\n        apiKeyEnv: OPENCODE_ALT_API_KEY\n      opencode-muse:\n        displayName: opencode-go-muse\n        apiKeyEnv: OPENCODE_MUSE_API_KEY\n      openrouter:\n        displayName: openrouter\n        apiKeyEnv: OPENROUTER_API_KEY\n- insert:\n    - id: dsh-crew-hub\n      name: '@ran-sh/dsh-crew'\n`;
+
+test('fresh Harness empty profile patch is valid and contains no provider declarations', () => {
+  const inspected = inspectProviderProfile('[]\n');
+  assert.equal(inspected.ok, true);
+  assert.deepEqual(inspected.providerIds, []);
+  assert.match(inspected.revision, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(readProviderDeclarations('[]\n'), { ok: true, declarations: [] });
+  assert.deepEqual(hasInlineProviderCredentials('[]\n'), { ok: true, inline: false });
+});
 
 test('inspectProviderProfile returns provider ids and a revision without values', () => {
   const result = inspectProviderProfile(PROFILE);
