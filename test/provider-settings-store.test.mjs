@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  addProviderSettings,
+  hasInlineProviderCredentials,
   inspectProviderSettings,
   readProviderSettingsDeclarations,
+  readProviderSettingsMaterialization,
   removeProviderSettings,
   readHarnessDefault,
   replaceHarnessDefault,
@@ -11,6 +14,45 @@ import {
 
 const SETTINGS = `ui-onboarding:\n  welcomeNoticeVersion: 2026-08-13.1\nllm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n      models:\n        - id: deepseek-v4-flash\n    openrouter:\n      apiKeyEnv: OPENROUTER_API_KEY\nagent-presets:\n  default: minimal\n`;
 const SETTINGS_WITH_DEFAULT = SETTINGS.replace('agent-presets:', 'agent-default-model:\n  provider: opencode-go\n  model: mimo-v2.5\nagent-presets:');
+
+// Harness 0.1.2-rc.1 persists the provider map as a multiline flow
+// collection. Keep this fixture credential-reference-only: no secret values.
+const FLOW_SETTINGS = `ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+llm-pi-ai:
+  providers:
+    {
+      opencode-go-muse:
+        {
+          displayName: opencode-go-muse,
+          apiKeyEnv: OPENCODE_GO_MUSE_API_KEY,
+          api: openai-responses,
+          baseURL: https://opencode.ai/zen/go/v1,
+          models:
+            [
+              { id: muse-spark-1.3-contributor, name: Muse Spark 1.3 },
+              { id: muse-spark-1.2-contributor, name: Muse Spark 1.2 }
+            ]
+        },
+      opencode1:
+        {
+          displayName: Opencode 1,
+          apiKeyEnv: OPENCODE1_API_KEY,
+          api: openai-completions,
+          baseURL: https://opencode.ai/zen/go/v1,
+          models:
+            [
+              { id: deepseek-v4-flash, name: DeepSeek V4 Flash },
+              { id: mimo-v2.5, name: MiMo V2.5 }
+            ]
+        }
+    }
+agent-default-model:
+  provider: opencode-go-muse
+  model: muse-spark-1.3-contributor
+permission:
+  defaultPreset: danger-full-access
+`;
 
 test('Harness settings parser discovers nested provider declarations with a stable authority', () => {
   const inspected = inspectProviderSettings(SETTINGS);
@@ -102,4 +144,77 @@ test('provider deletion mutates settings declaration and Harness Default in one 
   assert.match(result.text, /agent-default-model:\n  provider: deepseek-official\n  model: deepseek-v4-flash/);
   assert.doesNotMatch(result.text, /    opencode-go:/);
   assert.equal(inspectProviderSettings(result.text).ok, true);
+});
+
+test('Harness 0.1.2 multiline flow provider map is discovered with safe provenance', () => {
+  const inspected = inspectProviderSettings(FLOW_SETTINGS);
+  assert.equal(inspected.ok, true);
+  assert.deepEqual(inspected.providerIds, ['opencode-go-muse', 'opencode1']);
+
+  const result = readProviderSettingsDeclarations(FLOW_SETTINGS);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.declarations.map(({ id, display_name, credential_ref }) => ({ id, display_name, credential_ref })), [
+    {
+      id: 'opencode-go-muse', display_name: 'opencode-go-muse',
+      credential_ref: { kind: 'env', name_or_handle: 'OPENCODE_GO_MUSE_API_KEY', ownership: 'unknown' },
+    },
+    {
+      id: 'opencode1', display_name: 'Opencode 1',
+      credential_ref: { kind: 'env', name_or_handle: 'OPENCODE1_API_KEY', ownership: 'unknown' },
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes('muse-spark-1.3-contributor'), false);
+});
+
+test('flow provider materialization keeps only bounded non-secret connection and model metadata', () => {
+  const result = readProviderSettingsMaterialization(FLOW_SETTINGS, { providerId: 'opencode-go-muse' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.provider, {
+    id: 'opencode-go-muse',
+    display_name: 'opencode-go-muse',
+    credential_ref: 'OPENCODE_GO_MUSE_API_KEY',
+    api: 'openai-responses',
+    base_url: 'https://opencode.ai/zen/go/v1',
+    models: [
+      { id: 'muse-spark-1.3-contributor', name: 'Muse Spark 1.3' },
+      { id: 'muse-spark-1.2-contributor', name: 'Muse Spark 1.2' },
+    ],
+    source_file: 'harness/settings.yaml',
+  });
+});
+
+test('flow provider removal preserves the sibling, default, and unrelated settings', () => {
+  const inspected = inspectProviderSettings(FLOW_SETTINGS);
+  const removed = removeProviderSettings(FLOW_SETTINGS, {
+    providerIds: ['opencode1'], expectedRevision: inspected.revision,
+  });
+  assert.equal(removed.ok, true);
+  assert.deepEqual(removed.remaining, ['opencode-go-muse']);
+  assert.doesNotMatch(removed.text, /^ {6}opencode1:/m);
+  assert.match(removed.text, /^ {6}opencode-go-muse:/m);
+  assert.match(removed.text, /agent-default-model:\n  provider: opencode-go-muse/);
+  assert.match(removed.text, /permission:\n  defaultPreset: danger-full-access/);
+  assert.deepEqual(inspectProviderSettings(removed.text).providerIds, ['opencode-go-muse']);
+});
+
+test('adding a provider to a flow map preserves flow syntax and remains readable', () => {
+  const inspected = inspectProviderSettings(FLOW_SETTINGS);
+  const added = addProviderSettings(FLOW_SETTINGS, {
+    expectedRevision: inspected.revision,
+    provider: {
+      id: 'new-provider', display_name: 'New Provider', api: 'openai-completions',
+      base_url: 'https://example.test/v1', credential_ref: 'NEW_PROVIDER_API_KEY',
+      models: [{ id: 'new-model', name: 'New Model', input: ['text'] }],
+    },
+  });
+  assert.equal(added.ok, true);
+  assert.deepEqual(inspectProviderSettings(added.text).providerIds, ['opencode-go-muse', 'opencode1', 'new-provider']);
+  assert.equal(readProviderSettingsMaterialization(added.text, { providerId: 'new-provider' }).ok, true);
+});
+
+test('flow credential scanning still rejects inline secrets without returning them', () => {
+  const unsafe = FLOW_SETTINGS.replace('apiKeyEnv: OPENCODE1_API_KEY', 'apiKey: sk-live-do-not-return');
+  const result = hasInlineProviderCredentials(unsafe, { providerIds: ['opencode1'] });
+  assert.deepEqual(result, { ok: true, inline: true });
+  assert.equal(JSON.stringify(result).includes('sk-live-do-not-return'), false);
 });
