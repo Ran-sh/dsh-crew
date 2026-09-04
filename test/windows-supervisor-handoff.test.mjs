@@ -188,6 +188,37 @@ test('an initially target-ready watcher still requires strict runtime verificati
   }
 });
 
+test('a target-ready watcher with a stale runtime enters the durable restart transaction', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'target-ready' });
+    const classifyNormally = hooks.classifyHeartbeat;
+    let classifications = 0;
+    hooks.classifyHeartbeat = async (payload) => {
+      classifications += 1;
+      return classifications === 1
+        ? { ok: true, classification: 'target-ready', watcher: { ...NEW }, runtime_id: 'runtime-old' }
+        : classifyNormally(payload);
+    };
+    const verifyNormally = hooks.verifyReady;
+    let verifies = 0;
+    hooks.verifyReady = async (payload) => {
+      verifies += 1;
+      return verifies === 1
+        ? { ok: false, code: 'RUNTIME_VERSION_MISMATCH' }
+        : verifyNormally(payload);
+    };
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(state.stopCalls, 1);
+    assert.equal(state.startCalls, 1);
+    assert.equal(state.launchCalls, 1);
+    assert.equal(verifies, 2);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test('busy lock returns a stable contract without observing or mutating runtime state', async () => {
   const temp = temporaryAppRoot();
   try {

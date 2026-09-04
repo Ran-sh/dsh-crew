@@ -479,7 +479,7 @@ export async function runWindowsSupervisorHandoff({
       if (observed?.ok !== true) {
         return hookFailure(observed?.code ?? 'SUPERVISOR_HANDOFF_HEARTBEAT_UNAVAILABLE', 'observe', observed, 'heartbeat classification failed');
       }
-      const classification = classificationOf(observed);
+      let classification = classificationOf(observed);
 
       if (classification === 'target-ready') {
         const watcher = targetWatcherFrom(observed, target);
@@ -492,10 +492,14 @@ export async function runWindowsSupervisorHandoff({
           previous_runtime_id: null,
         }, 'observe');
         const verified = readyContract(ready, target, null);
-        if (!verified) {
-          return hookFailure('SUPERVISOR_HANDOFF_READY_VERIFY_FAILED', 'observe', ready, 'ready watcher/runtime did not pass the strict target contract');
+        if (verified) {
+          return { ok: true, state: 'VERIFIED', idempotent: true, runtime_id: verified.runtime_id, watcher: verified.watcher };
         }
-        return { ok: true, state: 'VERIFIED', idempotent: true, runtime_id: verified.runtime_id, watcher: verified.watcher };
+        // The watcher/control generation is current but the owned 3210 may
+        // still be running the previously activated payload. Reuse the exact
+        // durable handoff transaction to stop/restart that runtime instead of
+        // treating a safe, recoverable version skew as terminal.
+        classification = 'stale';
       }
 
       if (classification === 'legacy' || classification === 'stale') {
