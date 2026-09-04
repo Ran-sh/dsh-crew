@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 — 2026-09-04
+
+- Supports the multiline flow-style Provider settings emitted by Harness
+  0.1.2-rc.1, including bounded materialization, safe add/remove operations,
+  and native user-layer deletion visibility.
+- Treats a fresh empty Harness profile patch as valid and stabilizes the
+  update-lock contention regression under heavily parallel Windows test runs.
+
 ## 1.1.0 — 2026-09-04
 
 - Consolidates the Crew configuration control plane onto 3210: the native
