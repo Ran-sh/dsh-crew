@@ -117,13 +117,22 @@ $crewHeartbeatFile = Join-Path $crewSupervisorRoot 'heartbeat.json'
 $crewRequestsDir = Join-Path $crewSupervisorRoot 'restart-requests'
 $crewResultsDir = Join-Path $crewSupervisorRoot 'restart-results'
 
+# UTF-8 WITHOUT BOM: Windows PowerShell 5.1's Set-Content -Encoding UTF8
+# writes a BOM, and the Node hub's JSON.parse rejects it (heartbeat/request
+# files would be unreadable -> supervisor judged unavailable).
+function Write-Utf8NoBom {
+  param([string] $Path, [string] $Content)
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
 function Write-SupervisorHeartbeat {
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   $record = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
   try {
     if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
     $temp = Join-Path $crewSupervisorRoot ("heartbeat.{0}.tmp" -f $PID)
-    Set-Content -LiteralPath $temp -Value $record -Encoding UTF8 -NoNewline
+    Write-Utf8NoBom -Path $temp -Content $record
     Move-Item -LiteralPath $temp -Destination $crewHeartbeatFile -Force
   } catch { /* heartbeat is best-effort */ }
 }
@@ -157,7 +166,7 @@ function Write-RestartResult {
     } | ConvertTo-Json -Depth 5
     $file = Join-Path $crewResultsDir ("{0}.json" -f $Request.request_id)
     $temp = Join-Path $crewResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
-    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Write-Utf8NoBom -Path $temp -Content $result
     Move-Item -LiteralPath $temp -Destination $file -Force
   } catch { /* best effort */ }
   Remove-Item -LiteralPath (Join-Path $crewRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
@@ -253,7 +262,7 @@ function Set-MaintenanceSession {
       request_id = $Request.request_id
     } | ConvertTo-Json -Compress
     $temp = Join-Path $crewSupervisorRoot ("maintenance-session.{0}.tmp" -f $PID)
-    Set-Content -LiteralPath $temp -Value $session -Encoding UTF8 -NoNewline
+    Write-Utf8NoBom -Path $temp -Content $session
     Move-Item -LiteralPath $temp -Destination $crewMaintenanceSessionFile -Force
     $back = Read-MaintenanceSession
     if ($back -is [string]) { return $false }
@@ -304,7 +313,7 @@ function Write-MaintenanceResult {
     } | ConvertTo-Json -Depth 5
     $file = Join-Path $crewMaintenanceResultsDir ("{0}.json" -f $Request.request_id)
     $temp = Join-Path $crewMaintenanceResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
-    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Write-Utf8NoBom -Path $temp -Content $result
     Move-Item -LiteralPath $temp -Destination $file -Force
   } catch { /* best effort */ }
   Remove-Item -LiteralPath (Join-Path $crewMaintenanceRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
