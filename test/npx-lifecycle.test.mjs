@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { RUNTIME_VERSION } from '../src/runtime-identity.mjs';
 import {
   CREW_APP_DIRNAME,
+  INCOMPLETE_MARKER,
   crewAppRoot,
   crewReleasesDir,
   currentPointerFile,
@@ -50,6 +51,7 @@ import {
   compareVersions,
   resolveUpdateCandidate,
   npmCliInvocation,
+  updateLockFile,
 } from '../src/install/npx-lifecycle.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
@@ -89,6 +91,7 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   mkdirSync(join(root, 'statusline'), { recursive: true });
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
   mkdirSync(join(root, 'official-web-bridge', 'lib'), { recursive: true });
+  mkdirSync(join(root, 'windows'), { recursive: true });
 
   writeFileSync(join(root, 'package.json'), JSON.stringify({
     name,
@@ -97,11 +100,12 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
     main: './src/hub/entry.mjs',
     bin: { 'dsh-crew': './bin/dsh-crew.mjs' },
     exports: { '.': './src/hub/entry.mjs' },
+    dshCrew: { payloadSchema: 2, windowsSupervisorHandoff: 1 },
     dsh: { bundle: { patch: './cordis.patch.yml' }, client: {} },
     dependencies: { '@ran-fake/sdk': '^1.0.0', 'fake-zod': '^3.0.0' },
     peerDependencies: { '@ran-fake/host-peer': '^9.0.0' },
     devDependencies: { 'build-tool': '^1.0.0' },
-    files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline', 'official-web-bridge',
+    files: ['bin', 'lib', 'src', 'codex', 'agents', 'commands', 'statusline', 'official-web-bridge', 'windows',
       '.claude-plugin', 'cordis.patch.yml', 'worker.cordis.yml',
       'README.md', 'README.*.md', 'LICENSE'],
   }, null, 2));
@@ -133,6 +137,10 @@ function makeCandidate(home, { version = '0.3.3', name = PKG_NAME } = {}) {
   writeFileSync(join(root, 'official-web-bridge', 'entry.mjs'), 'export async function apply() {}\n');
   writeFileSync(join(root, 'official-web-bridge', 'cordis.patch.yml'), `- insert:\n    - id: bridge\n      name: '${OFFICIAL_BRIDGE_PACKAGE}'\n`);
   writeFileSync(join(root, 'official-web-bridge', 'lib', 'client.js'), '// bridge client\n');
+  writeFileSync(join(root, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\n');
+  writeFileSync(join(root, 'windows', 'start-dsh-crew.cmd'), '@echo off\r\nrem DSH Crew Launcher\r\n');
+  writeFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'Option Explicit\r\n');
+  writeFileSync(join(root, 'windows', 'supervisor-control.ps1'), '# DSH Crew Windows supervisor process control\n');
   writeFileSync(join(root, 'official-web-bridge', 'package.json'), JSON.stringify({
     name: OFFICIAL_BRIDGE_PACKAGE,
     version,
@@ -216,6 +224,7 @@ test('package exposes exactly one natural CLI executable backed by an existing s
 test('package, runtime identity, and changelog identify candidate 1.1.1', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.version, '1.1.1');
+  assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
   assert.equal(RUNTIME_VERSION, '1.1.1');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
@@ -388,11 +397,29 @@ test('validateInstalledPayload fails closed on identity, artifact, or dependency
     const sourceRoot = makeCandidate(t.dir);
     const staged = stageCandidatePayload({ sourceRoot, home: t.dir });
     assert.equal(staged.ok, true);
+    const legacy = join(t.dir, 'legacy-retained');
+    cpSync(staged.stageDir, legacy, { recursive: true });
+    const legacyManifest = JSON.parse(readFileSync(join(legacy, 'package.json'), 'utf8'));
+    delete legacyManifest.dshCrew;
+    writeFileSync(join(legacy, 'package.json'), JSON.stringify(legacyManifest));
+    rmSync(join(legacy, 'windows'), { recursive: true, force: true });
+    rmSync(join(legacy, INCOMPLETE_MARKER), { force: true });
+    const legacyValidation = validateInstalledPayload(legacy, { expectedName: PKG_NAME, expectedVersion: '0.3.3' });
+    assert.equal(
+      legacyValidation.ok,
+      true,
+      `a retained pre-handoff payload remains a valid rollback target; ${JSON.stringify(legacyValidation.errors)}`,
+    );
     assert.match(validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '9.9.9' }).errors.join(), /version mismatch/);
 
     rmSync(join(staged.stageDir, 'lib', 'client.js'));
     let errors = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3' }).errors;
     assert.ok(errors.some((e) => e.includes('lib/client.js')));
+
+    rmSync(join(staged.stageDir, 'windows', 'supervisor-control.ps1'));
+    errors = validateInstalledPayload(staged.stageDir, { expectedName: PKG_NAME, expectedVersion: '0.3.3' }).errors;
+    assert.ok(errors.some((e) => e.includes('windows/supervisor-control.ps1')));
+
 
     cpSync(staged.stageDir, join(t.dir, 'copy'), { recursive: true });
     rmSync(join(t.dir, 'copy', 'node_modules'), { recursive: true, force: true });
@@ -436,8 +463,8 @@ test('install persists the payload under Crew-owned state and registers that pat
     assert.equal(codexCall[1].root, pointer.path);
     const claudeCall = calls.find(([name]) => name === 'installClaudeCode');
     assert.equal(claudeCall[1].root, pointer.path);
-    const startupCall = calls.find(([name]) => name === 'installWindowsStartup');
-    assert.equal(startupCall[1].root, pointer.path);
+  const startupCall = calls.find(([name]) => name === 'installWindowsStartup');
+    assert.equal(startupCall[1].root, runningPackageRoot(), 'supervisor assets stay on the current launcher generation across payload rollback');
 
     // The release is runnable standalone: its own bin exists and deps resolve locally.
     assert.equal(existsSync(join(pointer.path, 'bin', 'dsh-crew.mjs')), true);
@@ -528,7 +555,7 @@ test('status reports unverifiable payloads instead of pretending success', async
   } finally { t.cleanup(); }
 });
 
-test('status reports drifted integrations as needing repair and passes the authoritative payload root', async () => {
+test('status checks host integrations against payload root and supervisor assets against current launcher root', async () => {
   const t = tempHome();
   try {
     const rec = recordingInstaller();
@@ -568,7 +595,7 @@ test('status reports drifted integrations as needing repair and passes the autho
     assert.equal(status.claude, 'needs repair');
     assert.equal(status.windowsStartup, 'needs repair');
     assert.equal(integrationOptions.root, pointer.path);
-    assert.equal(startupOptions.root, pointer.path);
+    assert.equal(startupOptions.root, runningPackageRoot());
     assert.match(logs.join('\n'), /Codex Desktop integration: needs repair/);
     assert.match(logs.join('\n'), /ZCode integration: needs repair/);
     assert.match(logs.join('\n'), /Claude Code integration: needs repair/);
@@ -1459,4 +1486,162 @@ test('CLI forwards --candidate to update in both value forms', async () => {
   await runNpxCli({ argv: ['update', '--candidate', 'X:\\dir'], log: () => {}, error: () => {}, commands });
   await runNpxCli({ argv: ['update', '--candidate=Y:\\tgz.tgz'], log: () => {}, error: () => {}, commands });
   assert.deepEqual(seen, ['X:\\dir', 'Y:\\tgz.tgz']);
+});
+
+test('install converges the Windows supervisor only after releasing the update lock', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    const calls = [];
+    const result = await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidate(t.dir, { version: '1.2.0' }),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorConverger: async (options) => {
+        assert.equal(existsSync(updateLockFile({ home: t.dir })), false, 'handoff must run after update-lock release');
+        assert.equal(options.home, t.dir);
+        assert.equal(options.root, readCurrentPointer({ home: t.dir }).path);
+        assert.equal(typeof options.maintenanceClient?.stopOwnedBackend, 'function');
+        calls.push(options.root);
+        return { ok: true, state: 'VERIFIED' };
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.supervisor_convergence, { ok: true, state: 'VERIFIED' });
+    assert.deepEqual(calls, [readCurrentPointer({ home: t.dir }).path]);
+  } finally { t.cleanup(); }
+});
+
+test('production-style handoff ownership is reserved before releasing the update lock', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    const reservation = { ok: true, lock: { ok: true, token: 'reserved', file: 'fixture' }, marker: 'reservation' };
+    const events = [];
+    const result = await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidate(t.dir, { version: '1.2.0' }),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorReserver: async ({ root }) => {
+        assert.equal(existsSync(updateLockFile({ home: t.dir })), true, 'handoff ownership must be reserved while the update lock is still held');
+        assert.equal(root, readCurrentPointer({ home: t.dir }).path);
+        events.push('reserved');
+        return reservation;
+      },
+      supervisorConverger: async (options) => {
+        assert.equal(existsSync(updateLockFile({ home: t.dir })), false, 'legacy watcher processing begins only after update-lock release');
+        assert.equal(options.reservation, reservation);
+        events.push('converged');
+        return { ok: true, state: 'VERIFIED' };
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(events, ['reserved', 'converged']);
+  } finally { t.cleanup(); }
+});
+
+test('a pending handoff is recovered before a new lifecycle transaction acquires its update window', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    const sourceRoot = makeCandidate(t.dir, { version: '1.2.0' });
+    assert.equal((await npxInstall({
+      home: t.dir, sourceRoot, installer: rec.installer, log: () => {}, ensureRuntime: okRuntime(),
+    })).ok, true);
+    const calls = [];
+    let pendingChecks = 0;
+    const result = await npxInstall({
+      home: t.dir,
+      sourceRoot,
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorPendingChecker: () => {
+        pendingChecks += 1;
+        return pendingChecks <= 2;
+      },
+      supervisorConverger: async ({ root }) => {
+        assert.equal(existsSync(updateLockFile({ home: t.dir })), false);
+        assert.equal(root, readCurrentPointer({ home: t.dir }).path);
+        calls.push(root);
+        return { ok: true, state: 'VERIFIED' };
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 3, 'every reacquired update window is rechecked before mutation, then post-transaction convergence runs');
+  } finally { t.cleanup(); }
+});
+
+test('a post-commit supervisor convergence failure is explicit and never rolls back the committed payload', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    const result = await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidate(t.dir, { version: '1.2.0' }),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorConverger: async () => ({ ok: false, code: 'SUPERVISOR_HANDOFF_BUSY' }),
+    });
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SUPERVISOR_CONVERGENCE_FAILED');
+    assert.equal(result.committed, true);
+    assert.equal(pointer.version, '1.2.0');
+    assert.deepEqual(result.supervisor_convergence, { ok: false, code: 'SUPERVISOR_HANDOFF_BUSY' });
+  } finally { t.cleanup(); }
+});
+
+test('rollback converges the supervisor against the exact retained release after releasing the update lock', async () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    const converged = [];
+    const converge = async (options) => {
+      assert.equal(existsSync(updateLockFile({ home: t.dir })), false, 'rollback handoff must run after update-lock release');
+      converged.push(options.root);
+      return { ok: true, state: 'VERIFIED' };
+    };
+    await npxInstall({
+      home: t.dir,
+      sourceRoot: makeCandidate(t.dir, { version: '1.2.0' }),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorConverger: converge,
+    });
+    await npxUpdate({
+      home: t.dir,
+      candidate: makeCandidate(join(t.dir, 'next'), { version: '1.3.0' }),
+      installer: rec.installer,
+      log: () => {},
+      ensureRuntime: okRuntime(),
+      supervisorConverger: converge,
+    });
+    converged.length = 0;
+
+    const result = await npxRollback({
+      home: t.dir,
+      version: '1.2.0',
+      installer: rec.installer,
+      log: () => {},
+      validatePayload: () => ({ ok: true }),
+      activate: async () => true,
+      supervisorFactory: () => ({
+        stopOwnedBackend: async () => ({ ok: true }),
+        startOwnedBackend: async () => ({ ok: true }),
+      }),
+      verifyRuntime: async () => ({ ok: true }),
+      supervisorConverger: converge,
+    });
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(result.ok, true);
+    assert.equal(pointer.version, '1.2.0');
+    assert.deepEqual(converged, [pointer.path]);
+  } finally { t.cleanup(); }
 });

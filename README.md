@@ -31,6 +31,10 @@ open the Crew control:
 
 Or open <http://127.0.0.1:3210/> after startup.
 
+Install, update, and rollback also converge the Windows watcher automatically:
+the exact old watcher is handed off, and completion is reported only after the
+new 3210 Crew and DSH versions are verified. No 3080 restart is involved.
+
 ```bash
 dsh-crew status
 dsh-crew inspect

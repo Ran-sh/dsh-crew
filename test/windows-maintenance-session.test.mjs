@@ -174,7 +174,7 @@ maybe('maintenance-start verifies the requested Crew runtime version', () => {
       `function Get-PortState { [pscustomobject]@{ State = 'free'; Pid = $null; Error = $null } }`,
       `function Start-CrewService { }`,
       `function Wait-CrewServices { }`,
-      `function Invoke-RestMethod { [pscustomobject]@{ ok = $true; extension = [pscustomobject]@{ runtime = [pscustomobject]@{ runtime_id = 'rid-new'; runtime_version = 'WRONG'; dsh_version = '0.1.2-rc.1' } } } }`,
+      `function Invoke-RestMethod { [pscustomobject]@{ ok = $true; extension = [pscustomobject]@{ runtime = [pscustomobject]@{ runtime_id = 'rid-new'; service = 'dsh-crew-hub'; execution_plane = 'hub-3210'; profile = 'dsh-crew'; listen_port = 3210; protocol_version = 1; runtime_version = 'WRONG'; dsh_version = '0.1.2-rc.1' } } } }`,
       `Invoke-CrewMaintenanceRequests`,
       `$res = Get-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-results') 'req-start.json') -Raw | ConvertFrom-Json`,
       `if ($res.state -ne 'VERIFY_FAILED') { throw ('expected VERIFY_FAILED, got ' + $res.state) }`,
@@ -182,5 +182,32 @@ maybe('maintenance-start verifies the requested Crew runtime version', () => {
     ].join('\n'));
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout.trim(), /CREW_VERSION_GATE_OK/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+maybe('maintenance-stop rejects a responder that is not the canonical isolated Crew runtime', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-maint-ps-'));
+  try {
+    const root = dir.replaceAll("'", "''");
+    const result = runPs([
+      `$script:crewSupervisorRoot = '${root}'`,
+      `$script:crewMaintenanceRequestsDir = Join-Path '${root}' 'maintenance-requests'`,
+      `$script:crewMaintenanceResultsDir = Join-Path '${root}' 'maintenance-results'`,
+      `$script:crewMaintenanceSessionFile = Join-Path '${root}' 'maintenance-session.json'`,
+      `$script:services = @([pscustomobject]@{ Name = 'test'; CrewOwned = $true; Port = 3210; Url = 'http://127.0.0.1:3210' })`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-requests') -Force | Out-Null`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-results') -Force | Out-Null`,
+      `$stop = @{ schema_version = 1; request_id = 'req-stop'; operation = 'maintenance-stop'; lease = 'lease-good'; runtime_id = 'rid-old'; expires_at = 9999999999999; extra = $null } | ConvertTo-Json -Compress`,
+      `Set-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-requests') 'req-stop.json') -Value $stop -Encoding UTF8 -NoNewline`,
+      `function Invoke-RestMethod { [pscustomobject]@{ ok = $true; extension = [pscustomobject]@{ runtime = [pscustomobject]@{ runtime_id = 'rid-old'; service = 'other-service'; execution_plane = 'hub-3210'; profile = 'dsh-crew'; listen_port = 3210; protocol_version = 1 } } } }`,
+      `function Get-PortState { throw 'must not inspect the port for an impostor' }`,
+      `function Stop-OwnedListener { throw 'must not stop an impostor' }`,
+      `Invoke-CrewMaintenanceRequests`,
+      `$res = Get-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-results') 'req-stop.json') -Raw | ConvertFrom-Json`,
+      `if ($res.state -ne 'SUPERVISOR_OWNERSHIP_CONFLICT') { throw ('expected conflict, got ' + $res.state) }`,
+      `'STOP_IDENTITY_GATE_OK'`,
+    ].join('\n'));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout.trim(), /STOP_IDENTITY_GATE_OK/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

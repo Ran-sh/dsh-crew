@@ -28,6 +28,10 @@ Windows 安装会注册登录启动项。如需立即启动并打开 Crew 控制
 
 启动后打开 <http://127.0.0.1:3210/>。
 
+安装、更新和回滚也会自动收敛 Windows watcher：系统会精确交接旧 watcher，
+并且只有在新的 3210 Crew 与 DSH 版本验证通过后才报告完成；整个过程不涉及
+重启 3080。
+
 ```bash
 dsh-crew status
 dsh-crew inspect

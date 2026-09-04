@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   installWindowsStartup,
+  readWindowsSupervisorAssets,
   uninstallWindowsStartup,
   windowsStartupStatus,
 } from '../src/install/windows-startup.mjs';
@@ -17,6 +18,7 @@ function fixture() {
   writeFileSync(join(root, 'windows', 'start-dsh-crew.cmd'), '@echo off\r\npowershell.exe -File "%~dp0start-dsh-crew.ps1" %*\r\n');
   writeFileSync(join(root, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\n# DSHCrewServiceSupervisor\nparam([string]$Mode = "open")\n');
   writeFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'Option Explicit\n__LAUNCHER__\n--watch\n');
+  writeFileSync(join(root, 'windows', 'supervisor-control.ps1'), '# DSH Crew Windows supervisor process control\nfunction Stop-ExactManagedWatcher {}\n');
   return { home, root, startupDir, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
@@ -27,9 +29,13 @@ test('Windows startup install is durable, idempotent, and reports readiness', ()
     const second = installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
+    assert.equal(second.changed, false);
     assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, true);
     assert.equal(existsSync(first.launcherFile), true);
     assert.equal(existsSync(first.helperFile), true);
+    assert.equal(existsSync(first.controlFile), true);
+    assert.equal(existsSync(first.supervisorManifestFile), true);
+    assert.equal(readWindowsSupervisorAssets({ home: f.home }).ok, true);
     assert.equal(existsSync(first.startupFile), true);
     const startup = readFileSync(first.startupFile, 'utf16le');
     assert.match(startup, /start-dsh-crew\.cmd/);
@@ -46,6 +52,11 @@ test('Windows startup readiness fails closed when a managed launcher asset is mi
 
     installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
     writeFileSync(installed.launcherFile, '');
+    assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, false);
+
+    installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    writeFileSync(installed.supervisorManifestFile, '{"schema_version":1,"managed_by":"dsh-crew"}');
+    assert.equal(readWindowsSupervisorAssets({ home: f.home }).ok, false);
     assert.equal(windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' }).ready, false);
   } finally { f.cleanup(); }
 });
@@ -74,6 +85,7 @@ test('Windows startup readiness rejects launcher assets installed from an older 
     writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.cmd'), '@echo off\r\nrem payload revision new\r\npowershell.exe -File "%~dp0start-dsh-crew.ps1" %*\r\n');
     writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.ps1'), '# DSH Crew managed Windows launcher\n# DSHCrewServiceSupervisor\n# payload revision new\nparam([string]$Mode = "open")\n');
     writeFileSync(join(newRoot, 'windows', 'start-dsh-crew.vbs'), "Option Explicit\n' payload revision new\n__LAUNCHER__\n--watch\n");
+    writeFileSync(join(newRoot, 'windows', 'supervisor-control.ps1'), '# DSH Crew Windows supervisor process control\n# payload revision new\nfunction Stop-ExactManagedWatcher {}\n');
 
     const status = windowsStartupStatus({ home: f.home, root: newRoot, startupDir: f.startupDir, platform: 'win32' });
     assert.equal(status.installed, true);
@@ -92,6 +104,8 @@ test('Windows startup uninstall removes only managed files', () => {
     assert.equal(result.ok, true);
     assert.equal(existsSync(keep), true);
     assert.equal(existsSync(join(f.home, '.config', 'dsh-crew', 'launchers', 'start-dsh-crew.ps1')), false);
+    assert.equal(existsSync(join(f.home, '.config', 'dsh-crew', 'launchers', 'supervisor-control.ps1')), false);
+    assert.equal(existsSync(join(f.home, '.config', 'dsh-crew', 'launchers', 'supervisor-assets.json')), false);
     assert.equal(windowsStartupStatus({ home: f.home, startupDir: f.startupDir, platform: 'win32' }).installed, false);
   } finally { f.cleanup(); }
 });

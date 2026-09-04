@@ -124,6 +124,31 @@ export function maintenanceResultsDir(appRoot) {
   return join(supervisorStateRoot(appRoot), 'maintenance-results');
 }
 
+export function maintenanceSessionFile(appRoot) {
+  return join(supervisorStateRoot(appRoot), 'maintenance-session.json');
+}
+
+export function readMaintenanceSession(appRoot) {
+  const file = maintenanceSessionFile(appRoot);
+  if (!existsSync(file)) return { ok: true, state: 'absent', session: null };
+  try {
+    const session = JSON.parse(readFileSync(file, 'utf8'));
+    const valid = session?.schema_version === 1
+      && session.state === 'STOPPED'
+      && typeof session.lease === 'string'
+      && session.lease.length > 0
+      && typeof session.runtime_id === 'string'
+      && session.runtime_id.length > 0
+      && typeof session.request_id === 'string'
+      && session.request_id.length > 0;
+    return valid
+      ? { ok: true, state: 'present', session }
+      : { ok: false, state: 'malformed', code: 'MAINTENANCE_SESSION_MALFORMED', session: null };
+  } catch (error) {
+    return { ok: false, state: 'malformed', code: 'MAINTENANCE_SESSION_MALFORMED', error: error?.message, session: null };
+  }
+}
+
 export function readRestartRequest(appRoot, requestId) {
   try {
     const parsed = JSON.parse(readFileSync(join(restartRequestsDir(appRoot), `${requestId}.json`), 'utf8'));
@@ -177,7 +202,14 @@ export function readSupervisorHeartbeatRecord(appRoot, { now = Date.now(), stale
     if (parsed?.schema_version !== 1 || !Number.isInteger(parsed.pid) || parsed.pid < 1) return null;
     if (typeof parsed.last_seen !== 'number' || now - parsed.last_seen > staleAfterMs || parsed.last_seen - now > 5_000) return null;
     const hasOwnershipField = Object.hasOwn(parsed, 'ownership_ready');
-    const state = !hasOwnershipField ? 'legacy-v1' : parsed.ownership_ready === true ? 'ready' : 'starting';
+    const identityReady = typeof parsed.process_started_at_utc_ticks === 'string'
+      && /^\d+$/u.test(parsed.process_started_at_utc_ticks)
+      && parsed.process_started_at_utc_ticks !== '0'
+      && typeof parsed.helper_hash === 'string'
+      && /^[a-f0-9]{64}$/u.test(parsed.helper_hash)
+      && typeof parsed.supervisor_instance_id === 'string'
+      && parsed.supervisor_instance_id.trim().length > 0;
+    const state = !hasOwnershipField ? 'legacy-v1' : parsed.ownership_ready === true && identityReady ? 'ready' : 'starting';
     return { state, record: { ...parsed, ownership_source: state } };
   } catch { return null; }
 }
@@ -188,11 +220,21 @@ export function readSupervisorHeartbeat(appRoot, options = {}) {
   return observed?.state === 'ready' ? observed.record : null;
 }
 
-export function writeSupervisorHeartbeat({ appRoot, pid, now = Date.now(), ownershipReady = true }) {
+export function writeSupervisorHeartbeat({
+  appRoot,
+  pid,
+  now = Date.now(),
+  ownershipReady = true,
+  processStartedAtUtcTicks = null,
+  helperHash = null,
+  supervisorInstanceId = randomUUID(),
+}) {
   const record = {
     schema_version: 1,
-    supervisor_instance_id: randomUUID(),
+    supervisor_instance_id: supervisorInstanceId,
     pid,
+    process_started_at_utc_ticks: typeof processStartedAtUtcTicks === 'string' ? processStartedAtUtcTicks : null,
+    helper_hash: helperHash,
     ownership_ready: ownershipReady === true,
     last_seen: now,
     protocol_version: 1,
@@ -201,7 +243,13 @@ export function writeSupervisorHeartbeat({ appRoot, pid, now = Date.now(), owner
   // run (the watcher rewrites this file every few seconds).
   try {
     const prev = JSON.parse(readFileSync(heartbeatFile(appRoot), 'utf8'));
-    if (prev?.schema_version === 1) record.supervisor_instance_id = prev.supervisor_instance_id;
+    const sameWatcher = prev?.schema_version === 1
+      && prev.pid === record.pid
+      && prev.process_started_at_utc_ticks === record.process_started_at_utc_ticks
+      && prev.helper_hash === record.helper_hash
+      && typeof prev.supervisor_instance_id === 'string'
+      && prev.supervisor_instance_id.length > 0;
+    if (sameWatcher) record.supervisor_instance_id = prev.supervisor_instance_id;
   } catch { /* first beat */ }
   writeFileAtomic(heartbeatFile(appRoot), JSON.stringify(record, null, 2) + '\n');
   return record;

@@ -13,7 +13,17 @@ $dshCli = Join-Path $crewHome 'runtime\node_modules\.bin\dsh.cmd'
 $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
-$launcherProcessStartedAtUtcTicks = try { (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().Ticks } catch { $null }
+$launcherProcessStartedAtUtcTicks = try { (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture) } catch { $null }
+$supervisorInstanceId = [guid]::NewGuid().ToString()
+$launcherHelperHash = $null
+try {
+  $hashStream = [System.IO.File]::OpenRead($PSCommandPath)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try { $launcherHelperHash = (($sha256.ComputeHash($hashStream) | ForEach-Object { $_.ToString('x2') }) -join '') }
+    finally { $sha256.Dispose() }
+  } finally { $hashStream.Dispose() }
+} catch { $launcherHelperHash = $null }
 $services = @(
   [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; CrewOwned = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
@@ -110,7 +120,7 @@ function Write-Utf8NoBom {
 function Write-SupervisorHeartbeat {
   param([bool] $OwnershipReady = $false)
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  $record = @{ schema_version = 1; pid = $PID; process_started_at_utc_ticks = $launcherProcessStartedAtUtcTicks; ownership_ready = $OwnershipReady; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
+  $record = @{ schema_version = 1; supervisor_instance_id = $supervisorInstanceId; pid = $PID; process_started_at_utc_ticks = $launcherProcessStartedAtUtcTicks; helper_hash = $launcherHelperHash; ownership_ready = $OwnershipReady; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
   try {
     if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
     $temp = Join-Path $crewSupervisorRoot ("heartbeat.{0}.tmp" -f $PID)
@@ -151,7 +161,12 @@ function Get-SupervisorHeartbeatRecord {
       if ($process.StartTime.ToUniversalTime().Ticks -ne $expectedTicks) { return $null }
     }
     $ownershipProperty = $record.PSObject.Properties['ownership_ready']
-    $state = if ($null -eq $ownershipProperty) { 'legacy-v1' } elseif ($ownershipProperty.Value -eq $true) { 'ready' } else { 'starting' }
+    $helperHashProperty = $record.PSObject.Properties['helper_hash']
+    $instanceProperty = $record.PSObject.Properties['supervisor_instance_id']
+    $identityReady = $null -ne $processStartProperty -and $processStartProperty.Value `
+      -and $null -ne $helperHashProperty -and $helperHashProperty.Value -match '^[a-f0-9]{64}$' `
+      -and $null -ne $instanceProperty -and -not [string]::IsNullOrWhiteSpace([string] $instanceProperty.Value)
+    $state = if ($null -eq $ownershipProperty) { 'legacy-v1' } elseif ($ownershipProperty.Value -eq $true -and $identityReady) { 'ready' } else { 'starting' }
     return [pscustomobject]@{ State = $state; Record = $record }
   } catch {
     return $null
@@ -410,7 +425,14 @@ function Invoke-CrewMaintenanceRequests {
       $liveRuntimeId = $null
       try {
         $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
-        if ($resp.ok -eq $true) { $liveRuntimeId = $resp.extension.runtime.runtime_id }
+        $runtime = $resp.extension.runtime
+        $canonical = $resp.ok -eq $true `
+          -and $runtime.service -eq 'dsh-crew-hub' `
+          -and $runtime.execution_plane -eq 'hub-3210' `
+          -and $runtime.profile -eq 'dsh-crew' `
+          -and ($runtime.listen_port -as [int]) -eq 3210 `
+          -and ($runtime.protocol_version -as [int]) -eq 1
+        if ($canonical) { $liveRuntimeId = $runtime.runtime_id }
       } catch { $liveRuntimeId = $null }
       if (-not $liveRuntimeId -or $liveRuntimeId -ne $request.runtime_id) {
         Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
@@ -476,7 +498,14 @@ function Invoke-CrewMaintenanceRequests {
         $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 5
         if ($resp.ok -eq $true) { $newRuntime = $resp.extension.runtime }
       } catch { $newRuntime = $null }
-      $ok = $newRuntime -and $newRuntime.runtime_id -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
+      $ok = $newRuntime -and $newRuntime.runtime_id `
+        -and $newRuntime.service -eq 'dsh-crew-hub' `
+        -and $newRuntime.execution_plane -eq 'hub-3210' `
+        -and $newRuntime.profile -eq 'dsh-crew' `
+        -and ($newRuntime.listen_port -as [int]) -eq 3210 `
+        -and ($newRuntime.protocol_version -as [int]) -eq 1 `
+        -and ($expectedCrew -eq $null -or $newRuntime.runtime_version -eq $expectedCrew) `
+        -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
       if ($ok) {
         # Verifiable one-shot consumption: only a provably-cleared session
         # completes the transaction; otherwise the lease stays live and any
@@ -807,16 +836,18 @@ function Start-ServiceSupervisor {
         } else {
           $staleLockNotified = $false
         }
+        # Maintenance stop/start is the updater's owned process handoff and
+        # must remain live while the update lock fences ordinary recovery.
+        Invoke-CrewMaintenanceRequests
         if ($updateHeld) {
-          Write-LaunchLog 'Update in progress; supervisor observing only, no restarts.'
+          Write-LaunchLog 'Update in progress; maintenance only, ordinary recovery suspended.'
           $lastRecoveryError = $null
         } else {
           # Control protocol: publish this watcher's heartbeat and consume
           # any durable restart requests the hub wrote (3210 never spawns
-          # itself). Then consume maintenance transactions (npx cohort
-          # migration stop/start phases). Then run the ordinary health pass.
+          # itself). Maintenance was consumed above; now run the ordinary
+          # health pass.
           Invoke-CrewRestartRequests
-          Invoke-CrewMaintenanceRequests
           Ensure-CrewServices -QuietHealthy
           if ($lastRecoveryError) {
             Write-LaunchLog 'Supervisor recovery succeeded; Crew-owned 3210 is healthy.'

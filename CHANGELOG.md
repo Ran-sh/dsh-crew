@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Makes Windows launcher upgrades automatic and crash-resumable: install,
+  update, and rollback reserve supervisor ownership before releasing the
+  payload transaction, hand off the exact watcher PID, and verify the new
+  3210 Crew/DSH runtime identity.
+- Adds bounded maintenance discovery, exact PowerShell/process/helper
+  provenance, durable STOPPED-session recovery, and safe resume across every
+  watcher handoff checkpoint.
+- Keeps supervisor assets in a hash-bound Crew-owned manifest so unfinished
+  handoffs survive global package refreshes and legacy retained payloads remain
+  valid rollback targets.
+
 ## 1.1.1 — 2026-09-04
 
 - Supports the multiline flow-style Provider settings emitted by Harness
@@ -48,10 +61,6 @@
   deletion after a Provider is materialized in Harness user settings.
 - Keeps the isolated 3210 execution plane and explicit model-priority routing
   intact across the 3080 bridge, Codex, Claude, and ZCode integrations.
-
-## Unreleased
-
-Future changes go here.
 
 ## 1.0.2 — 2026-09-01
 

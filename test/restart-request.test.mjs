@@ -83,7 +83,7 @@ test('supervisor heartbeat freshness gate', () => {
       appRoot: t.dir,
       pid: 4242,
       now,
-      processStartedAtUtcTicks: 123,
+      processStartedAtUtcTicks: '123',
       helperHash: 'a'.repeat(64),
       supervisorInstanceId: '11111111-1111-4111-8111-111111111111',
     });
@@ -117,6 +117,50 @@ test('ownership flag without watcher identity and helper hash is not authoritati
     writeFileSync(hb, JSON.stringify({ schema_version: 1, pid: 4242, ownership_ready: true, last_seen: now, protocol_version: 1 }));
     assert.equal(readSupervisorHeartbeatRecord(t.dir, { now: now + 1_000 })?.state, 'starting');
     assert.equal(readSupervisorHeartbeat(t.dir, { now: now + 1_000 }), null);
+  } finally { t.cleanup(); }
+});
+
+test('numeric process-start ticks are rejected because JSON cannot preserve Windows Int64 identity', () => {
+  const t = tempRoot();
+  try {
+    const now = 1_000_000;
+    const hb = heartbeatFile(t.dir);
+    mkdirSync(hb.replace(/[^/\\]+$/, ''), { recursive: true });
+    writeFileSync(hb, JSON.stringify({
+      schema_version: 1,
+      pid: 4242,
+      process_started_at_utc_ticks: 638609500000000000,
+      helper_hash: 'a'.repeat(64),
+      supervisor_instance_id: '11111111-1111-4111-8111-111111111111',
+      ownership_ready: true,
+      last_seen: now,
+      protocol_version: 1,
+    }));
+    assert.equal(readSupervisorHeartbeatRecord(t.dir, { now })?.state, 'starting');
+    assert.equal(readSupervisorHeartbeat(t.dir, { now }), null);
+  } finally { t.cleanup(); }
+});
+
+test('heartbeat instance identity is reused only for the exact same watcher lifetime and helper', () => {
+  const t = tempRoot();
+  try {
+    const common = {
+      appRoot: t.dir,
+      pid: 4242,
+      processStartedAtUtcTicks: '638609500000000000',
+      helperHash: 'a'.repeat(64),
+      now: 1_000,
+    };
+    const first = writeSupervisorHeartbeat({ ...common, supervisorInstanceId: 'instance-one' });
+    const same = writeSupervisorHeartbeat({ ...common, now: 2_000 });
+    const replacement = writeSupervisorHeartbeat({
+      ...common,
+      processStartedAtUtcTicks: '638609500000000001',
+      now: 3_000,
+    });
+    assert.equal(first.supervisor_instance_id, 'instance-one');
+    assert.equal(same.supervisor_instance_id, 'instance-one');
+    assert.notEqual(replacement.supervisor_instance_id, 'instance-one');
   } finally { t.cleanup(); }
 });
 

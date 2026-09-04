@@ -7,6 +7,10 @@
     "dsh-crew": "bin/dsh-crew.mjs"
   },
   "description": "DeepSeek Harness plugin: dispatch work to DSH agents from Claude Code / Codex, as native subagents with live progress",
+  "dshCrew": {
+    "payloadSchema": 2,
+    "windowsSupervisorHandoff": 1
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

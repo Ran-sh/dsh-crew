@@ -768,7 +768,13 @@ test('coordinated update migrates payload + runtime together and retains the pri
     // candidate 1.0.4 pins the current TARGET (rc.1).
     const candDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
     // Complete the candidate payload artifacts so finalize validation passes.
-    for (const rel of ['src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml', 'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml', 'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js']) {
+    for (const rel of [
+      'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml',
+      'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml',
+      'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js',
+      'windows/start-dsh-crew.ps1', 'windows/start-dsh-crew.cmd',
+      'windows/start-dsh-crew.vbs', 'windows/supervisor-control.ps1',
+    ]) {
       const f = join(candDir, rel);
       mkdirSync(join(f, '..'), { recursive: true });
       writeFileSync(f, rel.endsWith('package.json') ? JSON.stringify({ name: '@ran-sh/dsh-crew-web-bridge', version: '1.0.0' }) : '// artifact');
@@ -953,7 +959,13 @@ test('retention failure never deletes the parked prior tree', async () => {
     materializeLiveRuntime({ home: t.dir, version: ALPHA });
     const candDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
     // Complete the candidate payload artifacts so finalize validation passes.
-    for (const rel of ['src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml', 'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml', 'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js']) {
+    for (const rel of [
+      'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml',
+      'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml',
+      'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js',
+      'windows/start-dsh-crew.ps1', 'windows/start-dsh-crew.cmd',
+      'windows/start-dsh-crew.vbs', 'windows/supervisor-control.ps1',
+    ]) {
       const f = join(candDir, rel);
       mkdirSync(join(f, '..'), { recursive: true });
       writeFileSync(f, rel.endsWith('package.json') ? JSON.stringify({ name: '@ran-sh/dsh-crew-web-bridge', version: '1.0.0' }) : '// artifact');
@@ -1026,7 +1038,13 @@ test('coordinated commit crash before pointer write recovers to prior via reconc
     materializeLiveRuntime({ home: t.dir, version: ALPHA });
     const candDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: TARGET_DSH_VERSION });
     // Complete the candidate payload artifacts so finalize validation passes.
-    for (const rel of ['src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml', 'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml', 'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js']) {
+    for (const rel of [
+      'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'cordis.patch.yml',
+      'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml',
+      'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js',
+      'windows/start-dsh-crew.ps1', 'windows/start-dsh-crew.cmd',
+      'windows/start-dsh-crew.vbs', 'windows/supervisor-control.ps1',
+    ]) {
       const f = join(candDir, rel);
       mkdirSync(join(f, '..'), { recursive: true });
       writeFileSync(f, rel.endsWith('package.json') ? JSON.stringify({ name: '@ran-sh/dsh-crew-web-bridge', version: '1.0.0' }) : '// artifact');

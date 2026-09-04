@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  acquireWindowsSupervisorHandoffLock,
   clearWindowsSupervisorHandoffJournal,
   readWindowsSupervisorHandoffJournal,
   runWindowsSupervisorHandoff,
   windowsSupervisorHandoffJournalPath,
+  windowsSupervisorHandoffLockPath,
   writeWindowsSupervisorHandoffJournal,
 } from '../src/install/windows-supervisor-lifecycle.mjs';
 
@@ -27,6 +29,8 @@ const NEW = Object.freeze({
 const TARGET = Object.freeze({
   helper_path: 'C:\\Program Files\\DSH Crew\\start-dsh-crew.ps1',
   helper_hash: TARGET_HASH,
+  control_path: 'C:\\Program Files\\DSH Crew\\supervisor-control.ps1',
+  control_hash: 'c'.repeat(64),
 });
 
 function temporaryAppRoot() {
@@ -76,6 +80,7 @@ function successfulHooks({ appRoot, initial = 'legacy', eventLog = [] } = {}) {
       eventLog.push(`maintenance-stop:${phase()}`);
       return { ok: true, state: 'STOPPED', lease, runtime_id };
     },
+    maintenanceStatus: async () => ({ ok: true, state: 'absent' }),
     verifyPortFree: async () => {
       eventLog.push(`port-free:${phase()}`);
       return { ok: true, free: true };
@@ -164,7 +169,20 @@ test('already-ready watcher with the target helper hash is an idempotent no-op',
     assert.equal(state.stopCalls, 0);
     assert.equal(state.startCalls, 0);
     assert.equal(state.launchCalls, 0);
-    assert.deepEqual(events, ['classify:target-ready', 'release-lock']);
+    assert.deepEqual(events, ['classify:target-ready', 'verify-ready:absent', 'release-lock']);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('an initially target-ready watcher still requires strict runtime verification', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    const { hooks } = successfulHooks({ appRoot: temp.dir, initial: 'target-ready' });
+    hooks.verifyReady = async () => ({ ok: false, code: 'RUNTIME_VERSION_MISMATCH' });
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SUPERVISOR_HANDOFF_READY_VERIFY_FAILED');
   } finally {
     temp.cleanup();
   }
@@ -248,6 +266,25 @@ test('journal target mismatch fails closed without invoking process hooks', asyn
   }
 });
 
+test('journal control hash drift fails closed before invoking process hooks', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({
+      appRoot: temp.dir,
+      journal: journal({ target: { ...TARGET, control_hash: 'd'.repeat(64) } }),
+    });
+    let observed = false;
+    const { hooks } = successfulHooks({ appRoot: temp.dir });
+    hooks.classifyHeartbeat = async () => { observed = true; };
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SUPERVISOR_HANDOFF_JOURNAL_IDENTITY_MISMATCH');
+    assert.equal(observed, false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test('maintenance STOPPED receipt must match the durable lease and runtime identity', async () => {
   const temp = temporaryAppRoot();
   try {
@@ -273,6 +310,39 @@ test('maintenance STOPPED receipt must match the durable lease and runtime ident
   }
 });
 
+test('planned handoff rebinds when the same exact watcher recovered a new runtime before STOPPED was durable', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    let runtimeId = 'runtime-old';
+    let stops = 0;
+    let leaseSequence = 0;
+    const { hooks } = successfulHooks({ appRoot: temp.dir });
+    const classifyNormally = hooks.classifyHeartbeat;
+    hooks.classifyHeartbeat = async (payload) => stops < 2
+      ? ({ ok: true, classification: 'legacy', watcher: { ...OLD }, runtime_id: runtimeId })
+      : classifyNormally(payload);
+    hooks.maintenanceStop = async ({ lease, runtime_id }) => {
+      stops += 1;
+      if (stops === 1) {
+        runtimeId = 'runtime-recovered';
+        return { ok: false, code: 'MAINTENANCE_IDENTITY_CHANGED' };
+      }
+      return { ok: true, state: 'STOPPED', lease, runtime_id };
+    };
+    const result = await runWindowsSupervisorHandoff({
+      appRoot: temp.dir,
+      target: TARGET,
+      hooks,
+      createLease: () => `lease-${++leaseSequence}`,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(stops, 2);
+    assert.equal(leaseSequence, 2, 'the recovered runtime must get a fresh durable lease');
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test('exact-watcher mismatch fails closed and never stops an unproven PID', async () => {
   const temp = temporaryAppRoot();
   try {
@@ -285,6 +355,36 @@ test('exact-watcher mismatch fails closed and never stops an unproven PID', asyn
     assert.equal(result.code, 'SUPERVISOR_HANDOFF_OLD_WATCHER_MISMATCH');
     assert.equal(stopped, false);
     assert.equal(readWindowsSupervisorHandoffJournal({ appRoot: temp.dir }).state, 'absent');
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('exact watcher verification requires the hook to echo the full proven identity', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    let stopped = false;
+    const { hooks } = successfulHooks({ appRoot: temp.dir });
+    hooks.verifyExactWatcher = async () => ({ ok: true });
+    hooks.stopExactWatcher = async () => { stopped = true; };
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SUPERVISOR_HANDOFF_OLD_WATCHER_MISMATCH');
+    assert.equal(stopped, false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('watcher stop requires an exact identity receipt before advancing the durable phase', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    const { hooks } = successfulHooks({ appRoot: temp.dir });
+    hooks.stopExactWatcher = async () => ({ ok: true, stopped: true });
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'SUPERVISOR_HANDOFF_WATCHER_STOP_FAILED');
+    assert.equal(readWindowsSupervisorHandoffJournal({ appRoot: temp.dir }).journal.phase, 'backend-stopped');
   } finally {
     temp.cleanup();
   }
@@ -392,6 +492,138 @@ test('resume recognizes a target watcher launched just before a crash and does n
     assert.equal(result.ok, true);
     assert.equal(state.launchCalls, 0);
     assert.equal(state.startCalls, 1);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('resume advances when the exact old watcher was killed before the phase checkpoint', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({
+      appRoot: temp.dir,
+      journal: journal({ phase: 'backend-stopped' }),
+    });
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'legacy' });
+    let stopCalls = 0;
+    hooks.verifyExactWatcher = async ({ expected, role }) => {
+      if (role === 'old') {
+        state.heartbeat = 'absent';
+        return { ok: false, code: 'PROCESS_NOT_FOUND' };
+      }
+      return { ok: true, watcher: { ...expected } };
+    };
+    hooks.stopExactWatcher = async () => { stopCalls += 1; };
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(stopCalls, 0, 'an already-dead exact watcher must not be killed again');
+    assert.equal(state.launchCalls, 1);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('default handoff lock reclaims a dead owner and resumes the durable journal', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({
+      appRoot: temp.dir,
+      journal: journal({ phase: 'old-watcher-stopped', old: null, runtime_id: null }),
+    });
+    const lock = `${windowsSupervisorHandoffJournalPath(temp.dir)}.lock`;
+    mkdirSync(lock);
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify({
+      schema_version: 1,
+      token: 'dead-owner',
+      pid: 2147483647,
+      acquired_at: 1,
+    }));
+    const { hooks } = successfulHooks({ appRoot: temp.dir, initial: 'absent' });
+    delete hooks.acquireLock;
+    delete hooks.releaseLock;
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(lock), false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('a lock reserved while another lifecycle lock is held transfers atomically into handoff execution', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    const reserved = acquireWindowsSupervisorHandoffLock({ appRoot: temp.dir });
+    assert.equal(reserved.ok, true);
+    assert.equal(existsSync(windowsSupervisorHandoffLockPath(temp.dir)), true);
+    const { hooks } = successfulHooks({ appRoot: temp.dir, initial: 'absent' });
+    delete hooks.acquireLock;
+    delete hooks.releaseLock;
+    const result = await runWindowsSupervisorHandoff({
+      appRoot: temp.dir,
+      target: TARGET,
+      hooks,
+      preAcquiredLock: reserved,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(windowsSupervisorHandoffLockPath(temp.dir)), false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('planned recovery accepts a replacement target watcher only after strict ready verification', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({ appRoot: temp.dir, journal: journal({ phase: 'planned' }) });
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'target-ready' });
+    hooks.verifyExactWatcher = async ({ expected, role }) => role === 'old'
+      ? ({ ok: false, code: 'PROCESS_NOT_FOUND' })
+      : ({ ok: true, watcher: { ...expected } });
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.runtime_id, 'runtime-new');
+    assert.equal(state.stopCalls, 0);
+    assert.equal(state.launchCalls, 0);
+    assert.equal(existsSync(windowsSupervisorHandoffJournalPath(temp.dir)), false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('planned recovery converts to a fresh launch only when old watcher, maintenance session, and port are absent', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({ appRoot: temp.dir, journal: journal({ phase: 'planned' }) });
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'absent' });
+    hooks.verifyExactWatcher = async ({ expected, role }) => role === 'old'
+      ? ({ ok: false, code: 'PROCESS_NOT_FOUND' })
+      : ({ ok: true, watcher: { ...expected } });
+    hooks.maintenanceStatus = async () => ({ ok: true, state: 'absent' });
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.fresh, true);
+    assert.equal(state.stopCalls, 0);
+    assert.equal(state.startCalls, 0);
+    assert.equal(state.launchCalls, 1);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('planned recovery preserves a matching durable STOPPED session when the old watcher is gone', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    writeWindowsSupervisorHandoffJournal({ appRoot: temp.dir, journal: journal({ phase: 'planned' }) });
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'absent' });
+    hooks.verifyExactWatcher = async ({ expected, role }) => role === 'old'
+      ? ({ ok: false, code: 'PROCESS_NOT_FOUND' })
+      : ({ ok: true, watcher: { ...expected } });
+    hooks.maintenanceStatus = async ({ lease, runtime_id }) => ({ ok: true, state: 'matching', lease, runtime_id });
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(state.stopCalls, 0);
+    assert.equal(state.startCalls, 1, 'the matching stopped lease must be consumed by maintenance-start');
+    assert.equal(state.launchCalls, 1);
   } finally {
     temp.cleanup();
   }

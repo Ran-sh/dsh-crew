@@ -31,13 +31,19 @@ node scripts/setup.mjs status
 | Codex MCP and roles | Points Worker, Reviewer, and MCP to the installed release | Only DSH Crew entries are removed |
 | Global Codex policy | Managed block inside `~/.codex/AGENTS.md` | Only the managed block is removed |
 | ZCode MCP, agents and commands | Installs `~/.zcode/AGENTS.md`, `agents/{ds-worker,ds-reviewer}.md`, commands and a source-aware `dsh-crew` MCP entry | Only DSH Crew-owned files/entry are removed |
-| Windows login startup | `DSH Crew.vbs`, `start-dsh-crew.cmd`, and `start-dsh-crew.ps1` | Only DSH Crew-owned files are removed; foreign pre-existing content at those exact paths is preserved or fails closed |
+| Windows login startup | `DSH Crew.vbs`, `start-dsh-crew.cmd`, `start-dsh-crew.ps1`, the exact process controller, and its hash manifest | Only DSH Crew-owned files are removed; foreign pre-existing content at those exact paths is preserved or fails closed |
 | Official 3080 UI | External read-only optional legacy diagnostic; never installed or required by Crew | Nothing to remove; Crew never owns the official profile |
 
 The Windows launcher supervises only the Crew-owned 3210 service, so provider
 restart and rollback operations have one verifiable supervisor. The official
 3080 surface never starts, owns, or supervises 3210. The launcher does not
 store credentials.
+
+`dsh-crew install`, `update`, and `rollback` automatically perform an exact,
+crash-resumable watcher handoff after the payload transaction. The updater
+reserves handoff ownership before releasing its update lock, resumes any
+unfinished handoff first, and succeeds only after the isolated 3210 runtime
+reports the expected Crew and DSH versions.
 
 On Windows, installation registers login startup. To start immediately and
 open the Crew control:

@@ -47,6 +47,12 @@ import {
   officialWebIntegrationStatus,
   removeOfficialWebIntegration,
 } from './official-web.mjs';
+import {
+  convergeWindowsSupervisor,
+  releaseWindowsSupervisorConvergenceReservation,
+  reserveWindowsSupervisorConvergence,
+  windowsSupervisorConvergencePending,
+} from './windows-supervisor-adapter.mjs';
 
 export const CREW_APP_DIRNAME = 'app';
 export const RELEASES_DIRNAME = 'releases';
@@ -1023,11 +1029,18 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
       }
     }
   }
-  for (const rel of [
+  const requiredArtifacts = [
     'cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs',
     'official-web-bridge/package.json', 'official-web-bridge/cordis.patch.yml',
     'official-web-bridge/entry.mjs', 'official-web-bridge/lib/client.js',
-  ]) {
+  ];
+  if (manifest?.dshCrew?.windowsSupervisorHandoff === 1) {
+    requiredArtifacts.push(
+      'windows/start-dsh-crew.ps1', 'windows/start-dsh-crew.cmd',
+      'windows/start-dsh-crew.vbs', 'windows/supervisor-control.ps1',
+    );
+  }
+  for (const rel of requiredArtifacts) {
     if (!existsSync(join(dir, rel))) errors.push(`payload artifact missing: ${rel}`);
   }
   if (!allowIncomplete && existsSync(join(dir, INCOMPLETE_MARKER))) errors.push('release is still marked incomplete');
@@ -1287,12 +1300,18 @@ export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl 
 // requests. The npx process owns the runtime TREE swap; the supervisor owns
 // the PROCESS stop/start. The Node sidecar supervisor is deliberately not
 // used here: two authorities must never share the same kill rights.
-function crewSupervisor({ home = homedir() } = {}) {
+export function createCrewSupervisor({
+  home = homedir(),
+  fetchImpl = globalThis.fetch,
+  pollMs = 1_000,
+  timeoutMs = 90_000,
+  identityTimeoutMs = 3_000,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = Date.now,
+} = {}) {
   // The ONLY Crew app root both the hub and the Windows launcher agree on.
   // Requests written anywhere else are invisible to the supervisor.
   const appRoot = join(home, '.config', 'dsh-crew');
-  const pollMs = 1_000;
-  const timeoutMs = 90_000;
   // One maintenance transaction = one lease + the pre-stop identity proven
   // live. stop() fetches the CURRENT live runtime_id (the process exists);
   // start() reuses that proven identity + lease (the process is stopped by
@@ -1301,11 +1320,24 @@ function crewSupervisor({ home = homedir() } = {}) {
   let transaction = null;
   async function fetchCrewIdentity() {
     try {
-      const response = await fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+      const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(identityTimeoutMs),
+      });
       if (!response.ok) return null;
       const body = await response.json();
       const runtime = body?.extension?.runtime ?? null;
-      return runtime?.runtime_id ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id } : null;
+      const canonical = body?.ok === true
+        && runtime?.service === 'dsh-crew-hub'
+        && runtime?.execution_plane === 'hub-3210'
+        && runtime?.profile === 'dsh-crew'
+        && Number(runtime?.listen_port) === 3210
+        && Number(runtime?.protocol_version) === 1
+        && typeof runtime?.runtime_id === 'string'
+        && runtime.runtime_id.length > 0;
+      return canonical
+        ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id }
+        : null;
     } catch { return null; }
   }
   async function writeMaintenance({ operation, lease, identity, extra = null }) {
@@ -1318,10 +1350,10 @@ function crewSupervisor({ home = homedir() } = {}) {
       extra,
     });
     if (!created.ok) return created;
-    const deadline = Date.now() + timeoutMs;
+    const deadline = now() + timeoutMs;
     for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      if (Date.now() > deadline) {
+      await sleep(pollMs);
+      if (now() > deadline) {
         return { ok: false, code: 'MAINTENANCE_TIMEOUT', error: `${operation} ${created.request.request_id} not completed within ${timeoutMs}ms` };
       }
       const resultFile = join(maintenanceResultsDir(appRoot), `${created.request.request_id}.json`);
@@ -1331,21 +1363,70 @@ function crewSupervisor({ home = homedir() } = {}) {
           result = JSON.parse(readFileSync(resultFile, 'utf8'));
         }
       } catch { /* not yet */ }
-      if (!result || result.request_id !== created.request.request_id) continue;
-      if (result.state === 'STOPPED' || result.state === 'VERIFIED') {
-        return { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null };
+      if (!result) continue;
+      const identityMatches = result.schema_version === 1
+        && result.request_id === created.request.request_id
+        && result.operation === created.request.operation
+        && result.lease === created.request.lease
+        && result.runtime_id === created.request.runtime_id;
+      if (!identityMatches) {
+        return {
+          ok: false,
+          code: 'MAINTENANCE_RESULT_IDENTITY_MISMATCH',
+          error: 'maintenance result does not match the exact request identity',
+        };
+      }
+      const expectedState = operation === 'maintenance-stop' ? 'STOPPED' : 'VERIFIED';
+      if (result.state === expectedState) {
+        return {
+          ok: true,
+          state: result.state,
+          request_id: result.request_id,
+          lease: result.lease,
+          runtime_id: result.runtime_id,
+          detail: result.detail ?? null,
+        };
       }
       return { ok: false, code: `MAINTENANCE_${result.state ?? 'FAILED'}`, error: `maintenance ended in state ${result.state}`, detail: result.detail ?? null };
     }
   }
   return {
-    stopOwnedBackend: async () => {
+    stopOwnedBackend: async ({ lease = null, runtimeId = null } = {}) => {
+      const { readMaintenanceSession } = await import('../supervisor/restart-request.mjs');
+      const durable = readMaintenanceSession(appRoot);
+      if (!durable.ok) {
+        transaction = null;
+        return { ok: false, code: durable.code, error: 'durable maintenance session is malformed' };
+      }
+      if (durable.state === 'present') {
+        const session = durable.session;
+        if (lease && runtimeId && session.lease === lease && session.runtime_id === runtimeId) {
+          transaction = { lease, runtime_id: runtimeId };
+          return {
+            ok: true,
+            state: 'STOPPED',
+            lease,
+            runtime_id: runtimeId,
+            resumed: true,
+            request_id: session.request_id,
+          };
+        }
+        transaction = null;
+        return { ok: false, code: 'MAINTENANCE_SESSION_CONFLICT', error: 'a different durable maintenance session owns the stopped runtime window' };
+      }
       const identity = await fetchCrewIdentity();
       if (!identity?.runtime_id) {
         transaction = null;
         return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
       }
-      transaction = { lease: `txn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, runtime_id: identity.runtime_id };
+      if (runtimeId && runtimeId !== identity.runtime_id) {
+        transaction = null;
+        return { ok: false, code: 'MAINTENANCE_IDENTITY_CHANGED', error: 'live 3210 runtime_id changed before maintenance-stop' };
+      }
+      transaction = {
+        lease: lease ?? `txn-${now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        runtime_id: identity.runtime_id,
+      };
       const result = await writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
       if (!result.ok) {
         // A failed stop must not leave a usable lease behind: clear it so a
@@ -1355,18 +1436,217 @@ function crewSupervisor({ home = homedir() } = {}) {
       }
       return result;
     },
-    startOwnedBackend: async () => {
+    startOwnedBackend: async ({ lease = null, runtimeId = null, expectedCrewVersion = null, expectedDshVersion = null } = {}) => {
       // Reuse the proven stop-phase identity + lease: the process is stopped
       // by design and fetching identity now would always fail.
-      if (!transaction?.lease || !transaction?.runtime_id) {
+      const active = lease && runtimeId ? { lease, runtime_id: runtimeId } : transaction;
+      if (!active?.lease || !active?.runtime_id) {
         return { ok: false, code: 'MAINTENANCE_NO_TRANSACTION', error: 'maintenance-start requires a completed maintenance-stop in the same supervisor' };
       }
-      const identity = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: transaction.runtime_id };
-      const result = await writeMaintenance({ operation: 'maintenance-start', lease: transaction.lease, identity });
+      const identity = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: active.runtime_id };
+      const extra = expectedCrewVersion || expectedDshVersion ? {
+        ...(expectedCrewVersion ? { expected_crew_version: expectedCrewVersion } : {}),
+        ...(expectedDshVersion ? { expected_dsh_version: expectedDshVersion } : {}),
+      } : null;
+      const result = await writeMaintenance({ operation: 'maintenance-start', lease: active.lease, identity, extra });
       transaction = null;
       return result;
     },
   };
+}
+
+const crewSupervisor = createCrewSupervisor;
+
+function sameFilesystemPath(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const a = resolve(left);
+  const b = resolve(right);
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function usesProductionWindowsSupervisor(home, supervisorConverger) {
+  return typeof supervisorConverger !== 'function'
+    && process.platform === 'win32'
+    && sameFilesystemPath(home, homedir());
+}
+
+async function acquireLifecycleUpdateLock({
+  home,
+  log,
+  supervisorConverger,
+  supervisorPendingChecker,
+}) {
+  const production = usesProductionWindowsSupervisor(home, supervisorConverger);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const updateLock = acquireUpdateLock({ home });
+    if (!updateLock.ok) return updateLock;
+    let pending;
+    try {
+      pending = typeof supervisorPendingChecker === 'function'
+        ? await supervisorPendingChecker({ home })
+        : production
+          ? windowsSupervisorConvergencePending({ home })
+          : false;
+    } catch (error) {
+      releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+      return { ok: false, code: 'SUPERVISOR_HANDOFF_PENDING_CHECK_FAILED', error: error?.message ?? String(error) };
+    }
+    // Holding updateLock makes this a stable observation: no other conforming
+    // lifecycle operation can reserve a new handoff until we either return
+    // this lock or release it for recovery.
+    if (!pending) return updateLock;
+
+    const released = releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+    if (!released.ok || existsSync(updateLockFile({ home }))) {
+      return { ok: false, code: 'UPDATE_LOCK_RELEASE_UNVERIFIED' };
+    }
+    const active = readCurrentPointer({ home });
+    if (!active?.path || !existsSync(active.path)) {
+      return { ok: false, code: 'SUPERVISOR_HANDOFF_RECOVERY_RELEASE_MISSING' };
+    }
+    const converge = typeof supervisorConverger === 'function' ? supervisorConverger : convergeWindowsSupervisor;
+    let recovery;
+    try {
+      recovery = await converge({
+        home,
+        root: active.path,
+        maintenanceClient: createCrewSupervisor({ home }),
+      });
+    } catch (error) {
+      recovery = { ok: false, code: 'SUPERVISOR_HANDOFF_RECOVERY_THROWN', error: error?.message ?? String(error) };
+    }
+    if (recovery?.ok !== true) {
+      log?.(`✗ pending Windows supervisor handoff recovery failed (${recovery?.code ?? 'unknown'}).`);
+      return { ok: false, code: 'SUPERVISOR_HANDOFF_RECOVERY_FAILED', recovery };
+    }
+  }
+  return { ok: false, code: 'SUPERVISOR_HANDOFF_RECOVERY_CHURN' };
+}
+
+async function reservePostCommitSupervisor({
+  home,
+  result,
+  supervisorConverger,
+  supervisorReserver,
+}) {
+  if (result?.ok !== true) return { result, reservation: null };
+  const production = usesProductionWindowsSupervisor(home, supervisorConverger);
+  const reserve = typeof supervisorReserver === 'function'
+    ? supervisorReserver
+    : production
+      ? reserveWindowsSupervisorConvergence
+      : null;
+  if (!reserve) return { result, reservation: null };
+  const active = readCurrentPointer({ home });
+  if (!active?.path
+    || !sameFilesystemPath(active.path, result.path)
+    || (result.version && active.version !== result.version)) {
+    return {
+      result: {
+        ...result,
+        ok: false,
+        committed: true,
+        code: 'SUPERVISOR_CONVERGENCE_RELEASE_CHANGED',
+        error: 'active Crew release changed before Windows supervisor reservation',
+      },
+      reservation: null,
+    };
+  }
+  const reservation = await reserve({ home, root: active.path });
+  if (reservation?.ok !== true) {
+    return {
+      result: {
+        ...result,
+        ok: false,
+        committed: true,
+        code: 'SUPERVISOR_CONVERGENCE_RESERVATION_FAILED',
+        supervisor_convergence: reservation ?? null,
+      },
+      reservation: null,
+    };
+  }
+  return { result, reservation };
+}
+
+async function finalizeSupervisorConvergence({
+  home,
+  result,
+  log,
+  supervisorConverger,
+  reservation = null,
+}) {
+  if (result?.ok !== true) return result;
+
+  const defaultWindowsHome = process.platform === 'win32' && sameFilesystemPath(home, homedir());
+  const converge = typeof supervisorConverger === 'function'
+    ? supervisorConverger
+    : defaultWindowsHome
+      ? convergeWindowsSupervisor
+      : null;
+  if (!converge) return result;
+
+  const active = readCurrentPointer({ home });
+  if (!active?.path
+    || !sameFilesystemPath(active.path, result.path)
+    || (result.version && active.version !== result.version)) {
+    if (reservation) releaseWindowsSupervisorConvergenceReservation(reservation);
+    return {
+      ...result,
+      ok: false,
+      committed: true,
+      code: 'SUPERVISOR_CONVERGENCE_RELEASE_CHANGED',
+      error: 'active Crew release changed before Windows supervisor convergence',
+    };
+  }
+
+  let convergence;
+  try {
+    convergence = await converge({
+      home,
+      root: active.path,
+      maintenanceClient: createCrewSupervisor({ home }),
+      ...(reservation ? { reservation } : {}),
+    });
+  } catch (error) {
+    convergence = {
+      ok: false,
+      code: 'SUPERVISOR_CONVERGENCE_THROWN',
+      error: error?.message ?? String(error),
+    };
+  }
+  if (convergence?.ok !== true) {
+    log?.(`✗ Windows supervisor convergence failed (${convergence?.code ?? 'unknown'}); the payload remains committed and the handoff can be resumed.`);
+    return {
+      ...result,
+      ok: false,
+      committed: true,
+      code: 'SUPERVISOR_CONVERGENCE_FAILED',
+      supervisor_convergence: convergence ?? null,
+    };
+  }
+  return { ...result, supervisor_convergence: convergence };
+}
+
+async function finishLifecycleAfterUpdateLock({
+  home,
+  result,
+  lockRelease,
+  log,
+  supervisorConverger,
+  reservation = null,
+}) {
+  if (result?.ok !== true) return result;
+  if (lockRelease?.ok !== true || existsSync(updateLockFile({ home }))) {
+    if (reservation) releaseWindowsSupervisorConvergenceReservation(reservation);
+    return {
+      ...result,
+      ok: false,
+      committed: true,
+      code: 'UPDATE_LOCK_RELEASE_UNVERIFIED',
+      error: 'update lock release could not be verified; supervisor convergence was not attempted',
+    };
+  }
+  return finalizeSupervisorConvergence({ home, result, log, supervisorConverger, reservation });
 }
 
 // ---- release cohort resolution -------------------------------------------------
@@ -1470,19 +1750,27 @@ export async function npxRollback({
   restart,
   verifyRuntime,
   supervisorFactory = crewSupervisor,
+  supervisorConverger,
+  supervisorPendingChecker,
+  supervisorReserver,
 } = {}) {
   const targetVersion = typeof version === 'string' ? version.trim() : '';
   if (!targetVersion) return { ok: false, error: 'rollback requires a target version' };
   // Rollback shares the update mutual-exclusion lock: it mutates the same
   // pointer/registration/runtime surfaces as install/update, and the watch
   // supervisor must observe-only while it runs.
-  const updateLock = acquireUpdateLock({ home });
+  const updateLock = await acquireLifecycleUpdateLock({ home, log, supervisorConverger, supervisorPendingChecker });
   if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  let result;
+  let lockRelease;
+  let reservation = null;
   try {
-    return await npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory });
+    result = await npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory });
+    ({ result, reservation } = await reservePostCommitSupervisor({ home, result, supervisorConverger, supervisorReserver }));
   } finally {
-    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+    lockRelease = releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
   }
+  return finishLifecycleAfterUpdateLock({ home, result, lockRelease, log, supervisorConverger, reservation });
 }
 
 async function npxRollbackInner({ home, version: targetVersion, log, installer, ensureRuntime, validatePayload, activate, restart, verifyRuntime, supervisorFactory }) {
@@ -2044,7 +2332,7 @@ function currentInstallationHealth({ home }) {
   return { installed: true, healthy: validated.ok && registered, validated, registered, pointer };
 }
 
-async function activateRelease({ home, releaseDir, manifest, log, installer }) {
+async function activateRelease({ home, releaseDir, manifest, log, installer, supervisorRoot = runningPackageRoot() }) {
   const registration = ensureCrewPluginRegistration({ home, root: releaseDir, name: manifest.name });
   if (!registration.ok) {
     log(`✗ Harness registration failed (${registration.code ?? 'unknown'})`);
@@ -2068,7 +2356,7 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
     log('✓ ZCode integration');
   }
 
-  const startup = installer.installWindowsStartup?.({ home, root: releaseDir });
+  const startup = installer.installWindowsStartup?.({ home, root: supervisorRoot });
   if (startup?.ok === false) {
     log(`✗ Windows login startup failed (${startup.code ?? 'unknown'})`);
     return false;
@@ -2121,15 +2409,23 @@ export async function npxInstall({
   installer = realInstaller,
   ensureRuntime,
   npmInstaller,
+  supervisorConverger,
+  supervisorPendingChecker,
+  supervisorReserver,
 } = {}) {
   log('DSH Crew installer (npx-managed)');
-  const updateLock = acquireUpdateLock({ home });
+  const updateLock = await acquireLifecycleUpdateLock({ home, log, supervisorConverger, supervisorPendingChecker });
   if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  let result;
+  let lockRelease;
+  let reservation = null;
   try {
-    return await npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller });
+    result = await npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller });
+    ({ result, reservation } = await reservePostCommitSupervisor({ home, result, supervisorConverger, supervisorReserver }));
   } finally {
-    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+    lockRelease = releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
   }
+  return finishLifecycleAfterUpdateLock({ home, result, lockRelease, log, supervisorConverger, reservation });
 }
 
 async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller }) {
@@ -2179,7 +2475,7 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
 
   log('');
   log('Done.');
-  log('Restart DeepSeek Harness and Codex Desktop.');
+  log('Managed Windows supervisor convergence follows automatically when supported.');
   return { ok: true, version: manifest.version, path: releaseDir };
 }
 
@@ -2329,15 +2625,23 @@ export async function npxUpdate({
   ensureRuntime,
   npmInstaller,
   runner = spawnSync,
+  supervisorConverger,
+  supervisorPendingChecker,
+  supervisorReserver,
 } = {}) {
   log('DSH Crew updater');
-  const updateLock = acquireUpdateLock({ home });
+  const updateLock = await acquireLifecycleUpdateLock({ home, log, supervisorConverger, supervisorPendingChecker });
   if (!updateLock.ok) return { ok: false, error: `another update is in progress (${updateLock.code})` };
+  let result;
+  let lockRelease;
+  let reservation = null;
   try {
-    return await npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner });
+    result = await npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner });
+    ({ result, reservation } = await reservePostCommitSupervisor({ home, result, supervisorConverger, supervisorReserver }));
   } finally {
-    releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
+    lockRelease = releaseUpdateLock({ home, nonce: updateLock.nonce ?? null });
   }
+  return finishLifecycleAfterUpdateLock({ home, result, lockRelease, log, supervisorConverger, reservation });
 }
 
 async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner = spawnSync }) {
@@ -2478,8 +2782,8 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
       noteLauncherDivergence({ log, home });
       log('');
       log('Done.');
-      log('Restart DeepSeek Harness and Codex Desktop.');
-      return { ok: true, updated: true, version: manifest.version, path: staged.stageDir, coordinated: true, dsh_version: candidateDsh };
+      log('Managed Windows supervisor convergence follows automatically when supported.');
+      return { ok: true, updated: true, version: manifest.version, path: committedRelease.path, coordinated: true, dsh_version: candidateDsh };
     }
 
     if (!await ensureRuntimeStep({ home, log, ensureRuntime })) return { ok: false, error: 'Crew DSH runtime bootstrap failed' };
@@ -2501,7 +2805,7 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
     noteLauncherDivergence({ log, home });
     log('');
     log('Done.');
-    log('Restart DeepSeek Harness and Codex Desktop.');
+    log('Managed Windows supervisor convergence follows automatically when supported.');
     return { ok: true, updated: true, version: manifest.version, path: releaseDir };
   } finally {
     resolved.cleanup?.();
@@ -2586,7 +2890,7 @@ export function npxStatus({
   const claude = integrationLabel(st?.claude);
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
   const officialWeb = !official.legacy_present ? 'not present (native 3210 control plane)' : official.healthy ? 'legacy full bridge present (deprecated; manual cleanup available)' : 'legacy full bridge record present but unhealthy (deprecated)';
-  const startupState = installer.windowsStartupStatus?.({ home, root: managedRoot });
+  const startupState = installer.windowsStartupStatus?.({ home, root: runningPackageRoot() });
   const windowsStartup = !startupState?.supported ? 'not supported'
     : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
 

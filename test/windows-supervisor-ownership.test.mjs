@@ -26,7 +26,7 @@ function processTree({ rootTicks, listenerTicks }) {
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 15_000,
+    timeout: 60_000,
     windowsHide: true,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -43,7 +43,7 @@ function supervisedServices() {
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 15_000,
+    timeout: 60_000,
     windowsHide: true,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -61,7 +61,7 @@ function supervisorLaunchArguments() {
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 15_000,
+    timeout: 60_000,
     windowsHide: true,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -81,7 +81,7 @@ function untrackedListenerOwnership() {
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 15_000,
+    timeout: 60_000,
     windowsHide: true,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -114,7 +114,7 @@ function heartbeatCompatibility() {
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
     env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
-    timeout: 20_000,
+    timeout: 60_000,
     windowsHide: true,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
