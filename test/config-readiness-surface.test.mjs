@@ -7,17 +7,15 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const serverSource = readFileSync(join(here, '..', 'src', 'server.mjs'), 'utf8');
 
-test('dsh_worker_config exposes a top-level readiness matrix from the existing catalog read', () => {
-  assert.match(serverSource, /import \{ buildConfigReadinessMatrix \} from '\.\/config-readiness\.mjs';/);
+test('dsh_worker_config consumes the Hub extension readiness snapshot as its matrix authority', () => {
   assert.match(serverSource, /import \{ buildRuntimeReadinessSnapshot \} from '\.\/runtime-readiness-snapshot\.mjs';/);
   assert.match(serverSource, /providerCatalogChecked = true;[\s\S]*const res = await fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/models`, \{ signal: AbortSignal\.timeout\(800\) \}\);[\s\S]*providerCatalogBody = body;/);
-  assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/jobs`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
-  assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/providers`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
-  assert.match(serverSource, /providerInventoryChecked,/);
-  assert.match(serverSource, /providerHealthChecked,/);
+  assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/extension`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
+  assert.match(serverSource, /hubReadinessSnapshot/);
+  assert.match(serverSource, /hubReadinessSnapshot\?\.readiness_matrix/);
   assert.match(serverSource, /readinessSnapshot/);
-  assert.match(serverSource, /const readinessMatrix = buildConfigReadinessMatrix\(\{[\s\S]*hubCompatibility,[\s\S]*workerProviderMode,[\s\S]*providerCatalogChecked,[\s\S]*providerCatalogBody,[\s\S]*\}\);/);
   assert.match(serverSource, /readiness_matrix:\s*readinessMatrix/);
+  assert.doesNotMatch(serverSource, /\/_dsh\/dsh-crew\/(?:jobs|providers|provider-health)/);
 });
 test('dsh_worker_config bounds the Hub /models catalog fetch instead of hanging forever', () => {
   assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/models`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
