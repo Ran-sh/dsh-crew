@@ -107,6 +107,334 @@ function Test-LegacyBridgeAvailable {
   }
 }
 
+# ---- Crew supervisor control protocol (heartbeat + restart requests) --------
+# The hub (3210) never spawns itself. It writes a durable restart request;
+# this watcher is the only process authority and executes it after proving
+# ownership (persisted identity + live runtime_id match).
+
+$crewSupervisorRoot = Join-Path $env:USERPROFILE '.config\dsh-crew\supervisor'
+$crewHeartbeatFile = Join-Path $crewSupervisorRoot 'heartbeat.json'
+$crewRequestsDir = Join-Path $crewSupervisorRoot 'restart-requests'
+$crewResultsDir = Join-Path $crewSupervisorRoot 'restart-results'
+
+function Write-SupervisorHeartbeat {
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $record = @{ schema_version = 1; pid = $PID; last_seen = $now; protocol_version = 1 } | ConvertTo-Json -Compress
+  try {
+    if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
+    $temp = Join-Path $crewSupervisorRoot ("heartbeat.{0}.tmp" -f $PID)
+    Set-Content -LiteralPath $temp -Value $record -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $crewHeartbeatFile -Force
+  } catch { /* heartbeat is best-effort */ }
+}
+
+function Read-RestartRequests {
+  if (-not (Test-Path -LiteralPath $crewRequestsDir -PathType Container)) { return @() }
+  $requests = @()
+  Get-ChildItem -LiteralPath $crewRequestsDir -Filter '*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      $parsed = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+      if ($parsed.schema_version -eq 1 -and $parsed.operation -eq 'restart' -and $parsed.request_id) {
+        $requests += $parsed
+      }
+    } catch { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+  }
+  return $requests
+}
+
+function Write-RestartResult {
+  param([object] $Request, [string] $State, [object] $Detail = $null)
+  try {
+    if (-not (Test-Path -LiteralPath $crewResultsDir -PathType Container)) { New-Item -ItemType Directory -Path $crewResultsDir -Force | Out-Null }
+    $result = @{
+      schema_version = 1
+      request_id = $Request.request_id
+      operation = 'restart'
+      state = $State
+      runtime_id = $Request.runtime_id
+      written_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      detail = $Detail
+    } | ConvertTo-Json -Depth 5
+    $file = Join-Path $crewResultsDir ("{0}.json" -f $Request.request_id)
+    $temp = Join-Path $crewResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
+    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $file -Force
+  } catch { /* best effort */ }
+  Remove-Item -LiteralPath (Join-Path $crewRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-CrewRestartRequests {
+  # Consume durable restart requests from the hub. Called by the watch loop.
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  foreach ($request in (Read-RestartRequests)) {
+    if (($request.expires_at -as [long]) -lt $now) {
+      Write-RestartResult $request 'RESTART_REQUEST_EXPIRED'
+      Write-LaunchLog ('Restart request {0} expired; not executed.' -f $request.request_id) 'WARN'
+      continue
+    }
+    # Ownership authority: the request must name the SAME runtime identity we
+    # own, and that identity must still be live on 3210.
+    $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+    if (-not $crew) { continue }
+    $health = Get-HealthState $crew
+    $liveIdentityOk = $false
+    try {
+      $response = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+      $liveRuntimeId = $response.extension.runtime.runtime_id
+      $liveIdentityOk = ($response.ok -eq $true) -and ($liveRuntimeId -eq $request.runtime_id)
+    } catch { $liveIdentityOk = $false }
+    if (-not $liveIdentityOk) {
+      Write-RestartResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+      Write-LaunchLog ('Restart request {0} rejected: live runtime_id does not match the request.' -f $request.request_id) 'WARN'
+      continue
+    }
+    Write-LaunchLog ('Executing restart request {0} (reason: {1}).' -f $request.request_id, $request.reason)
+    $previousRuntimeId = $request.runtime_id
+    # Re-read the listener port right before the kill so the PID identity is
+    # fresh: Stop-OwnedListener requires a PID that equals the tracked
+    # listener and belongs to the current owned process tree.
+    $port = Get-PortState $crew.Port
+    if ($port.State -ne 'occupied' -or -not $port.Pid) {
+      Write-RestartResult $request 'SUPERVISOR_STOP_FAILED'
+      Write-LaunchLog ('Restart request {0} failed: no listener on port {1}.' -f $request.request_id, $crew.Port) 'ERROR'
+      continue
+    }
+    $stopped = Stop-OwnedListener -Service $crew -ListenerPid ([int] $port.Pid)
+    if (-not $stopped) {
+      Write-RestartResult $request 'SUPERVISOR_STOP_FAILED'
+      Write-LaunchLog ('Restart request {0} failed to stop the owned runtime.' -f $request.request_id) 'ERROR'
+      continue
+    }
+    Start-CrewService $crew
+    Wait-CrewServices
+    # Verify: runtime_id must have changed and the cohort must still match.
+    $newRuntimeId = $null
+    try {
+      $response = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+      $newRuntimeId = $response.extension.runtime.runtime_id
+    } catch { $newRuntimeId = $null }
+    if ($newRuntimeId -and $newRuntimeId -ne $previousRuntimeId) {
+      Write-RestartResult $request 'VERIFIED' @{ previous_runtime_id = $previousRuntimeId; runtime_id = $newRuntimeId }
+      Write-LaunchLog ('Restart request {0} verified: runtime_id {1} -> {2}.' -f $request.request_id, $previousRuntimeId, $newRuntimeId)
+    } else {
+      Write-RestartResult $request 'VERIFY_FAILED' @{ previous_runtime_id = $previousRuntimeId; runtime_id = $newRuntimeId }
+      Write-LaunchLog ('Restart request {0} verification failed: runtime_id did not change.' -f $request.request_id) 'ERROR'
+    }
+  }
+}
+
+$crewMaintenanceRequestsDir = Join-Path $crewSupervisorRoot 'maintenance-requests'
+$crewMaintenanceResultsDir = Join-Path $crewSupervisorRoot 'maintenance-results'
+$crewMaintenanceSessionFile = Join-Path $crewSupervisorRoot 'maintenance-session.json'
+
+function Test-MaintenanceSessionActive {
+  # Fence for ordinary Crew auto-start. Returns $true when a STOPPED session
+  # holds the launch right OR when the session file is present but MALFORMED
+  # (fail closed: a corrupt session must not let supervision auto-start
+  # 3210, because the stopped window may belong to a live npx swap).
+  # ABSENT means no fence: ordinary supervision proceeds.
+  $session = Read-MaintenanceSession
+  if ($session -eq 'ABSENT') { return $false }
+  return $true
+}
+
+function Set-MaintenanceSession {
+  param([object] $Request)
+  # Strong-failure semantics: the STOPPED result may only be published after
+  # the session is durably written AND read back with exact identity. Any
+  # failure returns $false and the caller must NOT claim the stopped window.
+  try {
+    $session = @{
+      schema_version = 1
+      state = 'STOPPED'
+      lease = $Request.lease
+      runtime_id = $Request.runtime_id
+      stopped_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      request_id = $Request.request_id
+    } | ConvertTo-Json -Compress
+    $temp = Join-Path $crewSupervisorRoot ("maintenance-session.{0}.tmp" -f $PID)
+    Set-Content -LiteralPath $temp -Value $session -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $crewMaintenanceSessionFile -Force
+    $back = Read-MaintenanceSession
+    if ($back -is [string]) { return $false }
+    return ($back.schema_version -eq 1 -and $back.state -eq 'STOPPED' -and $back.lease -eq $Request.lease -and $back.runtime_id -eq $Request.runtime_id -and $back.request_id -eq $Request.request_id)
+  } catch { return $false }
+}
+
+function Clear-MaintenanceSession {
+  # Verifiable one-shot consumption: returns $true only when the session
+  # file is provably ABSENT afterwards (otherwise the lease is NOT consumed
+  # and replay stays impossible because start re-validates the session).
+  try {
+    Remove-Item -LiteralPath $crewMaintenanceSessionFile -Force -ErrorAction Stop
+  } catch {
+    if (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf) { return $false }
+    return $true
+  }
+  return (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf))
+}
+
+function Read-MaintenanceSession {
+  # Tri-state: 'ABSENT' (no file), a session object when valid, or the
+  # string 'MALFORMED' (present but unreadable/invalid). MALFORMED fails
+  # closed for Crew auto-start (see Test-MaintenanceSessionActive).
+  try {
+    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return 'ABSENT' }
+    $parsed = Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($parsed.schema_version -ne 1 -or $parsed.state -ne 'STOPPED' -or -not $parsed.lease -or -not $parsed.runtime_id -or -not $parsed.request_id) {
+      return 'MALFORMED'
+    }
+    return $parsed
+  } catch { return 'MALFORMED' }
+}
+
+function Write-MaintenanceResult {
+  param([object] $Request, [string] $State, [object] $Detail = $null)
+  try {
+    if (-not (Test-Path -LiteralPath $crewMaintenanceResultsDir -PathType Container)) { New-Item -ItemType Directory -Path $crewMaintenanceResultsDir -Force | Out-Null }
+    $result = @{
+      schema_version = 1
+      request_id = $Request.request_id
+      operation = $Request.operation
+      state = $State
+      lease = $Request.lease
+      runtime_id = $Request.runtime_id
+      written_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+      detail = $Detail
+    } | ConvertTo-Json -Depth 5
+    $file = Join-Path $crewMaintenanceResultsDir ("{0}.json" -f $Request.request_id)
+    $temp = Join-Path $crewMaintenanceResultsDir ("{0}.{1}.tmp" -f $Request.request_id, $PID)
+    Set-Content -LiteralPath $temp -Value $result -Encoding UTF8 -NoNewline
+    Move-Item -LiteralPath $temp -Destination $file -Force
+  } catch { /* best effort */ }
+  Remove-Item -LiteralPath (Join-Path $crewMaintenanceRequestsDir ("{0}.json" -f $Request.request_id)) -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-CrewMaintenanceRequests {
+  # Consume maintenance transactions from npx lifecycle (cohort migration).
+  # The npx process owns the runtime TREE swap; this watcher owns the
+  # PROCESS stop/start around it. Two phases, both verified:
+  #   maintenance-stop  -> stop owned 3210, write STOPPED (+lease)
+  #   maintenance-start -> start 3210, verify new identity + cohort, VERIFIED
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if (-not (Test-Path -LiteralPath $crewMaintenanceRequestsDir -PathType Container)) { return }
+  $files = Get-ChildItem -LiteralPath $crewMaintenanceRequestsDir -Filter '*.json' -File -ErrorAction SilentlyContinue
+  foreach ($file in $files) {
+    try {
+      $request = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+      continue
+    }
+    if ($request.schema_version -ne 1 -or -not $request.request_id -or -not $request.operation) {
+      Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+      continue
+    }
+    if (($request.expires_at -as [long]) -lt $now) {
+      Write-MaintenanceResult $request 'MAINTENANCE_EXPIRED'
+      Write-LaunchLog ('Maintenance request {0} ({1}) expired; not executed.' -f $request.request_id, $request.operation) 'WARN'
+      continue
+    }
+    $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+    if (-not $crew) { continue }
+    if ($request.operation -eq 'maintenance-stop') {
+      # Authority: the request must name the SAME live runtime identity we own.
+      $liveRuntimeId = $null
+      try {
+        $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 3
+        if ($resp.ok -eq $true) { $liveRuntimeId = $resp.extension.runtime.runtime_id }
+      } catch { $liveRuntimeId = $null }
+      if (-not $liveRuntimeId -or $liveRuntimeId -ne $request.runtime_id) {
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-stop {0} rejected: live runtime_id mismatch.' -f $request.request_id) 'WARN'
+        continue
+      }
+      $port = Get-PortState $crew.Port
+      if ($port.State -ne 'occupied' -or -not $port.Pid) {
+        Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
+        continue
+      }
+      $stopped = Stop-OwnedListener -Service $crew -ListenerPid ([int] $port.Pid)
+      if ($stopped) {
+        # The stopped window now belongs to the npx lifecycle: persist the
+        # STOPPED session (lease + proven runtime_id) so ordinary
+        # supervision will NOT auto-start 3210 until the matching start.
+        # STRONG semantics: STOPPED is published ONLY after the session is
+        # durably written AND read back with exact identity. A session write
+        # failure must never tell npx it owns a stopped window it cannot
+        # later prove (that race auto-restarts 3210 mid tree-swap).
+        $sessionDurable = Set-MaintenanceSession $request
+        if ($sessionDurable) {
+          Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
+          Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
+        } else {
+          Write-MaintenanceResult $request 'SUPERVISOR_SESSION_PERSIST_FAILED'
+          Write-LaunchLog ('Maintenance-stop {0} stopped the process but the STOPPED session could not be persisted; NOT publishing STOPPED.' -f $request.request_id) 'ERROR'
+        }
+      } else {
+        Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
+      }
+    } elseif ($request.operation -eq 'maintenance-start') {
+      # Pair with the matching STOPPED session: the start request must carry
+      # the SAME lease and runtime_id the stop proved. A missing session,
+      # mismatched lease/identity, or a still-listening port all fail closed
+      # WITHOUT starting anything. The session is consumed on VERIFIED so
+      # the lease is one-shot (no replay).
+      $lease = $request.lease
+      $expectedCrew = $null
+      $expectedDsh = $null
+      if ($request.extra) {
+        $expectedCrew = $request.extra.expected_crew_version
+        $expectedDsh = $request.extra.expected_dsh_version
+      }
+      $session = Read-MaintenanceSession
+      if ($session -is [string] -or $session.lease -ne $lease -or $session.runtime_id -ne $request.runtime_id) {
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-start {0} rejected: no matching STOPPED session (lease/identity mismatch).' -f $request.request_id) 'WARN'
+        continue
+      }
+      $livePort = Get-PortState $crew.Port
+      if ($livePort.State -ne 'free') {
+        # occupied AND unknown both fail closed: the stopped window is not
+        # provably clean, so no start authority.
+        Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
+        Write-LaunchLog ('Maintenance-start {0} rejected: port {1} is not provably free (state={2}).' -f $request.request_id, $crew.Port, $livePort.State) 'WARN'
+        continue
+      }
+      Start-CrewService $crew
+      Wait-CrewServices
+      $newRuntime = $null
+      try {
+        $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' -TimeoutSec 5
+        if ($resp.ok -eq $true) { $newRuntime = $resp.extension.runtime }
+      } catch { $newRuntime = $null }
+      $ok = $newRuntime -and $newRuntime.runtime_id -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
+      if ($ok) {
+        # Verifiable one-shot consumption: only a provably-cleared session
+        # completes the transaction; otherwise the lease stays live and any
+        # replay is still fenced (no VERIFIED without consumption proof).
+        $consumed = Clear-MaintenanceSession
+        if ($consumed) {
+          Write-MaintenanceResult $request 'VERIFIED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id; runtime_version = $newRuntime.runtime_version; dsh_version = $newRuntime.dsh_version }
+          Write-LaunchLog ('Maintenance-start {0} verified: Crew {1} + DSH {2}.' -f $request.request_id, $newRuntime.runtime_version, $newRuntime.dsh_version)
+        } else {
+          Write-MaintenanceResult $request 'VERIFY_FAILED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id }
+          Write-LaunchLog ('Maintenance-start {0} identity verified but session consumption unproven; NOT marking VERIFIED.' -f $request.request_id) 'ERROR'
+        }
+      } else {
+        $failedRuntimeId = $null
+        if ($newRuntime) { $failedRuntimeId = $newRuntime.runtime_id }
+        Write-MaintenanceResult $request 'VERIFY_FAILED' @{ lease = $lease; runtime_id = $failedRuntimeId }
+        Write-LaunchLog ('Maintenance-start {0} verification failed.' -f $request.request_id) 'ERROR'
+      }
+    } else {
+      # Unknown maintenance op: remove and report.
+      Write-MaintenanceResult $request 'MAINTENANCE_UNKNOWN_OP'
+    }
+  }
+}
+
+
 function Get-PortState {
   param([int] $Port)
   try {
@@ -269,6 +597,16 @@ function Ensure-CrewServices {
   param([switch] $QuietHealthy)
 
   foreach ($service in $services) {
+    # Maintenance fence: while a STOPPED maintenance session is active for
+    # the Crew backend, ordinary supervision must NOT auto-start 3210 —
+    # the stopped window belongs to the npx lifecycle's tree swap. Only a
+    # matching maintenance-start owns the launch right. 3080 supervision
+    # continues normally during the window.
+    if ($service.CrewOwned -and (Test-MaintenanceSessionActive)) {
+      $service.State = 'maintenance'
+      $service.LastError = $null
+      continue
+    }
     $health = Get-HealthState $service
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
@@ -375,6 +713,13 @@ function Start-ServiceSupervisor {
           Write-LaunchLog 'Update in progress; supervisor observing only, no restarts.'
           $lastRecoveryError = $null
         } else {
+          # Control protocol: publish this watcher's heartbeat and consume
+          # any durable restart requests the hub wrote (3210 never spawns
+          # itself). Then consume maintenance transactions (npx cohort
+          # migration stop/start phases). Then run the ordinary health pass.
+          Write-SupervisorHeartbeat
+          Invoke-CrewRestartRequests
+          Invoke-CrewMaintenanceRequests
           Ensure-CrewServices -QuietHealthy
           if ($lastRecoveryError) {
             Write-LaunchLog 'Supervisor recovery succeeded; both services are healthy.'

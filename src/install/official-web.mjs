@@ -50,23 +50,44 @@ export function ensureOfficialWebIntegration({ home = homedir(), releaseDir } = 
   return { ok: false, code: OFFICIAL_WEB_READ_ONLY_CODE };
 }
 
-export function officialWebIntegrationStatus({ home = homedir(), releaseDir } = {}) {
-  const state = readState(home);
-  if (state?.enabled !== true) return { enabled: false, healthy: false, state };
+// Project the legacy full-bridge state file. The old `enabled: true` shape
+// is DEPRECATED: dsh-crew no longer desires any control of the 3080 official
+// web profile (the native 3210 page is the full control plane, and the 3080
+// quick surface is optional). Status probing stays read-only; the projection
+// makes the legacy record diagnostic instead of an active intent.
+function projectLegacyState(state, home, releaseDir) {
+  if (!state || state?.enabled !== true) {
+    return { enabled: false, legacy_present: false, desired: false, healthy: false, state };
+  }
   const expectedRelease = releaseDir ?? state.release_dir;
   let expectedBridge;
   try { expectedBridge = realpathSync(join(expectedRelease, 'official-web-bridge')); } catch {
-    return { enabled: true, healthy: false, code: 'BRIDGE_RELEASE_MISSING', state };
+    return { enabled: false, legacy_present: true, desired: false, healthy: false, code: 'BRIDGE_RELEASE_MISSING', state };
   }
   const profileRoot = officialWebProfileDir({ home });
   const profile = validOfficialManifest(join(profileRoot, 'package.json'));
-  if (!profile.ok) return { enabled: true, healthy: false, code: profile.code, state };
+  if (!profile.ok) {
+    return { enabled: false, legacy_present: true, desired: false, healthy: false, code: profile.code, state };
+  }
   const dependency = profile.manifest.dependencies?.[OFFICIAL_BRIDGE_PACKAGE];
   const bundled = profile.manifest.dsh.profile.bundles.includes(OFFICIAL_BRIDGE_PACKAGE);
   const linkPath = join(profileRoot, 'node_modules', ...OFFICIAL_BRIDGE_PACKAGE.split('/'));
   let linked = false;
   try { linked = lstatSync(linkPath).isSymbolicLink() && realpathSync(linkPath) === expectedBridge; } catch {}
-  return { enabled: true, healthy: Boolean(dependency && bundled && linked), state, linkPath, expectedBridge };
+  return {
+    enabled: false,
+    legacy_present: true,
+    desired: false,
+    healthy: Boolean(dependency && bundled && linked),
+    removal_requires_manual_official_profile_action: true,
+    state,
+    linkPath,
+    expectedBridge,
+  };
+}
+
+export function officialWebIntegrationStatus({ home = homedir(), releaseDir } = {}) {
+  return projectLegacyState(readState(home), home, releaseDir);
 }
 
 export function removeOfficialWebIntegration({ home = homedir(), remember = true, preserveIntent = false } = {}) {

@@ -640,7 +640,8 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }, [get]);
 
   useEffect(() => {
-    if (surface !== CREW_UI_SURFACES.OFFICIAL) return undefined;
+    const responsibilities = surfaceResponsibilities(surface);
+    if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
     const timer = setInterval(() => {
       void Promise.all([get('/jobs'), get('/provider-health').catch(() => null)]).then(([j, health]) => {
@@ -704,11 +705,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }, [copy, locale, post, readJson, refreshProviderInventory, withLang]);
 
   useEffect(() => {
-    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshHarnessModels();
+    if (surfaceResponsibilities(surface).fullControlPlane) void refreshHarnessModels();
   }, [surface, refreshHarnessModels]);
 
   useEffect(() => {
-    if (surface === CREW_UI_SURFACES.OFFICIAL) void refreshProviderInventory();
+    if (surfaceResponsibilities(surface).fullControlPlane) void refreshProviderInventory();
   }, [surface, refreshProviderInventory]);
 
   const act = useCallback(async (target: string, confirmName?: string) => {
@@ -737,6 +738,25 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         if (authoritative.ok) setConfig(authoritative.config);
       } catch { /* keep the error visible while the Hub is unavailable */ }
       return false;
+    }
+  }, [post, get, copy]);
+
+  /** Request a Crew 3210 restart through the durable supervisor channel
+   *  (hub writes the request; the Windows watcher executes it). Polls until
+   *  VERIFIED or a terminal failure. Same-origin against the 3210 API — the
+   *  legacy 3080 supervisor endpoint is retired. */
+  const requestRestart = useCallback(async (reason?: string): Promise<any> => {
+    const created = await post('/runtime/restart-request', { confirm: true, reason: reason ?? 'configuration change' });
+    if (!created.ok) throw new Error(created.code ?? created.error ?? copy.providerLifecycleError);
+    const requestId = created.request_id;
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (Date.now() > deadline) throw new Error('Crew restart timed out');
+      const status = await get(`/runtime/restart-status?id=${encodeURIComponent(requestId)}`);
+      if (!status.ok) continue; // 404 while the watcher has not picked it up
+      if (status.state === 'VERIFIED') return { ok: true, ...status };
+      if (status.state !== 'RESTART_REQUESTED') throw new Error(status.state ?? 'Crew restart failed');
     }
   }, [post, get, copy]);
   /** Selects & checkboxes: apply immediately. */
@@ -908,12 +928,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       }), path);
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true && result.result?.state === 'RESTART_PENDING') {
-        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
-        const restarted = await readJson(await fetch(restartPath, {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ confirm: true }),
-        }), restartPath);
-        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        await requestRestart('provider delete');
         const verified = await post(`/providers/${encoded}/verify-delete`, { transaction_id: planned.plan.plan_id, confirm: true });
         if (!verified.ok || verified.state !== 'VERIFIED') throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
       }
@@ -945,11 +960,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       const result = await post(`/providers/${encoded}/migrate`, { plan_id: planned.plan.plan_id, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true && result.result?.state === 'RESTART_PENDING') {
-        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
-        const restarted = await readJson(await fetch(restartPath, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-        }), restartPath);
-        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        await requestRestart('provider migrate');
         const verified = await post(`/providers/${encoded}/verify-migration`, { transaction_id: planned.plan.plan_id, confirm: true });
         if (!verified.ok || verified.state !== 'VERIFIED') throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
       }
@@ -972,11 +983,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       const result = await post(`/providers/${encoded}/rollback-migration`, { transaction_id: transactionId, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true) {
-        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
-        const restarted = await readJson(await fetch(restartPath, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-        }), restartPath);
-        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        await requestRestart('provider migrate');
       }
       setNotice(copy.saved);
       await refreshProviderInventory();
@@ -1003,11 +1010,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
         : await post(`/providers/${encoded}/rollback`, { transaction_id: transactionId, confirm: true });
       if (!result.ok) throw new Error(result.code ?? result.error ?? copy.providerLifecycleError);
       if (result.restart_required === true && result.state === 'ROLLBACK_PENDING') {
-        const restartPath = 'http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart';
-        const restarted = await readJson(await fetch(restartPath, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-        }), restartPath);
-        if (!restarted.ok) throw new Error(restarted.code ?? restarted.error ?? copy.providerLifecycleError);
+        await requestRestart('provider migrate');
         const verified = await post(`/providers/${encoded}/verify-rollback`, { transaction_id: transactionId, confirm: true });
         if (!verified.ok || verified.state !== 'ROLLED_BACK') throw new Error(verified.code ?? verified.error ?? copy.providerLifecycleError);
       } else if (result.state !== 'ROLLED_BACK') {
@@ -1841,7 +1844,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
 
 export function apply(ctx: any): void {
   let runningCount = 0;
-  let officialSurface: boolean | null = null;
+  let badgeSurface: boolean | null = null;
   ctx.slots.inject('settings.section', () => {
     let dispose = register();
     function register() {
@@ -1865,12 +1868,14 @@ export function apply(ctx: any): void {
     const poll = async () => {
       if (document.visibilityState !== 'visible') return;
       try {
-        if (officialSurface === null) {
-          const response = await fetch(`${API}/bridge-status`, { cache: 'no-store' });
-          const bridgeStatus = response.ok ? await response.json() : null;
-          officialSurface = classifyCrewSurface({ bridgeStatus }) === CREW_UI_SURFACES.OFFICIAL;
+        if (badgeSurface === null) {
+          const [bridgeStatus, runtime] = await Promise.all([
+            fetch(`${API}/bridge-status`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+            fetch(`${API}/runtime`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+          ]);
+          badgeSurface = surfaceResponsibilities(classifyCrewSurface({ bridgeStatus, runtime })).fullControlPlane;
         }
-        if (!officialSurface) return;
+        if (!badgeSurface) return;
         const r = await (await fetch(`${API}/jobs`, { cache: 'no-store' })).json();
         const n = r.ok ? (r.jobs ?? []).filter((j: any) => j.status === 'running').length : 0;
         if (n !== runningCount) {

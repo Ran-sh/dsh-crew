@@ -42,7 +42,6 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
-import { createCrewSidecarSupervisor } from '../official-web-bridge.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -1129,14 +1128,65 @@ export function listManagedReleases({ home = homedir() } = {}) {
     .sort((a, b) => compareVersions(b.version, a.version) || b.path.localeCompare(a.path));
 }
 
+// Unified restart client: request a Crew 3210 restart through the durable
+// supervisor control channel. The hub (3210) writes a restart request; the
+// Windows supervisor executes it and writes a VERIFIED result. This polls
+// until the result arrives (or the timeout elapses). NEVER talks to the
+// legacy 3080 supervisor endpoint.
+export async function requestCrewRuntimeRestart({
+  reason = null,
+  fetchImpl = globalThis.fetch,
+  pollIntervalMs = 1_000,
+  timeoutMs = 90_000,
+  log = () => {},
+} = {}) {
+  const base = 'http://127.0.0.1:3210/_dsh/dsh-crew/runtime';
+  let created;
+  try {
+    const response = await fetchImpl(`${base}/restart-request`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ confirm: true, reason }),
+    });
+    created = await response.json();
+    if (!response.ok || created?.ok !== true) {
+      return { ok: false, code: created?.code ?? 'CREW_3210_RESTART_REQUEST_FAILED', error: created?.error ?? `restart request failed (HTTP ${response.status})` };
+    }
+  } catch (error) {
+    return { ok: false, code: 'CREW_3210_RESTART_REQUEST_UNREACHABLE', error: String(error?.message ?? error) };
+  }
+  const requestId = created.request_id;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    if (Date.now() > deadline) {
+      return { ok: false, code: 'CREW_3210_RESTART_TIMEOUT', error: `restart request ${requestId} not verified within ${timeoutMs}ms`, request_id: requestId };
+    }
+    try {
+      const statusResponse = await fetchImpl(`${base}/restart-status?id=${encodeURIComponent(requestId)}`, { headers: { accept: 'application/json' } });
+      const status = await statusResponse.json();
+      if (!statusResponse.ok || status?.ok !== true) {
+        // 404 while the watcher has not yet picked the request up is normal.
+        if (statusResponse.status === 404) continue;
+        return { ok: false, code: status?.code ?? 'CREW_3210_RESTART_STATUS_FAILED', error: status?.error ?? 'restart status query failed', request_id: requestId };
+      }
+      if (status.state === 'VERIFIED') {
+        log(`- Crew 3210 restart verified (request ${requestId})`);
+        return { ok: true, state: 'VERIFIED', request_id: requestId, detail: status.detail ?? null };
+      }
+      if (status.state === 'RESTART_REQUEST_EXPIRED' || status.state === 'SUPERVISOR_OWNERSHIP_CONFLICT' || status.state === 'SUPERVISOR_STOP_FAILED' || status.state === 'VERIFY_FAILED') {
+        return { ok: false, code: `CREW_3210_RESTART_${status.state}`, error: `restart ended in state ${status.state}`, request_id: requestId, detail: status.detail ?? null };
+      }
+      // RESTART_REQUESTED: still pending; keep polling.
+    } catch (error) {
+      // Hub may be briefly down mid-restart; keep polling until the deadline.
+      log(`- restart poll transient error: ${String(error?.message ?? error)}`);
+    }
+  }
+}
+
 async function restartOwnedRuntime(fetchImpl = globalThis.fetch) {
-  const response = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({ confirm: true }),
-  });
-  const body = await response.json();
-  return response.ok && body?.ok === true ? body : { ok: false, code: body?.code ?? 'CREW_3210_RESTART_FAILED' };
+  return requestCrewRuntimeRestart({ fetchImpl, reason: 'lifecycle restart' });
 }
 
 async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
@@ -1232,13 +1282,91 @@ export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl 
   return { ok: true, runtime_id: runtime.runtime_id, runtime_version: runtime?.runtime_version ?? null };
 }
 
-// Crew-owned stop/start for cohort migration come from the sidecar
-// supervisor (PID-identity verified, no legacy bridge). The supervisor
-// module owns the 3210 child lifecycle; the installer only drives its
-// stop-only / start-only primitives around the runtime-tree swap.
+// Crew-owned stop/start for cohort migration go through the Windows
+// launcher supervisor (the ONLY process authority) via durable maintenance
+// requests. The npx process owns the runtime TREE swap; the supervisor owns
+// the PROCESS stop/start. The Node sidecar supervisor is deliberately not
+// used here: two authorities must never share the same kill rights.
 function crewSupervisor({ home = homedir() } = {}) {
-  const dshHome = crewDshHome({ home });
-  return createCrewSidecarSupervisor({ home, ownershipFile: join(dshHome, 'supervisor-ownership.json') });
+  // The ONLY Crew app root both the hub and the Windows launcher agree on.
+  // Requests written anywhere else are invisible to the supervisor.
+  const appRoot = join(home, '.config', 'dsh-crew');
+  const pollMs = 1_000;
+  const timeoutMs = 90_000;
+  // One maintenance transaction = one lease + the pre-stop identity proven
+  // live. stop() fetches the CURRENT live runtime_id (the process exists);
+  // start() reuses that proven identity + lease (the process is stopped by
+  // design and cannot re-prove itself). This pairs stop and start into a
+  // single one-shot transaction instead of two independent requests.
+  let transaction = null;
+  async function fetchCrewIdentity() {
+    try {
+      const response = await fetch('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
+      if (!response.ok) return null;
+      const body = await response.json();
+      const runtime = body?.extension?.runtime ?? null;
+      return runtime?.runtime_id ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id } : null;
+    } catch { return null; }
+  }
+  async function writeMaintenance({ operation, lease, identity, extra = null }) {
+    const { createSupervisorRequest, maintenanceResultsDir } = await import('../supervisor/restart-request.mjs');
+    const created = createSupervisorRequest({
+      appRoot,
+      operation,
+      runtimeIdentity: identity,
+      lease,
+      extra,
+    });
+    if (!created.ok) return created;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+      if (Date.now() > deadline) {
+        return { ok: false, code: 'MAINTENANCE_TIMEOUT', error: `${operation} ${created.request.request_id} not completed within ${timeoutMs}ms` };
+      }
+      const resultFile = join(maintenanceResultsDir(appRoot), `${created.request.request_id}.json`);
+      let result = null;
+      try {
+        if (existsSync(resultFile)) {
+          result = JSON.parse(readFileSync(resultFile, 'utf8'));
+        }
+      } catch { /* not yet */ }
+      if (!result || result.request_id !== created.request.request_id) continue;
+      if (result.state === 'STOPPED' || result.state === 'VERIFIED') {
+        return { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null };
+      }
+      return { ok: false, code: `MAINTENANCE_${result.state ?? 'FAILED'}`, error: `maintenance ended in state ${result.state}`, detail: result.detail ?? null };
+    }
+  }
+  return {
+    stopOwnedBackend: async () => {
+      const identity = await fetchCrewIdentity();
+      if (!identity?.runtime_id) {
+        transaction = null;
+        return { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE', error: 'live 3210 runtime_id unavailable' };
+      }
+      transaction = { lease: `txn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, runtime_id: identity.runtime_id };
+      const result = await writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
+      if (!result.ok) {
+        // A failed stop must not leave a usable lease behind: clear it so a
+        // later startOwnedBackend() fails closed instead of presenting a
+        // stale transaction.
+        transaction = null;
+      }
+      return result;
+    },
+    startOwnedBackend: async () => {
+      // Reuse the proven stop-phase identity + lease: the process is stopped
+      // by design and fetching identity now would always fail.
+      if (!transaction?.lease || !transaction?.runtime_id) {
+        return { ok: false, code: 'MAINTENANCE_NO_TRANSACTION', error: 'maintenance-start requires a completed maintenance-stop in the same supervisor' };
+      }
+      const identity = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: transaction.runtime_id };
+      const result = await writeMaintenance({ operation: 'maintenance-start', lease: transaction.lease, identity });
+      transaction = null;
+      return result;
+    },
+  };
 }
 
 // ---- release cohort resolution -------------------------------------------------
@@ -1958,8 +2086,8 @@ async function activateRelease({ home, releaseDir, manifest, log, installer }) {
   // repairs or mutates the official bridge. The isolated 3210 Crew backend
   // is the only runtime Crew owns.
   const official = officialWebIntegrationStatus({ home });
-  if (official.enabled) {
-    log('- official 3080 bridge left untouched (official web profile is read-only)');
+  if (official.legacy_present) {
+    log('- legacy official 3080 bridge record present but deprecated; official web profile is read-only and untouched');
   }
   return true;
 }
@@ -2455,7 +2583,7 @@ export function npxStatus({
   const zcode = st?.zcode?.installed ? 'installed' : 'not installed';
   const claude = st?.claude?.installed ? 'installed' : 'not installed';
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
-  const officialWeb = !official.enabled ? 'disabled' : official.healthy ? 'installed' : 'needs repair';
+  const officialWeb = !official.legacy_present ? 'not present (native 3210 control plane)' : official.healthy ? 'legacy full bridge present (deprecated; manual cleanup available)' : 'legacy full bridge record present but unhealthy (deprecated)';
   const startupState = installer.windowsStartupStatus?.({ home });
   const windowsStartup = !startupState?.supported ? 'not supported'
     : startupState.ready ? 'installed' : startupState.installed ? 'needs repair' : 'not installed';
@@ -2805,13 +2933,8 @@ export async function npxProviders({
   let body = await response.json();
   if (!response.ok || body?.ok === false) throw new Error(body?.code ?? body?.error ?? 'Crew provider API unavailable');
   if (action === 'delete' && body?.restart_required === true && body?.result?.state === 'RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-delete`;
     const verifyResponse = await fetchImpl(verifyUrl, {
       method: 'POST',
@@ -2823,11 +2946,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'migrate' && body?.restart_required === true && body?.result?.state === 'RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyResponse = await fetchImpl(`${base}/${encodeURIComponent(id)}/verify-migration`, {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
     });
@@ -2836,11 +2956,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'rollback-migration' && body?.restart_required === true && body?.state === 'ROLLBACK_RESTART_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyResponse = await fetchImpl(`${base}/${encodeURIComponent(id)}/verify-rollback-migration`, {
       method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ transaction_id: resolvedPlan, confirm: true }),
     });
@@ -2849,13 +2966,8 @@ export async function npxProviders({
     body = { ...body, restart: restartBody, verification: verifyBody };
   }
   if (action === 'rollback' && body?.restart_required === true && body?.state === 'ROLLBACK_PENDING') {
-    const restartResponse = await fetchImpl('http://127.0.0.1:3080/_dsh/dsh-crew/supervisor/restart', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ confirm: true }),
-    });
-    const restartBody = await restartResponse.json();
-    if (!restartResponse.ok || restartBody?.ok !== true) throw new Error(restartBody?.code ?? restartBody?.error ?? 'Crew 3210 restart failed');
+    const restartBody = await requestCrewRuntimeRestart({ fetchImpl, reason: `providers ${action}` });
+    if (restartBody?.ok !== true) throw new Error(restartBody?.error ?? restartBody?.code ?? 'Crew 3210 restart failed');
     const verifyUrl = `${base}/${encodeURIComponent(id)}/verify-rollback`;
     const verifyResponse = await fetchImpl(verifyUrl, {
       method: 'POST',

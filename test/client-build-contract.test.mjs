@@ -77,7 +77,9 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /credentialRefs/);
   assert.match(panelSource, /sectionId=["']harnessProviders["']/);
   assert.match(panelSource, /delete-plan/);
-  assert.match(panelSource, /supervisor\/restart/);
+  assert.match(panelSource, /runtime\/restart-request/);
+  assert.match(panelSource, /runtime\/restart-status/);
+  assert.doesNotMatch(panelSource, /127\.0\.0\.1:3080\/_dsh\/dsh-crew\/supervisor\/restart/);
   assert.match(panelSource, /verify-delete/);
   assert.match(panelSource, /migrate-plan/);
   assert.match(panelSource, /verify-migration/);
@@ -136,12 +138,18 @@ test('model priority rows render fresh provider health without treating catalog 
   assert.match(panelSource, /get\('\/provider-health'\)\.catch\(\(\) => null\)/);
 });
 
-test('shared client renders a full 3080 control plane and a minimal 3210 diagnostic surface', () => {
+test('native 3210 is the full control plane; official 3080 is quick-only; unknown is diagnostics-only', async () => {
+  // Anti-drift contract: the old inverted world (full 3080 control plane +
+  // minimal 3210 diagnostics) must never come back.
   assert.match(panelSource, /classifyCrewSurface/);
   assert.match(panelSource, /surfaceResponsibilities/);
   assert.match(panelSource, /<MinimalCrewPanel\b/);
   assert.match(panelSource, /fullControlPlane/);
-  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3080\/?/);
+  const surfaceSrc = await readFile(new URL('../src/client/surface-detection.mjs', import.meta.url), 'utf8');
+  assert.match(surfaceSrc, /quickControlPlane: true/);
+  assert.match(surfaceSrc, /fullControlPlane: true/);
+  // The full console deep-links to the 3210 native harness, not 3080.
+  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3210\/?/);
 });
 
 test('client consumes the Hub extension readiness snapshot instead of recomputing Crew state', () => {
@@ -154,4 +162,22 @@ test('3080 readiness matrix names every required host integration', () => {
   for (const label of ['Codex MCP', 'ds-worker', 'ds-reviewer', 'Claude plugin', 'ZCode MCP', 'Crew Harness', 'Official bridge']) {
     assert.match(panelSource, new RegExp(label));
   }
+});
+
+test('quick bundle is capability-light compared to the full bundle', async () => {
+  const quick = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
+  const full = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  // Quick surface talks only to narrow endpoints.
+  assert.match(quick, /quick-config/);
+  assert.match(quick, /restart-request/);
+  // Quick surface must NOT ship full control-plane capabilities.
+  for (const forbidden of ['credentialPurgePlan', 'rollback-migration', 'quarantine', 'install/status', 'providerLifecycleError', 'delete-plan']) {
+    assert.doesNotMatch(quick, new RegExp(forbidden));
+  }
+  // It must not hardcode the legacy 3080 supervisor endpoint either.
+  assert.doesNotMatch(quick, /127\.0\.0\.1:3080\/_dsh\/dsh-crew\/supervisor\/restart/);
+  // Full bundle keeps the complete control plane including quick API usage.
+  assert.match(full, /credentialPurgePlan/);
+  // Quick is genuinely smaller than full.
+  assert.ok(quick.length < full.length / 5, `quick ${quick.length} vs full ${full.length}`);
 });

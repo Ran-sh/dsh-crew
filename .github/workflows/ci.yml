@@ -55,4 +55,4 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Windows path and Git resolver regressions
-        run: node --test test/hub-windows.test.mjs test/workspace-audit.test.mjs
+        run: node --test test/hub-windows.test.mjs test/workspace-audit.test.mjs test/windows-supervisor-ownership.test.mjs test/maintenance-transaction.test.mjs test/windows-maintenance-session.test.mjs

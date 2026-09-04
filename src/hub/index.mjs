@@ -103,6 +103,18 @@ function seedLangFromHost(ctx) {
 import { setLang } from '../i18n.mjs';
 
 const ROUTE_BASE = '/_dsh/dsh-crew';
+// Quick-config allowlist: the ONLY config keys writable from the official
+// 3080 quick-controls surface. The full /config endpoint stays the single
+// canonical authority; quick-config is a projection, never a second store.
+export const QUICK_CONFIG_KEYS = Object.freeze([
+  'subagents_enabled',
+  'flash_model_priority',
+  'pro_model_priority',
+  'vision_enabled',
+  'imagegen_enabled',
+  'vision_provider',
+  'imagegen_provider',
+]);
 const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 // Local copy (the hub must not import jobs.mjs, which pulls the DSH SDK into
 // the profile realm): a valid dispatch role set.
@@ -1476,6 +1488,111 @@ export async function apply(ctx) {
           }
           if (req.method === 'POST') return sendJson(res, 200, { ok: true, config: writeGlobalConfig(await readBody(req)) });
           return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    // Quick-config: the narrow, capability-projected write surface used by
+    // the official 3080 quick-controls panel. Only the user-facing toggles
+    // and model-priority lists are writable here; the FULL config endpoint
+    // remains the single authority for everything else. This is a projection
+    // over writeGlobalConfig, never a second config store.
+    const projectQuickConfig = (config) => Object.fromEntries(
+      [...QUICK_CONFIG_KEYS].map((key) => [key, config[key]]),
+    );
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/quick-config`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        try {
+          const { readGlobalConfig, writeGlobalConfig } = await import(`../install/install.mjs?t=${Date.now()}`);
+          if (req.method === 'GET') {
+            return sendJson(res, 200, { ok: true, config: projectQuickConfig(readGlobalConfig()) });
+          }
+          if (req.method === 'POST') {
+            const body = await readBody(req);
+            const patch = {};
+            for (const [key, value] of Object.entries(body ?? {})) {
+              if (!QUICK_CONFIG_KEYS.includes(key)) {
+                return sendJson(res, 403, { ok: false, code: 'QUICK_CONFIG_KEY_FORBIDDEN', error: `key not writable from the quick surface: ${key}` });
+              }
+              patch[key] = value;
+            }
+            const next = writeGlobalConfig(patch);
+            return sendJson(res, 200, { ok: true, config: projectQuickConfig(next) });
+          }
+          return sendJson(res, 405, { ok: false, error: 'GET or POST' }, { allow: 'GET, POST' });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/quick-status`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const { readGlobalConfig } = await import(`../install/install.mjs?t=${Date.now()}`);
+          const runtime = getHubRuntimeIdentity();
+          return sendJson(res, 200, {
+            ok: true,
+            ready: true,
+            runtime: { runtime_version: runtime.runtime_version, dsh_version: runtime.dsh_version ?? null, runtime_id: runtime.runtime_id },
+            config: projectQuickConfig(readGlobalConfig()),
+          });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/runtime/restart-request`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' }, { allow: 'POST' });
+        try {
+          const { createRestartRequest, readSupervisorHeartbeat, supervisorStateRoot } = await import(`../supervisor/restart-request.mjs?t=${Date.now()}`);
+          const appRoot = CONFIG_DIR;
+          // The restart-request helpers take the Crew app root and append
+          // supervisor/ internally — do NOT pre-compose the path here.
+          const heartbeat = readSupervisorHeartbeat(appRoot);
+          if (!heartbeat) {
+            return sendJson(res, 503, { ok: false, code: 'CREW_SUPERVISOR_UNAVAILABLE', error: 'no fresh supervisor heartbeat; restart cannot be executed' });
+          }
+          let reason = null;
+          try {
+            const body = await readBody(req);
+            reason = typeof body?.reason === 'string' && body.reason.length > 0 ? body.reason.slice(0, 200) : null;
+          } catch { /* body optional */ }
+          const created = createRestartRequest({ appRoot, runtimeIdentity: getHubRuntimeIdentity(), reason });
+          if (!created.ok) return sendJson(res, 400, { ok: false, code: created.code, error: created.error });
+          return sendJson(res, 202, { ok: true, state: 'RESTART_REQUESTED', request_id: created.request.request_id, expires_at: created.request.expires_at });
+        } catch (err) {
+          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
+        }
+      },
+    }));
+
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/runtime/restart-status`,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' }, { allow: 'GET' });
+        try {
+          const { readRestartResult, readRestartRequest, supervisorStateRoot } = await import(`../supervisor/restart-request.mjs?t=${Date.now()}`);
+          const appRoot = CONFIG_DIR;
+          const requestId = new URL(req.url, 'http://localhost').searchParams.get('id');
+          if (!requestId || !/^[0-9a-f-]{36}$/i.test(requestId)) return sendJson(res, 400, { ok: false, error: 'request id required' });
+          const result = readRestartResult(appRoot, requestId);
+          if (result) return sendJson(res, 200, { ok: true, state: result.state, request_id: result.request_id, detail: result.detail ?? null });
+          const pending = readRestartRequest(appRoot, requestId);
+          if (pending) return sendJson(res, 200, { ok: true, state: 'RESTART_REQUESTED', request_id: pending.request_id });
+          return sendJson(res, 404, { ok: false, error: 'unknown restart request' });
         } catch (err) {
           return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
         }

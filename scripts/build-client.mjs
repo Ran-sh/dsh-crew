@@ -10,23 +10,38 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const pluginId = manifest.name;
 const buildDir = join(root, '.client-build');
-const compiledEntries = (await readdir(buildDir)).filter((name) => name.endsWith('.cjs'));
-if (compiledEntries.length !== 1) {
-  throw new Error(`expected exactly one compiled client entry in .client-build, found ${compiledEntries.length}: ${compiledEntries.join(', ')}`);
+
+// Dual entry: the full 3210 control plane (entry.cjs) and the narrow 3080
+// quick panel (quick-entry.cjs). They are wrapped under DIFFERENT module
+// ids so the official surface never receives full control-plane code.
+const fullEntry = 'entry.cjs';
+const quickEntry = 'quick-entry.cjs';
+const built = (await readdir(buildDir)).filter((name) => name.endsWith('.cjs'));
+for (const expected of [fullEntry, quickEntry]) {
+  if (!built.includes(expected)) {
+    throw new Error(`missing compiled client entry ${expected} in .client-build (found: ${built.join(', ')})`);
+  }
 }
-const source = await readFile(join(buildDir, compiledEntries[0]), 'utf8');
-const wrapped = [
-  `window.__ModuleLoader__.load({ id: ${JSON.stringify(pluginId)}, factory: (require) => {`,
-  'var module = { exports: {} }; var exports = module.exports;',
-  source.replace(/\n?\/\/# sourceMappingURL=.*$/u, ''),
-  'return module.exports; } });',
-  '',
-].join('\n');
+
+function wrap(source, id) {
+  return [
+    `window.__ModuleLoader__.load({ id: ${JSON.stringify(id)}, factory: (require) => {`,
+    'var module = { exports: {} }; var exports = module.exports;',
+    source.replace(/\n?\/\/# sourceMappingURL=.*$/u, ''),
+    'return module.exports; } });',
+    '',
+  ].join('\n');
+}
+
+const fullSource = await readFile(join(buildDir, fullEntry), 'utf8');
+const fullWrapped = wrap(fullSource, pluginId);
 await mkdir(join(root, 'lib'), { recursive: true });
-await writeFile(join(root, 'lib', 'client.js'), wrapped);
+await writeFile(join(root, 'lib', 'client.js'), fullWrapped);
+
 const bridgeManifest = JSON.parse(await readFile(join(root, 'official-web-bridge', 'package.json'), 'utf8'));
-const bridgeWrapped = wrapped.replace(JSON.stringify(pluginId), JSON.stringify(bridgeManifest.name));
+const quickSource = await readFile(join(buildDir, quickEntry), 'utf8');
+const quickWrapped = wrap(quickSource, bridgeManifest.name);
 await mkdir(join(root, 'official-web-bridge', 'lib'), { recursive: true });
-await writeFile(join(root, 'official-web-bridge', 'lib', 'client.js'), bridgeWrapped);
+await writeFile(join(root, 'official-web-bridge', 'lib', 'client.js'), quickWrapped);
 await rm(buildDir, { recursive: true, force: true });
-console.log(`built lib/client.js and official-web-bridge/lib/client.js (${wrapped.length} bytes) from ${compiledEntries[0]}`);
+console.log(`built lib/client.js (${fullWrapped.length} bytes) and official-web-bridge/lib/client.js (${quickWrapped.length} bytes) from ${fullEntry} + ${quickEntry}`);

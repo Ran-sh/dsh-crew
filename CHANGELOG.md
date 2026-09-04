@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0 — 2026-09-04
+
+- Consolidates the Crew configuration control plane onto 3210: the native
+  harness page is now the single full control plane; the official 3080 page
+  is an optional narrow quick-controls panel (master switch, flash/pro
+  model priority, vision/imagegen toggles).
+- Durable supervisor control channel: the hub writes restart/maintenance
+  requests, the Windows launcher executes them (heartbeat-gated, lease-
+  paired, one-shot). The 3080 bridge no longer spawns or owns 3210.
+- 3080 bridge slimmed to a least-privilege allowlist (quick-config,
+  quick-status, runtime/restart-request, runtime/restart-status); legacy
+  supervisor endpoint returns 410 Gone.
+- Independent full (3210) and quick (3080) client bundles; quick bundle is
+  capability-light by construction.
+
 ## 1.0.4 — 2026-09-03
 
 - Upgrades the pinned DeepSeek Harness cohort from 0.1.2-alpha.5 to
