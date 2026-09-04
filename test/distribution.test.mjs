@@ -166,4 +166,11 @@ test('Windows launcher opens and supervises the Crew-owned 3210 surface without 
   assert.doesNotMatch(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3080\/'/);
   assert.doesNotMatch(helper, /profiles\\web\\package\.json/);
   assert.doesNotMatch(helper, /Name = 'Official UI'[\s\S]{0,200}Port = 3080/);
+  assert.match(helper, /function Get-SupervisorLaunchArguments/);
+  assert.match(helper, /function Ensure-CrewSupervisorRunning/);
+  assert.match(helper, /Start-Process -FilePath 'powershell\.exe'[\s\S]{0,300}-WindowStyle Hidden/);
+  const main = helper.slice(helper.indexOf("if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT"));
+  assert.match(main, /if \(\$Mode -eq 'watch'\)[\s\S]{0,300}Start-ServiceSupervisor/);
+  assert.match(main, /Ensure-CrewSupervisorRunning/);
+  assert.doesNotMatch(main, /\n\s*Ensure-CrewServices\s*\n/);
 });

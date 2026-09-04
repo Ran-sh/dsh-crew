@@ -51,8 +51,35 @@ function supervisedServices() {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
+function supervisorLaunchArguments() {
+  const quoted = helper.replaceAll("'", "''");
+  const command = [
+    `. '${quoted}'`,
+    "$args = @(Get-SupervisorLaunchArguments -ScriptPath 'C:\\Program Files\\DSH Crew\\start-dsh-crew.ps1')",
+    'ConvertTo-Json -InputObject $args -Compress',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout.trim());
+}
+
 maybe('launcher supervisor owns only the isolated 3210 service', () => {
   assert.deepEqual(supervisedServices(), [{ Profile: 'dsh-crew', Port: 3210, CrewOwned: true }]);
+});
+
+maybe('interactive launch delegates to a hidden persistent watch process', () => {
+  const args = supervisorLaunchArguments();
+  assert.ok(args.includes('-NoLogo'));
+  assert.ok(args.includes('-NonInteractive'));
+  assert.ok(args.includes('-File'));
+  assert.ok(args.includes('-Mode'));
+  assert.equal(args.at(-1), 'watch');
+  assert.ok(args.some((value) => value.includes('C:\\Program Files\\DSH Crew\\start-dsh-crew.ps1')));
 });
 
 maybe('tracked process tree excludes a reused wrapper PID while retaining the original listener tree', () => {
