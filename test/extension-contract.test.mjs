@@ -102,6 +102,27 @@ test('workspace conflict and read-only states remain machine-visible', () => {
   }
 });
 
+test('fresh current-route health failures are not masked by historical success', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'manual' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' },
+      { id: 'provider_lifecycle_consistent', status: 'PASS', reason_code: 'PROVIDER_LIFECYCLE_CONSISTENT' },
+      { id: 'provider_health', status: 'FAIL', reason_code: 'PROVIDER_ROUTE_UNCALLABLE' },
+      { id: 'reviewer_health', status: 'FAIL', reason_code: 'PROVIDER_ROUTE_UNCALLABLE' },
+      { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
+      { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED' },
+    ] },
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'UNAVAILABLE');
+  assert.equal(contract.readiness.components.model.reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
+  assert.equal(contract.readiness.components.reviewer.status, 'UNAVAILABLE');
+  assert.equal(contract.readiness.components.reviewer.reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
+  assert.equal(contract.readiness.status, 'UNAVAILABLE');
+});
+
 test('extension contract consumes the unified readiness snapshot as its matrix authority', () => {
   const snapshot = buildRuntimeReadinessSnapshot({ readinessMatrix: { rows: [
     { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },

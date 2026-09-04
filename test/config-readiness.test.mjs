@@ -233,6 +233,81 @@ test('provider lifecycle readiness requires a structurally consistent 3210 inven
   });
   assert.equal(row(corruptState, 'provider_lifecycle_consistent').status, 'FAIL');
   assert.equal(row(corruptState, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
+
+  for (const authorityEvidence of [
+    { declaration_evidence: { ok: false, sources: { settings: { code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' } } } },
+    { default_evidence: { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' } },
+  ]) {
+    const authorityFailure = buildConfigReadinessMatrix({
+      hubCompatibility: compatibleHub,
+      workerProviderMode: 'follow-dsh',
+      providerInventoryChecked: true,
+      providerInventoryBody: {
+        ok: true,
+        lifecycle_evidence: { ok: true },
+        records: [{ id: 'p', desired_state: 'present', lifecycle: { installed: true, configured: true, enabled: true, catalogued: true } }],
+        ...authorityEvidence,
+      },
+    });
+    assert.equal(row(authorityFailure, 'provider_lifecycle_consistent').status, 'FAIL');
+    assert.equal(row(authorityFailure, 'provider_lifecycle_consistent').reason_code, READINESS_REASON_CODES.PROVIDER_LIFECYCLE_INCONSISTENT);
+  }
+});
+
+test('fresh current-route health overrides stale execution while unrelated failures are ignored', () => {
+  const selected = { ok: true, provider: 'current', model: 'model', source: 'priority' };
+  const negative = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerHealthChecked: true,
+    providerHealthBody: { ok: true, health: [
+      { provider: 'current', model: 'model', state: 'quota-exhausted', reason_code: 'QUOTA_EXHAUSTED', fresh: true },
+      { provider: 'unused', model: 'other', state: 'credential-missing', reason_code: 'CREDENTIAL_MISSING', fresh: true },
+    ] },
+    currentSelections: { worker: selected },
+    hubJobsChecked: true,
+    hubJobsBody: { ok: true, jobs: [
+      { id: 'old-success', ...HUB_CONTEXT, role: 'worker', provider: 'old', model: 'old-model', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true },
+    ] },
+  });
+  assert.equal(row(negative, 'provider_health').status, 'FAIL');
+  assert.equal(row(negative, 'provider_health').reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
+  assert.equal(row(negative, 'provider_health').detail_code, 'QUOTA_EXHAUSTED');
+  assert.equal(row(negative, 'model_execution').status, 'NOT_RUN');
+
+  const callable = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerHealthChecked: true,
+    providerHealthBody: { ok: true, health: [
+      { provider: 'unused', model: 'other', state: 'quota-exhausted', reason_code: 'QUOTA_EXHAUSTED', fresh: true },
+      { provider: 'current', model: 'model', state: 'callable', reason_code: 'PROVIDER_CALLABLE', fresh: true },
+    ] },
+    currentSelections: { worker: selected },
+  });
+  assert.equal(row(callable, 'provider_health').status, 'PASS');
+  assert.equal(row(callable, 'provider_health').reason_code, 'PROVIDER_ROUTE_CALLABLE');
+});
+
+test('reviewer health and execution evidence are bound to the current reviewer route', () => {
+  const matrix = buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerHealthChecked: true,
+    providerHealthBody: { ok: true, health: [
+      { provider: 'review-current', model: 'review-model', state: 'credential-missing', reason_code: 'CREDENTIAL_MISSING', fresh: true },
+    ] },
+    currentSelections: {
+      reviewer: { ok: true, provider: 'review-current', model: 'review-model', source: 'priority' },
+    },
+    hubJobsChecked: true,
+    hubJobsBody: { ok: true, jobs: [
+      { id: 'old-review', ...HUB_CONTEXT, role: 'reviewer', provider: 'old', model: 'old-model', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true, review_verdict: 'approve' },
+    ] },
+  });
+  assert.equal(row(matrix, 'reviewer_health').status, 'FAIL');
+  assert.equal(row(matrix, 'reviewer_health').detail_code, 'CREDENTIAL_MISSING');
+  assert.equal(row(matrix, 'reviewer_pipeline').status, 'NOT_RUN');
 });
 
 test('unchecked or malformed Hub job evidence never promotes execution readiness', () => {

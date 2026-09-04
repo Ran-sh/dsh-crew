@@ -338,6 +338,9 @@ test('Hub extension readiness observes authoritative provider inventory with bou
   assert.match(block, /buildConfigReadinessMatrix/, 'extension readiness must reuse the canonical readiness builder');
   assert.match(block, /providerInventoryChecked:\s*true/, 'extension readiness must mark inventory evidence as checked');
   assert.match(block, /providerInventoryBody/, 'extension readiness must pass bounded inventory evidence to the builder');
+  assert.match(block, /declaration_evidence/, 'extension readiness must preserve declaration authority evidence');
+  assert.match(block, /default_evidence/, 'extension readiness must preserve Harness Default authority evidence');
+  assert.match(block, /currentSelections/, 'extension readiness must bind health and historical jobs to current routes');
   assert.doesNotMatch(block, /const readinessMatrix = \{ rows:/, 'extension must not maintain a second reduced matrix implementation');
 });
 
