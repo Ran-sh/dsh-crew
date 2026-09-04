@@ -121,3 +121,36 @@ ${result.stderr}`);
     assert.match(result.stdout.trim(), /BLOCK_OK/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+maybe('Invoke-CrewMaintenanceRequests rejects mismatched start without launching', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-maint-ps-'));
+  try {
+    const root = dir.replaceAll("'", "''");
+    const result = runPs([
+      `$script:crewSupervisorRoot = '${root}'`,
+      `$script:crewMaintenanceRequestsDir = Join-Path '${root}' 'maintenance-requests'`,
+      `$script:crewMaintenanceResultsDir = Join-Path '${root}' 'maintenance-results'`,
+      `$script:crewMaintenanceSessionFile = Join-Path '${root}' 'maintenance-session.json'`,
+      `$script:services = @([pscustomobject]@{ Name = 'test'; CrewOwned = $true; Port = 32199; Url = 'http://127.0.0.1:32199' })`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-requests') -Force | Out-Null`,
+      `New-Item -ItemType Directory -Path (Join-Path '${root}' 'maintenance-results') -Force | Out-Null`,
+      // A STOPPED session for lease-good/rid-good...
+      `$session = @{ schema_version = 1; state = 'STOPPED'; lease = 'lease-good'; runtime_id = 'rid-good'; stopped_at = 1; request_id = 'req-stop' } | ConvertTo-Json -Compress`,
+      `Set-Content -LiteralPath (Join-Path '${root}' 'maintenance-session.json') -Value $session -Encoding UTF8 -NoNewline`,
+      // ...but the start request carries a WRONG lease/identity.
+      `$start = @{ schema_version = 1; request_id = 'req-start'; operation = 'maintenance-start'; lease = 'lease-WRONG'; runtime_id = 'rid-WRONG'; expires_at = 9999999999999; extra = $null } | ConvertTo-Json -Compress`,
+      `Set-Content -LiteralPath (Join-Path (Join-Path '${root}' 'maintenance-requests') 'req-start.json') -Value $start -Encoding UTF8 -NoNewline`,
+      // Stub the launcher: any actual launch attempt throws.
+      `function Start-CrewService { throw 'must not launch on mismatch' }`,
+      `Invoke-CrewMaintenanceRequests`,
+      `$resFile = Join-Path (Join-Path '${root}' 'maintenance-results') 'req-start.json'`,
+      `if (-not (Test-Path -LiteralPath $resFile -PathType Leaf)) { throw 'result missing' }`,
+      `$res = Get-Content -LiteralPath $resFile -Raw | ConvertFrom-Json`,
+      `if ($res.state -ne 'SUPERVISOR_OWNERSHIP_CONFLICT') { throw ('expected conflict, got ' + $res.state) }`,
+      `'HANDLER_REJECT_OK'`,
+    ].join('\n'));
+    assert.equal(result.status, 0, `${result.stdout}
+${result.stderr}`);
+    assert.match(result.stdout.trim(), /HANDLER_REJECT_OK/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
