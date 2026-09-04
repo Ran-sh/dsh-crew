@@ -228,18 +228,21 @@ $crewMaintenanceResultsDir = Join-Path $crewSupervisorRoot 'maintenance-results'
 $crewMaintenanceSessionFile = Join-Path $crewSupervisorRoot 'maintenance-session.json'
 
 function Test-MaintenanceSessionActive {
-  # True when a STOPPED maintenance session holds the Crew 3210 launch
-  # right (the npx lifecycle is mid tree-swap). Ordinary supervision must
-  # skip the Crew backend while this is set.
-  try {
-    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return $false }
-    $session = Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
-    return ($session.schema_version -eq 1 -and $session.state -eq 'STOPPED' -and $session.lease -and $session.runtime_id)
-  } catch { return $false }
+  # Fence for ordinary Crew auto-start. Returns $true when a STOPPED session
+  # holds the launch right OR when the session file is present but MALFORMED
+  # (fail closed: a corrupt session must not let supervision auto-start
+  # 3210, because the stopped window may belong to a live npx swap).
+  # ABSENT means no fence: ordinary supervision proceeds.
+  $session = Read-MaintenanceSession
+  if ($session -eq 'ABSENT') { return $false }
+  return $true
 }
 
 function Set-MaintenanceSession {
   param([object] $Request)
+  # Strong-failure semantics: the STOPPED result may only be published after
+  # the session is durably written AND read back with exact identity. Any
+  # failure returns $false and the caller must NOT claim the stopped window.
   try {
     $session = @{
       schema_version = 1
@@ -252,18 +255,37 @@ function Set-MaintenanceSession {
     $temp = Join-Path $crewSupervisorRoot ("maintenance-session.{0}.tmp" -f $PID)
     Set-Content -LiteralPath $temp -Value $session -Encoding UTF8 -NoNewline
     Move-Item -LiteralPath $temp -Destination $crewMaintenanceSessionFile -Force
-  } catch { /* best effort */ }
+    $back = Read-MaintenanceSession
+    if ($back -is [string]) { return $false }
+    return ($back.schema_version -eq 1 -and $back.state -eq 'STOPPED' -and $back.lease -eq $Request.lease -and $back.runtime_id -eq $Request.runtime_id -and $back.request_id -eq $Request.request_id)
+  } catch { return $false }
 }
 
 function Clear-MaintenanceSession {
-  Remove-Item -LiteralPath $crewMaintenanceSessionFile -Force -ErrorAction SilentlyContinue
+  # Verifiable one-shot consumption: returns $true only when the session
+  # file is provably ABSENT afterwards (otherwise the lease is NOT consumed
+  # and replay stays impossible because start re-validates the session).
+  try {
+    Remove-Item -LiteralPath $crewMaintenanceSessionFile -Force -ErrorAction Stop
+  } catch {
+    if (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf) { return $false }
+    return $true
+  }
+  return (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf))
 }
 
 function Read-MaintenanceSession {
+  # Tri-state: 'ABSENT' (no file), a session object when valid, or the
+  # string 'MALFORMED' (present but unreadable/invalid). MALFORMED fails
+  # closed for Crew auto-start (see Test-MaintenanceSessionActive).
   try {
-    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return $null }
-    return Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
-  } catch { return $null }
+    if (-not (Test-Path -LiteralPath $crewMaintenanceSessionFile -PathType Leaf)) { return 'ABSENT' }
+    $parsed = Get-Content -LiteralPath $crewMaintenanceSessionFile -Raw | ConvertFrom-Json -ErrorAction Stop
+    if ($parsed.schema_version -ne 1 -or $parsed.state -ne 'STOPPED' -or -not $parsed.lease -or -not $parsed.runtime_id -or -not $parsed.request_id) {
+      return 'MALFORMED'
+    }
+    return $parsed
+  } catch { return 'MALFORMED' }
 }
 
 function Write-MaintenanceResult {
@@ -337,9 +359,18 @@ function Invoke-CrewMaintenanceRequests {
         # The stopped window now belongs to the npx lifecycle: persist the
         # STOPPED session (lease + proven runtime_id) so ordinary
         # supervision will NOT auto-start 3210 until the matching start.
-        Set-MaintenanceSession $request
-        Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
-        Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
+        # STRONG semantics: STOPPED is published ONLY after the session is
+        # durably written AND read back with exact identity. A session write
+        # failure must never tell npx it owns a stopped window it cannot
+        # later prove (that race auto-restarts 3210 mid tree-swap).
+        $sessionDurable = Set-MaintenanceSession $request
+        if ($sessionDurable) {
+          Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
+          Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
+        } else {
+          Write-MaintenanceResult $request 'SUPERVISOR_SESSION_PERSIST_FAILED'
+          Write-LaunchLog ('Maintenance-stop {0} stopped the process but the STOPPED session could not be persisted; NOT publishing STOPPED.' -f $request.request_id) 'ERROR'
+        }
       } else {
         Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
       }
@@ -357,15 +388,17 @@ function Invoke-CrewMaintenanceRequests {
         $expectedDsh = $request.extra.expected_dsh_version
       }
       $session = Read-MaintenanceSession
-      if (-not $session -or $session.state -ne 'STOPPED' -or $session.lease -ne $lease -or $session.runtime_id -ne $request.runtime_id) {
+      if ($session -is [string] -or $session.lease -ne $lease -or $session.runtime_id -ne $request.runtime_id) {
         Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
         Write-LaunchLog ('Maintenance-start {0} rejected: no matching STOPPED session (lease/identity mismatch).' -f $request.request_id) 'WARN'
         continue
       }
       $livePort = Get-PortState $crew.Port
-      if ($livePort.State -eq 'occupied') {
+      if ($livePort.State -ne 'free') {
+        # occupied AND unknown both fail closed: the stopped window is not
+        # provably clean, so no start authority.
         Write-MaintenanceResult $request 'SUPERVISOR_OWNERSHIP_CONFLICT'
-        Write-LaunchLog ('Maintenance-start {0} rejected: port {1} still listens; the stopped window is not clean.' -f $request.request_id, $crew.Port) 'WARN'
+        Write-LaunchLog ('Maintenance-start {0} rejected: port {1} is not provably free (state={2}).' -f $request.request_id, $crew.Port, $livePort.State) 'WARN'
         continue
       }
       Start-CrewService $crew
@@ -377,9 +410,17 @@ function Invoke-CrewMaintenanceRequests {
       } catch { $newRuntime = $null }
       $ok = $newRuntime -and $newRuntime.runtime_id -and ($expectedDsh -eq $null -or $newRuntime.dsh_version -eq $expectedDsh)
       if ($ok) {
-        Clear-MaintenanceSession
-        Write-MaintenanceResult $request 'VERIFIED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id; runtime_version = $newRuntime.runtime_version; dsh_version = $newRuntime.dsh_version }
-        Write-LaunchLog ('Maintenance-start {0} verified: Crew {1} + DSH {2}.' -f $request.request_id, $newRuntime.runtime_version, $newRuntime.dsh_version)
+        # Verifiable one-shot consumption: only a provably-cleared session
+        # completes the transaction; otherwise the lease stays live and any
+        # replay is still fenced (no VERIFIED without consumption proof).
+        $consumed = Clear-MaintenanceSession
+        if ($consumed) {
+          Write-MaintenanceResult $request 'VERIFIED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id; runtime_version = $newRuntime.runtime_version; dsh_version = $newRuntime.dsh_version }
+          Write-LaunchLog ('Maintenance-start {0} verified: Crew {1} + DSH {2}.' -f $request.request_id, $newRuntime.runtime_version, $newRuntime.dsh_version)
+        } else {
+          Write-MaintenanceResult $request 'VERIFY_FAILED' @{ lease = $lease; runtime_id = $newRuntime.runtime_id }
+          Write-LaunchLog ('Maintenance-start {0} identity verified but session consumption unproven; NOT marking VERIFIED.' -f $request.request_id) 'ERROR'
+        }
       } else {
         $failedRuntimeId = $null
         if ($newRuntime) { $failedRuntimeId = $newRuntime.runtime_id }
