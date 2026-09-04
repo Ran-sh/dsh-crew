@@ -329,3 +329,24 @@ test('missing flow separators fail closed across inspection and mutation entry p
     }).ok, false);
   }
 });
+
+test('missing inline flow-object separators fail closed across every entry point', () => {
+  const malformed = [
+    FLOW_SETTINGS.replace(
+      '{ id: muse-spark-1.3-contributor, name: Muse Spark 1.3 }',
+      '{ id: muse-spark-1.3-contributor name: Muse Spark 1.3 }',
+    ),
+    FLOW_SETTINGS.replace(
+      '{ id: muse-spark-1.3-contributor, name: Muse Spark 1.3 }',
+      '{ id: muse-spark-1.3-contributor, name: Muse Spark 1.3, reasoningEfforts: { off: null high: reasoning_effort_high } }',
+    ),
+  ];
+  for (const source of malformed) {
+    assert.equal(inspectProviderSettings(source).ok, false);
+    assert.equal(readProviderSettingsMaterialization(source, { providerId: 'opencode-go-muse' }).ok, false);
+    assert.equal(removeProviderSettings(source, { providerIds: ['opencode1'] }).ok, false);
+    assert.equal(addProviderSettings(source, {
+      provider: { id: 'new-provider', display_name: 'New Provider', models: [{ id: 'new-model' }] },
+    }).ok, false);
+  }
+});
