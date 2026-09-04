@@ -156,6 +156,13 @@ test('primary docs do not instruct disabled integrate-detach and identify 3210 a
   }
 });
 
+test('primary install docs state the managed supervisor platform boundary', () => {
+  for (const file of ['README.md', 'README.zh.md', 'docs/installation.md']) {
+    const doc = read(file);
+    assert.match(doc, /Windows[\s\S]{0,160}(?:required|requirement|supported|支持|必需)|(?:required|requirement|supported|支持|必需)[\s\S]{0,160}Windows/i, file);
+  }
+});
+
 test('Windows launcher opens and supervises the Crew-owned 3210 surface without requiring official 3080', () => {
   const launcher = read('windows/start-dsh-crew.cmd');
   const helper = read('windows/start-dsh-crew.ps1');
