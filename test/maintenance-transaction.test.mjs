@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
 
 import {
   createSupervisorRequest,
@@ -246,6 +247,27 @@ test('maintenance identity discovery stays alive until a stalled response times 
     assert.equal(sawSignal, true);
     assert.equal(Date.now() - started < 1_000, true, 'identity discovery must not inherit an unbounded fetch timeout');
   } finally { t.cleanup(); }
+});
+
+test('maintenance identity timeout aborts a real stalled HTTP body', async () => {
+  const t = tempHome();
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = createCrewSupervisor({ home: t.dir, identityTimeoutMs: 50,
+      fetchImpl: (_url, options) => fetch(`http://127.0.0.1:${server.address().port}`, options),
+    });
+    const result = await client.stopOwnedBackend({ lease: 'timeout-body', runtimeId: 'old' });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'MAINTENANCE_IDENTITY_UNAVAILABLE');
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    t.cleanup();
+  }
 });
 
 test('maintenance client rejects forged result identity before accepting a terminal receipt', async (t) => {

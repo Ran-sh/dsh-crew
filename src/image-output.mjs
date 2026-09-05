@@ -1,6 +1,44 @@
 import { mkdtempSync, mkdirSync, lstatSync, openSync, readSync, closeSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 
+export async function downloadImageBytes(url, { fetchImpl = globalThis.fetch, timeoutMs = 60_000, maxBytes = 64 * 1024 * 1024 } = {}) {
+  if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error('unsupported image URL protocol');
+  const controller = new AbortController();
+  let reader;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error('image download timed out'));
+    }, timeoutMs);
+  });
+  const download = async () => {
+    const response = await fetchImpl(url, { signal: controller.signal });
+    controller.signal.throwIfAborted();
+    if (!response.ok) throw new Error(`image download failed: HTTP ${response.status}`);
+    if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('image download exceeds size limit');
+    if (!response.body) throw new Error('image download has no body');
+    reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      controller.signal.throwIfAborted();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw new Error('image download exceeds size limit');
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, bytes);
+  };
+  try { return await Promise.race([download(), timeout]); }
+  finally {
+    clearTimeout(timer);
+    controller.abort();
+    if (reader) void reader.cancel().catch(() => {});
+  }
+}
+
 function validateImage(file) {
   const info = lstatSync(file);
   if (!info.isFile() || info.size === 0 || info.size > 64 * 1024 * 1024) throw new Error('generated image has invalid type or size');
