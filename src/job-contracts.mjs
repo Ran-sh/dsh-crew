@@ -85,7 +85,7 @@ function evidenceStatus(view) {
   if (view?.role === 'reviewer' && view?.outcome == null) {
     return view.status === 'done' && view.review?.status === 'done'
       && view.review.verdict === 'approve' && view.review.delivery_complete === true
-      && view.review.mutated_candidate === false ? 'PASS' : 'PARTIAL';
+      && view.review.mutated_candidate !== true ? 'PASS' : 'PARTIAL';
   }
   if (view?.status === 'done' && view?.outcome?.task_status === 'success') return 'PASS';
   return 'PARTIAL';
