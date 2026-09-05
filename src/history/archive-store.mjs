@@ -111,7 +111,7 @@ async function requireStopped(assertStopped) {
 }
 
 /** Internal offline primitive: caller must own the maintenance lease + update lock. */
-export async function archiveHistory({ crewRoot, request, assertStopped }) {
+export async function archiveHistory({ crewRoot, request, assertStopped, archiveId = randomUUID() }) {
   await requireStopped(assertStopped);
   if (!request || !['archive', 'delete'].includes(request.operation) || !Array.isArray(request.artifacts)
     || !Array.isArray(request.sessionIds) || !Array.isArray(request.workspaceIds)
@@ -143,7 +143,8 @@ export async function archiveHistory({ crewRoot, request, assertStopped }) {
     if (hash(bytes) !== file.sha256) fail('PREVIEW_CHANGED');
     return { sessionId: file.sessionId, relativePath: file.relativePath, sha256: file.sha256, size: bytes.length };
   });
-  const manifest = { schemaVersion: 1, id: randomUUID(), operation: request.operation,
+  if (existsSync(pathInside(crewRoot, `${batchPath(archiveId)}/manifest.json`))) fail('ARCHIVE_EXISTS');
+  const manifest = { schemaVersion: 1, id: archiveId, operation: request.operation,
     createdAt: new Date().toISOString(), state: 'PREPARING', files, before, after };
   saveManifest(crewRoot, manifest);
   try {
@@ -167,6 +168,10 @@ export async function archiveHistory({ crewRoot, request, assertStopped }) {
     throw error;
   }
 }
+
+// Shared internal IO for the controller; no paths are accepted from HTTP clients.
+export { pathInside as historyPath, readBounded as readHistoryBytes, atomic as writeHistoryBytes,
+  decodeStore as decodeWorkspaceStore, loadManifest as readHistoryManifest, hash as historyHash };
 
 export async function restoreHistory({ crewRoot, archiveId, assertStopped }) {
   await requireStopped(assertStopped);
