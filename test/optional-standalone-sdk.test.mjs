@@ -37,3 +37,13 @@ test('missing standalone SDK returns a bounded actionable error rather than cras
   const harness = createStandaloneHarness({}, { load: async () => { throw Object.assign(Error('private loader path'), { code: 'ERR_MODULE_NOT_FOUND' }); } });
   await assert.rejects(harness.run('test'), error => error.code === 'STANDALONE_SDK_UNAVAILABLE' && !error.message.includes('private loader path'));
 });
+
+test('closing before a run skips loading; unrelated SDK failures keep their identity', async () => {
+  const { createStandaloneHarness } = await import('../src/standalone-sdk.mjs');
+  let loads = 0;
+  const closed = createStandaloneHarness({}, { load: async () => { loads++; return {}; } });
+  await closed.close(); await assert.rejects(closed.run('test'), /cancelled/); assert.equal(loads, 0);
+  const error = Error('SDK initialization failed');
+  const broken = createStandaloneHarness({}, { load: async () => { throw error; } });
+  await assert.rejects(broken.run('test'), e => e === error);
+});
