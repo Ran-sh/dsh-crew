@@ -118,6 +118,12 @@ test('changed same-version content forces a new runtime even with a ready watche
   const temp = temporaryAppRoot();
   try {
     const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'target-ready' });
+    let prematureReadinessChecks = 0;
+    const verify = hooks.verifyReady;
+    hooks.verifyReady = async (...args) => {
+      if (!readWindowsSupervisorHandoffJournal({ appRoot: temp.dir }).journal) prematureReadinessChecks++;
+      return verify(...args);
+    };
     const classify = hooks.classifyHeartbeat;
     hooks.classifyHeartbeat = async (...args) => {
       const observed = await classify(...args);
@@ -127,6 +133,7 @@ test('changed same-version content forces a new runtime even with a ready watche
     assert.equal(result.ok, true);
     assert.equal(state.stopCalls, 1);
     assert.equal(state.startCalls, 1);
+    assert.equal(prematureReadinessChecks, 0, 'do not wait for old code to become the new code');
     assert.equal(result.runtime_id, 'runtime-new');
   } finally { temp.cleanup(); }
 });
