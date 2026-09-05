@@ -39,6 +39,102 @@ function Write-LaunchLog {
   }
 }
 
+function Resolve-OfficialHarnessCommand {
+  $shim = Get-Command dsh.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1
+  $root = Join-Path (Split-Path -Parent $shim.Source) 'node_modules\@deepseek-ai\dsh'
+  $manifest = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
+  if ($manifest.name -ne '@deepseek-ai/dsh') { throw 'The dsh command is not a verified official Harness installation.' }
+  $entrySpec = [string] $manifest.bin.dsh
+  if (-not $entrySpec -or [IO.Path]::IsPathRooted($entrySpec) -or $entrySpec.Contains(':') -or ($entrySpec.Replace('\', '/').Split('/') -contains '..')) {
+    throw 'The official Harness CLI entry is invalid.'
+  }
+  $entry = [IO.Path]::GetFullPath((Join-Path $root $entrySpec))
+  $rootPrefix = [IO.Path]::GetFullPath($root).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if (-not $entry.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+    throw 'The official Harness CLI entry was not found.'
+  }
+  $node = Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+  return [pscustomobject]@{ NodePath = $node.Source; Entry = $entry }
+}
+
+function Test-OfficialHarnessListener {
+  param([int] $OwnerPid, [pscustomobject] $Official)
+  if ($OwnerPid -le 0) { return $false }
+  try {
+    $owner = Get-CimInstance Win32_Process -Filter ('ProcessId={0}' -f $OwnerPid) -ErrorAction Stop
+    if (-not $owner -or [IO.Path]::GetFileName([string] $owner.ExecutablePath) -ine 'node.exe') { return $false }
+    $line = ([string] $owner.CommandLine).Replace('/', '\')
+    $entry = [regex]::Escape($Official.Entry.Replace('/', '\'))
+    $node = [regex]::Escape($Official.NodePath.Replace('/', '\'))
+    $pattern = '^\s*(?:"?' + $node + '"?|"?node(?:\.exe)?"?)\s+"?' + $entry + '"?\s+(?:"?web"?|--profile\s+"?web"?)(?:\s|$)'
+    return $line -match $pattern
+  } catch { return $false }
+}
+
+function Test-OfficialWebReady {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/' -TimeoutSec 2
+    return $response.StatusCode -ge 200 -and $response.StatusCode -lt 300
+  } catch {
+    # An authenticated official UI may reject this cookie-free health request.
+    if ($_.Exception.Response) { return [int] $_.Exception.Response.StatusCode -in @(401, 403) }
+    return $false
+  }
+}
+
+function Open-OfficialFrontend {
+  param([int] $TimeoutSeconds = 90)
+  $official = Resolve-OfficialHarnessCommand
+  $mutex = New-Object System.Threading.Mutex($false, 'Local\DSHCrewOfficialFrontendLauncher')
+  $locked = $false
+  try {
+    try { $locked = $mutex.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) { throw 'Another desktop launch is still starting the official frontend.' }
+    $port = Get-PortState -Port 3080
+    if ($port.State -eq 'unknown') { throw $port.Error }
+    if ($port.State -eq 'occupied') {
+      if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official)) { throw 'Port 3080 is occupied by an unverified process; it was left untouched.' }
+      if (-not (Test-OfficialWebReady)) { throw 'The official 3080 frontend is not ready; its process was left running.' }
+      Start-Process 'http://127.0.0.1:3080/' | Out-Null
+      Write-LaunchLog 'Opened the existing official Harness frontend on 3080.'
+      return
+    }
+
+    $stamp = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmssfff'), $PID
+    $stdout = Join-Path $logRoot ('dsh-official-web-{0}.out.log' -f $stamp)
+    $stderr = Join-Path $logRoot ('dsh-official-web-{0}.err.log' -f $stamp)
+    $previousHome = $env:DSH_HOME
+    try {
+      # The official application owns its normal state; no Crew plugin/profile
+      # registration or repair is performed in this home by the launcher.
+      $env:DSH_HOME = Join-Path $env:USERPROFILE '.dsh'
+      $arguments = @(('"{0}"' -f $official.Entry), 'web', '--host', '127.0.0.1', '--port', '3080')
+      $process = Start-Process -FilePath $official.NodePath -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    } finally { $env:DSH_HOME = $previousHome }
+    Write-LaunchLog ('Started official Harness on 3080; PID={0}. The official CLI opens the browser. Logs: {1}, {2}' -f $process.Id, $stdout, $stderr)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $nextProgress = (Get-Date).AddSeconds(5)
+    do {
+      $port = Get-PortState -Port 3080
+      if ($port.State -eq 'occupied') {
+        if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official)) { throw 'Port 3080 became occupied by an unverified process; it was left untouched.' }
+        if (Test-OfficialWebReady) { return }
+      }
+      if ($process.HasExited) { throw ('Official Harness exited before readiness. Diagnostic log: {0}' -f $stderr) }
+      if ((Get-Date) -ge $nextProgress) {
+        Write-LaunchLog 'Waiting for the official Harness frontend on 3080...'
+        $nextProgress = (Get-Date).AddSeconds(5)
+      }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    throw ('Official Harness did not become ready within {0}s; inspect {1}. No official process was stopped.' -f $TimeoutSeconds, $stderr)
+  } finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+  }
+}
+
 function Get-HealthState {
   param([pscustomObject] $Service)
   # Preserve the installed extension health contract used by maintenance.
@@ -883,6 +979,7 @@ if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT -eq '1') { return }
 try {
   New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
   Write-LaunchLog ('Launcher started; mode={0}; user={1}' -f $Mode, $env:USERNAME)
+  if ($Mode -eq 'open') { Open-OfficialFrontend }
 
   if (-not (Test-Path -LiteralPath $dshCli -PathType Leaf)) {
     throw "DSH CLI was not found at $dshCli. Run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"
@@ -890,7 +987,7 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $crewHome 'profiles\dsh-crew\package.json') -PathType Leaf)) {
     throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
   }
-  # The launcher never starts or requires the external official ~/.dsh web/3080 profile.
+  # Background/watch modes remain independent of the official frontend.
 
   if ($Mode -eq 'watch') {
     Start-ServiceSupervisor
@@ -901,8 +998,7 @@ try {
   Ensure-CrewSupervisorRunning
 
   if ($Mode -eq 'open') {
-    Start-Process 'http://127.0.0.1:3210/' | Out-Null
-    Write-LaunchLog 'Opened Crew control at http://127.0.0.1:3210/'
+    Write-LaunchLog 'Official frontend is on 3080; Crew is running silently on 3210.'
   }
   Write-LaunchLog ('Launcher completed successfully in {0:n1}s.' -f ((Get-Date) - $startedAt).TotalSeconds)
   exit 0

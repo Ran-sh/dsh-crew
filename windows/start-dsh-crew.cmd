@@ -51,7 +51,7 @@ exit /b 64
 
 :help
 echo Usage: %~nx0 [--open ^| --background ^| --watch]
-echo   --open        Start the Crew-owned 3210 service, then open it in the browser.
+echo   --open        Open official Harness on 3080, then start Crew silently on 3210.
 echo   --background  Start the Crew-owned 3210 service silently.
 echo   --watch       Keep the Crew-owned 3210 service healthy.
 exit /b 0
