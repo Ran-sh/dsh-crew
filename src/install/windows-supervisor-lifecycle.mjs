@@ -487,7 +487,7 @@ export async function runWindowsSupervisorHandoff({
         if (!watcher || !nonEmptyString(observed.runtime_id, 2_048)) {
           return hookFailure('SUPERVISOR_HANDOFF_TARGET_IDENTITY_MISMATCH', 'observe', observed, 'ready watcher does not match the target helper identity');
         }
-        const ready = await invokeHook(hooks, 'verifyReady', {
+        const ready = forceRestart ? null : await invokeHook(hooks, 'verifyReady', {
           handoff_id: null,
           target: normalizedTarget(target),
           previous_runtime_id: null,
