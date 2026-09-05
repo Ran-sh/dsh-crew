@@ -2443,7 +2443,7 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
 
   const staged = stageCandidatePayload({ sourceRoot: candidateRoot, home, log, npmInstaller });
   if (!staged.ok) {
-    log(`✗ staging failed (${staged.code})${staged.detail ? `: ${staged.detail.join('; ')}` : ''}`);
+    log(`✗ staging failed (${staged.code})${staged.detail ? `: ${Array.isArray(staged.detail) ? staged.detail.join('; ') : String(staged.detail)}` : ''}`);
     return { ok: false, error: `staging failed (${staged.code})` };
   }
   log(`✓ candidate payload staged (${manifest.version})`);
@@ -2701,7 +2701,7 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
 
     const staged = stageCandidatePayload({ sourceRoot: resolved.sourceRoot, home, log, npmInstaller });
     if (!staged.ok) {
-      log(`✗ staging failed (${staged.code})${staged.detail ? `: ${staged.detail.join('; ')}` : ''}`);
+      log(`✗ staging failed (${staged.code})${staged.detail ? `: ${Array.isArray(staged.detail) ? staged.detail.join('; ') : String(staged.detail)}` : ''}`);
       return { ok: false, error: `staging failed (${staged.code})` };
     }
     log(`✓ candidate payload staged and validated (${manifest.version})`);
