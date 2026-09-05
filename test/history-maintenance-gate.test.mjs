@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 const load = () => import('../src/history/admission-gate.mjs');
 
 test('maintenance fences pending creations as well as existing agents', async () => {
@@ -69,4 +72,24 @@ test('Cordis-style method proxies preserve ownership and fence both create and r
   await assert.rejects(() => agents.create({}), /MAINTENANCE_PENDING/);
   gate.dispose();
   await agents.resume({});
+});
+
+test('real official Cordis service proxies support the history admission adapter', async t => {
+  const require = createRequire(import.meta.url);
+  const peer = require.resolve('@deepseek-ai/cordis', { paths: [dirname(require.resolve('@deepseek-ai/dsh-agent'))] });
+  const { Context, Service } = await import(pathToFileURL(peer).href);
+  const { installHistoryAdmissionGate } = await load();
+  const ctx = new Context();
+  class Agents extends Service {
+    constructor(ctx) { super(ctx, 'historyTestAgents'); }
+    list() { return []; }
+    async create() { return {}; }
+    async resume() { return {}; }
+  }
+  const ready = new Promise(resolve => ctx.inject(['historyTestAgents'], () => { resolve(); }));
+  const scope = ctx.plugin(Agents); t.after(() => scope.dispose()); await ready;
+  let pending = false;
+  const gate = installHistoryAdmissionGate(ctx.historyTestAgents, () => pending); t.after(() => gate.dispose());
+  assert.equal(gate.idle(), true); pending = true;
+  await assert.rejects(() => ctx.historyTestAgents.resume(), /MAINTENANCE_PENDING/);
 });
