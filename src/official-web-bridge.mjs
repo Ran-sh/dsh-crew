@@ -429,8 +429,6 @@ export function registerOfficialWebBridge(ctx, options = {}) {
     const QUICK_ALLOWLIST = new Set([
       '/quick-config',
       '/quick-status',
-      '/runtime/restart-request',
-      '/runtime/restart-status',
     ]);
     const disposers = [];
     for (const path of QUICK_ALLOWLIST) {

@@ -1,5 +1,13 @@
 # 3210 and 3080 UI responsibilities
 
+The desktop entry opens the official frontend with a simple Crew panel on 3080. Crew runs hidden on 3210;
+its web page is an explicit advanced-settings entry, not the default browser tab.
+The background watcher manages only 3210. Desktop launch may start the official
+program but never uses it as authority to restart, update or roll back Crew.
+The simple panel is mounted through a `--patch` file under the Crew-owned home,
+with immutable frontend revisions kept independently of backend release cleanup.
+The 3080 button opens 3210; the 3210 button opens 3080.
+
 DSH Crew is a plugin attached to the official DeepSeek Harness. Current installs
 register it in a dedicated official Harness `dsh-crew` profile whose native 3210
 page is the canonical full Crew control and execution surface. An older
@@ -26,7 +34,7 @@ DSH Crew plugin and owns day-to-day Crew management and model execution:
 Bundle: `lib/client.js` (module `@ran-sh/dsh-crew`), built from
 `src/client/entry.tsx`.
 
-## 3080: deprecated legacy quick-controls surface
+## 3080: official frontend; optional legacy Crew controls
 
 An older official Harness `web` profile on `127.0.0.1:3080` may still host a
 NARROW quick-controls card — and nothing else:
@@ -41,9 +49,9 @@ Bundle: `official-web-bridge/lib/client.js` (module
 It physically contains none of the full control-plane code (no credential
 purge, no provider delete/migration, no install integration).
 
-The 3080 bridge proxies ONLY four exact endpoints to 3210:
-`quick-config`, `quick-status`, `runtime/restart-request`,
-`runtime/restart-status`. Everything else on the Crew namespace is 404 on
+The 3080 bridge proxies ONLY two exact endpoints to 3210:
+`quick-config` and `quick-status`. Restart and rollback belong to 3210;
+the quick panel links there when needed. Everything else on the Crew namespace is 404 on
 3080, and `/supervisor/restart` returns 410 Gone pointing at 3210.
 
 The official `~/.dsh` tree is strictly read-only for Crew; the 3080 quick
@@ -94,5 +102,6 @@ The Windows launcher supervisor (`windows/start-dsh-crew.ps1` watch mode) is
 the ONLY process authority for the Crew-owned 3210 service. The official 3080
 surface never starts, owns, or supervises 3210. Restart and maintenance go
 through durable request files the hub writes and the launcher executes
-(`supervisor/restart-request.mjs`). A legacy 3080 bridge is probed only
-diagnostically after 3210 readiness and never gates startup.
+(`supervisor/restart-request.mjs`). Ordinary backend startup does not probe the
+legacy bridge. Desktop opening uses the official process and root HTTP response,
+independently of whether that process has any Crew plugin installed.

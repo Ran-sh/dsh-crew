@@ -15,7 +15,7 @@ const RESTART_KEYS = /* @__PURE__ */ new Set([
 const T = {
 	zh: {
 		title: "DSH Crew 快捷控制",
-		openFull: "打开完整设置 →",
+		openFull: "打开 3210 后台 →",
 		running: "运行中",
 		unavailable: "Crew 后端不可用",
 		openDiag: "打开诊断",
@@ -37,7 +37,7 @@ const T = {
 	},
 	en: {
 		title: "DSH Crew Quick Controls",
-		openFull: "Open full settings →",
+		openFull: "Open Crew backend (3210) →",
 		running: "Running",
 		unavailable: "Crew backend unavailable",
 		openDiag: "Open diagnostics",
@@ -191,39 +191,6 @@ function QuickPanel({ ctx }) {
 		}));
 		patch({ [listKey]: list });
 	};
-	const applyRestart = (0, react.useCallback)(async () => {
-		setBusy(true);
-		setNotice(t.working);
-		try {
-			const created = await readJson(await fetch(`${API}/runtime/restart-request`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					confirm: true,
-					reason: "quick panel restart"
-				})
-			}));
-			if (!created.ok) throw new Error(created.code ?? created.error ?? "restart failed");
-			const requestId = created.request_id;
-			const deadline = Date.now() + 9e4;
-			for (;;) {
-				await new Promise((r) => setTimeout(r, 1e3));
-				if (Date.now() > deadline) throw new Error("restart timed out");
-				const status = await readJson(await fetch(`${API}/runtime/restart-status?id=${encodeURIComponent(requestId)}`, { cache: "no-store" }));
-				if (!status.ok) continue;
-				if (status.state === "VERIFIED") {
-					setRestartPending(false);
-					setNotice(t.saved);
-					return;
-				}
-				if (status.state !== "RESTART_REQUESTED") throw new Error(status.state ?? "restart failed");
-			}
-		} catch (e) {
-			setNotice(String(e?.message ?? e));
-		} finally {
-			setBusy(false);
-		}
-	}, [t]);
 	const modelList = (listKey, label) => {
 		const list = config?.[listKey] ?? [];
 		const draft = drafts[listKey] ?? {
@@ -442,11 +409,12 @@ function QuickPanel({ ctx }) {
 			}),
 			restartPending && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: "crew-quick-row",
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
 					className: "crew-quick-btn primary",
-					disabled: busy,
-					onClick: () => void applyRestart(),
-					children: t.applyRestart
+					href: FULL,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: t.openFull
 				})
 			}),
 			notice && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {

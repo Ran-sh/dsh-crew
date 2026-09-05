@@ -9,6 +9,8 @@ ZCode 和 Claude Code 增加 Worker/Reviewer 调度、模型优先级、任务�
 
 需要 Windows、Node.js 和 Git。目前受管 3210 监督仅支持 Windows；Linux 和 macOS
 暂不属于生产运行平台。
+桌面前台还需要单独安装官方 CLI：`npm install -g @deepseek-ai/dsh@latest`，
+并确保 PATH 中能找到 `dsh.cmd`。
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
@@ -18,8 +20,9 @@ dsh-crew install
 DSH Crew 安装在 DeepSeek 官方 Harness 的专用 `dsh-crew` profile 中，并由 3210
 提供服务。这个 profile 是 Crew 的 canonical control and execution surface。
 
-官方 3080 界面不属于 Crew，Crew 不依赖它并始终将其 profile 视为只读；
-Crew 从不启动、拥有或监管它。
+桌面启动器打开官方 3080，并在后台隐藏启动 Crew 3210，不自动打开后台网页。
+后台模式和登录启动项只启动 Crew。Crew 安装器不修改官方 profile；官方程序
+正常启动时自行管理它的运行状态。
 
 Windows 安装会注册登录启动项。如需立即启动并打开 Crew 控制台：
 
@@ -27,7 +30,9 @@ Windows 安装会注册登录启动项。如需立即启动并打开 Crew 控制
 & "$env:USERPROFILE\.config\dsh-crew\launchers\start-dsh-crew.cmd" --open
 ```
 
-启动后打开 <http://127.0.0.1:3210/>。
+日常使用 <http://127.0.0.1:3080/>；需要后台高级配置时再访问
+<http://127.0.0.1:3210/>。桌面启动通过 Crew 自有目录中的 `--patch` 叠加配置
+挂载简易面板，不写入官方 profile。3080 的按钮打开 3210，3210 的按钮打开 3080。
 
 安装、更新和回滚也会自动收敛 Windows watcher：系统会精确交接旧 watcher，
 并且只有在新的 3210 Crew 与 DSH 版本验证通过后才报告完成；整个过程不涉及
@@ -43,8 +48,8 @@ dsh-crew inspect
 
 | 界面 | 用途 |
 | --- | --- |
-| `3080` | 官方 Harness 的 `web` profile；不属于 Crew，Crew 不依赖它 |
-| `3210` | 安装了 DSH Crew 插件的官方 Harness `dsh-crew` profile |
+| `3080` | 日常官方 Harness 前台，桌面启动时打开 |
+| `3210` | Crew 后台执行实例，默认隐藏，需要时进入高级配置 |
 
 进入 **设置 → DSH Crew**，刷新 Harness Models，并分别排列 Worker 与 Reviewer
 的模型顺序。然后直接告诉 Codex、ZCode 或 Claude：

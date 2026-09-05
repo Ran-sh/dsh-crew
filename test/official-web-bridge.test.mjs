@@ -362,8 +362,6 @@ test('official bridge registers quick-status and the narrow quick allowlist', ()
     'exact:/_dsh/dsh-crew/supervisor/restart',
     'exact:/_dsh/dsh-crew/quick-config',
     'exact:/_dsh/dsh-crew/quick-status',
-    'exact:/_dsh/dsh-crew/runtime/restart-request',
-    'exact:/_dsh/dsh-crew/runtime/restart-status',
   ]);
   // NO prefix proxy: the full Crew API must not be reachable from 3080.
   assert.equal(registrations.some((entry) => entry.kind === 'prefix'), false);
@@ -407,5 +405,5 @@ test('Cordis apply registers the bridge without returning an invalid injected ef
     },
   };
   assert.equal(await apply(ctx), undefined);
-  assert.equal(registrations.length, 6);
+  assert.equal(registrations.length, 4);
 });

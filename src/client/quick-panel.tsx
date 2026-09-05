@@ -5,8 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 // Narrow by design: only the user-facing master switch, flash/pro model
 // priority lists and vision/imagegen toggles — all other operations belong
 // to the native 3210 full control plane. Talks only to the quick endpoints
-// (/_dsh/dsh-crew/quick-config, /quick-status, /runtime/restart-request,
-// /runtime/restart-status). NEVER writes to any other surface.
+// (/_dsh/dsh-crew/quick-config, /quick-status). Runtime maintenance stays on 3210.
 
 const API = '/_dsh/dsh-crew';
 const CREW_CONTROL_PLANE_URL = 'http://127.0.0.1:3210/';
@@ -33,7 +32,7 @@ const RESTART_KEYS = new Set([
 const T = {
   zh: {
     title: 'DSH Crew 快捷控制',
-    openFull: '打开完整设置 →',
+    openFull: '打开 3210 后台 →',
     running: '运行中',
     unavailable: 'Crew 后端不可用',
     openDiag: '打开诊断',
@@ -55,7 +54,7 @@ const T = {
   },
   en: {
     title: 'DSH Crew Quick Controls',
-    openFull: 'Open full settings →',
+    openFull: 'Open Crew backend (3210) →',
     running: 'Running',
     unavailable: 'Crew backend unavailable',
     openDiag: 'Open diagnostics',
@@ -174,29 +173,6 @@ export function QuickPanel({ ctx }: { ctx: any }) {
     void patch({ [listKey]: list } as unknown as QuickConfig);
   };
 
-  const applyRestart = useCallback(async () => {
-    setBusy(true); setNotice(t.working);
-    try {
-      const created = await readJson(await fetch(`${API}/runtime/restart-request`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ confirm: true, reason: 'quick panel restart' }),
-      }));
-      if (!created.ok) throw new Error(created.code ?? created.error ?? 'restart failed');
-      const requestId = created.request_id;
-      const deadline = Date.now() + 90_000;
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 1000));
-        if (Date.now() > deadline) throw new Error('restart timed out');
-        const status = await readJson(await fetch(`${API}/runtime/restart-status?id=${encodeURIComponent(requestId)}`, { cache: 'no-store' }));
-        if (!status.ok) continue;
-        if (status.state === 'VERIFIED') { setRestartPending(false); setNotice(t.saved); return; }
-        if (status.state !== 'RESTART_REQUESTED') throw new Error(status.state ?? 'restart failed');
-      }
-    } catch (e: any) {
-      setNotice(String(e?.message ?? e));
-    } finally { setBusy(false); }
-  }, [t]);
-
   const modelList = (listKey: 'flash_model_priority' | 'pro_model_priority', label: string) => {
     const list: ModelEntry[] = (config?.[listKey] as ModelEntry[] | undefined) ?? [];
     const draft = drafts[listKey] ?? { provider: '', model: '' };
@@ -272,7 +248,7 @@ export function QuickPanel({ ctx }: { ctx: any }) {
       </div>
       {restartPending && (
         <div className="crew-quick-row">
-          <button className="crew-quick-btn primary" disabled={busy} onClick={() => void applyRestart()}>{t.applyRestart}</button>
+          <a className="crew-quick-btn primary" href={FULL} target="_blank" rel="noopener noreferrer">{t.openFull}</a>
         </div>
       )}
       {notice && <div className="crew-quick-notice">{notice}</div>}

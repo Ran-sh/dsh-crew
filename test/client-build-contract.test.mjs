@@ -46,8 +46,8 @@ test('3080 exposes one consolidated DSH Crew settings entry', () => {
   assert.match(panelSource, /<ActivationSummary\b/);
 });
 
-test('daily console links explicitly to the Crew plugin profile on official Harness', () => {
-  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3210\/?/);
+test('Crew backend settings do not display a self-navigation button', () => {
+  assert.doesNotMatch(panelSource, /href=\{CREW_HARNESS_URL\}/);
   assert.match(panelSource, /target=["']_blank["']/);
   assert.match(panelSource, /noopener noreferrer/);
   assert.match(panelSource, /official DeepSeek Harness|DeepSeek 官方 Harness/i);
@@ -151,8 +151,8 @@ test('native 3210 is the full control plane; official 3080 is quick-only; unknow
   const surfaceSrc = await readFile(new URL('../src/client/surface-detection.mjs', import.meta.url), 'utf8');
   assert.match(surfaceSrc, /quickControlPlane: true/);
   assert.match(surfaceSrc, /fullControlPlane: true/);
-  // The full console deep-links to the 3210 native harness, not 3080.
-  assert.match(panelSource, /http:\/\/127\.0\.0\.1:3210\/?/);
+  // The native full settings page is already the backend destination.
+  assert.doesNotMatch(panelSource, /copy\.openHarness/);
 });
 
 test('client consumes the Hub extension readiness snapshot instead of recomputing Crew state', () => {
@@ -172,7 +172,7 @@ test('quick bundle is capability-light compared to the full bundle', async () =>
   const full = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
   // Quick surface talks only to narrow endpoints.
   assert.match(quick, /quick-config/);
-  assert.match(quick, /restart-request/);
+  assert.doesNotMatch(quick, /runtime\/restart-request|runtime\/restart-status/);
   // Quick surface must NOT ship full control-plane capabilities.
   for (const forbidden of ['credentialPurgePlan', 'rollback-migration', 'quarantine', 'install/status', 'providerLifecycleError', 'delete-plan']) {
     assert.doesNotMatch(quick, new RegExp(forbidden));

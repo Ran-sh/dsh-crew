@@ -82,9 +82,39 @@ function Test-OfficialWebReady {
   }
 }
 
+function Get-OfficialFrontendOverlay {
+  $frontendRoot = Join-Path $env:USERPROFILE '.config\dsh-crew\frontend'
+  $path = Join-Path $frontendRoot 'official-web.patch.json'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Crew frontend overlay is missing. Run dsh-crew update with the current GitHub candidate.' }
+  $patch = @(Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
+  if ($patch.Count -ne 1 -or @($patch[0].insert).Count -ne 1 -or $patch[0].insert[0].id -ne 'dsh-crew-official-web-bridge') {
+    throw 'Crew frontend overlay has an unexpected structure.'
+  }
+  $uri = [Uri] ([string] $patch[0].insert[0].name)
+  if (-not $uri.IsFile) { throw 'Crew frontend must load from its local snapshot.' }
+  $entry = [IO.Path]::GetFullPath($uri.LocalPath)
+  $prefix = [IO.Path]::GetFullPath((Join-Path $frontendRoot 'revisions')) + [IO.Path]::DirectorySeparatorChar
+  if (-not $entry.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Crew frontend snapshot is outside its owned directory.' }
+  $metadata = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $entry) 'package.json') -Raw | ConvertFrom-Json
+  $revision = [string] $metadata.dshCrewFrontendRevision
+  if ($metadata.dshCrewManagedFrontend -ne $true -or $revision -notmatch '^[a-f0-9]{64}$' -or -not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+    throw 'Crew frontend snapshot is incomplete.'
+  }
+  return [pscustomobject]@{ Path = $path; Revision = $revision }
+}
+
+function Test-OfficialFrontendAttached {
+  param([string] $Revision)
+  try {
+    $response = Invoke-RestMethod -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/bridge-status' -TimeoutSec 2
+    return $response.ok -eq $true -and $response.surface -eq 'official-bridge' -and $response.frontend_revision -eq $Revision
+  } catch { return $false }
+}
+
 function Open-OfficialFrontend {
   param([int] $TimeoutSeconds = 90)
   $official = Resolve-OfficialHarnessCommand
+  $frontend = Get-OfficialFrontendOverlay
   $mutex = New-Object System.Threading.Mutex($false, 'Local\DSHCrewOfficialFrontendLauncher')
   $locked = $false
   try {
@@ -95,6 +125,7 @@ function Open-OfficialFrontend {
     if ($port.State -eq 'occupied') {
       if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official)) { throw 'Port 3080 is occupied by an unverified process; it was left untouched.' }
       if (-not (Test-OfficialWebReady)) { throw 'The official 3080 frontend is not ready; its process was left running.' }
+      if (-not (Test-OfficialFrontendAttached -Revision $frontend.Revision)) { throw 'The running official frontend has not loaded the current Crew panel. Stop that official instance when idle, then launch from the desktop again. It was left untouched.' }
       Start-Process 'http://127.0.0.1:3080/' | Out-Null
       Write-LaunchLog 'Opened the existing official Harness frontend on 3080.'
       return
@@ -108,7 +139,7 @@ function Open-OfficialFrontend {
       # The official application owns its normal state; no Crew plugin/profile
       # registration or repair is performed in this home by the launcher.
       $env:DSH_HOME = Join-Path $env:USERPROFILE '.dsh'
-      $arguments = @(('"{0}"' -f $official.Entry), 'web', '--host', '127.0.0.1', '--port', '3080')
+      $arguments = @(('"{0}"' -f $official.Entry), 'web', '--patch', ('"{0}"' -f $frontend.Path), '--host', '127.0.0.1', '--port', '3080')
       $process = Start-Process -FilePath $official.NodePath -ArgumentList $arguments -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } finally { $env:DSH_HOME = $previousHome }
@@ -119,7 +150,7 @@ function Open-OfficialFrontend {
       $port = Get-PortState -Port 3080
       if ($port.State -eq 'occupied') {
         if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official)) { throw 'Port 3080 became occupied by an unverified process; it was left untouched.' }
-        if (Test-OfficialWebReady) { return }
+        if ((Test-OfficialWebReady) -and (Test-OfficialFrontendAttached -Revision $frontend.Revision)) { return }
       }
       if ($process.HasExited) { throw ('Official Harness exited before readiness. Diagnostic log: {0}' -f $stderr) }
       if ((Get-Date) -ge $nextProgress) {

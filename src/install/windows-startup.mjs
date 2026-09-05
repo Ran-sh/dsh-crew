@@ -10,6 +10,7 @@ import {
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { installOfficialFrontendAssets, officialFrontendAssetsReady } from './official-frontend-assets.mjs';
 
 export const WINDOWS_STARTUP_FILENAME = 'DSH Crew.vbs';
 export const WINDOWS_LAUNCHER_FILENAME = 'start-dsh-crew.cmd';
@@ -102,6 +103,7 @@ export function windowsStartupStatus({
     try {
       const sourceLauncher = readFileSync(join(root, 'windows', WINDOWS_LAUNCHER_FILENAME), 'utf8');
       const sourceHelper = readFileSync(join(root, 'windows', WINDOWS_HELPER_FILENAME), 'utf8');
+      if (sourceHelper.includes('Get-OfficialFrontendOverlay')) components.frontend_overlay = officialFrontendAssetsReady({ home, root });
       const sourceControl = readFileSync(join(root, 'windows', WINDOWS_CONTROL_FILENAME), 'utf8');
       const sourceVbs = readFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'utf8');
       const startup = readFileSync(resolved.startupFile, 'utf16le').replace(/^\uFEFF/, '');
@@ -176,6 +178,9 @@ export function installWindowsStartup({
   if (conflicts.length > 0) {
     return { ok: false, supported: true, code: 'STARTUP_TARGET_COLLISION', conflicts, ...resolved };
   }
+  const needsFrontend = readFileSync(sourceHelper, 'utf8').includes('Get-OfficialFrontendOverlay');
+  const frontend = needsFrontend ? installOfficialFrontendAssets({ home, root }) : null;
+  if (frontend && !frontend.ok) return { ...frontend, supported: true };
   mkdirSync(dirname(resolved.launcherFile), { recursive: true });
   mkdirSync(dirname(resolved.startupFile), { recursive: true });
   const beforeLauncher = existsSync(resolved.launcherFile) ? readFileSync(resolved.launcherFile) : null;
@@ -200,7 +205,7 @@ export function installWindowsStartup({
   }
   const rendered = renderVbs(readFileSync(sourceVbs, 'utf8'), resolved.launcherFile);
   writeFileSync(resolved.startupFile, `\uFEFF${rendered}`, 'utf16le');
-  const changed = !beforeLauncher?.equals(readFileSync(resolved.launcherFile))
+  const changed = frontend?.changed === true || !beforeLauncher?.equals(readFileSync(resolved.launcherFile))
     || !beforeHelper?.equals(readFileSync(resolved.helperFile))
     || !beforeControl?.equals(readFileSync(resolved.controlFile))
     || !beforeManifest?.equals(readFileSync(resolved.supervisorManifestFile))

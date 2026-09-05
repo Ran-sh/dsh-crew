@@ -16,6 +16,15 @@ The installer registers the plugin in a dedicated official Harness
 `profile: dsh-crew` served on 3210. This is the canonical Crew control and
 execution surface; it is not a separate or forked Harness product.
 
+Desktop `--open` starts or reuses the separately installed official CLI's web
+frontend on 3080, then ensures Crew runs hidden on 3210. It never opens the 3210
+browser automatically. Install the official CLI separately so `dsh.cmd` is on
+PATH. Login startup and `--background` remain Crew-only.
+The launcher adds a Crew-owned overlay pointing to an immutable small frontend
+snapshot. It supplies the simple panel and the link to 3210; the backend links
+back to 3080. An already-running official instance without that overlay must be
+reloaded when idle; the desktop launcher does not terminate existing official work.
+
 To test GitHub `main` before an npm release:
 
 ```bash
@@ -34,7 +43,7 @@ node scripts/setup.mjs status
 | Global Codex policy | Managed block inside `~/.codex/AGENTS.md` | Only the managed block is removed |
 | ZCode MCP, agents and commands | Installs `~/.zcode/AGENTS.md`, `agents/{ds-worker,ds-reviewer}.md`, commands and a source-aware `dsh-crew` MCP entry | Only DSH Crew-owned files/entry are removed |
 | Windows login startup | `DSH Crew.vbs`, `start-dsh-crew.cmd`, `start-dsh-crew.ps1`, the exact process controller, and its hash manifest | Only DSH Crew-owned files are removed; foreign pre-existing content at those exact paths is preserved or fails closed |
-| Official 3080 UI | External read-only optional legacy diagnostic; never installed or required by Crew | Nothing to remove; Crew never owns the official profile |
+| Official 3080 UI | Desktop launch starts/reuses the official program; Crew installer does not register plugins in its profile | Left running and untouched by Crew uninstall |
 
 The Windows launcher supervises only the Crew-owned 3210 service, so provider
 restart and rollback operations have one verifiable supervisor. The official

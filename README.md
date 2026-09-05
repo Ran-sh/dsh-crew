@@ -10,6 +10,8 @@ safety gate for Codex Desktop, ZCode, and Claude Code.
 
 Requirements: Windows, Node.js, and Git. Managed 3210 supervision is currently
 supported on Windows; Linux and macOS are not yet production runtime targets.
+The desktop frontend also requires the separately installed official CLI
+(`npm install -g @deepseek-ai/dsh@latest`, providing `dsh.cmd` on PATH).
 
 ```bash
 npm install -g @ran-sh/dsh-crew@latest
@@ -20,8 +22,10 @@ DSH Crew is installed as a plugin in a dedicated official DeepSeek Harness
 profile named `dsh-crew`, served on 3210. That profile is the canonical Crew
 control and execution surface.
 
-The official 3080 surface is outside Crew ownership and optional for Crew.
-Crew treats its profile as read-only and never starts, owns, or supervises it.
+The desktop launcher opens the official Harness on 3080 and starts Crew on 3210
+with no console window or automatic backend browser tab. Background/login startup
+starts only Crew. The official profile is not modified by the Crew installer;
+normal official application startup manages its own state.
 
 On Windows, installation registers login startup. To start immediately and
 open the Crew control:
@@ -30,7 +34,10 @@ open the Crew control:
 & "$env:USERPROFILE\.config\dsh-crew\launchers\start-dsh-crew.cmd" --open
 ```
 
-Or open <http://127.0.0.1:3210/> after startup.
+The daily page is <http://127.0.0.1:3080/>. The backend settings remain available
+at <http://127.0.0.1:3210/> when explicitly needed. Desktop launch mounts the
+simple Crew panel using a Crew-owned `--patch` overlay, without installing it
+into the official profile. Its button opens 3210; the backend button opens 3080.
 
 Install, update, and rollback also converge the Windows watcher automatically:
 the exact old watcher is handed off, and completion is reported only after the
@@ -47,8 +54,8 @@ they are never bundled into this package.
 
 | Surface | Purpose |
 | --- | --- |
-| `3080` | Official Harness `web` profile outside Crew ownership; optional for Crew |
-| `3210` | Official Harness `dsh-crew` profile with the DSH Crew plugin |
+| `3080` | Daily official Harness `web` frontend; opened by the desktop launcher |
+| `3210` | Hidden Crew backend; explicit advanced configuration via its web page |
 
 In **Settings → DSH Crew**, refresh Harness Models and order the Worker and
 Reviewer model lists. Then ask a host agent:

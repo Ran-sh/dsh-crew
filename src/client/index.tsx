@@ -18,7 +18,6 @@ import { aggregateModelInvocations } from './task-telemetry.mjs';
 export const inject = ['slots', 'locale'];
 
 const API = '/_dsh/dsh-crew';
-const CREW_HARNESS_URL = 'http://127.0.0.1:3210/';
 const CREW_CONTROL_PLANE_URL = 'http://127.0.0.1:3080/';
 
 type AdaptiveConfig = { enabled: boolean; window_size: number; min_samples: number };
@@ -43,7 +42,8 @@ const COPY = {
   zh: {
     label: 'DSH Crew',
     title: 'DSH Crew',
-    intro: '日常 Crew 控制台：在一个入口里配置编排、角色、模型路由与宿主集成，并跟踪真实 Worker / Reviewer 任务。',
+    openOfficial: '打开 3080 官方界面 →',
+    intro: 'Crew 后台配置：管理编排、角色、模型路由与宿主集成，并跟踪 Worker / Reviewer 任务。日常官方界面位于 3080。',
     integrations: '集成',
     installed: '已安装', notInstalled: '未安装', ready: '可调用', notReady: '未就绪', hud: 'HUD 段',
     install: '安装', update: '更新', restore: '还原',
@@ -53,7 +53,6 @@ const COPY = {
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
     sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
-    openHarness: '打开 3210 DSH Crew 插件控制台 →',
     harnessHint: 'DeepSeek 官方 Harness 的 dsh-crew profile：Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -184,7 +183,8 @@ const COPY = {
   en: {
     label: 'DSH Crew',
     title: 'DSH Crew',
-    intro: 'The daily Crew console: configure orchestration, roles, model routing, and host integrations in one place while tracking real Worker / Reviewer jobs.',
+    intro: 'Crew backend settings for orchestration, roles, model routing, host integrations, and Worker / Reviewer jobs. The daily official interface is on 3080.',
+    openOfficial: 'Open official frontend (3080) →',
     integrations: 'Integrations',
     installed: 'installed', notInstalled: 'not installed', ready: 'ready', notReady: 'not ready', hud: 'HUD segment',
     install: 'Install', update: 'Update', restore: 'Restore',
@@ -194,7 +194,6 @@ const COPY = {
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
     sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
-    openHarness: 'Open the 3210 DSH Crew plugin console →',
     harnessHint: 'The official DeepSeek Harness dsh-crew profile: providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -501,7 +500,7 @@ function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surfac
         <a href={CREW_CONTROL_PLANE_URL} target="_blank" rel="noopener noreferrer" style={{
           ...S.btn, alignSelf: 'flex-start', textDecoration: 'none', fontWeight: 650, padding: '7px 12px',
           borderColor: 'rgba(74,158,255,0.55)', background: 'rgba(74,158,255,0.08)',
-        }}>{zh ? '打开 3080 DSH Crew 控制台 →' : 'Open the 3080 DSH Crew console →'}</a>
+        }}>{zh ? '打开官方 Harness 界面（3080） →' : 'Open official Harness (3080) →'}</a>
       </div>
     </div>
   );
@@ -1105,17 +1104,17 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           <div style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.01em' }}>{copy.title}</div>
           <div style={{ opacity: 0.7, fontSize: 12.5, marginTop: 2 }}>{copy.intro}</div>
           <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? 'READY' : 'CHECK'}</span>
-            <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? 'READY' : 'CHECK'}</span>
-            <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? 'READY' : 'CHECK'}</span>
+            <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? copy.installed : copy.notReady}</span>
+            <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? copy.installed : copy.notReady}</span>
+            <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? copy.installed : copy.notReady}</span>
             <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{jobs.filter((job) => job.status === 'running').length} running</span>
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <a href={CREW_HARNESS_URL} target="_blank" rel="noopener noreferrer" style={{
+          <a href={CREW_CONTROL_PLANE_URL} target="_blank" rel="noopener noreferrer" style={{
             ...S.btn, textDecoration: 'none', fontWeight: 650, padding: '7px 12px',
             borderColor: 'rgba(74,158,255,0.55)', background: 'rgba(74,158,255,0.10)',
-          }}>{copy.openHarness}</a>
+          }}>{copy.openOfficial}</a>
           <span style={{ fontSize: 10.5, opacity: 0.52 }}>{copy.harnessHint}</span>
         </div>
       </div>
