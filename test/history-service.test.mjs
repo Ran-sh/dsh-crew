@@ -19,7 +19,7 @@ async function fixture(t) {
   let now = 1000;
   const service = createHistoryService({ crewRoot: root, agents, persistence, runtimeId: 'test-runtime', launch: async id => launched.push(id), now: () => now });
   t.after(() => service.dispose());
-  return { root, file, agents, service, launched, advance: () => { now += 700000; } };
+  return { root, file, agents, persistence, service, launched, advance: () => { now += 700000; } };
 }
 
 test('preview is non-destructive and execution requires confirmation plus a fresh server-owned plan', async t => {
@@ -98,4 +98,11 @@ test('recovery of an unstarted request cancels it without stopping a runtime or 
   await runHistoryOperation({ crewRoot: f.root, id: op.id, recover: true, acquire: () => ({ ok: true }), release: () => ({ ok: true }),
     supervisor: { stopOwnedBackend: async () => { stops++; return { ok: true }; } } });
   assert.equal(stops, 0); assert.equal(f.service.status().phase, 'FAILED'); assert.equal(existsSync(f.file), true);
+});
+
+test('a legacy plain log is resolved from the official locator directory, but ambiguous encodings reject', async t => {
+  const f = await fixture(t); f.persistence.locate = () => ({ kind: 'jsonl', path: `${f.file}.zstd` });
+  assert.equal((await f.service.preview({ scope: 'all' })).counts.sessions, 1);
+  writeFileSync(`${f.file}.zstd`, 'conflicting encoding');
+  await assert.rejects(f.service.preview({ scope: 'all' }), /AMBIGUOUS/);
 });
