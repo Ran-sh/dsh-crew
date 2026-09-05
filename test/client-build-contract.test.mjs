@@ -13,6 +13,13 @@ const setupSource = await readFile(new URL('../scripts/setup.mjs', import.meta.u
 const entrySource = await readFile(new URL('../src/client/entry.tsx', import.meta.url), 'utf8');
 const panelSource = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8');
 
+test('shipped client modules never require discarded relative shared chunks', async () => {
+  for (const file of ['../lib/client.js', '../official-web-bridge/lib/client.js']) {
+    const artifact = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.equal(/require\(["']\.\.?\//.test(artifact), false, `${file} depends on an unshipped chunk`);
+  }
+});
+
 test('client build uses the activation wrapper entry', () => {
   assert.match(packageJson.scripts?.['build:client'] ?? '', /tsdown src\/client\/entry\.tsx\b/);
   assert.match(setupSource, /run\(['"]pnpm['"],\s*\[['"]run['"],\s*['"]build:client['"]\]/);
