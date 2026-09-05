@@ -22,9 +22,16 @@ export function capturePayloadContent(root, suppliedManifest) {
     const manifest = suppliedManifest ?? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
     if (!Array.isArray(manifest.files)) return null;
     const files = new Map();
+    const modes = new Map();
     const directories = new Set();
     let bytes = 0;
     const visit = relative => {
+      let parent = root;
+      for (const segment of posix.dirname(relative).split('/').filter(part => part && part !== '.')) {
+        parent = join(parent, segment);
+        const info = lstatSync(parent);
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('unsupported payload parent');
+      }
       const file = join(root, relative);
       const stat = lstatSync(file);
       if (stat.isSymbolicLink()) throw new Error('unsupported payload symlink');
@@ -42,6 +49,7 @@ export function capturePayloadContent(root, suppliedManifest) {
         ? Buffer.from(JSON.stringify(runtimeManifest(manifest))) : readFileSync(file);
       if (content.length > stat.size && relative !== 'package.json') throw new Error('payload changed while being read');
       files.set(relative, content);
+      modes.set(relative, stat.mode & 0o777);
     };
     visit('package.json');
     for (const entry of manifest.files ?? []) {
@@ -62,7 +70,7 @@ export function capturePayloadContent(root, suppliedManifest) {
         for (const name of readdirSync(join(root, base))) if (expression.test(name)) visit(posix.join(base, name));
       }
     }
-    return { files, directories };
+    return { files, directories, modes };
   } catch { return null; }
 }
 

@@ -870,7 +870,7 @@ export function stageCandidatePayload({
   for (const [entry, bytes] of content.files) {
     const destination = join(stageDir, entry);
     mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, bytes);
+    writeFileSync(destination, bytes, { mode: content.modes.get(entry) });
   }
 
   // Persist an adjusted manifest: identity/runtime fields stay; production
