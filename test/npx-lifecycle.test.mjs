@@ -522,6 +522,18 @@ test('staging refuses malformed or escaping published file patterns before copyi
   } finally { t.cleanup(); }
 });
 
+test('install reports a textual boot-smoke failure without throwing from its logger', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    writeFileSync(join(sourceRoot, 'lib', 'client.js'), 'not valid javascript');
+    const { installer } = recordingInstaller();
+    const result = await npxInstall({ home: t.dir, sourceRoot, installer, ensureRuntime: okRuntime(), log: () => {} });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /STAGE_SMOKE_FAILED/);
+  } finally { t.cleanup(); }
+});
+
 test('install fails closed without mutating anything when the candidate cannot be staged', async () => {
   const t = tempHome();
   try {
