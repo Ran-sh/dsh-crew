@@ -2,7 +2,7 @@ import { localRequestCore, originAuthorityMatches } from '../local-request-guard
 import { safeHistoryError } from './service.mjs';
 
 export function registerHistoryHttp(webServer, service) {
-  return webServer.register({ kind: 'prefix', path: '/_dsh/dsh-crew/history/', async handler(req, res) {
+  return webServer.register({ kind: 'prefix', path: '/_dsh/dsh-crew/history', async handler(req, res) {
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
     if (!localRequestCore(req) || (req.headers.origin !== undefined && !originAuthorityMatches(req.headers.origin, req.headers.host))) return send(403, { ok: false, code: 'HISTORY_LOCAL_ORIGIN_REQUIRED' });
     const action = new URL(req.url, 'http://127.0.0.1').pathname.split('/').pop();
