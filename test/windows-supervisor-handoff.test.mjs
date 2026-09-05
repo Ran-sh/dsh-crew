@@ -114,6 +114,23 @@ function successfulHooks({ appRoot, initial = 'legacy', eventLog = [] } = {}) {
   return { hooks, state };
 }
 
+test('changed same-version content forces a new runtime even with a ready watcher', async () => {
+  const temp = temporaryAppRoot();
+  try {
+    const { hooks, state } = successfulHooks({ appRoot: temp.dir, initial: 'target-ready' });
+    const classify = hooks.classifyHeartbeat;
+    hooks.classifyHeartbeat = async (...args) => {
+      const observed = await classify(...args);
+      return state.stopCalls === 0 ? { ...observed, runtime_id: 'runtime-old' } : observed;
+    };
+    const result = await runWindowsSupervisorHandoff({ appRoot: temp.dir, target: TARGET, hooks, forceRestart: true });
+    assert.equal(result.ok, true);
+    assert.equal(state.stopCalls, 1);
+    assert.equal(state.startCalls, 1);
+    assert.equal(result.runtime_id, 'runtime-new');
+  } finally { temp.cleanup(); }
+});
+
 test('legacy watcher handoff persists every boundary before the next side effect', async () => {
   const temp = temporaryAppRoot();
   try {

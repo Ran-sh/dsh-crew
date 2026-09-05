@@ -534,6 +534,25 @@ test('install reports a textual boot-smoke failure without throwing from its log
   } finally { t.cleanup(); }
 });
 
+for (const verified of [true, false]) {
+  test(`runtime activation marker survives until verified=${verified}`, async () => {
+    const t = tempHome();
+    try {
+      const sourceRoot = makeCandidate(t.dir);
+      const { installer } = recordingInstaller();
+      const result = await npxInstall({ home: t.dir, sourceRoot, installer, ensureRuntime: okRuntime(), log: () => {},
+        supervisorConverger: async ({ root }) => {
+          assert.equal(existsSync(join(root, 'runtime-activation-pending')), true);
+          return { ok: verified, state: verified ? 'VERIFIED' : 'FAILED' };
+        },
+      });
+      assert.equal(result.ok, verified);
+      const pointer = readCurrentPointer({ home: t.dir });
+      assert.equal(existsSync(join(pointer.path, 'runtime-activation-pending')), !verified);
+    } finally { t.cleanup(); }
+  });
+}
+
 test('install fails closed without mutating anything when the candidate cannot be staged', async () => {
   const t = tempHome();
   try {
