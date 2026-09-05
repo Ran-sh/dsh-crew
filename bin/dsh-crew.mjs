@@ -9,4 +9,8 @@
 
 import { runNpxCli } from '../src/install/npx-lifecycle.mjs';
 
-process.exitCode = await runNpxCli();
+if (process.argv[2] === 'history' && process.argv[3] === 'recover') {
+  const { runProductionHistory } = await import('../src/history/runner.mjs');
+  try { await runProductionHistory({ recover: true }); console.log('History maintenance recovered.'); }
+  catch { console.error('HISTORY_RECOVERY_REQUIRED: recovery did not complete; data and maintenance evidence were retained.'); process.exitCode = 1; }
+} else process.exitCode = await runNpxCli();

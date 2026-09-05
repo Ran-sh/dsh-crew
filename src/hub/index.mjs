@@ -1296,6 +1296,8 @@ export async function apply(ctx) {
   // calls resolveHubSpawnPayload (above) to stamp the effective tier onto
   // the spawn payload.
   const disposers = [];
+  const { registerRuntimeHistory } = await import('../history/runtime.mjs');
+  disposers.push(registerRuntimeHistory(ctx));
   const PROVIDER_DELETE_PLAN_TTL_MS = 10 * 60 * 1000;
   const providerDeletePlans = new Map();
   const providerMigrationPlans = new Map();

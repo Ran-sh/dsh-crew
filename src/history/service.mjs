@@ -112,7 +112,14 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
     }
     return true;
   }
-  return { preview, execute, restore, archives, fencedCheck, status: () => publicHistoryState(readHistoryState(crewRoot)), dispose: () => gate.dispose() };
+  async function recover({ confirm } = {}) {
+    const state = readHistoryState(crewRoot);
+    if (confirm !== true) throw Error('HISTORY_CONFIRMATION_REQUIRED');
+    if (!state || !historyPending(crewRoot)) throw Error('HISTORY_RECOVERY_UNAVAILABLE');
+    await launch(state.id, true);
+    return publicHistoryState(state);
+  }
+  return { preview, execute, restore, recover, archives, fencedCheck, status: () => publicHistoryState(readHistoryState(crewRoot)), dispose: () => gate.dispose() };
 }
 export function safeHistoryError(error) {
   return /^HISTORY_[A-Z_]+$/.test(error?.message ?? '') ? error.message : 'HISTORY_OPERATION_FAILED';
