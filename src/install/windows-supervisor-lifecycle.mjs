@@ -415,6 +415,7 @@ export async function runWindowsSupervisorHandoff({
   createHandoffId = randomUUID,
   createLease = randomUUID,
   preAcquiredLock = null,
+  forceRestart = false,
 } = {}) {
   if (!validTarget(target)) {
     return { ok: false, code: 'SUPERVISOR_HANDOFF_TARGET_INVALID', error: 'target helper/control path and hash identity is incomplete' };
@@ -492,7 +493,7 @@ export async function runWindowsSupervisorHandoff({
           previous_runtime_id: null,
         }, 'observe');
         const verified = readyContract(ready, target, null);
-        if (verified) {
+        if (verified && !forceRestart) {
           return { ok: true, state: 'VERIFIED', idempotent: true, runtime_id: verified.runtime_id, watcher: verified.watcher };
         }
         // The watcher/control generation is current but the owned 3210 may

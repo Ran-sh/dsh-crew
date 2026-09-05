@@ -20,6 +20,7 @@ import {
 import { readWindowsSupervisorAssets } from './windows-startup.mjs';
 
 const HASH_RE = /^[a-f0-9]{64}$/u;
+export const PENDING_RUNTIME_ACTIVATION = 'runtime-activation-pending';
 const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 function text(value) {
@@ -437,5 +438,6 @@ export async function convergeWindowsSupervisor({
     target: prepared.target,
     hooks,
     preAcquiredLock: reservation?.lock ?? null,
+    forceRestart: existsSync(join(root, PENDING_RUNTIME_ACTIVATION)),
   });
 }

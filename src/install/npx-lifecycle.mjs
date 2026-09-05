@@ -50,6 +50,7 @@ import {
 } from './official-web.mjs';
 import {
   convergeWindowsSupervisor,
+  PENDING_RUNTIME_ACTIVATION,
   releaseWindowsSupervisorConvergenceReservation,
   reserveWindowsSupervisorConvergence,
   windowsSupervisorConvergencePending,
@@ -1042,6 +1043,9 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
 // A crash at any point before the pointer write leaves the prior release
 // authoritative and the journal behind for reconcileUpdateJournal.
 export function beginReleaseActivation({ stageDir, manifest, home, prior = null }) {
+  // Survives pointer commit and updater crashes; versions alone cannot prove
+  // that a same-version code replacement has reached the running process.
+  writeFileSync(join(stageDir, PENDING_RUNTIME_ACTIVATION), `${manifest.version}\n`);
   // Journal FIRST, marker removal second: a crash between the two leaves a
   // journaled (recoverable) candidate, never a marker-free orphan that
   // looks complete but was never in a transaction. Marker removal failure
@@ -1616,6 +1620,10 @@ async function finalizeSupervisorConvergence({
       code: 'SUPERVISOR_CONVERGENCE_FAILED',
       supervisor_convergence: convergence ?? null,
     };
+  }
+  try { rmSync(join(active.path, PENDING_RUNTIME_ACTIVATION), { force: true }); }
+  catch {
+    return { ...result, ok: false, committed: true, code: 'RUNTIME_ACTIVATION_MARKER_CLEAR_FAILED', supervisor_convergence: convergence };
   }
   return { ...result, supervisor_convergence: convergence };
 }
