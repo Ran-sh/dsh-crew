@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const WORKSPACE = 'harness/storages/workspace.json';
@@ -179,5 +179,56 @@ export async function restoreHistory({ crewRoot, archiveId, assertStopped }) {
   }
   atomic(crewRoot, WORKSPACE, JSON.stringify(next));
   manifest.state = 'RESTORED'; saveManifest(crewRoot, manifest);
+  return { id: archiveId, state: manifest.state };
+}
+
+/** Roll back an interrupted offline operation. The caller retains its stop lease. */
+export async function recoverHistory({ crewRoot, archiveId, assertStopped }) {
+  await requireStopped(assertStopped);
+  const manifest = loadManifest(crewRoot, archiveId);
+  if (manifest.state === 'ROLLED_BACK') return { id: archiveId, state: manifest.state };
+  if (!['PREPARING', 'PREPARED', 'APPLYING', 'APPLIED', 'RESTORING'].includes(manifest.state)) fail('RECOVERY_UNAVAILABLE');
+  const restoring = manifest.state === 'RESTORING';
+  const desired = restoring ? manifest.restoreBefore : manifest.before;
+  const possible = restoring ? manifest.restoreAfter : manifest.after;
+  decodeStore(Buffer.from(JSON.stringify(desired)));
+  decodeStore(Buffer.from(JSON.stringify(possible)));
+  const current = decodeStore(readBounded(pathInside(crewRoot, WORKSPACE)));
+  if (!equal(current, desired) && !equal(current, possible)) fail('RECOVERY_CONFLICT');
+  const touched = !['PREPARING', 'PREPARED'].includes(manifest.state);
+  for (const [index, file] of manifest.files.entries()) {
+    const target = artifactPath(crewRoot, file);
+    if (existsSync(target) && hash(readBounded(target)) !== file.sha256) fail('RECOVERY_CONFLICT');
+    if (!touched && !existsSync(target)) fail('RECOVERY_CONFLICT');
+    if (touched && hash(readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`))) !== file.sha256) fail('BACKUP_CHANGED');
+  }
+  await requireStopped(assertStopped);
+  for (const [index, file] of manifest.files.entries()) {
+    const target = artifactPath(crewRoot, file);
+    if (restoring) { if (existsSync(target)) unlinkSync(target); }
+    else if (!existsSync(target)) {
+      mkdirSync(dirname(target), { recursive: true });
+      const fd = openSync(artifactPath(crewRoot, file), 'wx', 0o600);
+      try { writeFileSync(fd, readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`))); fsyncSync(fd); }
+      finally { closeSync(fd); }
+    }
+  }
+  atomic(crewRoot, WORKSPACE, JSON.stringify(desired));
+  manifest.state = restoring ? 'APPLIED' : 'ROLLED_BACK'; saveManifest(crewRoot, manifest);
+  return { id: archiveId, state: manifest.state };
+}
+
+/** The private rollback artifacts are purged only after the new runtime is verified. */
+export async function finalizeHistoryDeletion({ crewRoot, archiveId, assertRestarted }) {
+  if (typeof assertRestarted !== 'function' || await assertRestarted() !== true) fail('RESTART_NOT_VERIFIED');
+  const manifest = loadManifest(crewRoot, archiveId);
+  if (manifest.operation !== 'delete' || !['APPLIED', 'DELETING', 'DELETED'].includes(manifest.state)) fail('DELETE_UNAVAILABLE');
+  if (manifest.state === 'DELETED') return { id: archiveId, state: manifest.state };
+  manifest.state = 'DELETING'; saveManifest(crewRoot, manifest);
+  for (const [index] of manifest.files.entries()) {
+    const backup = pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`);
+    if (existsSync(backup)) unlinkSync(backup);
+  }
+  manifest.state = 'DELETED'; saveManifest(crewRoot, manifest);
   return { id: archiveId, state: manifest.state };
 }
