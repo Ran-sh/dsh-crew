@@ -487,6 +487,25 @@ test('same-version reinstall is a repairing no-op that does not add releases', a
   } finally { t.cleanup(); }
 });
 
+for (const command of ['install', 'update']) {
+  test(`same-version ${command} stages changed candidate content`, async () => {
+    const t = tempHome();
+    try {
+      const sourceRoot = makeCandidate(t.dir);
+      const { installer } = recordingInstaller();
+      const options = { home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() };
+      const first = await npxInstall(options);
+      assert.equal(first.ok, true);
+      writeFileSync(join(sourceRoot, 'lib', 'client.js'), 'new candidate client');
+      const next = await (command === 'install' ? npxInstall : npxUpdate)(options);
+      assert.equal(next.ok, true);
+      assert.notEqual(next.path, first.path);
+      assert.equal(readFileSync(join(next.path, 'lib', 'client.js'), 'utf8'), 'new candidate client');
+      assert.ok(existsSync(first.path), 'retain prior payload for rollback');
+    } finally { t.cleanup(); }
+  });
+}
+
 test('install fails closed without mutating anything when the candidate cannot be staged', async () => {
   const t = tempHome();
   try {
