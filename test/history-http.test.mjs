@@ -7,7 +7,7 @@ test('history endpoints require same-origin local access and no GET triggers a m
   let handler; let calls = 0;
   registerHistoryHttp({ register: r => { handler = r.handler; return () => {}; } }, {
     status: () => ({ phase: 'IDLE' }), archives: () => [], preview: async () => ({ planId: 'test' }),
-    execute: async () => { calls++; return { phase: 'QUEUED' }; }, restore: async () => { calls++; return {}; }, fencedCheck: async () => true,
+    execute: async () => { calls++; return { phase: 'QUEUED' }; }, restore: async () => { calls++; return {}; }, recover: async () => { calls++; return {}; }, fencedCheck: async () => true,
   });
   async function request(path, method = 'GET', body = {}, headers = {}) {
     const req = Readable.from([Buffer.from(JSON.stringify(body))]);
@@ -23,4 +23,13 @@ test('history endpoints require same-origin local access and no GET triggers a m
   assert.equal((await request('preview', 'POST')).status, 200);
   assert.equal((await request('execute', 'POST')).status, 202);
   assert.equal(calls, 1);
+  assert.equal((await request('status')).payload.status.phase, 'IDLE');
+  assert.deepEqual((await request('archives')).payload.archives, []);
+  assert.equal((await request('restore', 'POST')).status, 202);
+  assert.equal((await request('recover', 'POST')).status, 202);
+  assert.equal((await request('fenced-check', 'POST')).status, 200);
+  assert.equal((await request('unknown', 'POST')).status, 404);
+  assert.equal((await request('status', 'PUT')).status, 405);
+  assert.equal((await request('preview', 'POST', [])).status, 400);
+  assert.equal((await request('preview', 'POST', { large: 'x'.repeat(5000) })).status, 413);
 });
