@@ -117,4 +117,69 @@ test('permanent deletion discards rollback copies only after verified restart an
   await api.finalizeHistoryDeletion({ crewRoot: f.root, archiveId: archived.id, assertRestarted: () => true });
   assert.equal(existsSync(join(f.root, `history/transactions/${archived.id}/files/0.bin`)), false);
   await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }));
+  assert.equal((await api.finalizeHistoryDeletion({ crewRoot: f.root, archiveId: archived.id, assertRestarted: () => true })).state, 'DELETED');
+  await assert.rejects(api.recoverHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }));
+});
+
+test('failure after backup preparation rolls back without removing original data', async t => {
+  const f = fixture(t); const api = await load(); let checks = 0; let archiveId;
+  await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => ++checks === 1 }), error => {
+    archiveId = error.archiveId; return /NOT_STOPPED/.test(error.message);
+  });
+  assert.ok(archiveId);
+  const result = await api.recoverHistory({ crewRoot: f.root, archiveId, assertStopped: () => true });
+  assert.equal(result.state, 'ROLLED_BACK');
+  assert.equal((await api.recoverHistory({ crewRoot: f.root, archiveId, assertStopped: () => true })).state, 'ROLLED_BACK');
+  assert.equal(readFileSync(join(f.root, f.file), 'utf8'), 'private conversation\n');
+});
+
+test('partial restore recovery returns to the archived state', async t => {
+  const f = fixture(t); const api = await load();
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  const path = join(f.root, `history/transactions/${archived.id}/manifest.json`);
+  const manifest = JSON.parse(readFileSync(path));
+  manifest.state = 'RESTORING'; manifest.restoreBefore = manifest.after; manifest.restoreAfter = manifest.before;
+  writeFileSync(path, JSON.stringify(manifest));
+  writeFileSync(join(f.root, f.file), 'private conversation\n');
+  await api.recoverHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true });
+  assert.equal(existsSync(join(f.root, f.file)), false);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json'))), manifest.after);
+});
+
+test('invalid requests and corrupted archives fail before touching source data', async t => {
+  const f = fixture(t); const api = await load();
+  for (const patch of [{ operation: 'bad' }, { sessionIds: ['session-a', 'session-a'] }, { workspaceIds: ['../project'] },
+    { workspaceIds: ['missing'] }, { artifacts: [] }, { artifacts: [{ ...f.request.artifacts[0], sha256: 'bad' }] }]) {
+    await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: { ...f.request, ...patch }, assertStopped: () => true }));
+  }
+  await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: '../escape', assertStopped: () => true }));
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  writeFileSync(join(f.root, `history/transactions/${archived.id}/files/0.bin`), 'tampered');
+  await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }), /BACKUP_CHANGED/);
+  assert.equal(existsSync(join(f.root, f.file)), false);
+});
+
+test('restore rechecks workspace bytes after the final asynchronous stopped proof', async t => {
+  const f = fixture(t); const api = await load();
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  let checks = 0;
+  await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => {
+    if (++checks === 2) {
+      const current = JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json')));
+      current.tables.workspaces.new = { ...f.workspace.tables.workspaces.w1, path: '/changed', sessionIds: [] }; current.global.workspaceIds.push('new');
+      writeFileSync(join(f.root, 'harness/storages/workspace.json'), JSON.stringify(current));
+    }
+    return true;
+  } }), /CONFLICT/);
+  assert.equal(existsSync(join(f.root, f.file)), false);
+});
+
+test('malformed duplicate artifact manifests are rejected before restore publication', async t => {
+  const f = fixture(t); const api = await load();
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  const path = join(f.root, `history/transactions/${archived.id}/manifest.json`);
+  const manifest = JSON.parse(readFileSync(path)); manifest.files.push(manifest.files[0]);
+  writeFileSync(path, JSON.stringify(manifest));
+  await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }), /INVALID_MANIFEST/);
+  assert.equal(existsSync(join(f.root, f.file)), false);
 });

@@ -44,3 +44,15 @@ test('missing authority and unreadable persistent gate fail closed', async () =>
   assert.equal(gate.idle(), true);
   gate.dispose();
 });
+
+test('double installation, replaced admission method and broken live inventory cannot claim idle', async () => {
+  const { installHistoryAdmissionGate } = await load();
+  const agents = { list: () => [], create: async () => ({}) };
+  const gate = installHistoryAdmissionGate(agents, () => false);
+  assert.throws(() => installHistoryAdmissionGate(agents, () => false), /ALREADY_INSTALLED/);
+  agents.list = () => { throw Error('unavailable'); };
+  assert.equal(gate.idle(), false);
+  agents.list = () => []; agents.create = async () => ({});
+  assert.equal(gate.idle(), false);
+  gate.dispose();
+});
