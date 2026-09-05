@@ -71,3 +71,25 @@ test('symlinked storage is rejected instead of following it', async t => {
   symlinkSync(outside, join(f.root, 'harness/sessions/project'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true }), /LINK/);
 });
+
+test('interrupted apply can roll back with an exact stopped lease and never overwrites conflicts', async t => {
+  const f = fixture(t); const api = await load();
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  const manifestPath = join(f.root, `history/transactions/${archived.id}/manifest.json`);
+  const manifest = JSON.parse(readFileSync(manifestPath)); manifest.state = 'APPLYING';
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const result = await api.recoverHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true });
+  assert.equal(result.state, 'ROLLED_BACK');
+  assert.equal(readFileSync(join(f.root, f.file), 'utf8'), 'private conversation\n');
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json'))), f.workspace);
+});
+
+test('permanent deletion discards rollback copies only after verified restart and cannot be restored', async t => {
+  const f = fixture(t); const api = await load();
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: { ...f.request, operation: 'delete' }, assertStopped: () => true });
+  await assert.rejects(api.finalizeHistoryDeletion({ crewRoot: f.root, archiveId: archived.id, assertRestarted: () => false }));
+  assert.equal(existsSync(join(f.root, `history/transactions/${archived.id}/files/0.bin`)), true);
+  await api.finalizeHistoryDeletion({ crewRoot: f.root, archiveId: archived.id, assertRestarted: () => true });
+  assert.equal(existsSync(join(f.root, `history/transactions/${archived.id}/files/0.bin`)), false);
+  await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }));
+});
