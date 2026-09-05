@@ -322,7 +322,11 @@ export function createWorkflowRuntime(adapters, {
       if (isReviewJob) {
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
         const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
-        const reviewTask = adapters.buildReviewTask(job.original_task, null, { strictness: job.review_strictness ?? 'standard' });
+        // Explicit reviewers inspect the caller's stated task/workspace
+        // directly. The bounded worker-candidate capsule belongs only to the
+        // automatic post-worker review path; constructing it with no worker
+        // view falsely tells an explicit reviewer that nothing was delivered.
+        const reviewTask = job.original_task;
         const review = await runReviewerAttempt(job, reviewTask, config, before);
         if (job.cancelling) { await cancelWorkflow(job); return; }
         job.review = review;
