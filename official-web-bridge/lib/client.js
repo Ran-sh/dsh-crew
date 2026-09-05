@@ -1,6 +1,7 @@
 window.__ModuleLoader__.load({ id: "@ran-sh/dsh-crew-web-bridge", factory: (require) => {
 var module = { exports: {} }; var exports = module.exports;
 Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+const require_panel_chrome = require("./panel-chrome-CLeO7gqz.cjs");
 let react = require("react");
 let react_jsx_runtime = require("react/jsx-runtime");
 //#region src/client/quick-panel.tsx
@@ -16,13 +17,21 @@ const T = {
 	zh: {
 		title: "DSH Crew 快捷控制",
 		openFull: "打开 3210 后台 →",
-		running: "运行中",
+		running: "后台已连接",
+		surface: "3080 / 日常控制",
+		description: "常用开关与模型顺序在这里调整，更多设置进入后台。",
+		priorityHint: "从上到下按优先级排列；从列表移除不会删除 Provider。",
+		empty: "未配置优先模型，按现有后备策略选择。",
+		models: (n) => `${n} 个模型`,
+		moveUp: "上移",
+		moveDown: "下移",
+		remove: "从优先级移除",
 		unavailable: "Crew 后端不可用",
 		openDiag: "打开诊断",
 		crew: "Crew",
 		enabled: "启用子 Agent",
-		flash: "Flash 模型",
-		pro: "Pro 模型",
+		flash: "Worker / Flash",
+		pro: "Reviewer / Pro",
 		addModel: "+ 添加模型",
 		multimodal: "多模态",
 		vision: "视觉",
@@ -38,13 +47,21 @@ const T = {
 	en: {
 		title: "DSH Crew Quick Controls",
 		openFull: "Open Crew backend (3210) →",
-		running: "Running",
+		running: "Backend connected",
+		surface: "3080 / DAILY CONTROLS",
+		description: "Manage everyday switches and model order here. Open the backend for advanced settings.",
+		priorityHint: "Ordered by priority. Removing a model here does not delete its provider.",
+		empty: "No priority models. The existing fallback policy applies.",
+		models: (n) => `${n} models`,
+		moveUp: "Move up",
+		moveDown: "Move down",
+		remove: "Remove from priority",
 		unavailable: "Crew backend unavailable",
 		openDiag: "Open diagnostics",
 		crew: "Crew",
 		enabled: "Enable sub-agents",
-		flash: "Flash models",
-		pro: "Pro models",
+		flash: "Worker / Flash",
+		pro: "Reviewer / Pro",
 		addModel: "+ Add model",
 		multimodal: "Multimodal",
 		vision: "Vision",
@@ -55,21 +72,37 @@ const T = {
 		saved: "Saved",
 		working: "Working…",
 		providerPlaceholder: "provider",
-		modelPlaceholder: "model"
+		modelPlaceholder: "Model"
 	}
 };
 function LocalStyles() {
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: `
-      .crew-quick-card { border: 1px solid rgba(128,128,128,0.24); border-radius: 12px; padding: 14px 15px; font-size: 13px; line-height: 1.55; display: flex; flex-direction: column; gap: 10px; background: linear-gradient(135deg, rgba(74,158,255,0.10), rgba(128,128,128,0.025) 56%); }
+      .dsh-crew-ui.crew-quick-card { display: flex; flex-direction: column; gap: 12px; }
       .crew-quick-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .crew-quick-title { font-size: 16px; font-weight: 680; }
       .crew-quick-section { font-weight: 650; opacity: 0.85; }
       .crew-quick-chip { border: 1px solid rgba(128,128,128,0.35); border-radius: 999px; padding: 1px 10px; font-size: 12px; }
-      .crew-quick-btn { border: 1px solid rgba(128,128,128,0.4); border-radius: 8px; padding: 2px 10px; cursor: pointer; background: transparent; font-size: 12.5px; }
+      .crew-quick-card .crew-quick-btn { border: 1px solid var(--crew-line); border-radius: 7px; min-height: 30px; padding: 3px 9px; cursor: pointer; background: transparent; color: inherit; font-size: 12px; }
       .crew-quick-btn.primary { border-color: #4a9eff; color: #4a9eff; font-weight: 650; }
-      .crew-quick-input { border: 1px solid rgba(128,128,128,0.35); border-radius: 6px; padding: 2px 8px; font-size: 12.5px; width: 130px; background: transparent; color: inherit; }
+      .crew-quick-card .crew-quick-input { border: 1px solid var(--crew-line); border-radius: 6px; padding: 6px 9px; font-size: 12px; min-width: 0; width: 100%; background: transparent; color: inherit; }
       .crew-quick-notice { opacity: 0.75; font-size: 12.5px; }
-      .crew-quick-model { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
+      .crew-quick-card .crew-quick-master { padding: 11px 14px; border: 1px solid var(--crew-line); border-radius: 10px; justify-content: space-between; }
+      .crew-quick-card input[type=checkbox] { accent-color: var(--crew-accent); width: 15px; height: 15px; }
+      .crew-quick-card label { display: inline-flex; gap: 7px; align-items: center; }
+      .crew-quick-card .crew-quick-group { border: 1px solid var(--crew-line); border-radius: 10px; overflow: hidden; }
+      .crew-quick-card .crew-quick-group > summary { cursor: pointer; padding: 12px 14px; }
+      .crew-quick-card .crew-quick-count { margin-left: 10px; font-size: 11px; opacity: .65; font-weight: 400; }
+      .crew-quick-card .crew-quick-content { padding: 0 14px 14px; }
+      .crew-quick-card .crew-quick-list { padding: 0; margin: 10px 0; list-style: none; }
+      .crew-quick-card .crew-quick-model { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 9px; align-items: center; border-top: 1px solid var(--crew-line); padding: 10px 0; }
+      .crew-quick-card .crew-quick-rank { opacity: .5; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .crew-quick-card .crew-quick-model-name { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+      .crew-quick-card .crew-quick-provider { font-size: 11px; opacity: .65; overflow-wrap: anywhere; }
+      .crew-quick-card .crew-quick-actions { display: flex; gap: 4px; }
+      .crew-quick-card .crew-quick-add > summary { color: var(--crew-accent); cursor: pointer; font-size: 12px; padding: 4px 0; }
+      .crew-quick-card .crew-quick-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 7px; margin-top: 9px; }
+      .crew-quick-card .crew-quick-media { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; align-items: center; margin-top: 10px; }
+      @media (max-width: 640px) { .crew-quick-card .crew-quick-form { grid-template-columns: minmax(0, 1fr); } .crew-quick-card .crew-quick-model { grid-template-columns: 18px minmax(0, 1fr); } .crew-quick-card .crew-quick-actions { grid-column: 2; justify-content: flex-end; } }
     ` });
 }
 async function readJson(res) {
@@ -197,90 +230,127 @@ function QuickPanel({ ctx }) {
 			provider: "",
 			model: ""
 		};
-		return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			style: {
-				display: "flex",
-				flexDirection: "column",
-				gap: 4
-			},
-			children: [
-				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					className: "crew-quick-section",
-					children: label
-				}),
-				list.map((entry, i) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					className: "crew-quick-model",
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [
-							i + 1,
-							". ",
-							entry.provider,
-							" / ",
-							entry.model
-						] }),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "crew-quick-btn",
-							disabled: busy || i === 0,
-							onClick: () => moveModel(listKey, i, -1),
-							children: "↑"
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "crew-quick-btn",
-							disabled: busy || i === list.length - 1,
-							onClick: () => moveModel(listKey, i, 1),
-							children: "↓"
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "crew-quick-btn",
-							disabled: busy,
-							onClick: () => removeModel(listKey, i),
-							children: "×"
-						})
-					]
-				}, `${entry.provider}/${entry.model}/${i}`)),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					className: "crew-quick-row",
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-							className: "crew-quick-input",
-							placeholder: t.providerPlaceholder,
-							disabled: busy,
-							value: draft.provider,
-							onChange: (e) => setDrafts((d) => ({
-								...d,
-								[listKey]: {
-									...draft,
-									provider: e.target.value
-								}
-							}))
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-							className: "crew-quick-input",
-							placeholder: t.modelPlaceholder,
-							disabled: busy,
-							value: draft.model,
-							onChange: (e) => setDrafts((d) => ({
-								...d,
-								[listKey]: {
-									...draft,
-									model: e.target.value
-								}
-							}))
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							className: "crew-quick-btn",
-							disabled: busy,
-							onClick: () => addModel(listKey),
-							children: t.addModel
-						})
-					]
-				})
-			]
+		return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
+			className: "crew-quick-group",
+			open: listKey === "flash_model_priority",
+			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: label }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: "crew-quick-count",
+				children: t.models(list.length)
+			})] }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "crew-quick-content",
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "crew-quick-notice",
+						children: t.priorityHint
+					}),
+					list.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						className: "crew-quick-notice",
+						children: t.empty
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("ol", {
+						className: "crew-quick-list",
+						"aria-label": label,
+						children: list.map((entry, i) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
+							className: "crew-quick-model",
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+									className: "crew-quick-rank",
+									"aria-hidden": "true",
+									children: [i + 1, "."]
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									className: "crew-quick-model-name",
+									children: entry.model
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									className: "crew-quick-provider",
+									children: entry.provider
+								})] }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "crew-quick-actions",
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "crew-quick-btn",
+											"aria-label": `${t.moveUp} ${entry.model}`,
+											title: t.moveUp,
+											disabled: busy || i === 0,
+											onClick: () => moveModel(listKey, i, -1),
+											children: "↑"
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "crew-quick-btn",
+											"aria-label": `${t.moveDown} ${entry.model}`,
+											title: t.moveDown,
+											disabled: busy || i === list.length - 1,
+											onClick: () => moveModel(listKey, i, 1),
+											children: "↓"
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "crew-quick-btn",
+											"aria-label": `${t.remove} ${entry.model}`,
+											title: t.remove,
+											disabled: busy,
+											onClick: () => removeModel(listKey, i),
+											children: "×"
+										})
+									]
+								})
+							]
+						}, `${entry.provider}/${entry.model}/${i}`))
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
+						className: "crew-quick-add",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("summary", { children: t.addModel }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "crew-quick-form",
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									className: "crew-quick-input",
+									"aria-label": `${label} Provider`,
+									placeholder: t.providerPlaceholder,
+									disabled: busy,
+									value: draft.provider,
+									onChange: (e) => setDrafts((d) => ({
+										...d,
+										[listKey]: {
+											...draft,
+											provider: e.target.value
+										}
+									}))
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									className: "crew-quick-input",
+									"aria-label": `${label} ${locale === "zh" ? "模型" : "Model"}`,
+									placeholder: t.modelPlaceholder,
+									disabled: busy,
+									value: draft.model,
+									onChange: (e) => setDrafts((d) => ({
+										...d,
+										[listKey]: {
+											...draft,
+											model: e.target.value
+										}
+									}))
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "crew-quick-btn",
+									disabled: busy || !draft.provider.trim() || !draft.model.trim(),
+									onClick: () => addModel(listKey),
+									children: t.addModel
+								})
+							]
+						})]
+					})
+				]
+			})]
 		});
 	};
 	if (ready === false) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		className: "crew-quick-card",
+		className: "dsh-crew-ui crew-quick-card",
 		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(require_panel_chrome.PanelStyles, {}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(LocalStyles, {}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: "crew-quick-title",
@@ -293,47 +363,45 @@ function QuickPanel({ ctx }) {
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: "crew-quick-row",
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+					className: "crew-nav-link",
 					href: FULL,
 					target: "_blank",
-					rel: "noreferrer",
+					rel: "noopener noreferrer",
 					children: t.openDiag
 				})
 			})
 		]
 	});
 	if (config === null) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		className: "crew-quick-card",
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(LocalStyles, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-			className: "crew-quick-notice",
-			children: t.working
-		})]
+		className: "dsh-crew-ui crew-quick-card",
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(require_panel_chrome.PanelStyles, {}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(LocalStyles, {}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "crew-quick-notice",
+				role: "status",
+				children: t.working
+			})
+		]
 	});
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		className: "crew-quick-card",
+		className: "dsh-crew-ui crew-quick-card",
 		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(require_panel_chrome.PanelStyles, {}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(LocalStyles, {}),
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "crew-quick-row",
-				style: { justifyContent: "space-between" },
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: "crew-quick-title",
-						children: t.title
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-						className: "crew-quick-chip",
-						children: [t.running, " · 3210"]
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
-						href: FULL,
-						target: "_blank",
-						rel: "noreferrer",
-						children: t.openFull
-					})
-				]
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(require_panel_chrome.PanelHeader, {
+				title: t.title,
+				eyebrow: t.surface,
+				description: t.description,
+				href: FULL,
+				linkText: t.openFull,
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: "crew-quick-chip",
+					children: [t.running, " · 3210"]
+				})
 			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "crew-quick-row",
+				className: "crew-quick-row crew-quick-master",
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					className: "crew-quick-section",
 					children: t.crew
@@ -350,62 +418,57 @@ function QuickPanel({ ctx }) {
 			}),
 			modelList("flash_model_priority", t.flash),
 			modelList("pro_model_priority", t.pro),
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: {
-					display: "flex",
-					flexDirection: "column",
-					gap: 4
-				},
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "crew-quick-section",
-						children: t.multimodal
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "crew-quick-row",
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									disabled: busy,
-									checked: config.vision_enabled === true,
-									onChange: (e) => toggle("vision_enabled", e.target.checked)
-								}),
-								" ",
-								t.vision
-							] }),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t.provider }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("details", {
+				className: "crew-quick-group",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("summary", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", { children: t.multimodal }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: "crew-quick-count",
+					children: [
+						t.vision,
+						" / ",
+						t.imagegen
+					]
+				})] }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: "crew-quick-content",
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "crew-quick-media",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-								className: "crew-quick-input",
+								type: "checkbox",
 								disabled: busy,
-								defaultValue: config.vision_provider ?? "",
-								onBlur: (e) => setProvider("vision_provider", e.target.value)
-							}, `vision-${config.vision_provider ?? ""}`)
-						]
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "crew-quick-row",
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									disabled: busy,
-									checked: config.imagegen_enabled === true,
-									onChange: (e) => toggle("imagegen_enabled", e.target.checked)
-								}),
-								" ",
-								t.imagegen
-							] }),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t.provider }),
+								checked: config.vision_enabled === true,
+								onChange: (e) => toggle("vision_enabled", e.target.checked)
+							}),
+							" ",
+							t.vision
+						] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							className: "crew-quick-input",
+							"aria-label": `${t.vision} Provider`,
+							placeholder: t.provider,
+							disabled: busy,
+							defaultValue: config.vision_provider ?? "",
+							onBlur: (e) => setProvider("vision_provider", e.target.value)
+						}, `vision-${config.vision_provider ?? ""}`)]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "crew-quick-media",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-								className: "crew-quick-input",
+								type: "checkbox",
 								disabled: busy,
-								defaultValue: config.imagegen_provider ?? "",
-								onBlur: (e) => setProvider("imagegen_provider", e.target.value)
-							})
-						]
-					})
-				]
+								checked: config.imagegen_enabled === true,
+								onChange: (e) => toggle("imagegen_enabled", e.target.checked)
+							}),
+							" ",
+							t.imagegen
+						] }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							className: "crew-quick-input",
+							"aria-label": `${t.imagegen} Provider`,
+							placeholder: t.provider,
+							disabled: busy,
+							defaultValue: config.imagegen_provider ?? "",
+							onBlur: (e) => setProvider("imagegen_provider", e.target.value)
+						})]
+					})]
+				})]
 			}),
 			restartPending && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: "crew-quick-row",
@@ -419,6 +482,8 @@ function QuickPanel({ ctx }) {
 			}),
 			notice && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: "crew-quick-notice",
+				role: "status",
+				"aria-live": "polite",
 				children: notice
 			})
 		]

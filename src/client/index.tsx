@@ -14,6 +14,7 @@ import { ActivationSummary } from './activation-summary';
 import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
 import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
 import { aggregateModelInvocations } from './task-telemetry.mjs';
+import { PanelHeader, PanelStyles } from './panel-chrome';
 
 export const inject = ['slots', 'locale'];
 
@@ -43,7 +44,8 @@ const COPY = {
     label: 'DSH Crew',
     title: 'DSH Crew',
     openOfficial: '打开 3080 官方界面 →',
-    intro: 'Crew 后台配置：管理编排、角色、模型路由与宿主集成，并跟踪 Worker / Reviewer 任务。日常官方界面位于 3080。',
+    intro: '管理工作流、模型路由与宿主集成。展开分区查看和修改设置。',
+    surfaceLabel: '3210 / 高级配置',
     integrations: '集成',
     installed: '已安装', notInstalled: '未安装', ready: '可调用', notReady: '未就绪', hud: 'HUD 段',
     install: '安装', update: '更新', restore: '还原',
@@ -183,7 +185,8 @@ const COPY = {
   en: {
     label: 'DSH Crew',
     title: 'DSH Crew',
-    intro: 'Crew backend settings for orchestration, roles, model routing, host integrations, and Worker / Reviewer jobs. The daily official interface is on 3080.',
+    intro: 'Manage workflows, model routing and host integrations. Expand a section to edit its settings.',
+    surfaceLabel: '3210 / ADVANCED SETTINGS',
     openOfficial: 'Open official frontend (3080) →',
     integrations: 'Integrations',
     installed: 'installed', notInstalled: 'not installed', ready: 'ready', notReady: 'not ready', hud: 'HUD segment',
@@ -429,10 +432,12 @@ function CollapsibleSection({ sectionId, title, summary, expanded, onToggle, chi
   const bodyId = `dsh-crew-section-${sectionId}`;
   return (
     <section style={S.sectionShell} data-section-id={sectionId}>
-      <button type="button" style={S.sectionButton} aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
+      <button type="button" className="crew-section-trigger" style={S.sectionButton} aria-expanded={expanded} aria-controls={bodyId} onClick={onToggle}>
         <span aria-hidden="true" style={{ width: 14, opacity: 0.62, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 140ms ease' }}>›</span>
-        <span style={{ fontWeight: 650, fontSize: 13, minWidth: 92 }}>{title}</span>
-        <span title={summary} style={{ flex: 1, minWidth: 0, fontSize: 11.5, opacity: 0.58, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+        <span className="crew-section-heading">
+          <span className="crew-section-title">{title}</span>
+          <span className="crew-section-summary">{summary}</span>
+        </span>
       </button>
       <div id={bodyId} hidden={!expanded} style={expanded ? S.sectionBody : undefined}>{children}</div>
     </section>
@@ -1094,39 +1099,23 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13, lineHeight: 1.55 }}>
-      <div style={{
-        border: '1px solid rgba(128,128,128,0.24)', borderRadius: 12, padding: '14px 15px',
-        display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
-        background: 'linear-gradient(135deg, rgba(74,158,255,0.10), rgba(128,128,128,0.025) 56%)',
-      }}>
-        <div style={{ minWidth: 240, flex: 1 }}>
-          <div style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.01em' }}>{copy.title}</div>
-          <div style={{ opacity: 0.7, fontSize: 12.5, marginTop: 2 }}>{copy.intro}</div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+    <div className="dsh-crew-ui" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13, lineHeight: 1.55 }}>
+      <PanelStyles />
+      <PanelHeader title={copy.title} eyebrow={copy.surfaceLabel} description={copy.intro} href={CREW_CONTROL_PLANE_URL} linkText={copy.openOfficial}>
             <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? copy.installed : copy.notReady}</span>
             <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? copy.installed : copy.notReady}</span>
             <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? copy.installed : copy.notReady}</span>
-            <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{jobs.filter((job) => job.status === 'running').length} running</span>
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <a href={CREW_CONTROL_PLANE_URL} target="_blank" rel="noopener noreferrer" style={{
-            ...S.btn, textDecoration: 'none', fontWeight: 650, padding: '7px 12px',
-            borderColor: 'rgba(74,158,255,0.55)', background: 'rgba(74,158,255,0.10)',
-          }}>{copy.openOfficial}</a>
-          <span style={{ fontSize: 10.5, opacity: 0.52 }}>{copy.harnessHint}</span>
-        </div>
-      </div>
+            <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{copy.runningCount(jobs.filter((job) => job.status === 'running').length)}</span>
+      </PanelHeader>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 5 }}>
+      <div className="crew-config-toolbar">
         <div style={{ ...S.section, margin: 0, flex: 1 }}>{copy.globalConfig}</div>
         <button type="button" style={{ ...S.btn, padding: '3px 9px' }} onClick={() => toggleAllSections(true)}>{copy.expandAll}</button>
         <button type="button" style={{ ...S.btn, padding: '3px 9px' }} onClick={() => toggleAllSections(false)}>{copy.collapseAll}</button>
       </div>
 
       <CollapsibleSection sectionId="integrations" title={copy.sectionNames.integrations}
-        summary={sectionSummary(status?.claude?.ready ? 'Claude READY' : 'Claude CHECK', `${status?.codex?.ready ? 'Codex READY' : 'Codex CHECK'} · ${status?.zcode?.ready ? 'ZCode READY' : 'ZCode CHECK'}`)}
+        summary={sectionSummary(...['Codex', 'Claude', 'ZCode'].map((name) => `${name} ${status?.[name.toLowerCase()]?.ready ? copy.installed : copy.notReady}`))}
         expanded={!!expandedSections.integrations} onToggle={() => toggleSection('integrations')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={S.block}>
