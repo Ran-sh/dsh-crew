@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const WORKSPACE = 'harness/storages/workspace.json';
@@ -14,6 +14,8 @@ function pathInside(root, relativePath) {
     || relativePath.includes(':') || relativePath.split('/').some(p => !p || p === '.' || p === '..')) fail('INVALID_PATH');
   let current = resolve(root);
   if (!lstatSync(current).isDirectory() || lstatSync(current).isSymbolicLink()) fail('LINKED_ROOT');
+  const canonical = realpathSync(current);
+  if ((process.platform === 'win32' ? canonical.toLowerCase() !== current.toLowerCase() : canonical !== current)) fail('LINKED_ROOT');
   for (const part of relativePath.split('/')) {
     current = join(current, part);
     try { if (lstatSync(current).isSymbolicLink()) fail('LINKED_PATH'); }
@@ -153,14 +155,16 @@ export async function restoreHistory({ crewRoot, archiveId, assertStopped }) {
   if (manifest.operation !== 'archive' || manifest.state !== 'APPLIED') fail('ARCHIVE_NOT_RESTORABLE');
   const current = decodeStore(readBounded(pathInside(crewRoot, WORKSPACE)));
   const next = structuredClone(current);
+  const restoredIds = [];
   for (const [id, old] of Object.entries(manifest.before.tables.workspaces)) {
     const after = manifest.after.tables.workspaces[id];
     if (equal(old, after)) continue;
     if (!equal(current.tables.workspaces[id], after)) fail('RESTORE_CONFLICT');
     if (Object.entries(current.tables.workspaces).some(([other, record]) => other !== id && record.path === old.path)) fail('RESTORE_CONFLICT');
     next.tables.workspaces[id] = old;
+    if (after === undefined) restoredIds.push(id);
   }
-  next.global.workspaceIds = [...manifest.before.global.workspaceIds.filter(id => !current.global.workspaceIds.includes(id)), ...current.global.workspaceIds];
+  next.global.workspaceIds = [...manifest.before.global.workspaceIds.filter(id => restoredIds.includes(id)), ...current.global.workspaceIds];
   const selected = new Set(manifest.files.map(file => file.sessionId));
   next.global.archivedSessionIds = [...new Set([...current.global.archivedSessionIds, ...manifest.before.global.archivedSessionIds.filter(id => selected.has(id))])];
   for (const [index, file] of manifest.files.entries()) {
