@@ -10,16 +10,16 @@ const maybe = process.platform === 'win32' ? test : test.skip;
 
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
 
-maybe('startup health uses the lightweight runtime identity and rejects foreign responders', () => {
+maybe('startup health preserves the installed extension contract', () => {
   const command = [
     `. '${helper.replaceAll("'", "''")}'`,
     "function Test-Path { return $true }",
     "function Get-Content { return '{\"version\":\"0.1.2-rc.1\"}' }",
-    "$script:serviceName = 'dsh-crew-hub'",
+    '$script:ok = $true',
     "$script:requestedUri = ''",
-    "function Invoke-RestMethod { param($Uri, $TimeoutSec) $script:requestedUri = $Uri; return [pscustomobject]@{ ok=$true; service=$script:serviceName; runtime_version='1.2.0-rc.4'; dsh_version='0.1.2-rc.1'; execution_plane='hub-3210'; profile='dsh-crew'; listen_port=3210 } }",
+    "function Invoke-RestMethod { param($Uri, $TimeoutSec) $script:requestedUri = $Uri; return [pscustomobject]@{ ok=$script:ok; extension=[pscustomobject]@{runtime=[pscustomobject]@{runtime_version='1.2.0-rc.4';dsh_version='0.1.2-rc.1'}} } }",
     '$good = Get-HealthState $services[0]',
-    "$script:serviceName = 'unrelated'",
+    '$script:ok = $false',
     '$bad = Get-HealthState $services[0]',
     '@{ good=$good.Ready; bad=$bad.Ready; uri=$script:requestedUri } | ConvertTo-Json -Compress',
   ].join('\n');
@@ -27,7 +27,7 @@ maybe('startup health uses the lightweight runtime identity and rejects foreign 
     encoding: 'utf8', env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' }, timeout: 30_000, windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout.trim()), { good: true, bad: false, uri: 'http://127.0.0.1:3210/_dsh/dsh-crew/runtime' });
+  assert.deepEqual(JSON.parse(result.stdout.trim()), { good: true, bad: false, uri: 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' });
 });
 
 test('daily startup never waits for the optional legacy bridge', () => {

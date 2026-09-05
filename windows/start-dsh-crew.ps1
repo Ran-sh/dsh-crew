@@ -41,12 +41,11 @@ function Write-LaunchLog {
 
 function Get-HealthState {
   param([pscustomObject] $Service)
-  # The small runtime endpoint avoids rebuilding model/provider readiness on
-  # every startup poll and supervisor heartbeat. Validate its identity below.
+  # Preserve the installed extension health contract used by maintenance.
   if ($Service.CrewOwned) {
     try {
-      $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/runtime') -TimeoutSec 2
-      $runtime = $response
+      $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
+      $runtime = $response.extension.runtime
       $version = $runtime.runtime_version
       # A stale 3210 process (booted before the runtime tree was swapped) can
       # keep serving from memory while the disk tree is a different cohort.
@@ -65,9 +64,7 @@ function Get-HealthState {
         } catch { $expectedDshVersion = $null }
       }
       $cohortMatches = $diskReadable -and $runtime.dsh_version -eq $expectedDshVersion
-      $identityMatches = $runtime.service -eq 'dsh-crew-hub' -and $runtime.profile -eq 'dsh-crew' `
-        -and $runtime.execution_plane -eq 'hub-3210' -and $runtime.listen_port -eq 3210
-      if ($response.ok -eq $true -and $version -and $cohortMatches -and $identityMatches) {
+      if ($response.ok -eq $true -and $version -and $cohortMatches) {
         return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
       }
       if (-not $diskReadable) {
