@@ -102,6 +102,35 @@ test('session overrides feed the canonical workflow model/review policy', () => 
   assert.equal(effective.review.auto_review, true);
 });
 
+test('session review-pipeline overrides remain authoritative after global config is already canonical v4', () => {
+  const canonical = buildEffectiveRuntimeConfig(
+    { collaboration_mode: 'flash-only', escalate_on_failure: false, pro_reviews_flash: false },
+    {},
+  );
+  canonical.config_schema_version = 4;
+  canonical.worker.model_policy.ordering = 'health-aware';
+  canonical.worker.model_policy.adaptive = { enabled: true, window_size: 6, min_samples: 2 };
+  const workerPriority = canonical.worker.model_policy.priority;
+
+  const effective = buildEffectiveRuntimeConfig(canonical, {
+    collaboration_mode: 'review-pipeline',
+    escalate_on_failure: true,
+    pro_reviews_flash: true,
+  });
+  assert.equal(effective.worker.model_policy.escalation.enabled, true);
+  assert.equal(effective.review.state, 'auto');
+  assert.equal(effective.review.auto_review, true);
+  assert.equal(effective.worker.model_policy.ordering, 'health-aware');
+  assert.deepEqual(effective.worker.model_policy.adaptive, { enabled: true, window_size: 6, min_samples: 2 });
+  assert.deepEqual(effective.worker.model_policy.priority, workerPriority);
+
+  const optedOut = buildEffectiveRuntimeConfig(
+    { ...effective, config_schema_version: 4 },
+    { pro_reviews_flash: false },
+  );
+  assert.equal(optedOut.review.auto_review, false);
+});
+
 test('escalation refreshes candidate after every worker attempt', async () => {
   let lastAttempt = -1;
   let captures = 0;
