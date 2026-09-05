@@ -6,6 +6,7 @@ on:
       - main
       - 'fix/**'
       - 'feat/**'
+      - 'codex/**'
   pull_request:
 
 permissions:

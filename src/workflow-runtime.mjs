@@ -516,6 +516,16 @@ export function createWorkflowRuntime(adapters, {
   }
 
   async function runReviewerAttempt(job, task, config, beforeCandidate, cwd = job.execution_cwd, baseRevision = job.base_revision) {
+    const requireFingerprint = (candidate) => {
+      if (job.isolation !== 'worktree') return;
+      if (candidate?.ok === true && typeof candidate.fingerprint === 'string' && candidate.fingerprint.trim()) return;
+      job.candidate_capture_failed = true;
+      job.retain_workspace = true;
+      throw Object.assign(new Error('review workspace evidence unavailable; worktree retained'), {
+        code: 'REVIEW_EVIDENCE_UNAVAILABLE',
+      });
+    };
+    requireFingerprint(beforeCandidate);
     const policy = resolveModelPolicy(config, 'reviewer', { attempt: 0 });
     const attemptId = attemptIdFor(adapters, job.id, 'review');
     job.current_attempt_id = attemptId;
@@ -548,6 +558,7 @@ export function createWorkflowRuntime(adapters, {
     }, 0);
     if (ar.status === 'failed' && attemptView.error_code) job.error_code = attemptView.error_code;
     const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
+    requireFingerprint(afterCandidate);
     const review = normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
     recordCanonical(job, 'review.completed', {
       attempt_id: attemptView.id,

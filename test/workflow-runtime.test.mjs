@@ -268,6 +268,25 @@ test('automatic reviewer runs after a verified worker and parses the verdict', a
   ]);
 });
 
+for (const failedCapture of [1, 2]) {
+  test(`automatic review retains workspace when capture ${failedCapture} fails`, async () => {
+    const a = makeAdapter({ getConfigPatch: { collaboration_mode: 'review-pipeline' } });
+    const capture = a.captureCandidate;
+    let count = 0;
+    a.captureCandidate = async () => ++count === failedCapture ? null : capture();
+    let released = false;
+    a.releaseWorkspace = async () => { released = true; return { ok: true }; };
+    const rt = createWorkflowRuntime(a, { idFactory });
+    const job = rt.start({ role: 'worker', task: 't', cwd: '/repo' });
+    await rt.wait(job.id, 2000);
+    const view = rt.get(job.id, { withResult: true });
+    assert.equal(view.status, 'failed');
+    assert.equal(view.error_code, 'REVIEW_EVIDENCE_UNAVAILABLE');
+    assert.equal(view.workspace_retained, true);
+    assert.equal(released, false);
+  });
+}
+
 test('reviewer that modifies the candidate is flagged and candidate kept', async () => {
   const a = makeAdapter({ getConfigPatch: { collaboration_mode: 'review-pipeline' }, candidateOverride: true });
   const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });

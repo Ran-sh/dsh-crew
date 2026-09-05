@@ -1319,10 +1319,13 @@ export function createCrewSupervisor({
   // single one-shot transaction instead of two independent requests.
   let transaction = null;
   async function fetchCrewIdentity() {
+    const controller = new AbortController();
+    // Keep the discovery deadline alive even if an adapter has no active I/O.
+    const timer = setTimeout(() => controller.abort(new Error('maintenance identity timeout')), identityTimeoutMs);
     try {
       const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', {
         headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(identityTimeoutMs),
+        signal: controller.signal,
       });
       if (!response.ok) return null;
       const body = await response.json();
@@ -1339,6 +1342,7 @@ export function createCrewSupervisor({
         ? { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: runtime.runtime_id }
         : null;
     } catch { return null; }
+    finally { clearTimeout(timer); }
   }
   async function writeMaintenance({ operation, lease, identity, extra = null }) {
     const { createSupervisorRequest, maintenanceResultsDir } = await import('../supervisor/restart-request.mjs');
