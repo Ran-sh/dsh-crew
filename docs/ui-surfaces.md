@@ -1,16 +1,17 @@
 # 3210 and 3080 UI responsibilities
 
-Current installs expose the native 3210 page as the canonical full Crew
-control and runtime; all production model execution runs there. An older
+DSH Crew is a plugin attached to the official DeepSeek Harness. Current installs
+register it in a dedicated official Harness `dsh-crew` profile whose native 3210
+page is the canonical full Crew control and execution surface. An older
 installation may still expose a narrow 3080 quick-controls bundle, but that
 legacy surface is external to Crew ownership, optional, and deprecated. Crew
 treats the official profile as read-only. The legacy surface
 never starts, owns, or supervises 3210.
 
-## 3210: canonical full control plane
+## 3210: official Harness profile with the Crew plugin
 
-The Crew-owned `dsh-crew` profile on `127.0.0.1:3210` owns day-to-day Crew
-management AND model execution:
+The Crew-owned official Harness `dsh-crew` profile on `127.0.0.1:3210` loads the
+DSH Crew plugin and owns day-to-day Crew management and model execution:
 
 - Crew workflow and global enablement
 - Worker and Reviewer policy

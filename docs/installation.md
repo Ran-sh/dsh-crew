@@ -1,6 +1,7 @@
 # Installation plan
 
-DSH Crew uses an explicit installer. Merely installing the npm package does not mutate the host.
+DSH Crew is a plugin for the official DeepSeek Harness and uses an explicit
+installer. Merely installing the npm package does not mutate the host.
 The managed production supervisor is currently supported on Windows; Linux and
 macOS are not yet production runtime targets.
 
@@ -11,8 +12,9 @@ npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
 ```
 
-3210 is the canonical full Crew control and runtime. All production
-Worker/Reviewer model execution runs on the isolated 3210 Crew Harness.
+The installer registers the plugin in a dedicated official Harness
+`profile: dsh-crew` served on 3210. This is the canonical Crew control and
+execution surface; it is not a separate or forked Harness product.
 
 To test GitHub `main` before an npm release:
 
@@ -27,7 +29,7 @@ node scripts/setup.mjs status
 
 | Surface | Installed behavior | Uninstall behavior |
 | --- | --- | --- |
-| Crew runtime | Isolated in `~/.config/dsh-crew/harness`, profile: dsh-crew | Registration removed; config kept unless `--purge` |
+| Crew plugin runtime | Official DeepSeek Harness isolated in `~/.config/dsh-crew/harness`, profile: dsh-crew, with the Crew plugin registered | Plugin registration removed; config kept unless `--purge` |
 | Codex MCP and roles | Points Worker, Reviewer, and MCP to the installed release | Only DSH Crew entries are removed |
 | Global Codex policy | Managed block inside `~/.codex/AGENTS.md` | Only the managed block is removed |
 | ZCode MCP, agents and commands | Installs `~/.zcode/AGENTS.md`, `agents/{ds-worker,ds-reviewer}.md`, commands and a source-aware `dsh-crew` MCP entry | Only DSH Crew-owned files/entry are removed |

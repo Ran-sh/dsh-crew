@@ -53,10 +53,10 @@ const COPY = {
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
     sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
-    openHarness: '打开 3210 Crew Harness →',
-    harnessHint: '底层 Provider、Harness Models 与运行时配置',
+    openHarness: '打开 3210 DSH Crew 插件控制台 →',
+    harnessHint: 'DeepSeek 官方 Harness 的 dsh-crew profile：Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
-    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
     readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
     orchestration: 'Agent 编排',
@@ -103,7 +103,7 @@ const COPY = {
     presetFlash: 'flash 模式', presetPro: 'pro 模式',
     multimodal: '多模态',
     visionProvider: '视觉 provider', visionModel: '视觉模型', imagegenProvider: '生图 provider',
-    harnessProviders: 'Harness Providers', harnessProviderHint: '3210 Crew Harness 的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
+    harnessProviders: 'Harness Providers', harnessProviderHint: 'DeepSeek 官方 Harness 的 3210 dsh-crew profile 中的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
     providerLayerMigration: '检测到旧版 profile Provider', providerLayerMigrationHint: '这些 Provider 仍在 Crew profile/base 层，所以 3210 原生页面不会显示删除。请先按迁移计划提升到 Harness 用户设置层；不会复制密钥。', providerLayerMigrationPlan: '迁移计划', providerLayerMigrate: '迁移到用户层', providerLayerMigrating: '迁移中…', providerLayerMigrationConfirm: '确认把这个 Provider 移到 Harness 用户设置层？会先保存可回滚快照，不会复制密钥值。', providerLayerRollback: '回滚迁移',
@@ -194,10 +194,10 @@ const COPY = {
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
     sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
-    openHarness: 'Open 3210 Crew Harness →',
-    harnessHint: 'Low-level providers, Harness Models, and runtime configuration',
+    openHarness: 'Open the 3210 DSH Crew plugin console →',
+    harnessHint: 'The official DeepSeek Harness dsh-crew profile: providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
-    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew Harness', official_bridge: 'Official bridge' },
+    readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
     readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
     orchestration: 'Agent orchestration',
@@ -244,7 +244,7 @@ const COPY = {
     presetFlash: 'flash preset', presetPro: 'pro preset',
     multimodal: 'Multimodal',
     visionProvider: 'Vision provider', visionModel: 'Vision model', imagegenProvider: 'Image-gen provider',
-    harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the 3210 Crew Harness; separate from vision / image-gen adapters.',
+    harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the official DeepSeek Harness dsh-crew profile on 3210; separate from vision / image-gen adapters.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerLayerMigration: 'Legacy profile Providers detected', providerLayerMigrationHint: 'These Providers still exist in the Crew profile/base layer, so the native 3210 page cannot show Delete. Promote them to Harness user settings with an explicit plan; keys are never copied.', providerLayerMigrationPlan: 'Migration plan', providerLayerMigrate: 'Migrate to user layer', providerLayerMigrating: 'Migrating…', providerLayerMigrationConfirm: 'Move this Provider into Harness user settings? A rollback snapshot is saved first; credential values are never copied.', providerLayerRollback: 'Rollback migration',
@@ -477,8 +477,8 @@ function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surfac
   const title = native ? (zh ? 'DSH Crew Runtime' : 'DSH Crew Runtime') : (zh ? 'DSH Crew Surface 未确认' : 'DSH Crew surface not verified');
   const hint = native
     ? (zh
-      ? '这里是隔离的 3210 Crew Harness。请使用 Harness 原生菜单管理 Provider、Harness Models、Agent 预设与底层配置；Crew 编排和宿主集成统一在 3080 管理。'
-      : 'This is the isolated 3210 Crew Harness. Use the native Harness menus for Providers, Harness Models, Agent presets, and low-level settings; manage Crew orchestration and host integrations on 3080.')
+      ? '这里是 DeepSeek 官方 Harness 的专用 dsh-crew profile，DSH Crew 作为插件加载其中。请使用 Harness 原生菜单管理 Provider、Harness Models、Agent 预设与底层配置。'
+      : 'This is the dedicated dsh-crew profile of the official DeepSeek Harness, with DSH Crew loaded as a plugin. Use the native Harness menus for Providers, Harness Models, Agent presets, and low-level settings.')
     : (zh
       ? '无法用结构化后端证据确认当前界面，因此已保守隐藏 Crew 编排、任务与宿主集成功能。'
       : 'Structured backend evidence could not identify this surface, so Crew orchestration, jobs, and host integrations are conservatively hidden.');
@@ -495,7 +495,7 @@ function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surfac
             {runtimeReady ? `Runtime ${runtime.runtime_version ?? 'READY'}` : 'Runtime UNKNOWN'}
           </span>
           <span style={readinessChip(native ? READINESS_STATES.READY : READINESS_STATES.UNKNOWN)}>
-            {native ? '3210 · isolated' : 'surface · unknown'}
+            {native ? '3210 · official profile + Crew plugin' : 'surface · unknown'}
           </span>
         </div>
         <a href={CREW_CONTROL_PLANE_URL} target="_blank" rel="noopener noreferrer" style={{

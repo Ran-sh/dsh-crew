@@ -1,8 +1,8 @@
 # DSH Crew
 
-An isolated Crew Harness for Codex Desktop, ZCode, and Claude Code. It
-provides Worker/Reviewer dispatch, model priorities, job tracking, and a
-capability-aware safety gate.
+A Crew orchestration plugin for the official DeepSeek Harness. It adds
+Worker/Reviewer dispatch, model priorities, job tracking, and a capability-aware
+safety gate for Codex Desktop, ZCode, and Claude Code.
 
 [简体中文](./README.zh.md)
 
@@ -16,8 +16,9 @@ npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
 ```
 
-3210 is the canonical full Crew control and runtime. All production
-Worker/Reviewer model execution runs on the isolated 3210 Crew Harness.
+DSH Crew is installed as a plugin in a dedicated official DeepSeek Harness
+profile named `dsh-crew`, served on 3210. That profile is the canonical Crew
+control and execution surface.
 
 The official 3080 surface is outside Crew ownership and optional for Crew.
 Crew treats its profile as read-only and never starts, owns, or supervises it.
@@ -46,8 +47,8 @@ they are never bundled into this package.
 
 | Surface | Purpose |
 | --- | --- |
-| `3080` | Official Harness UI outside Crew ownership; optional for Crew |
-| `3210` | Canonical Crew control, runtime, providers, models, and jobs |
+| `3080` | Official Harness `web` profile outside Crew ownership; optional for Crew |
+| `3210` | Official Harness `dsh-crew` profile with the DSH Crew plugin |
 
 In **Settings → DSH Crew**, refresh Harness Models and order the Worker and
 Reviewer model lists. Then ask a host agent:
@@ -85,11 +86,12 @@ dsh-crew update           # update and repair enabled integrations
 dsh-crew uninstall        # remove managed files, keep backups/config
 ```
 
-The runtime is isolated under `~/.config/dsh-crew/harness` with `profile: dsh-crew`.
-The official `web` profile is outside Crew ownership and read-only to Crew;
-an old 3080 bridge, if present, is only reported as a deprecated diagnostic.
-All production Worker/Reviewer model calls are executed by the isolated 3210
-Crew Harness.
+The dedicated official Harness runtime state is isolated under
+`~/.config/dsh-crew/harness` with `profile: dsh-crew`; DSH Crew itself remains a
+plugin, not a fork or replacement of DeepSeek Harness. The official `web`
+profile is outside Crew ownership and read-only to Crew; in other words, the
+official `web` profile is never mutated. An old 3080 bridge, if present, is
+only reported as a deprecated diagnostic.
 
 ## Legacy launcher migration
 

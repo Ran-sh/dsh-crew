@@ -1,7 +1,7 @@
 # DSH Crew
 
-为 Codex Desktop、ZCode 和 Claude Code 提供隔离的 Crew Harness，支持
-Worker/Reviewer 调度、模型优先级、任务跟踪和能力感知安全门。
+DSH Crew 是附着在 DeepSeek 官方 Harness 上的 Crew 编排插件，为 Codex Desktop、
+ZCode 和 Claude Code 增加 Worker/Reviewer 调度、模型优先级、任务跟踪和能力感知安全门。
 
 [English](./README.md)
 
@@ -15,7 +15,8 @@ npm install -g @ran-sh/dsh-crew@latest
 dsh-crew install
 ```
 
-3210 是 canonical full Crew control and runtime。生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行。
+DSH Crew 安装在 DeepSeek 官方 Harness 的专用 `dsh-crew` profile 中，并由 3210
+提供服务。这个 profile 是 Crew 的 canonical control and execution surface。
 
 官方 3080 界面不属于 Crew，Crew 不依赖它并始终将其 profile 视为只读；
 Crew 从不启动、拥有或监管它。
@@ -42,8 +43,8 @@ dsh-crew inspect
 
 | 界面 | 用途 |
 | --- | --- |
-| `3080` | Crew 之外的官方 Harness UI；Crew 不依赖它 |
-| `3210` | canonical Crew 控制台、runtime、Provider、Harness Models 和任务 |
+| `3080` | 官方 Harness 的 `web` profile；不属于 Crew，Crew 不依赖它 |
+| `3210` | 安装了 DSH Crew 插件的官方 Harness `dsh-crew` profile |
 
 进入 **设置 → DSH Crew**，刷新 Harness Models，并分别排列 Worker 与 Reviewer
 的模型顺序。然后直接告诉 Codex、ZCode 或 Claude：
@@ -79,9 +80,10 @@ dsh-crew update           # 更新并修复已启用集成
 dsh-crew uninstall        # 移除受管文件，保留配置/备份
 ```
 
-运行时隔离在 `~/.config/dsh-crew/harness`，使用 `profile: dsh-crew`。官方 `web` profile
-不属于 Crew 且对 Crew 始终只读；旧版 3080 bridge 若仍存在，只会作为已弃用诊断项显示。
-生产 Worker/Reviewer 的模型调用全部由隔离的 3210 Crew Harness 执行。
+专用的官方 Harness 运行时状态隔离在 `~/.config/dsh-crew/harness`，使用
+`profile: dsh-crew`；DSH Crew 本身仍然是插件，并非 DeepSeek Harness 的分支或替代品。
+官方 `web` profile 不属于 Crew 且对 Crew 始终只读；旧版 3080 bridge 若仍存在，
+只会作为已弃用诊断项显示。
 
 ## 旧启动器迁移
 

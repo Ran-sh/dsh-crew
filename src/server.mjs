@@ -277,7 +277,7 @@ server.registerTool('dsh_worker_config', {
     enabled: z.boolean().optional().describe('false = refuse all worker dispatch this session'),
     default_tier: z.enum(['flash', 'pro']).optional(),
     default_effort: z.enum(['off', 'high', 'max']).optional(),
-    mode: z.enum(['auto', 'hub']).optional().describe('Execution mode. Production dispatch always uses the isolated 3210 Crew Harness; standalone is retained only as a legacy read/migration value.'),
+    mode: z.enum(['auto', 'hub']).optional().describe('Execution mode. Production dispatch uses the official DeepSeek Harness dsh-crew profile on 3210 with the DSH Crew plugin loaded; standalone is retained only as a legacy read/migration value.'),
     default_timeout_seconds: z.number().int().positive().max(7200).optional(),
     tier_policy: z.enum(['auto', 'flash-only', 'pro-only']).optional().describe('session hard clamp: flash-only / pro-only pin every dispatch to one tier'),
     escalate_on_failure: z.boolean().optional().describe('allow an unverified worker attempt to retry through the stronger model policy (applies to run and spawn)'),
