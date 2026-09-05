@@ -35,7 +35,6 @@ export function resolveNpmInvocation({
   return { command: nodePath, argsPrefix: [npmCli] };
 }
 
-const npmInvocation = resolveNpmInvocation();
 
 /**
  * The candidate version is derived from the candidate package manifest at the
@@ -231,6 +230,7 @@ export async function auditOfficialDshCohort({
 }
 
 function run(args, cwd = root) {
+  const npmInvocation = resolveNpmInvocation();
   const result = spawnSync(npmInvocation.command, [...npmInvocation.argsPrefix, ...args], {
     cwd,
     encoding: 'utf8',
