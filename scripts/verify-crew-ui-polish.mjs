@@ -19,6 +19,7 @@ const results = [];
 const baseConfig = {
   subagents_enabled: true, collaboration_mode: 'balanced', main_agent_mode: 'direct-allowed',
   flash_state: 'auto', pro_state: 'auto', isolation: 'worktree', max_parallel: 16,
+  default_timeout_seconds: 1800,
   default_tier: 'flash', default_effort: 'max', mode: 'auto',
   vision_enabled: true, imagegen_enabled: false, vision_provider: 'example', imagegen_provider: 'example',
   flash_model_priority: [
@@ -96,9 +97,22 @@ try {
   await worker.getByRole('button', { name: '+ 添加模型', exact: true }).click();
   await worker.getByText('added-model', { exact: true }).waitFor();
   assert.equal(patches.at(-1).flash_model_priority.at(-1).model, 'added-model');
+  const reviewer = page.locator('details.crew-quick-group').filter({ has: page.locator('summary strong', { hasText: 'Reviewer / Pro' }) });
+  await reviewer.locator(':scope > summary').click();
+  await reviewer.locator('.crew-quick-add > summary').click();
+  await reviewer.getByRole('textbox', { name: 'Reviewer / Pro Provider', exact: true }).fill('review-provider');
+  await reviewer.getByRole('textbox', { name: 'Reviewer / Pro 模型', exact: true }).fill('review-model');
+  await reviewer.getByRole('button', { name: '+ 添加模型', exact: true }).click();
+  await reviewer.getByText('review-model', { exact: true }).waitFor();
+  await page.waitForFunction(() => !document.querySelector('input[type=checkbox]').disabled);
+  assert.notEqual(await reviewer.getAttribute('open'), null, 'Pro stays expanded after save rerenders');
+  const multimodal = page.locator('details.crew-quick-group').filter({ has: page.locator('summary strong', { hasText: '多模态' }) });
+  await multimodal.locator(':scope > summary').click();
   await page.getByRole('checkbox', { name: '启用子 Agent' }).uncheck();
   await page.waitForFunction(() => !document.querySelector('input[type=checkbox]').disabled);
   assert.equal(patches.at(-1).subagents_enabled, false);
+  assert.notEqual(await reviewer.getAttribute('open'), null, 'Pro stays expanded after other settings change');
+  assert.notEqual(await multimodal.getAttribute('open'), null, 'Multimodal stays expanded after other settings change');
   await worker.locator(':scope > summary').click();
   assert.equal(await worker.getAttribute('open'), null);
   await page.setViewportSize({ width: 420, height: 900 });
@@ -107,7 +121,7 @@ try {
   await page.screenshot({ path: join(output, '3080-narrow.png'), fullPage: true });
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.screenshot({ path: join(output, '3080-dark.png'), fullPage: true });
-  results.push('quick: reorder/remove/add/toggle/collapse/narrow/dark');
+  results.push('quick: reorder/remove/add/toggle/collapse; Pro and multimodal stay open across save rerenders; narrow/dark');
   await page.close();
 
   const { page: backend } = await mount('full');
