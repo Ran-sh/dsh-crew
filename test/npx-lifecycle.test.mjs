@@ -506,6 +506,22 @@ for (const command of ['install', 'update']) {
   });
 }
 
+test('staging refuses malformed or escaping published file patterns before copying', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const file = join(sourceRoot, 'package.json');
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    for (const files of ['src', ['../outside'], ['.'], ['node_modules'], ['src/*/escape'], ['C:/outside']]) {
+      writeFileSync(file, JSON.stringify({ ...manifest, files }));
+      const result = stageCandidatePayload({ sourceRoot, home: t.dir });
+      assert.equal(result.ok, false);
+      assert.equal(result.code, 'CANDIDATE_CONTENT_INVALID');
+      assert.equal(releaseCount(t.dir), 0);
+    }
+  } finally { t.cleanup(); }
+});
+
 test('install fails closed without mutating anything when the candidate cannot be staged', async () => {
   const t = tempHome();
   try {
