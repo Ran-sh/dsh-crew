@@ -8,7 +8,7 @@
 // live entirely in workflow-runtime.mjs; the adapters here just execute.
 
 import { createWorkflowRuntime } from './workflow-runtime.mjs';
-import { normalizeGlobalConfig } from './policy.mjs';
+import { CONFIG_SCHEMA_VERSION, normalizeGlobalConfig } from './policy.mjs';
 import { buildDirectSelectionTrace, enrichSelectionTrace } from './model-routing.mjs';
 import {
   createIsolatedWorkspace,
@@ -43,7 +43,72 @@ export function buildEffectiveRuntimeConfig(globalRaw = {}, session = {}) {
     if (session?.[key] !== undefined) patch[key] = session[key];
   }
   if (session?.enabled === false) patch.subagents_enabled = false;
-  return normalizeGlobalConfig({ ...globalRaw, ...patch });
+  const base = normalizeGlobalConfig(globalRaw);
+  if (Object.keys(patch).length === 0) return base;
+
+  // Session controls are expressed through the compatibility vocabulary,
+  // but a persisted schema-v4 config correctly ignores flat compatibility
+  // mirrors. Project the session once through the legacy normalizer, then
+  // apply only the policy dimensions the session is allowed to own onto the
+  // canonical snapshot. Model priorities, provider routing, fallback,
+  // adaptive ordering, health gates, and review gate remain untouched.
+  const compatibility = { ...base, ...patch, config_schema_version: 2 };
+  delete compatibility.worker;
+  delete compatibility.review;
+  delete compatibility.execution;
+  delete compatibility.legacy;
+  // Canonical flat mirrors describe the persisted base and must not outrank
+  // this session's compatibility command. Remove the derived role/review
+  // mirrors so the legacy projector can recompute them from the requested
+  // session mode and review opt-in.
+  delete compatibility.worker_state;
+  delete compatibility.review_state;
+  delete compatibility.auto_review;
+  if (patch.collaboration_mode !== undefined) {
+    delete compatibility.tier_policy;
+    delete compatibility.flash_state;
+    delete compatibility.pro_state;
+  } else if (patch.tier_policy !== undefined) {
+    delete compatibility.collaboration_mode;
+    delete compatibility.flash_state;
+    delete compatibility.pro_state;
+  } else if (patch.flash_state !== undefined || patch.pro_state !== undefined) {
+    compatibility.collaboration_mode = 'custom';
+    delete compatibility.tier_policy;
+  }
+  Object.assign(compatibility, patch);
+  const projected = normalizeGlobalConfig(compatibility);
+  return normalizeGlobalConfig({
+    ...base,
+    config_schema_version: CONFIG_SCHEMA_VERSION,
+    subagents_enabled: projected.subagents_enabled,
+    main_agent_mode: projected.main_agent_mode,
+    execution: {
+      ...base.execution,
+      enabled: projected.subagents_enabled,
+      default_effort: projected.execution.default_effort,
+      default_timeout_seconds: projected.execution.default_timeout_seconds,
+      mode: projected.execution.mode,
+    },
+    worker: {
+      ...base.worker,
+      state: projected.worker.state,
+      model_policy: {
+        ...base.worker.model_policy,
+        strategy: projected.worker.model_policy.strategy,
+        escalation: {
+          ...base.worker.model_policy.escalation,
+          enabled: projected.worker.model_policy.escalation.enabled,
+        },
+      },
+    },
+    review: {
+      ...base.review,
+      state: projected.review.state,
+      auto_review: projected.review.auto_review,
+    },
+    legacy: projected.legacy,
+  });
 }
 
 /**
