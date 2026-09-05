@@ -15,6 +15,7 @@ import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
 import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
 import { aggregateModelInvocations } from './task-telemetry.mjs';
 import { PanelHeader, PanelStyles } from './panel-chrome';
+import { HistoryPanel } from './history-panel';
 
 export const inject = ['slots', 'locale'];
 
@@ -1107,6 +1108,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? copy.installed : copy.notReady}</span>
             <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{copy.runningCount(jobs.filter((job) => job.status === 'running').length)}</span>
       </PanelHeader>
+      <HistoryPanel locale={locale} />
 
       <div className="crew-config-toolbar">
         <div style={{ ...S.section, margin: 0, flex: 1 }}>{copy.globalConfig}</div>

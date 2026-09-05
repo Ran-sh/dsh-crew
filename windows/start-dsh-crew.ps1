@@ -781,8 +781,19 @@ function Stop-OwnedListener {
   return $false
 }
 
+function Assert-HistoryStartAllowed {
+  param([string] $StatePath = (Join-Path $crewHome '..\history\active.json'))
+  if (-not (Test-Path -LiteralPath $StatePath)) { return }
+  try {
+    $state = Get-Content -LiteralPath $StatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($state.schemaVersion -eq 1 -and $state.phase -in @('STARTING', 'VERIFYING', 'DONE', 'FAILED', 'ROLLED_BACK')) { return }
+  } catch { }
+  throw 'HISTORY_RECOVERY_REQUIRED: Crew history maintenance is unfinished. Run dsh-crew history recover. Official 3080 is unchanged.'
+}
+
 function Start-CrewService {
   param([pscustomobject] $Service)
+  Assert-HistoryStartAllowed
   $serviceRunStamp = (Get-Date).ToString('yyyyMMdd-HHmmssfff')
   $stdout = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.out.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
   $stderr = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.err.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
