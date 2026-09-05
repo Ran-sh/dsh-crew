@@ -72,7 +72,7 @@ const fullView = {
 
 test('standalone reviewer evidence uses its complete review without a worker outcome', () => {
   const view = { id: 'review-only', role: 'reviewer', status: 'done', phase: 'completed',
-    review: { status: 'done', verdict: 'approve', delivery_complete: true, mutated_candidate: false,
+    review: { status: 'done', verdict: 'approve', delivery_complete: true,
       findings: ['matches request'], evidence: ['read package.json'], risks: ['limited scope'] } };
   const envelope = buildEvidenceEnvelope(view);
   assert.equal(envelope.status, 'PASS');
