@@ -26,7 +26,7 @@
   },
   "scripts": {
     "mcp": "node src/server.mjs",
-    "build:client": "tsdown src/client/entry.tsx src/client/quick-entry.tsx --format cjs --platform browser --target es2022 --tsconfig tsconfig.client.json --deps.never-bundle react --deps.never-bundle react/jsx-runtime --deps.never-bundle react-dom --deps.never-bundle react-dom/client --out-dir .client-build --clean --logLevel warn && node scripts/build-client.mjs",
+    "build:client": "tsdown src/client/entry.tsx --format cjs --platform browser --target es2022 --tsconfig tsconfig.client.json --deps.never-bundle react --deps.never-bundle react/jsx-runtime --deps.never-bundle react-dom --deps.never-bundle react-dom/client --out-dir .client-build --clean --logLevel warn && tsdown src/client/quick-entry.tsx --format cjs --platform browser --target es2022 --tsconfig tsconfig.client.json --deps.never-bundle react --deps.never-bundle react/jsx-runtime --deps.never-bundle react-dom --deps.never-bundle react-dom/client --out-dir .client-build --no-clean --logLevel warn && node scripts/build-client.mjs",
     "verify:npm-install": "node scripts/verify-npm-install.mjs",
     "verify:npm-install:official": "node scripts/verify-npm-install.mjs --with-official-dsh",
     "verify:official-bridge": "node scripts/verify-official-bridge-e2e.mjs --diagnostic-only"

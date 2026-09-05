@@ -24,6 +24,8 @@ for (const expected of [fullEntry, quickEntry]) {
 }
 
 function wrap(source, id) {
+  // The host resolves package modules, not discarded tsdown shared chunks.
+  if (/require\(["']\.\.?\//.test(source)) throw new Error(`client ${id} depends on an unshipped relative chunk`);
   return [
     `window.__ModuleLoader__.load({ id: ${JSON.stringify(id)}, factory: (require) => {`,
     'var module = { exports: {} }; var exports = module.exports;',
