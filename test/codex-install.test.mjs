@@ -11,7 +11,7 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexLegacyPolicyDigest, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -50,6 +50,38 @@ function makeClaudePluginRoot(root, marker) {
   }));
   writeFileSync(join(root, 'src', 'server.mjs'), `export const marker = ${JSON.stringify(marker)};\n`);
 }
+
+test('Claude reinstall skips CLI only for matching registered marketplace and snapshot', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    makeClaudePluginRoot(root, 'same');
+    makeClaudePluginRoot(snapshot, 'same');
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    const registry = join(plugins, 'known_marketplaces.json');
+    const writeRegistry = (path) => writeFileSync(registry, JSON.stringify({ 'dsh-crew': {
+      source: { source: 'directory', path }, installLocation: path,
+    } }));
+    writeRegistry(root);
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+    const ready = await installClaudeCode({ home, root });
+    assert.ok(ready.actions.includes('cli: skipped (registered marketplace and snapshot already current)'));
+    writeRegistry(join(home, 'other'));
+    const staleRegistry = await installClaudeCode({ home, root });
+    assert.ok(staleRegistry.actions.includes('cli: skipped (non-default home; test mode)'));
+    writeRegistry(root);
+    writeFileSync(join(snapshot, 'src', 'server.mjs'), 'changed');
+    const staleSnapshot = await installClaudeCode({ home, root });
+    assert.ok(staleSnapshot.actions.includes('cli: skipped (non-default home; test mode)'));
+    rmSync(registry);
+    const missing = await installClaudeCode({ home, root });
+    assert.ok(missing.actions.includes('cli: skipped (non-default home; test mode)'));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spawn)', async () => {
   const home = makeHome();
