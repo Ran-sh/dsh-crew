@@ -127,3 +127,28 @@ test('a stale executor never overwrites a later operation state after acquiring 
   await assert.rejects(runHistoryOperation({ crewRoot: f.root, id: op.id, acquire: () => { writeHistoryState(f.root, { ...readHistoryState(f.root), id: nextId }); return { ok: true }; }, release: () => ({ ok: true }) }), /CHANGED/);
   assert.equal(readHistoryState(f.root).id, nextId);
 });
+
+test('a newer fork protects its selected older parent and workspace from cleanup', async t => {
+  const f = await fixture(t);
+  const childFile = join(f.root, 'harness/sessions/example/session-child/session.jsonl');
+  mkdirSync(join(f.root, 'harness/sessions/example/session-child')); writeFileSync(childFile, 'child');
+  f.persistence.listSnapshots = async () => [
+    { header: { id: 'session-a', createdAt: 1767225600000 }, revision: 'old' },
+    { header: { id: 'session-child', createdAt: 1788220800000, parentSession: 'session-a' }, revision: 'new' },
+  ];
+  f.persistence.locate = header => ({ kind: 'jsonl', path: header.id === 'session-a' ? f.file : childFile });
+  const p = await f.service.preview({ scope: 'before', before: '2026-08-01T00:00:00Z' });
+  assert.equal(p.counts.sessions, 0); assert.equal(p.executable, false); assert.equal(p.counts.workspaces, 0);
+});
+
+test('recovery finishes deletion after a late successful restart without another stop', async t => {
+  const f = await fixture(t); const { runHistoryOperation } = await import('../src/history/operation.mjs');
+  const p = await f.service.preview({ operation: 'delete', scope: 'all' }); const op = await f.service.execute({ planId: p.planId, confirm: true, acknowledgement: 'DELETE' });
+  const deps = { crewRoot: f.root, id: op.id, acquire: () => ({ ok: true }), release: () => ({ ok: true }), checkFence: () => f.service.fencedCheck(), assertStopped: () => true,
+    supervisor: { stopOwnedBackend: async () => ({ ok: true }), startOwnedBackend: async () => ({ ok: false }) }, verifyRunning: async () => false };
+  await assert.rejects(runHistoryOperation(deps));
+  let stops = 0;
+  await runHistoryOperation({ ...deps, recover: true, verifyRunning: async () => true, supervisor: { stopOwnedBackend: async () => { stops++; throw Error('unexpected stop'); } } });
+  assert.equal(stops, 0); assert.equal(f.service.status().phase, 'DONE');
+  assert.equal(existsSync(join(f.root, `history/transactions/${op.id}/files/0.bin`)), false);
+});
