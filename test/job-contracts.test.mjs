@@ -70,6 +70,27 @@ const fullView = {
   execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
 };
 
+test('standalone reviewer evidence uses its complete review without a worker outcome', () => {
+  const view = { id: 'review-only', role: 'reviewer', status: 'done', phase: 'completed',
+    review: { status: 'done', verdict: 'approve', delivery_complete: true, mutated_candidate: false,
+      findings: ['matches request'], evidence: ['read package.json'], risks: ['limited scope'] } };
+  const envelope = buildEvidenceEnvelope(view);
+  assert.equal(envelope.status, 'PASS');
+  assert.equal(envelope.summary.delivery_complete, true);
+  assert.equal(envelope.summary.task_status, 'success');
+  assert.equal(envelope.summary.execution_status, 'completed');
+  assert.equal(envelope.summary.tests_status, null, 'review does not fabricate test execution');
+  assert.deepEqual(envelope.risks, ['limited scope']);
+  for (const patch of [{ delivery_complete: false }, { verdict: 'request_changes' },
+    { mutated_candidate: true }, { status: 'running' }]) {
+    assert.notEqual(buildEvidenceEnvelope({ ...view, review: { ...view.review, ...patch } }).status, 'PASS');
+  }
+  assert.notEqual(buildEvidenceEnvelope({ ...view, status: 'running' }).status, 'PASS');
+  assert.equal(buildEvidenceEnvelope({ ...view, status: 'failed' }).status, 'FAIL');
+  assert.equal(buildEvidenceEnvelope({ ...view, status: 'cancelled' }).status, 'BLOCKED');
+  assert.notEqual(buildEvidenceEnvelope({ ...view, role: 'worker' }).status, 'PASS');
+});
+
 test('canonical job events use the versioned allow-list and stable envelope', () => {
   assert.ok(JOB_EVENT_TYPES.includes('job.created'));
   assert.ok(JOB_EVENT_TYPES.includes('model.fallback'));
