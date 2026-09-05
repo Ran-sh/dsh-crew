@@ -82,6 +82,11 @@ function evidenceStatus(view) {
   if (view?.status === 'failed' || view?.phase === 'failed' || view?.outcome?.execution_status === 'failed') return 'FAIL';
   if (view?.review?.verdict === 'request_changes' || view?.outcome?.task_status === 'partial') return 'PARTIAL';
   if (view?.outcome?.task_status === 'blocked') return 'BLOCKED';
+  if (view?.role === 'reviewer' && view?.outcome == null) {
+    return view.status === 'done' && view.review?.status === 'done'
+      && view.review.verdict === 'approve' && view.review.delivery_complete === true
+      && view.review.mutated_candidate === false ? 'PASS' : 'PARTIAL';
+  }
   if (view?.status === 'done' && view?.outcome?.task_status === 'success') return 'PASS';
   return 'PARTIAL';
 }
@@ -165,6 +170,7 @@ export function buildEvidenceEnvelope(view = {}) {
   const errorMessage = boundedText(view.error, 1000);
   const changedFiles = boundedStrings(changedFilesFromView(view), { count: 120, length: 500 });
   const status = evidenceStatus(view);
+  const reviewOnly = view.role === 'reviewer' && view.outcome == null;
   const selectionAttempts = Array.isArray(view.child_attempts) && view.child_attempts.length > 0
     ? view.child_attempts
     : (view.selection_trace || view.provider || view.model ? [view] : []);
@@ -176,10 +182,10 @@ export function buildEvidenceEnvelope(view = {}) {
     status,
     summary: {
       phase: view.phase ?? null,
-      task_status: outcome.task_status ?? null,
-      execution_status: outcome.execution_status ?? null,
+      task_status: outcome.task_status ?? (reviewOnly && status === 'PASS' ? 'success' : null),
+      execution_status: outcome.execution_status ?? (reviewOnly && review?.status === 'done' ? 'completed' : null),
       tests_status: outcome.tests_status ?? null,
-      delivery_complete: outcome.delivery?.complete === true,
+      delivery_complete: reviewOnly ? review?.delivery_complete === true : outcome.delivery?.complete === true,
       review_verdict: review?.verdict ?? null,
     },
     selection_trace: compactSelectionTrace(selectionAttempts),
@@ -187,7 +193,7 @@ export function buildEvidenceEnvelope(view = {}) {
     changed_files: changedFiles,
     changes: boundedStrings(outcome.changes),
     tests: boundedTests(outcome.tests),
-    risks: boundedStrings(outcome.risks),
+    risks: boundedStrings(reviewOnly ? review?.risks : outcome.risks),
     unverified: boundedStrings(outcome.unverified),
     review: review ? {
       verdict: review.verdict ?? null,
