@@ -296,6 +296,7 @@ test('explicit reviewer role runs a single reviewer pass', async () => {
   assert.equal(v.role, 'reviewer');
   assert.equal(v.review.verdict, 'approve');
   assert.ok(a.attempts.length === 1 && a.attempts[0].role === 'reviewer');
+  assert.equal(a.attempts[0].task, 'review x', 'an explicit reviewer must inspect the caller task directly, not an empty automatic-review capsule');
 });
 
 // ---------- async parity ----------
