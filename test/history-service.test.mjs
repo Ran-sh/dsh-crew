@@ -79,3 +79,23 @@ test('restart failure leaves durable recovery fencing and no successful deletion
   await assert.rejects(() => f.agents.create(), /MAINTENANCE_PENDING/);
   assert.equal(existsSync(join(f.root, `history/transactions/${op.id}/files/0.bin`)), true);
 });
+
+test('one corrupt archive is explicitly reported without blocking healthy archive browsing', async t => {
+  const f = await fixture(t);
+  const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+  mkdirSync(join(f.root, `history/transactions/${id}`), { recursive: true });
+  writeFileSync(join(f.root, `history/transactions/${id}/manifest.json`), 'broken');
+  const archives = f.service.archives();
+  assert.equal(archives.length, 1); assert.equal(archives[0].invalid, true);
+  assert.equal(archives[0].code, 'HISTORY_INVALID_MANIFEST');
+  await assert.rejects(f.service.restore({ archiveId: id, confirm: true }), /NOT_RESTORABLE/);
+});
+
+test('recovery of an unstarted request cancels it without stopping a runtime or changing data', async t => {
+  const f = await fixture(t); const { runHistoryOperation } = await import('../src/history/operation.mjs');
+  const p = await f.service.preview({ scope: 'all' }); const op = await f.service.execute({ planId: p.planId, confirm: true });
+  let stops = 0;
+  await runHistoryOperation({ crewRoot: f.root, id: op.id, recover: true, acquire: () => ({ ok: true }), release: () => ({ ok: true }),
+    supervisor: { stopOwnedBackend: async () => { stops++; return { ok: true }; } } });
+  assert.equal(stops, 0); assert.equal(f.service.status().phase, 'FAILED'); assert.equal(existsSync(f.file), true);
+});
