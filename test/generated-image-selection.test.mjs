@@ -13,6 +13,10 @@ test('image selection never substitutes an unrelated recent image', () => {
     const expected = join(root, 'request123.png');
     writeFileSync(expected, 'current task');
     assert.equal(multimodal.findGeneratedImage(root, 'request123'), expected);
+    const duplicate = join(root, 'request123-copy.png');
+    writeFileSync(duplicate, 'ambiguous task result');
+    assert.equal(multimodal.findGeneratedImage(root, 'request123'), null);
+    rmSync(duplicate);
     utimesSync(expected, new Date(0), new Date(0));
     assert.equal(multimodal.findGeneratedImage(root, 'request123'), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
