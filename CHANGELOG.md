@@ -4,6 +4,12 @@
 
 Future changes go here.
 
+## 1.2.0-rc.2 — 2026-09-05
+
+- Applies session-level review-pipeline, automatic-review, and escalation
+  overrides to canonical v4 configuration without overwriting model priority,
+  fallback, adaptive routing, health gates, or provider selection.
+
 ## 1.2.0-rc.1 — 2026-09-04
 
 - Makes Windows launcher upgrades automatic and crash-resumable: install,
