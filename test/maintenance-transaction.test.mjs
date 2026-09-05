@@ -227,7 +227,7 @@ test('maintenance stop refuses a 3210 responder without the canonical Crew runti
   } finally { t.cleanup(); }
 });
 
-test('maintenance identity discovery is bounded when a 3210 responder never completes', async () => {
+test('maintenance identity discovery stays alive until a stalled response times out', async () => {
   const t = tempHome();
   try {
     const started = Date.now();

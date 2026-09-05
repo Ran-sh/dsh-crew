@@ -131,3 +131,35 @@ test('explicit reviewer failed execution fails the workflow', async () => {
   assert.ok(v.canonical_events.some((e) => e.type === 'job.failed'), 'terminal event must be job.failed');
   assert.ok(!v.canonical_events.some((e) => e.type === 'job.completed'), 'no job.completed event may exist');
 });
+
+for (const stage of ['before', 'after']) {
+  for (const failure of ['null', 'missing-fingerprint', 'throw']) {
+    test(`explicit review rejects ${failure} ${stage} evidence and retains workspace`, async () => {
+      const adapters = makeAdapter();
+      const capture = adapters.captureCandidate;
+      const execute = adapters.executeAttempt;
+      let captures = 0;
+      let executions = 0;
+      let releases = 0;
+      adapters.captureCandidate = async () => {
+        if (++captures === (stage === 'before' ? 1 : 2)) {
+          if (failure === 'throw') throw new Error('capture unavailable');
+          return failure === 'null' ? null : { ok: true };
+        }
+        return capture();
+      };
+      adapters.executeAttempt = async (spec) => { executions++; return execute(spec); };
+      adapters.releaseWorkspace = async () => { releases++; return { ok: true }; };
+      const rt = createWorkflowRuntime(adapters, { idFactory });
+      const job = rt.start({ role: 'reviewer', task: 'review', cwd: '/repo' });
+      await rt.wait(job.id, 2000);
+      const view = rt.get(job.id, { withResult: true });
+      assert.equal(view.status, 'failed');
+      assert.equal(view.error_code, 'REVIEW_EVIDENCE_UNAVAILABLE');
+      assert.equal(view.workspace_retained, true);
+      assert.equal(releases, 0);
+      assert.equal(executions, stage === 'before' ? 0 : 1);
+      assert.ok(!view.canonical_events.some(e => e.type === 'job.completed'));
+    });
+  }
+}
