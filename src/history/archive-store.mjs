@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const WORKSPACE = 'harness/storages/workspace.json';
 const LIMIT = 512 * 1024 * 1024;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+const equal = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(id);
 const fail = code => { throw new Error(`HISTORY_${code}`); };
 
@@ -39,7 +41,7 @@ function readBounded(file) {
   return bytes;
 }
 
-function atomic(root, relativePath, bytes) {
+function atomic(root, relativePath, bytes, exclusive = false) {
   const file = pathInside(root, relativePath);
   mkdirSync(dirname(file), { recursive: true });
   pathInside(root, relativePath);
@@ -47,7 +49,10 @@ function atomic(root, relativePath, bytes) {
   let fd;
   try {
     fd = openSync(temporary, 'wx', 0o600); writeFileSync(fd, bytes); fsyncSync(fd); closeSync(fd); fd = undefined;
-    renameSync(temporary, file);
+    if (exclusive) {
+      try { linkSync(temporary, file); }
+      catch (error) { if (error.code === 'EEXIST') fail('RESTORE_CONFLICT'); throw error; }
+    } else renameSync(temporary, file);
   } finally {
     if (fd !== undefined) closeSync(fd);
     if (existsSync(temporary)) unlinkSync(temporary);
@@ -55,10 +60,13 @@ function atomic(root, relativePath, bytes) {
 }
 
 function decodeStore(bytes) {
-  const store = JSON.parse(bytes.toString('utf8'));
+  let store;
+  try { store = JSON.parse(bytes.toString('utf8')); } catch { fail('INVALID_STORAGE'); }
   if (store?.unit?.name !== 'workspace' || store.unit.version !== 2 || store.global?.initialized !== true
     || store.global.pendingMutation || !Array.isArray(store.global.workspaceIds) || !Array.isArray(store.global.archivedSessionIds)
     || !store.tables?.workspaces || Array.isArray(store.tables.workspaces)) fail('UNSUPPORTED_STORAGE');
+  if (store.global.archivedSessionIds.some(id => !validId(id))
+    || new Set(store.global.archivedSessionIds).size !== store.global.archivedSessionIds.length) fail('INVALID_STORAGE');
   const table = store.tables.workspaces;
   if (Object.keys(table).length > 10000 || store.global.workspaceIds.length !== Object.keys(table).length
     || new Set(store.global.workspaceIds).size !== store.global.workspaceIds.length
@@ -78,12 +86,23 @@ function saveManifest(root, manifest) {
 }
 
 function loadManifest(root, id) {
-  const manifest = JSON.parse(readBounded(pathInside(root, `${batchPath(id)}/manifest.json`)));
+  let manifest;
+  try { manifest = JSON.parse(readBounded(pathInside(root, `${batchPath(id)}/manifest.json`))); }
+  catch { fail('INVALID_MANIFEST'); }
   if (manifest.id !== id || manifest.schemaVersion !== 1 || !['archive', 'delete'].includes(manifest.operation)
-    || !Array.isArray(manifest.files) || manifest.files.length > 10000) fail('INVALID_MANIFEST');
+    || !Array.isArray(manifest.files) || manifest.files.length > 10000
+    || !['PREPARING', 'PREPARED', 'APPLYING', 'APPLIED', 'RESTORING', 'RESTORED', 'ROLLED_BACK', 'DELETING', 'DELETED'].includes(manifest.state)
+    || manifest.files.some(file => !file || !/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0)
+    || new Set(manifest.files.map(file => file.sessionId)).size !== manifest.files.length
+    || new Set(manifest.files.map(file => file.relativePath)).size !== manifest.files.length
+    || manifest.files.reduce((total, file) => total + file.size, 0) > LIMIT) fail('INVALID_MANIFEST');
   decodeStore(Buffer.from(JSON.stringify(manifest.before)));
   decodeStore(Buffer.from(JSON.stringify(manifest.after)));
   for (const file of manifest.files) artifactPath(root, file);
+  if (manifest.state === 'RESTORING') {
+    decodeStore(Buffer.from(JSON.stringify(manifest.restoreBefore ?? null)));
+    decodeStore(Buffer.from(JSON.stringify(manifest.restoreAfter ?? null)));
+  }
   return manifest;
 }
 
@@ -153,7 +172,8 @@ export async function restoreHistory({ crewRoot, archiveId, assertStopped }) {
   await requireStopped(assertStopped);
   const manifest = loadManifest(crewRoot, archiveId);
   if (manifest.operation !== 'archive' || manifest.state !== 'APPLIED') fail('ARCHIVE_NOT_RESTORABLE');
-  const current = decodeStore(readBounded(pathInside(crewRoot, WORKSPACE)));
+  const currentBytes = readBounded(pathInside(crewRoot, WORKSPACE));
+  const current = decodeStore(currentBytes);
   const next = structuredClone(current);
   const restoredIds = [];
   for (const [id, old] of Object.entries(manifest.before.tables.workspaces)) {
@@ -173,13 +193,12 @@ export async function restoreHistory({ crewRoot, archiveId, assertStopped }) {
   }
   manifest.restoreBefore = current; manifest.restoreAfter = next; manifest.state = 'RESTORING'; saveManifest(crewRoot, manifest);
   await requireStopped(assertStopped);
+  if (hash(readBounded(pathInside(crewRoot, WORKSPACE))) !== hash(currentBytes)) fail('RESTORE_CONFLICT');
   for (const [index, file] of manifest.files.entries()) {
-    const target = artifactPath(crewRoot, file);
-    mkdirSync(dirname(target), { recursive: true });
-    // Exclusive publication: never overwrite a concurrently created artifact.
-    const fd = openSync(artifactPath(crewRoot, file), 'wx', 0o600);
-    try { writeFileSync(fd, readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`))); fsyncSync(fd); }
-    finally { closeSync(fd); }
+    artifactPath(crewRoot, file);
+    // A durable temporary file is published exclusively. A crash cannot leave
+    // a partially written target that recovery mistakes for someone else's data.
+    atomic(crewRoot, file.relativePath, readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`)), true);
   }
   atomic(crewRoot, WORKSPACE, JSON.stringify(next));
   manifest.state = 'RESTORED'; saveManifest(crewRoot, manifest);
@@ -197,7 +216,8 @@ export async function recoverHistory({ crewRoot, archiveId, assertStopped }) {
   const possible = restoring ? manifest.restoreAfter : manifest.after;
   decodeStore(Buffer.from(JSON.stringify(desired)));
   decodeStore(Buffer.from(JSON.stringify(possible)));
-  const current = decodeStore(readBounded(pathInside(crewRoot, WORKSPACE)));
+  const currentBytes = readBounded(pathInside(crewRoot, WORKSPACE));
+  const current = decodeStore(currentBytes);
   if (!equal(current, desired) && !equal(current, possible)) fail('RECOVERY_CONFLICT');
   const touched = !['PREPARING', 'PREPARED'].includes(manifest.state);
   for (const [index, file] of manifest.files.entries()) {
@@ -207,14 +227,12 @@ export async function recoverHistory({ crewRoot, archiveId, assertStopped }) {
     if (touched && hash(readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`))) !== file.sha256) fail('BACKUP_CHANGED');
   }
   await requireStopped(assertStopped);
+  if (hash(readBounded(pathInside(crewRoot, WORKSPACE))) !== hash(currentBytes)) fail('RECOVERY_CONFLICT');
   for (const [index, file] of manifest.files.entries()) {
     const target = artifactPath(crewRoot, file);
     if (restoring) { if (existsSync(target)) unlinkSync(target); }
     else if (!existsSync(target)) {
-      mkdirSync(dirname(target), { recursive: true });
-      const fd = openSync(artifactPath(crewRoot, file), 'wx', 0o600);
-      try { writeFileSync(fd, readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`))); fsyncSync(fd); }
-      finally { closeSync(fd); }
+      atomic(crewRoot, file.relativePath, readBounded(pathInside(crewRoot, `${batchPath(archiveId)}/files/${index}.bin`)), true);
     }
   }
   atomic(crewRoot, WORKSPACE, JSON.stringify(desired));
