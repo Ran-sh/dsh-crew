@@ -40,7 +40,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
-import { samePayloadContent, payloadContentDigest } from './payload-content.mjs';
+import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
@@ -855,7 +855,8 @@ export function stageCandidatePayload({
   if (!existsSync(join(sourceRoot, 'src', 'server.mjs')) || !existsSync(join(sourceRoot, 'cordis.patch.yml'))) {
     return { ok: false, code: 'CANDIDATE_NOT_RUNNABLE' };
   }
-  if (!payloadContentDigest(sourceRoot)) return { ok: false, code: 'CANDIDATE_CONTENT_INVALID' };
+  const content = capturePayloadContent(sourceRoot, manifest);
+  if (!content) return { ok: false, code: 'CANDIDATE_CONTENT_INVALID' };
 
   const releasesDir = crewReleasesDir({ home });
   mkdirSync(releasesDir, { recursive: true });
@@ -864,26 +865,12 @@ export function stageCandidatePayload({
   mkdirSync(stageDir, { recursive: true });
   writeFileSync(join(stageDir, INCOMPLETE_MARKER), String(Date.now()) + '\n');
 
-  // Copy every top-level entry referenced by manifest.files (directories are
-  // copied whole; single-segment wildcards match within their directory).
-  const entries = new Set(['package.json']);
-  for (const pattern of manifest.files ?? []) {
-    if (typeof pattern !== 'string' || !pattern.trim()) continue;
-    if (!pattern.includes('*')) { entries.add(pattern); continue; }
-    const base = dirname(pattern);
-    const regex = new RegExp(`^${pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
-    const scanDir = join(sourceRoot, base);
-    if (!existsSync(scanDir)) continue;
-    for (const item of readdirSync(scanDir)) {
-      const candidatePath = base === '.' ? item : `${base.replace(/\\/g, '/')}/${item}`;
-      if (regex.test(candidatePath)) entries.add(candidatePath);
-    }
-  }
-
-  for (const entry of entries) {
-    const source = join(sourceRoot, entry);
-    if (!existsSync(source)) continue;
-    cpSync(source, join(stageDir, entry), { recursive: true, force: true, dereference: true });
+  // Copy the validated byte snapshot, never re-resolve source paths here.
+  for (const directory of content.directories) mkdirSync(join(stageDir, directory), { recursive: true });
+  for (const [entry, bytes] of content.files) {
+    const destination = join(stageDir, entry);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
   }
 
   // Persist an adjusted manifest: identity/runtime fields stay; production

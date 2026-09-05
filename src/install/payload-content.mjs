@@ -16,18 +16,21 @@ function runtimeManifest(manifest) {
   return canonical(normalized);
 }
 
-/** Hash published source files, excluding installed dependencies and transaction metadata. */
-export function payloadContentDigest(root) {
+/** Capture bounded first-party package bytes once for both validation and copying. */
+export function capturePayloadContent(root, suppliedManifest) {
   try {
-    const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    const manifest = suppliedManifest ?? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
     if (!Array.isArray(manifest.files)) return null;
     const files = new Map();
+    const directories = new Set();
     let bytes = 0;
     const visit = relative => {
       const file = join(root, relative);
       const stat = lstatSync(file);
       if (stat.isSymbolicLink()) throw new Error('unsupported payload symlink');
       if (stat.isDirectory()) {
+        if (directories.size >= 4096) throw new Error('payload directory limit exceeded');
+        directories.add(relative);
         for (const name of readdirSync(file)) visit(posix.join(relative, name));
         return;
       }
@@ -36,8 +39,9 @@ export function payloadContentDigest(root) {
       bytes += stat.size;
       if (bytes > 64 * 1024 * 1024) throw new Error('payload content limit exceeded');
       const content = relative === 'package.json'
-        ? JSON.stringify(runtimeManifest(manifest)) : readFileSync(file);
-      files.set(relative, createHash('sha256').update(content).digest('hex'));
+        ? Buffer.from(JSON.stringify(runtimeManifest(manifest))) : readFileSync(file);
+      if (content.length > stat.size && relative !== 'package.json') throw new Error('payload changed while being read');
+      files.set(relative, content);
     };
     visit('package.json');
     for (const entry of manifest.files ?? []) {
@@ -46,7 +50,7 @@ export function payloadContentDigest(root) {
       const segments = pattern.split('/');
       if (!pattern.trim() || entry.includes('\\') || posix.normalize(pattern) === '.'
         || isAbsolute(pattern) || pattern.includes(':')
-        || segments.some(segment => ['..', '.git', 'node_modules'].includes(segment))) throw new Error('invalid payload path');
+        || segments.some(segment => ['..', '.git', 'node_modules'].includes(segment.toLowerCase()))) throw new Error('invalid payload path');
       if (!pattern.includes('*')) {
         if (existsSync(join(root, pattern))) visit(pattern);
         continue;
@@ -58,8 +62,16 @@ export function payloadContentDigest(root) {
         for (const name of readdirSync(join(root, base))) if (expression.test(name)) visit(posix.join(base, name));
       }
     }
-    return createHash('sha256').update(JSON.stringify([...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex');
+    return { files, directories };
   } catch { return null; }
+}
+
+/** This digest covers first-party shipped files, not dependency tamper attestation. */
+export function payloadContentDigest(root) {
+  const snapshot = capturePayloadContent(root);
+  if (!snapshot) return null;
+  const hashes = [...snapshot.files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')]);
+  return createHash('sha256').update(JSON.stringify(hashes.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex');
 }
 
 export function samePayloadContent(sourceRoot, installedRoot) {
