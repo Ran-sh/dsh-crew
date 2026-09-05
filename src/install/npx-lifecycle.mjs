@@ -40,7 +40,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
-import { samePayloadContent } from './payload-content.mjs';
+import { samePayloadContent, payloadContentDigest } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
@@ -855,6 +855,7 @@ export function stageCandidatePayload({
   if (!existsSync(join(sourceRoot, 'src', 'server.mjs')) || !existsSync(join(sourceRoot, 'cordis.patch.yml'))) {
     return { ok: false, code: 'CANDIDATE_NOT_RUNNABLE' };
   }
+  if (!payloadContentDigest(sourceRoot)) return { ok: false, code: 'CANDIDATE_CONTENT_INVALID' };
 
   const releasesDir = crewReleasesDir({ home });
   mkdirSync(releasesDir, { recursive: true });

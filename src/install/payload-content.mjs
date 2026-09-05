@@ -20,6 +20,7 @@ function runtimeManifest(manifest) {
 export function payloadContentDigest(root) {
   try {
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    if (!Array.isArray(manifest.files)) return null;
     const files = new Map();
     let bytes = 0;
     const visit = relative => {
@@ -42,7 +43,10 @@ export function payloadContentDigest(root) {
     for (const entry of manifest.files ?? []) {
       if (typeof entry !== 'string') throw new Error('invalid payload pattern');
       const pattern = entry.replaceAll('\\', '/');
-      if (isAbsolute(pattern) || pattern.includes(':') || pattern.split('/').includes('..')) throw new Error('invalid payload path');
+      const segments = pattern.split('/');
+      if (!pattern.trim() || entry.includes('\\') || posix.normalize(pattern) === '.'
+        || isAbsolute(pattern) || pattern.includes(':')
+        || segments.some(segment => ['..', '.git', 'node_modules'].includes(segment))) throw new Error('invalid payload path');
       if (!pattern.includes('*')) {
         if (existsSync(join(root, pattern))) visit(pattern);
         continue;

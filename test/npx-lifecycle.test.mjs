@@ -517,7 +517,7 @@ test('staging refuses malformed or escaping published file patterns before copyi
       const result = stageCandidatePayload({ sourceRoot, home: t.dir });
       assert.equal(result.ok, false);
       assert.equal(result.code, 'CANDIDATE_CONTENT_INVALID');
-      assert.equal(releaseCount(t.dir), 0);
+      assert.equal(existsSync(crewReleasesDir({ home: t.dir })), false);
     }
   } finally { t.cleanup(); }
 });
