@@ -106,3 +106,24 @@ test('a legacy plain log is resolved from the official locator directory, but am
   writeFileSync(`${f.file}.zstd`, 'conflicting encoding');
   await assert.rejects(f.service.preview({ scope: 'all' }), /AMBIGUOUS/);
 });
+
+test('recovery with a proven stopped lease does not query the offline live API', async t => {
+  const f = await fixture(t); const { runHistoryOperation } = await import('../src/history/operation.mjs');
+  const { readHistoryState, writeHistoryState } = await import('../src/history/state.mjs');
+  const p = await f.service.preview({ scope: 'all' }); const op = await f.service.execute({ planId: p.planId, confirm: true });
+  writeHistoryState(f.root, { ...readHistoryState(f.root), phase: 'STOPPING' });
+  let liveCalls = 0; let stopped = true;
+  await runHistoryOperation({ crewRoot: f.root, id: op.id, recover: true, acquire: () => ({ ok: true }), release: () => ({ ok: true }),
+    assertStopped: () => stopped, checkFence: () => { liveCalls++; throw Error('offline'); },
+    supervisor: { stopOwnedBackend: async () => ({ ok: true }), startOwnedBackend: async () => { stopped = false; return { ok: true }; } }, verifyRunning: async () => !stopped });
+  assert.equal(liveCalls, 0); assert.equal(f.service.status().phase, 'DONE');
+});
+
+test('a stale executor never overwrites a later operation state after acquiring its lock', async t => {
+  const f = await fixture(t); const { runHistoryOperation } = await import('../src/history/operation.mjs');
+  const { readHistoryState, writeHistoryState } = await import('../src/history/state.mjs');
+  const p = await f.service.preview({ scope: 'all' }); const op = await f.service.execute({ planId: p.planId, confirm: true });
+  const nextId = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+  await assert.rejects(runHistoryOperation({ crewRoot: f.root, id: op.id, acquire: () => { writeHistoryState(f.root, { ...readHistoryState(f.root), id: nextId }); return { ok: true }; }, release: () => ({ ok: true }) }), /CHANGED/);
+  assert.equal(readHistoryState(f.root).id, nextId);
+});
