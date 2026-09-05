@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   auditOfficialDshCohort,
   satisfiesCohortRange,
@@ -16,6 +17,14 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const verifierSource = readFileSync(join(here, '..', 'scripts', 'verify-npm-install.mjs'), 'utf8');
 const packageManifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+
+test('verifier library imports without npm beside the selected Node executable', () => {
+  const script = `Object.defineProperty(process, 'execPath', { value: 'C:/missing-node-distribution/node.exe' }); await import(${JSON.stringify(new URL('../scripts/verify-npm-install.mjs', import.meta.url).href)});`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8', windowsHide: true, timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 const directPeerNames = [
   '@deepseek-ai/dsh',
