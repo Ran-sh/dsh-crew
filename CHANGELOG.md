@@ -4,6 +4,11 @@
 
 Future changes go here.
 
+## 1.2.0-rc.4 — 2026-09-05
+
+- Reports complete standalone Reviewer evidence without requiring a Worker
+  outcome, preserving failure, cancellation, incomplete-review and mutation gates.
+
 ## 1.2.0-rc.3 — 2026-09-05
 
 - Preserves the caller's task for explicit Reviewer workflows while keeping
