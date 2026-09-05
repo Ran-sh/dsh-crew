@@ -22,9 +22,13 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
       if (!header || typeof header.id !== 'string') throw Error('HISTORY_INVENTORY_INVALID');
       const location = persistence.locate(header);
       if (location?.kind !== 'jsonl') throw Error('HISTORY_STORAGE_UNSUPPORTED');
-      const path = relative(crewRoot, location.path).replaceAll('\\', '/');
+      let path = relative(crewRoot, location.path).replaceAll('\\', '/');
       if (!/^harness\/sessions\/[^/]+\/[^/]+\/session\.jsonl(?:\.zstd)?$/.test(path)
         || path.split('/')[3] !== header.id) throw Error('HISTORY_STORAGE_UNSUPPORTED');
+      const plain = path.replace(/\.zstd$/, '');
+      const existing = [plain, `${plain}.zstd`].filter(candidate => existsSync(historyPath(crewRoot, candidate)));
+      if (existing.length !== 1) throw Error('HISTORY_ARTIFACT_AMBIGUOUS');
+      path = existing[0];
       const raw = readHistoryBytes(historyPath(crewRoot, path)); total += raw.length;
       if (total > 512 * 1024 * 1024) throw Error('HISTORY_INVENTORY_TOO_LARGE');
       return { id: header.id, createdAt: header.createdAt, parentSession: header.parentSession,
