@@ -4,11 +4,12 @@ import { Readable } from 'node:stream';
 
 test('history endpoints require same-origin local access and no GET triggers a mutation', async () => {
   const { registerHistoryHttp } = await import('../src/history/http.mjs');
-  let handler; let calls = 0;
-  registerHistoryHttp({ register: r => { handler = r.handler; return () => {}; } }, {
+  let handler; let calls = 0; let registeredPath;
+  registerHistoryHttp({ register: r => { handler = r.handler; registeredPath = r.path; return () => {}; } }, {
     status: () => ({ phase: 'IDLE' }), archives: () => [], preview: async () => ({ planId: 'test' }),
     execute: async () => { calls++; return { phase: 'QUEUED' }; }, restore: async () => { calls++; return {}; }, recover: async () => { calls++; return {}; }, fencedCheck: async () => true,
   });
+  assert.equal(registeredPath, '/_dsh/dsh-crew/history', 'official prefix matcher appends its own slash boundary');
   async function request(path, method = 'GET', body = {}, headers = {}) {
     const req = Readable.from([Buffer.from(JSON.stringify(body))]);
     Object.assign(req, { url: '/_dsh/dsh-crew/history/' + path, method, headers: { host: '127.0.0.1:3210', ...headers }, socket: { remoteAddress: '127.0.0.1' } });
