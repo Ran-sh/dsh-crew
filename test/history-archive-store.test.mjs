@@ -63,6 +63,31 @@ test('restore preserves unrelated workspaces created after the archive', async t
   assert.ok(restored.global.workspaceIds.includes('w1'));
 });
 
+test('restore never resurrects an unrelated workspace order entry removed afterwards', async t => {
+  const f = fixture(t); const api = await load();
+  f.workspace.tables.workspaces.w2 = { ...f.workspace.tables.workspaces.w1, path: '/other', sessionIds: [] };
+  f.workspace.global.workspaceIds.push('w2');
+  const bytes = JSON.stringify(f.workspace);
+  writeFileSync(join(f.root, 'harness/storages/workspace.json'), bytes); f.request.workspaceHash = hash(bytes);
+  const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });
+  const current = JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json')));
+  delete current.tables.workspaces.w2; current.global.workspaceIds = [];
+  writeFileSync(join(f.root, 'harness/storages/workspace.json'), JSON.stringify(current));
+  await api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true });
+  const restored = JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json')));
+  assert.deepEqual(restored.global.workspaceIds, ['w1']);
+  assert.equal(restored.tables.workspaces.w2, undefined);
+});
+
+test('a linked ancestor cannot redirect an otherwise regular Crew root', async t => {
+  const f = fixture(t); const api = await load();
+  const alias = `${f.root}-alias`;
+  symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => rmSync(alias, { force: true, recursive: true }));
+  mkdirSync(join(f.root, 'nested'));
+  await assert.rejects(api.archiveHistory({ crewRoot: join(alias, 'nested'), request: f.request, assertStopped: () => true }), /LINK/);
+});
+
 test('symlinked storage is rejected instead of following it', async t => {
   const f = fixture(t); const api = await load();
   const outside = mkdtempSync(join(tmpdir(), 'crew-history-outside-')); t.after(() => rmSync(outside, { recursive: true, force: true }));
