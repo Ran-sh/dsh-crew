@@ -543,6 +543,17 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // in the plugin cache (settings alone leave a stale/absent cache entry) and
   // pulls the plugin so the next session loads it. Best-effort: settings are
   // already correct, so a missing CLI just means one manual `plugin install`.
+  const registered = readJson(join(home, '.claude', 'plugins', 'known_marketplaces.json'), {})?.[MARKETPLACE_NAME];
+  const installedRecord = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {})?.plugins?.[PLUGIN_KEY];
+  const installedEntries = Array.isArray(installedRecord) ? installedRecord : [installedRecord];
+  const marketplaceCurrent = registered?.source?.source === 'directory'
+    && normalizedPath(registered.source.path) === normalizedPath(root)
+    && normalizedPath(registered.installLocation) === normalizedPath(root);
+  if (marketplaceCurrent && installedEntries.some((entry) => entry?.scope === 'user'
+    && sameManagedClaudeFiles(root, entry.installPath))) {
+    actions.push('cli: skipped (registered marketplace and snapshot already current)');
+    return { ok: true, actions };
+  }
   if (home !== homedir()) {
     actions.push('cli: skipped (non-default home; test mode)');
     return { ok: true, actions };

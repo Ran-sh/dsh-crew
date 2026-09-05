@@ -70,6 +70,14 @@ test('Claude reinstall skips CLI only for matching registered marketplace and sn
     } }));
     const ready = await installClaudeCode({ home, root });
     assert.ok(ready.actions.includes('cli: skipped (registered marketplace and snapshot already current)'));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'project', installPath: snapshot }],
+    } }));
+    const projectOnly = await installClaudeCode({ home, root });
+    assert.ok(projectOnly.actions.includes('cli: skipped (non-default home; test mode)'));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
     writeRegistry(join(home, 'other'));
     const staleRegistry = await installClaudeCode({ home, root });
     assert.ok(staleRegistry.actions.includes('cli: skipped (non-default home; test mode)'));
