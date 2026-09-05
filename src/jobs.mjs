@@ -8,7 +8,7 @@
 // never passes an explicit dshBin that would bypass it. The worker rides the
 // `sdk-minimal` profile with the Crew overlay applied as a --patch.
 
-import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+import { createStandaloneHarness } from './standalone-sdk.mjs';
 import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
@@ -123,7 +123,7 @@ export function startJob({
     throw new Error(`DEEPSEEK_API_KEY not found in env or ${join(CONFIG_DIR, '.env')}`);
   }
 
-  const harness = new DeepSeekHarness({
+  const harness = createStandaloneHarness({
     profile: 'sdk-minimal',
     patches: [CORDIS],
     dshHome: CREW_DSH_HOME,
