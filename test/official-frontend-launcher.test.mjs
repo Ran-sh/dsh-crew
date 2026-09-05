@@ -12,6 +12,8 @@ function launchScenario(initial, trusted = true) {
     '$script:calls = @()',
     `$script:occupied = $${initial === 'occupied'}`,
     "function Resolve-OfficialHarnessCommand { return [pscustomobject]@{ NodePath='C:\\node.exe'; Entry='C:\\official\\bin.js' } }",
+    "function Get-OfficialFrontendOverlay { return [pscustomobject]@{ Path='C:\\crew\\overlay.json'; Revision='test-revision' } }",
+    'function Test-OfficialFrontendAttached { param($Revision) return $true }',
     "function Get-PortState { param($Port) return [pscustomobject]@{ State=$(if($script:occupied){'occupied'}else{'free'}); Pid=123; Error=$null } }",
     `function Test-OfficialHarnessListener { param($OwnerPid,$Official) return $${trusted} }`,
     'function Test-OfficialWebReady { return $true }',
@@ -36,6 +38,7 @@ maybe('cold desktop launch uses official web CLI with isolated environment and h
   assert.equal(result.calls[0].file, 'C:\\node.exe');
   assert.ok(result.calls[0].args.includes('web'));
   assert.ok(result.calls[0].args.includes('3080'));
+  assert.ok(result.calls[0].args.includes('--patch'));
   assert.ok(!result.calls[0].args.includes('--no-open'));
   assert.equal(result.calls[0].style, 'Hidden');
   assert.notEqual(result.calls[0].dshHome, result.restored);
