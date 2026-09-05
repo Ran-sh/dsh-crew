@@ -56,3 +56,17 @@ test('double installation, replaced admission method and broken live inventory c
   assert.equal(gate.idle(), false);
   gate.dispose();
 });
+
+test('Cordis-style method proxies preserve ownership and fence both create and resume', async () => {
+  const { installHistoryAdmissionGate } = await load();
+  let pending = false;
+  const raw = { list: () => [], create: async () => ({}), resume: async () => ({}) };
+  const agents = new Proxy(raw, { get(target, name, receiver) { const value = Reflect.get(target, name, receiver); return typeof value === 'function' ? new Proxy(value, { apply: (fn, self, args) => Reflect.apply(fn, self, args) }) : value; } });
+  const gate = installHistoryAdmissionGate(agents, () => pending);
+  assert.equal(gate.idle(), true, 'proxy allocates a fresh callable on each property read');
+  pending = true;
+  await assert.rejects(() => agents.resume({}), /MAINTENANCE_PENDING/);
+  await assert.rejects(() => agents.create({}), /MAINTENANCE_PENDING/);
+  gate.dispose();
+  await agents.resume({});
+});
