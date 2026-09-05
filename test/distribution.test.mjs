@@ -156,6 +156,15 @@ test('primary docs do not instruct disabled integrate-detach and identify 3210 a
   }
 });
 
+test('primary documentation presents Crew as a plugin on the official Harness', () => {
+  for (const file of ['README.md', 'README.zh.md', 'docs/installation.md', 'docs/ui-surfaces.md']) {
+    const doc = read(file);
+    assert.match(doc, /official DeepSeek Harness|DeepSeek 官方 Harness|官方 DeepSeek Harness/i, file);
+    assert.match(doc, /(?:plugin|插件)[\s\S]{0,240}(?:profile|配置档)|(?:profile|配置档)[\s\S]{0,240}(?:plugin|插件)/i, file);
+    assert.doesNotMatch(doc, /isolated 3210 Crew Harness|隔离的 3210 Crew Harness|提供隔离的 Crew Harness/i, file);
+  }
+});
+
 test('Claude plugin metadata has one version authority and no project-scoped MCP duplicate', () => {
   const manifest = JSON.parse(read('package.json'));
   const plugin = JSON.parse(read('.claude-plugin/plugin.json'));

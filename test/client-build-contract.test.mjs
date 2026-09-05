@@ -46,10 +46,13 @@ test('3080 exposes one consolidated DSH Crew settings entry', () => {
   assert.match(panelSource, /<ActivationSummary\b/);
 });
 
-test('daily console links explicitly to the isolated Crew Harness', () => {
+test('daily console links explicitly to the Crew plugin profile on official Harness', () => {
   assert.match(panelSource, /http:\/\/127\.0\.0\.1:3210\/?/);
   assert.match(panelSource, /target=["']_blank["']/);
   assert.match(panelSource, /noopener noreferrer/);
+  assert.match(panelSource, /official DeepSeek Harness|DeepSeek 官方 Harness/i);
+  assert.match(panelSource, /plugin|插件/i);
+  assert.doesNotMatch(panelSource, /isolated 3210 Crew Harness|隔离的 3210 Crew Harness/i);
 });
 
 test('failed settings saves are surfaced and refresh the authoritative config', () => {
