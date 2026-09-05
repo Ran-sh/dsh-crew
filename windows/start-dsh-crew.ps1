@@ -41,13 +41,12 @@ function Write-LaunchLog {
 
 function Get-HealthState {
   param([pscustomObject] $Service)
-  # Crew-owned 3210 answers the Crew extension contract. The official 3080
-  # is an external dependency: probe only its native web root, never the
-  # Crew bridge endpoint, so a missing legacy bridge cannot fail 3080 health.
+  # The small runtime endpoint avoids rebuilding model/provider readiness on
+  # every startup poll and supervisor heartbeat. Validate its identity below.
   if ($Service.CrewOwned) {
     try {
-      $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/extension') -TimeoutSec 2
-      $runtime = $response.extension.runtime
+      $response = Invoke-RestMethod -Uri ($Service.Url + '/_dsh/dsh-crew/runtime') -TimeoutSec 2
+      $runtime = $response
       $version = $runtime.runtime_version
       # A stale 3210 process (booted before the runtime tree was swapped) can
       # keep serving from memory while the disk tree is a different cohort.
@@ -66,7 +65,9 @@ function Get-HealthState {
         } catch { $expectedDshVersion = $null }
       }
       $cohortMatches = $diskReadable -and $runtime.dsh_version -eq $expectedDshVersion
-      if ($response.ok -eq $true -and $version -and $cohortMatches) {
+      $identityMatches = $runtime.service -eq 'dsh-crew-hub' -and $runtime.profile -eq 'dsh-crew' `
+        -and $runtime.execution_plane -eq 'hub-3210' -and $runtime.listen_port -eq 3210
+      if ($response.ok -eq $true -and $version -and $cohortMatches -and $identityMatches) {
         return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
       }
       if (-not $diskReadable) {
@@ -196,6 +197,7 @@ function Ensure-CrewSupervisorRunning {
   $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
   if (-not $crew) { throw 'Crew-owned 3210 service definition is missing.' }
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $nextProgress = (Get-Date).AddSeconds(5)
   $lastHealthError = 'not checked'
   do {
     $heartbeat = Get-FreshSupervisorHeartbeat
@@ -204,6 +206,10 @@ function Ensure-CrewSupervisorRunning {
     if ($heartbeat -and $health.Ready) {
       Write-LaunchLog ('Persistent supervisor ready; PID={0}; 3210 runtime={1}.' -f $heartbeat.pid, $health.Version)
       return
+    }
+    if ((Get-Date) -ge $nextProgress) {
+      Write-LaunchLog ('Waiting for Crew on 3210; {0:n0}s remaining. Health: {1}' -f [Math]::Max(0, ($deadline - (Get-Date)).TotalSeconds), $lastHealthError)
+      $nextProgress = (Get-Date).AddSeconds(5)
     }
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
@@ -707,9 +713,7 @@ function Wait-CrewServices {
   }
 }
 
-# Non-critical diagnostic, called only after Ensure-CrewServices returns:
-# logs legacy bridge presence for operator awareness. Never gates, delays,
-# or claims 3210; never runs on the boot path.
+# Explicit diagnostic helper; not called by normal startup or supervision.
 function Write-LegacyBridgeDiagnostic {
   if (Test-LegacyBridgeAvailable) {
     Write-LaunchLog 'Diagnostic: legacy 3080 bridge still answers ping; Crew launcher owns 3210 directly, bridge ignored.'
@@ -898,7 +902,6 @@ try {
   }
 
   Ensure-CrewSupervisorRunning
-  Write-LegacyBridgeDiagnostic
 
   if ($Mode -eq 'open') {
     Start-Process 'http://127.0.0.1:3210/' | Out-Null
