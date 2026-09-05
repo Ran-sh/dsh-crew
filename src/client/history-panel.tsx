@@ -11,6 +11,7 @@ const copy = {
     consent: '我已确认范围，并同意短暂重启 3210', restore: '恢复', archives: '已归档批次', empty: '暂无可恢复的归档',
     working: '维护中，正在等待 3210 重新连接…', refresh: '刷新页面与工作区列表', recover: '恢复未完成的维护',
     recovery: '维护尚未完成，请使用恢复按钮；若 3210 无法连接，在终端运行 dsh-crew history recover。',
+    cancelQueued: '取消尚未开始的维护', cancelQueuedHint: '仅取消尚未开始的维护，不清理任何数据；如果操作已开始，请等待完成。',
     count: (w: number, s: number) => `${w} 个工作区 · ${s} 个会话`, confirmRestore: '恢复这一批归档？将短暂重启 3210，不会覆盖冲突数据。',
     phase: { IDLE: '就绪', QUEUED: '已提交', STOPPING: '停止后台', APPLYING: '处理数据', STARTING: '启动后台', VERIFYING: '验证结果', DONE: '已完成', FAILED: '未执行成功', ROLLED_BACK: '已回滚', RECOVERY_REQUIRED: '需要恢复' },
   },
@@ -22,6 +23,7 @@ const copy = {
     consent: 'I reviewed the scope and agree to restart 3210', restore: 'Restore', archives: 'Archived batches', empty: 'No restorable archives',
     working: 'Maintenance in progress; waiting for 3210 to reconnect…', refresh: 'Reload page and workspace list', recover: 'Recover unfinished maintenance',
     recovery: 'Maintenance is unfinished. Use recovery; if 3210 is unreachable, run dsh-crew history recover in a terminal.',
+    cancelQueued: 'Cancel unstarted maintenance', cancelQueuedHint: 'Cancel only if maintenance has not started. No data is cleaned; if already running, wait for completion.',
     count: (w: number, s: number) => `${w} workspaces · ${s} sessions`, confirmRestore: 'Restore this archive? 3210 will briefly restart; conflicting data will not be overwritten.',
     phase: { IDLE: 'Ready', QUEUED: 'Queued', STOPPING: 'Stopping backend', APPLYING: 'Processing data', STARTING: 'Starting backend', VERIFYING: 'Verifying', DONE: 'Completed', FAILED: 'Failed', ROLLED_BACK: 'Rolled back', RECOVERY_REQUIRED: 'Recovery required' },
   },
@@ -96,7 +98,7 @@ export function HistoryPanel({ locale }: { locale: string }) {
       </div>}
       <div role="status" aria-live="polite">{(t.phase as any)[status.phase] ?? status.phase}{status.code ? ` · ${status.code}` : ''}{notice ? ` · ${notice}` : ''}</div>
       {!connected && <div role="status">{pending(status.phase) ? t.working : '3210 history API unavailable'}<p>{t.recovery}</p></div>}
-      {['RECOVERY_REQUIRED', 'QUEUED'].includes(status.phase) && <div><p>{t.recovery}</p><button type="button" style={style} disabled={busy} onClick={() => { if (window.confirm(t.recovery)) void act('recover', { confirm: true }); }}>{t.recover}</button></div>}
+      {['RECOVERY_REQUIRED', 'QUEUED'].includes(status.phase) && <div><p>{status.phase === 'QUEUED' ? t.cancelQueuedHint : t.recovery}</p><button type="button" style={style} disabled={busy} onClick={() => { if (window.confirm(status.phase === 'QUEUED' ? t.cancelQueuedHint : t.recovery)) void act('recover', { confirm: true }); }}>{status.phase === 'QUEUED' ? t.cancelQueued : t.recover}</button></div>}
       {['DONE', 'ROLLED_BACK'].includes(status.phase) && <button type="button" style={style} onClick={() => window.location.reload()}>{t.refresh}</button>}
       <strong>{t.archives}</strong>
       {archives.length === 0 && <span style={{ opacity: .6 }}>{t.empty}</span>}

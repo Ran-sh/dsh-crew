@@ -31,9 +31,11 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
   const originalPhase = state.phase === 'RECOVERY_REQUIRED' ? state.resumePhase : state.phase;
   const save = phase => { state = { ...state, phase, code: undefined }; writeHistoryState(crewRoot, state); };
   let result;
+  let ownsState = false;
   try {
     const currentState = readHistoryState(crewRoot);
     if (currentState?.id !== state.id || currentState.phase !== state.phase) throw Error('HISTORY_OPERATION_CHANGED');
+    ownsState = true;
     if (recover && originalPhase === 'QUEUED') {
       state.code = 'HISTORY_CANCELLED_BEFORE_STOP';
       state.phase = 'FAILED'; writeHistoryState(crewRoot, state);
@@ -78,7 +80,7 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
     return state;
   } catch (error) {
     state = { ...state, phase: 'RECOVERY_REQUIRED', resumePhase: state.phase, code: safeHistoryError(error) };
-    writeHistoryState(crewRoot, state);
+    if (ownsState) writeHistoryState(crewRoot, state);
     throw error;
   } finally { await release(lock); }
 }
