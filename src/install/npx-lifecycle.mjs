@@ -40,6 +40,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
+import { samePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
@@ -2440,7 +2441,8 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
   if (!manifest?.name || !manifest?.version) return { ok: false, error: 'candidate package manifest invalid' };
 
   const health = currentInstallationHealth({ home });
-  if (health.installed && health.pointer.version === manifest.version && health.validated.ok) {
+  if (health.installed && health.pointer.version === manifest.version && health.validated.ok
+    && samePayloadContent(candidateRoot, health.pointer.path)) {
     // Same-version reinstall: repair activation surfaces without restaging.
     log(`- installed payload ${manifest.version} already present and valid; repairing activation`);
     const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest, log, installer });
@@ -2681,7 +2683,8 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
 
     const health = currentInstallationHealth({ home });
 
-    if (health.installed && health.healthy && health.pointer.version === manifest.version) {
+    if (health.installed && health.healthy && health.pointer.version === manifest.version
+      && samePayloadContent(resolved.sourceRoot, health.pointer.path)) {
       log(`- already current (${manifest.version}); repairing registration/integrations idempotently`);
       const activated = await activateRelease({ home, releaseDir: health.pointer.path, manifest, log, installer });
       if (!activated) return { ok: false, error: 'activation failed' };

@@ -496,11 +496,11 @@ for (const command of ['install', 'update']) {
       const options = { home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() };
       const first = await npxInstall(options);
       assert.equal(first.ok, true);
-      writeFileSync(join(sourceRoot, 'lib', 'client.js'), 'new candidate client');
+      writeFileSync(join(sourceRoot, 'lib', 'client.js'), '// new candidate client\n');
       const next = await (command === 'install' ? npxInstall : npxUpdate)(options);
       assert.equal(next.ok, true);
       assert.notEqual(next.path, first.path);
-      assert.equal(readFileSync(join(next.path, 'lib', 'client.js'), 'utf8'), 'new candidate client');
+      assert.equal(readFileSync(join(next.path, 'lib', 'client.js'), 'utf8'), '// new candidate client\n');
       assert.ok(existsSync(first.path), 'retain prior payload for rollback');
     } finally { t.cleanup(); }
   });
