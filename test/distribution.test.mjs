@@ -188,14 +188,14 @@ test('primary install docs state the managed supervisor platform boundary', () =
   }
 });
 
-test('Windows launcher opens and supervises the Crew-owned 3210 surface without requiring official 3080', () => {
+test('desktop opens official 3080 while supervision remains Crew-only', () => {
   const launcher = read('windows/start-dsh-crew.cmd');
   const helper = read('windows/start-dsh-crew.ps1');
 
-  assert.match(launcher, /--open\s+Start the Crew-owned 3210/i);
+  assert.match(launcher, /--open\s+Open official Harness/i);
   assert.doesNotMatch(launcher, /supervised 3210 backend|monitoring 3080 and 3210/i);
-  assert.match(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3210\/'/);
-  assert.doesNotMatch(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3080\/'/);
+  assert.doesNotMatch(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3210\/'/);
+  assert.match(helper, /Start-Process 'http:\/\/127\.0\.0\.1:3080\/'/);
   assert.doesNotMatch(helper, /profiles\\web\\package\.json/);
   assert.doesNotMatch(helper, /Name = 'Official UI'[\s\S]{0,200}Port = 3080/);
   assert.match(helper, /function Get-SupervisorLaunchArguments/);
