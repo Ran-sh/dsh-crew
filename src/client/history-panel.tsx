@@ -96,11 +96,11 @@ export function HistoryPanel({ locale }: { locale: string }) {
       </div>}
       <div role="status" aria-live="polite">{(t.phase as any)[status.phase] ?? status.phase}{status.code ? ` · ${status.code}` : ''}{notice ? ` · ${notice}` : ''}</div>
       {!connected && <div role="status">{pending(status.phase) ? t.working : '3210 history API unavailable'}<p>{t.recovery}</p></div>}
-      {status.phase === 'RECOVERY_REQUIRED' && <div><p>{t.recovery}</p><button type="button" style={style} disabled={busy} onClick={() => { if (window.confirm(t.recovery)) void act('recover', { confirm: true }); }}>{t.recover}</button></div>}
+      {['RECOVERY_REQUIRED', 'QUEUED'].includes(status.phase) && <div><p>{t.recovery}</p><button type="button" style={style} disabled={busy} onClick={() => { if (window.confirm(t.recovery)) void act('recover', { confirm: true }); }}>{t.recover}</button></div>}
       {['DONE', 'ROLLED_BACK'].includes(status.phase) && <button type="button" style={style} onClick={() => window.location.reload()}>{t.refresh}</button>}
       <strong>{t.archives}</strong>
       {archives.length === 0 && <span style={{ opacity: .6 }}>{t.empty}</span>}
-      {archives.map(a => <div key={a.id} style={{ ...style, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}><span style={{ flex: 1 }}>{new Date(a.createdAt).toLocaleString()} · {t.count(a.workspaces, a.sessions)}</span><button type="button" style={style} disabled={locked} onClick={() => { if (window.confirm(t.confirmRestore)) void act('restore', { archiveId: a.id, confirm: true }); }}>{t.restore}</button></div>)}
+      {archives.map(a => <div key={a.id} style={{ ...style, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}><span style={{ flex: 1 }}>{a.invalid ? `${a.id} · ${a.code}` : `${new Date(a.createdAt).toLocaleString()} · ${t.count(a.workspaces, a.sessions)}`}</span><button type="button" style={style} disabled={locked || a.invalid} onClick={() => { if (window.confirm(t.confirmRestore)) void act('restore', { archiveId: a.id, confirm: true }); }}>{t.restore}</button></div>)}
     </div>}
   </details>;
 }

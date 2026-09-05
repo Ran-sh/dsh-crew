@@ -53,9 +53,10 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
   async function preview(options = {}) {
     if (historyPending(crewRoot)) throw Error('HISTORY_MAINTENANCE_PENDING');
     const result = await snapshot(options); const planId = randomUUID();
-    plans.set(planId, { ...result, options, expiresAt: now() + 600000 });
+    const expiresAt = now() + 600000;
+    plans.set(planId, { ...result, options, expiresAt });
     while (plans.size > 16) plans.delete(plans.keys().next().value);
-    return { ...result.plan, planId, expiresAt: now() + 600000 };
+    return { ...result.plan, planId, expiresAt };
   }
   async function submit(operation, build) {
     if (entering || historyPending(crewRoot)) throw Error('HISTORY_MAINTENANCE_PENDING');
@@ -91,14 +92,20 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
     if (!existsSync(directory)) return [];
     const ids = readdirSync(directory).filter(id => /^[a-f0-9-]{36}$/.test(id));
     if (ids.length > 10000) throw Error('HISTORY_ARCHIVE_LIMIT');
-    return ids.map(id => readHistoryManifest(crewRoot, id)).filter(m => m.operation === 'archive' && m.state === 'APPLIED')
-      .map(m => ({ id: m.id, createdAt: m.createdAt, sessions: m.files.length,
-        workspaces: m.before.global.workspaceIds.filter(id => !m.after.global.workspaceIds.includes(id)).length })).reverse();
+    return ids.flatMap(id => {
+      try {
+        const m = readHistoryManifest(crewRoot, id);
+        return m.operation === 'archive' && m.state === 'APPLIED' ? [{ id: m.id, createdAt: m.createdAt, sessions: m.files.length,
+          workspaces: m.before.global.workspaceIds.filter(id => !m.after.global.workspaceIds.includes(id)).length }] : [];
+      } catch {
+        return [{ id, invalid: true, code: 'HISTORY_INVALID_MANIFEST', sessions: 0, workspaces: 0, createdAt: null }];
+      }
+    }).reverse();
   }
   async function restore({ archiveId, confirm } = {}) {
     if (confirm !== true) throw Error('HISTORY_CONFIRMATION_REQUIRED');
     return submit('restore', async () => {
-      const archive = archives().find(a => a.id === archiveId);
+      const archive = archives().find(a => a.id === archiveId && !a.invalid);
       if (!archive) throw Error('HISTORY_ARCHIVE_NOT_RESTORABLE');
       return { archiveId, counts: { sessions: archive.sessions, workspaces: archive.workspaces } };
     });

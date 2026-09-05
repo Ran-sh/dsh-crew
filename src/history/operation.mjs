@@ -32,10 +32,17 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
   const save = phase => { state = { ...state, phase, code: undefined }; writeHistoryState(crewRoot, state); };
   let result;
   try {
+    const currentState = readHistoryState(crewRoot);
+    if (currentState?.id !== state.id || currentState.phase !== state.phase) throw Error('HISTORY_OPERATION_CHANGED');
+    if (recover && originalPhase === 'QUEUED') {
+      state.code = 'HISTORY_CANCELLED_BEFORE_STOP';
+      state.phase = 'FAILED'; writeHistoryState(crewRoot, state);
+      return state;
+    }
     // A process may have died after a successful restart but before finalization.
     const alreadyStarted = recover && ['STARTING', 'VERIFYING'].includes(originalPhase) && await verifyRunning(state);
     if (!alreadyStarted) {
-      if (!recover) await checkFence(state);
+      if (!recover || await assertStopped(state) !== true) await checkFence(state);
       save('STOPPING');
       const stopped = await supervisor.stopOwnedBackend({ lease: state.lease, runtimeId: state.runtimeId });
       if (!stopped?.ok || await assertStopped(state) !== true) throw Error('HISTORY_STOP_NOT_VERIFIED');
