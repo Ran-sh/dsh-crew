@@ -15,8 +15,8 @@ function callableSnapshot({ reviewer = false } = {}) {
       runtime_identity: runtime,
       enabled_roles: { worker: true, reviewer },
       roles: {
-        worker: { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED' },
-        reviewer: reviewer ? { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED' } : { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' },
+        worker: { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'worker' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000 },
+        reviewer: reviewer ? { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'reviewer' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000 } : { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' },
       },
       overall: 'CALLABLE',
     },
