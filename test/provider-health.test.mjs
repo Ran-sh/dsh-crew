@@ -58,3 +58,19 @@ test('older probe evidence cannot replace newer state and list is bounded', () =
   store.record('p3', 'm', { ok: true, observed_at: 92_000 });
   assert.ok(store.list().length <= 2);
 });
+
+test('equal-time failure always wins over success regardless of write order', () => {
+  for (const order of ['failure-first', 'success-first']) {
+    const store = createProviderHealthStore({ clock: () => 100_000 });
+    const failure = { error: { status: 500 }, observed_at: 90_000 };
+    const success = { ok: true, observed_at: 90_000 };
+    if (order === 'failure-first') {
+      store.record('p', 'm', failure);
+      store.record('p', 'm', success);
+    } else {
+      store.record('p', 'm', success);
+      store.record('p', 'm', failure);
+    }
+    assert.equal(store.get('p', 'm').state, 'internal-error', order);
+  }
+});

@@ -100,11 +100,17 @@ export function createProviderHealthStore({ clock = () => Date.now(), ttls = {},
     const now = clock();
     const observed = boundedTimestamp(result.observed_at, now);
     const previous = records.get(key);
-    if (previous && previous.observed_at > observed) return get(provider, model);
     let classified;
     if (result.ok === true) classified = { state: 'callable', reason_code: REASON_CODES.callable };
     else if (PROVIDER_HEALTH_STATES.includes(result.state) && result.state !== 'unprobed') classified = { state: result.state, reason_code: REASON_CODES[result.state] ?? null };
     else classified = classifyProviderError(result.error ?? result);
+    if (previous && previous.observed_at > observed) return get(provider, model);
+    if (previous && previous.observed_at === observed) {
+      const previousFailure = previous.state !== 'callable';
+      const incomingFailure = classified.state !== 'callable';
+      if (previousFailure && !incomingFailure) return get(provider, model);
+      if (previousFailure && incomingFailure && String(previous.state).localeCompare(String(classified.state)) <= 0) return get(provider, model);
+    }
     const expires = observed + limits[classified.state];
     records.set(key, {
       provider: text(provider), model: text(model), ...classified,

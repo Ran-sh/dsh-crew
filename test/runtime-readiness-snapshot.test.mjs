@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildRuntimeReadinessSnapshot, reprojectRuntimeModelCallability } from '../src/runtime-readiness-snapshot.mjs';
+import { createProviderHealthStore } from '../src/provider-health.mjs';
 
 const matrix = { rows: [
   { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
@@ -92,4 +93,21 @@ test('session re-projection preserves bounded same-runtime execution evidence', 
   const projected = reprojectRuntimeModelCallability(snapshot, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
   assert.equal(projected.roles.worker.state, 'CALLABLE');
   assert.equal(projected.overall, 'CALLABLE');
+});
+
+test('health store equal-time failure remains authoritative in the canonical snapshot', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const store = createProviderHealthStore({ clock: () => 10_000 });
+  store.record('p', 'm', { error: { status: 500 }, observed_at: 9_000 });
+  store.record('p', 'm', { ok: true, observed_at: 9_000 });
+  const snapshot = buildRuntimeReadinessSnapshot({
+    runtime,
+    selections: { worker: { provider: 'p', model: 'm' } },
+    health: store.list(),
+    health_status: 'AVAILABLE',
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    enabled_roles: { worker: true, reviewer: false },
+    now: 10_000,
+  });
+  assert.equal(snapshot.model_callability.roles.worker.state, 'NOT_CALLABLE');
 });

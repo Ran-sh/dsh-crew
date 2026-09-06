@@ -3,9 +3,9 @@
 // never performs I/O or carries raw task/result/error/credential content.
 
 import { isCompleteRuntimeIdentity, isExactNativeCrewIdentity, sameCompleteRuntimeIdentity } from './runtime-identity-contract.mjs';
+import { MODEL_CALLABILITY_SCHEMA_VERSION } from './model-callability-contract.mjs';
 
 const MAX_HEALTH = 128;
-export const MODEL_CALLABILITY_SCHEMA_VERSION = 2;
 const DEFAULT_EXECUTION_EVIDENCE_TTL_MS = 5 * 60 * 1000;
 const MIN_EXECUTION_EVIDENCE_TTL_MS = 1_000;
 const MAX_EXECUTION_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;

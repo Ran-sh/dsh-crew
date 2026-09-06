@@ -10,15 +10,16 @@ test('client maps only the server model_callability projection', () => {
     schema_version: 2, captured_at: now, expires_at: now + 10_000, current_runtime_id: 'r1',
     runtime_identity: runtime,
     enabled_roles: { worker: true, reviewer: false },
-    roles: { worker: { state: 'CALLABLE' }, reviewer: { state: 'NOT_APPLICABLE' } }, overall: 'CALLABLE',
+    roles: { worker: { state: 'CALLABLE', selected: { provider: 'p', model: 'm' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 10_000 }, reviewer: { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' } }, overall: 'CALLABLE',
   };
   assert.equal(modelCallabilityState(callable, runtime, now), READINESS_STATES.READY);
   assert.equal(modelCallabilityState({ ...callable, schema_version: 1 }, runtime, now), READINESS_STATES.UNKNOWN);
   assert.equal(modelCallabilityState({ ...callable, expires_at: now - 1 }, runtime, now), READINESS_STATES.UNKNOWN);
   assert.equal(modelCallabilityState(callable, { ...runtime, execution_plane: 'official-bridge' }, now), READINESS_STATES.UNKNOWN);
-  assert.equal(modelCallabilityState({ ...callable, overall: 'NOT_CALLABLE', roles: { worker: { state: 'NOT_CALLABLE', expires_at: now + 5_000 }, reviewer: { state: 'NOT_APPLICABLE' } } }, runtime, now), READINESS_STATES.UNAVAILABLE);
-  assert.equal(modelCallabilityState({ ...callable, overall: 'NOT_CALLABLE', roles: { worker: { state: 'NOT_CALLABLE', expires_at: now - 1 }, reviewer: { state: 'NOT_APPLICABLE' } } }, runtime, now), READINESS_STATES.UNKNOWN);
-  assert.equal(modelCallabilityState({ ...callable, overall: 'STALE' }, runtime, now), READINESS_STATES.DEGRADED);
+  const negativeRole = { state: 'NOT_CALLABLE', selected: { provider: 'p', model: 'm' }, source: 'provider_health', observed_at: now - 1_000, expires_at: now + 5_000, reason_code: 'QUOTA_EXHAUSTED' };
+  assert.equal(modelCallabilityState({ ...callable, expires_at: now + 5_000, overall: 'NOT_CALLABLE', roles: { worker: negativeRole, reviewer: { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' } } }, runtime, now), READINESS_STATES.UNAVAILABLE);
+  assert.equal(modelCallabilityState({ ...callable, overall: 'NOT_CALLABLE', roles: { worker: { ...negativeRole, expires_at: now - 1 }, reviewer: { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' } } }, runtime, now), READINESS_STATES.UNKNOWN);
+  assert.equal(modelCallabilityState({ ...callable, overall: 'STALE', roles: { worker: { ...callable.roles.worker, state: 'STALE' }, reviewer: callable.roles.reviewer } }, runtime, now), READINESS_STATES.DEGRADED);
   assert.equal(modelCallabilityState({ ...callable, overall: 'UNKNOWN' }, runtime, now), READINESS_STATES.UNKNOWN);
   assert.equal(modelCallabilityState({ ...callable, roles: { ...callable.roles, reviewer: { state: 'NOT_CALLABLE' } } }, runtime, now), READINESS_STATES.UNKNOWN);
   assert.equal(modelCallabilityState({ readiness_matrix: { rows: [{ id: 'model_execution', status: 'PASS' }] } }), READINESS_STATES.UNKNOWN);

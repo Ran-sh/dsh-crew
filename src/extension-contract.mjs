@@ -2,8 +2,7 @@
 // describes only DSH Crew and deliberately never advertises itself as a top-
 // level Executor or control plane.
 
-import { isCompleteRuntimeIdentity, sameCompleteRuntimeIdentity } from './runtime-identity-contract.mjs';
-import { MODEL_CALLABILITY_SCHEMA_VERSION } from './runtime-readiness-snapshot.mjs';
+import { validateModelCallabilityV2 } from './model-callability-contract.mjs';
 
 export const EXTENSION_CONTRACT_SCHEMA_VERSION = 1;
 
@@ -37,56 +36,16 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }
 
-function validProjectionIdentity(callability, runtime, now = Date.now()) {
-  return callability && typeof callability === 'object' && callability.schema_version === MODEL_CALLABILITY_SCHEMA_VERSION
-    && Number.isFinite(callability.captured_at) && callability.captured_at <= now
-    && isCompleteRuntimeIdentity(callability.runtime_identity)
-    && isCompleteRuntimeIdentity(runtime)
-    && sameCompleteRuntimeIdentity(callability.runtime_identity, runtime)
-    && callability.current_runtime_id === callability.runtime_identity.runtime_id;
-}
-
-function validCallableProjection(callability, runtime, now = Date.now()) {
-  if (!validProjectionIdentity(callability, runtime, now)
-    || !Number.isFinite(callability.expires_at) || callability.expires_at <= now
-    || !callability.enabled_roles || typeof callability.enabled_roles !== 'object'
-    || !callability.roles || typeof callability.roles !== 'object') return false;
-  const allowedRoles = new Set(['worker', 'reviewer']);
-  if (Object.keys(callability.enabled_roles).some((role) => !allowedRoles.has(role))
-    || Object.keys(callability.roles).some((role) => !allowedRoles.has(role))) return false;
-  const activeRoles = Object.entries(callability.enabled_roles).filter(([, enabled]) => enabled === true).map(([role]) => role);
-  return activeRoles.length > 0
-    && activeRoles.every((role) => callability.roles?.[role]?.state === 'CALLABLE')
-    && Object.entries(callability.enabled_roles).every(([role, enabled]) => enabled === true || callability.roles?.[role]?.state === 'NOT_APPLICABLE');
-}
-
-function validNotCallableProjection(callability, runtime, now = Date.now()) {
-  if (!validProjectionIdentity(callability, runtime, now)
-    || !callability.enabled_roles || typeof callability.enabled_roles !== 'object'
-    || !callability.roles || typeof callability.roles !== 'object') return false;
-  const allowedRoles = new Set(['worker', 'reviewer']);
-  if (Object.keys(callability.enabled_roles).some((role) => !allowedRoles.has(role))
-    || Object.keys(callability.roles).some((role) => !allowedRoles.has(role))) return false;
-  const activeRoles = Object.entries(callability.enabled_roles).filter(([, enabled]) => enabled === true).map(([role]) => role);
-  return activeRoles.length > 0
-    && activeRoles.some((role) => callability.roles?.[role]?.state === 'NOT_CALLABLE'
-      && Number.isFinite(callability.roles?.[role]?.expires_at) && callability.roles[role].expires_at > now)
-    && Object.entries(callability.enabled_roles).every(([role, enabled]) => enabled === true || callability.roles?.[role]?.state === 'NOT_APPLICABLE');
-}
-
-function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, now = Date.now()) {
+function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, expectedEnabledRoles, now = Date.now()) {
   const callability = readinessSnapshot?.model_callability;
   const providerHealthEvidence = row(matrix, 'provider_health');
   const catalogEvidence = row(matrix, 'provider_catalog');
   if (callability && typeof callability === 'object') {
-    if (callability.overall === 'CALLABLE' && validCallableProjection(callability, runtime, now)) return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
-    const enabledRoles = callability.enabled_roles && typeof callability.enabled_roles === 'object' ? callability.enabled_roles : {};
-    const activeRoleNames = Object.entries(enabledRoles).filter(([, enabled]) => enabled === true).map(([name]) => name);
-    const activeRoles = activeRoleNames.map((name) => callability.roles?.[name]).filter(Boolean);
-    if (callability.overall === 'NOT_CALLABLE' && validNotCallableProjection(callability, runtime, now)) return component('UNAVAILABLE', activeRoles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
-    if (!validProjectionIdentity(callability, runtime, now)) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_CURRENT');
-    if (callability.overall === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
-    return component('DEGRADED', 'MODEL_CALLABILITY_UNKNOWN');
+    const validation = validateModelCallabilityV2({ projection: callability, runtime, expectedEnabledRoles, now });
+    if (validation.ok && validation.state === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
+    if (validation.ok && validation.state === 'NOT_CALLABLE') return component('UNAVAILABLE', callability.roles.worker?.state === 'NOT_CALLABLE' ? callability.roles.worker.reason_code : callability.roles.reviewer.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    if (validation.ok && validation.state === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
+    return component('DEGRADED', validation.reason_code ?? 'MODEL_CALLABILITY_UNKNOWN');
   }
   if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
   if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
@@ -100,7 +59,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, read
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
   const reviewerHealthEvidence = row(matrix, 'reviewer_health');
   const lifecycleEvidence = row(matrix, 'provider_lifecycle_consistent');
-  const modelReadiness = modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime);
+  const modelReadiness = modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, { worker: workerEnabled, reviewer: reviewerEnabled });
   const components = {
     harness: readinessFromRow(row(matrix, 'hub_compatibility')),
     provider_lifecycle: lifecycleEvidence
