@@ -48,7 +48,7 @@ const COPY = {
     intro: '管理工作流、模型路由与宿主集成。展开分区查看和修改设置。',
     surfaceLabel: '3210 / 高级配置',
     integrations: '集成',
-    installed: '已安装', notInstalled: '未安装', ready: '可调用', notReady: '未就绪', hud: 'HUD 段',
+    installed: '已安装', notInstalled: '未安装', ready: '集成就绪', integrationReady: '集成就绪', modelCallable: '模型可调用', modelNotCallable: '模型未验证', modelUnknown: '模型未知', notReady: '未就绪', hud: 'HUD 段',
     install: '安装', update: '更新', restore: '还原',
     confirmRestore: (name: string) => `确定从 ${name} 移除 dsh-crew 集成？（settings 会先备份）`,
     globalConfig: '全局配置',
@@ -190,7 +190,7 @@ const COPY = {
     surfaceLabel: '3210 / ADVANCED SETTINGS',
     openOfficial: 'Open official frontend (3080) →',
     integrations: 'Integrations',
-    installed: 'installed', notInstalled: 'not installed', ready: 'ready', notReady: 'not ready', hud: 'HUD segment',
+    installed: 'installed', notInstalled: 'not installed', ready: 'integration ready', integrationReady: 'integration ready', modelCallable: 'model callable', modelNotCallable: 'model not verified', modelUnknown: 'model unknown', notReady: 'not ready', hud: 'HUD segment',
     install: 'Install', update: 'Update', restore: 'Restore',
     confirmRestore: (name: string) => `Remove the dsh-crew integration from ${name}? (settings are backed up first)`,
     globalConfig: 'Global configuration',
@@ -474,6 +474,16 @@ function readinessChip(state: string) {
     border: `1px solid ${state === READINESS_STATES.UNKNOWN ? 'rgba(128,128,128,0.35)' : color}`,
     color, opacity: state === READINESS_STATES.UNKNOWN ? 0.58 : 1,
   };
+}
+
+function modelCallability(readinessSnapshot: any) {
+  const rows = Array.isArray(readinessSnapshot?.readiness_matrix?.rows)
+    ? readinessSnapshot.readiness_matrix.rows : [];
+  const real = rows.find((row: any) => ['worker_primary_callable', 'model_execution', 'worker_escalation_callable', 'deepseek_flash', 'deepseek_pro'].includes(row?.id) && row?.status === 'PASS');
+  if (real) return READINESS_STATES.READY;
+  if (rows.some((row: any) => row?.id === 'provider_health' && row?.status === 'FAIL')) return READINESS_STATES.UNAVAILABLE;
+  if (rows.some((row: any) => ['provider_health', 'provider_catalog'].includes(row?.id) && ['PASS', 'NOT_RUN', 'SKIP'].includes(row?.status))) return READINESS_STATES.DEGRADED;
+  return READINESS_STATES.UNKNOWN;
 }
 
 function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surface: string; runtime: any }) {
@@ -1065,7 +1075,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     <div style={S.card}>
       <span style={{ fontWeight: 600, fontSize: 13, minWidth: 92 }}>{name}</span>
       <span style={S.chip(installed)}>{installed ? `● ${copy.installed}` : `○ ${copy.notInstalled}`}</span>
-      <span style={S.chip(ready)}>{ready ? `● ${copy.ready}` : `○ ${copy.notReady}`}</span>
+      <span style={S.chip(ready)}>{ready ? `● ${copy.integrationReady}` : `○ ${copy.notReady}`}</span>
       {extra}
       <span style={{ flex: 1 }} />
       {!installed && <button style={S.btn} title={tips.install} disabled={busy} onClick={() => { void act(installTarget); }}>{copy.install}</button>}
@@ -1092,6 +1102,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     void applyPatch({ worker: { model_policy: { adaptive: next, ordering } } });
   };
   const modelActivity = aggregateModelInvocations(jobs);
+  const modelState = modelCallability(readinessSnapshot);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
   const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface, readinessSnapshot });
 
@@ -1103,9 +1114,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     <div className="dsh-crew-ui" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13, lineHeight: 1.55 }}>
       <PanelStyles />
       <PanelHeader title={copy.title} eyebrow={copy.surfaceLabel} description={copy.intro} href={CREW_CONTROL_PLANE_URL} linkText={copy.openOfficial}>
-            <span style={S.chip(!!status?.codex?.ready)}>Codex {status?.codex?.ready ? copy.installed : copy.notReady}</span>
-            <span style={S.chip(!!status?.claude?.ready)}>Claude {status?.claude?.ready ? copy.installed : copy.notReady}</span>
-            <span style={S.chip(!!status?.zcode?.ready)}>ZCode {status?.zcode?.ready ? copy.installed : copy.notReady}</span>
+            <span style={S.chip(status?.codex?.installed === true)}>{`Codex ${status?.codex?.installed === true ? copy.installed : copy.notInstalled}`}</span>
+            <span style={S.chip(status?.claude?.installed === true)}>{`Claude ${status?.claude?.installed === true ? copy.installed : copy.notInstalled}`}</span>
+            <span style={S.chip(status?.zcode?.installed === true)}>{`ZCode ${status?.zcode?.installed === true ? copy.installed : copy.notInstalled}`}</span>
+            <span style={readinessChip(modelState)}>{modelState === READINESS_STATES.READY ? copy.modelCallable : modelState === READINESS_STATES.UNKNOWN ? copy.modelUnknown : copy.modelNotCallable}</span>
             <span style={S.chip(jobs.some((job) => job.status === 'running'))}>{copy.runningCount(jobs.filter((job) => job.status === 'running').length)}</span>
       </PanelHeader>
       <HistoryPanel locale={locale} />
@@ -1117,7 +1129,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       </div>
 
       <CollapsibleSection sectionId="integrations" title={copy.sectionNames.integrations}
-        summary={sectionSummary(...['Codex', 'Claude', 'ZCode'].map((name) => `${name} ${status?.[name.toLowerCase()]?.ready ? copy.installed : copy.notReady}`))}
+        summary={sectionSummary(...['Codex', 'Claude', 'ZCode'].map((name) => `${name} ${status?.[name.toLowerCase()]?.installed ? copy.installed : copy.notInstalled}`), modelState === READINESS_STATES.READY ? copy.modelCallable : copy.modelNotCallable)}
         expanded={!!expandedSections.integrations} onToggle={() => toggleSection('integrations')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={S.block}>
