@@ -174,6 +174,14 @@ test('3080 readiness matrix names every required host integration', () => {
   }
 });
 
+test('integration installation readiness is distinct from model callability', () => {
+  assert.match(panelSource, /integrationReady/);
+  assert.match(panelSource, /modelCallable/);
+  assert.match(panelSource, /modelCallability/);
+  assert.doesNotMatch(panelSource, /installed: '已安装'.*ready: '可调用'/s);
+  assert.match(panelSource, /readinessSnapshot/);
+});
+
 test('quick bundle is capability-light compared to the full bundle', async () => {
   const quick = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
   const full = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
