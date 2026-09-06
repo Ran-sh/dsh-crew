@@ -1,5 +1,9 @@
 # History cleanup implementation — NOT ENABLED
 
+Historical checkpoint only. Superseded by
+[connected acceptance](2026-09-06-history-cleanup-acceptance.md); the feature is
+now installed and its read-only production preview is verified.
+
 User approved a 3210-only maintenance feature: archive (default, restorable) or
 delete workspace registrations and session logs, all or created-before an
 explicit instant, with preview and confirmation. The user accepted briefly
