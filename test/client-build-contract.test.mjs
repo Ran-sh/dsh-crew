@@ -180,6 +180,8 @@ test('integration installation readiness is distinct from model callability', ()
   assert.match(panelSource, /modelCallability/);
   assert.doesNotMatch(panelSource, /installed: '已安装'.*ready: '可调用'/s);
   assert.match(panelSource, /readinessSnapshot/);
+  assert.doesNotMatch(panelSource, /readiness_matrix\?\.rows/);
+  assert.match(panelSource, /modelCallabilityState\(readinessSnapshot\?\.model_callability\)/);
 });
 
 test('quick bundle is capability-light compared to the full bundle', async () => {

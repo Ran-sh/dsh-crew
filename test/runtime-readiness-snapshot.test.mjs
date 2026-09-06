@@ -16,6 +16,9 @@ test('runtime readiness snapshot centralizes provenance, selections, health and 
     jobs: [{ id: 'job-1', role: 'worker', task: 'SECRET TASK', result: 'SECRET RESULT' }],
   });
   assert.equal(snapshot.schema_version, 1);
+  assert.equal(typeof snapshot.captured_at, 'number');
+  assert.equal(snapshot.expires_at, null);
+  assert.equal(snapshot.model_callability.roles.worker.state, 'CALLABLE');
   assert.deepEqual(snapshot.runtime, { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' });
   assert.deepEqual(snapshot.worker.selected, { provider: 'opencode-muse', model: 'mimo-v2.5', source: 'priority' });
   assert.deepEqual(snapshot.worker.health, [{ provider: 'opencode-muse', model: 'mimo-v2.5', state: 'callable', fresh: true }]);
@@ -30,4 +33,5 @@ test('runtime readiness snapshot bounds health and ignores foreign runtime prove
   });
   assert.deepEqual(snapshot.runtime, { execution_plane: 'standalone', profile: 'legacy', listen_port: 3080, runtime_id: 'foreign' });
   assert.equal(snapshot.health.length, 128);
+  assert.equal(typeof snapshot.captured_at, 'number');
 });

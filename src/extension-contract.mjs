@@ -34,26 +34,32 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }
 
+function modelReadinessFromSnapshot(readinessSnapshot, matrix) {
+  const callability = readinessSnapshot?.model_callability;
+  const providerHealthEvidence = row(matrix, 'provider_health');
+  const catalogEvidence = row(matrix, 'provider_catalog');
+  if (callability && typeof callability === 'object') {
+    const roles = callability.roles && typeof callability.roles === 'object' ? Object.values(callability.roles) : [];
+    if (callability.overall === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, runtime_id: callability.current_runtime_id });
+    if (roles.some((role) => role?.state === 'NOT_CALLABLE') || callability.overall === 'NOT_CALLABLE') return component('UNAVAILABLE', roles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
+    if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
+    if (callability.overall === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
+    return component('DEGRADED', 'MODEL_CALLABILITY_UNKNOWN');
+  }
+  if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
+  if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
+  if (providerHealthEvidence || catalogEvidence) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_PROJECTED');
+  return component('UNAVAILABLE', 'MODEL_CALLABILITY_NOT_PROJECTED');
+}
+
 export function buildExtensionContract({ config = {}, readinessMatrix = {}, readinessSnapshot = null, workspace = null, profiles = null, runtime = null } = {}) {
   const matrix = readinessSnapshot?.readiness_matrix ?? readinessMatrix;
   const workerEnabled = config.subagents_enabled !== false && config.worker_state !== 'disabled';
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
-  const realModelEvidence = ['worker_primary_callable', 'model_execution', 'worker_escalation_callable', 'deepseek_flash', 'deepseek_pro']
-    .map((id) => row(matrix, id))
-    .find((entry) => entry?.status === 'PASS');
-  const catalogEvidence = row(matrix, 'provider_catalog');
-  const providerHealthEvidence = row(matrix, 'provider_health');
   const reviewerHealthEvidence = row(matrix, 'reviewer_health');
   const lifecycleEvidence = row(matrix, 'provider_lifecycle_consistent');
-  const modelReadiness = providerHealthEvidence?.status === 'FAIL'
-    ? readinessFromRow(providerHealthEvidence)
-    : catalogEvidence?.status === 'FAIL'
-      ? readinessFromRow(catalogEvidence)
-      : realModelEvidence
-        ? component('READY', realModelEvidence.reason_code ?? 'MODEL_EXECUTION_PASSED')
-        : catalogEvidence?.status === 'PASS' || catalogEvidence?.status === 'SKIP'
-          ? component('DEGRADED', 'MODEL_CATALOG_ONLY')
-          : component('UNAVAILABLE', catalogEvidence?.reason_code ?? 'NO_EVIDENCE');
+  const modelReadiness = modelReadinessFromSnapshot(readinessSnapshot, matrix);
   const components = {
     harness: readinessFromRow(row(matrix, 'hub_compatibility')),
     provider_lifecycle: lifecycleEvidence

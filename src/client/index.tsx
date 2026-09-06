@@ -12,6 +12,7 @@ import {
 } from './collapsible-sections.mjs';
 import { ActivationSummary } from './activation-summary';
 import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
+import { modelCallabilityState } from './model-callability-view.mjs';
 import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
 import { aggregateModelInvocations } from './task-telemetry.mjs';
 import { PanelHeader, PanelStyles } from './panel-chrome';
@@ -59,7 +60,7 @@ const COPY = {
     harnessHint: 'DeepSeek 官方 Harness 的 dsh-crew profile：Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
-    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
+    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN', NOT_APPLICABLE: 'N/A' },
     globalHint: '修改即时保存到 ~/.config/dsh-crew/config.json；CC / Codex 的新会话自动读取为默认值（会话内可用 /dsh-crew:config 临时覆盖）。',
     orchestration: 'Agent 编排',
     enableSubagents: '启用子 Agent',
@@ -201,7 +202,7 @@ const COPY = {
     harnessHint: 'The official DeepSeek Harness dsh-crew profile: providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
-    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN' },
+    readinessStates: { READY: 'READY', DEGRADED: 'DEGRADED', UNAVAILABLE: 'UNAVAILABLE', UNKNOWN: 'UNKNOWN', NOT_APPLICABLE: 'N/A' },
     globalHint: 'Changes save instantly to ~/.config/dsh-crew/config.json; new CC / Codex sessions pick them up as defaults (override per session with /dsh-crew:config).',
     orchestration: 'Agent orchestration',
     enableSubagents: 'Enable Subagents',
@@ -468,22 +469,13 @@ function formatTimestamp(value: string | null, locale: string) {
 function readinessChip(state: string) {
   const color = state === READINESS_STATES.READY ? '#3fb950'
     : state === READINESS_STATES.DEGRADED ? '#c98735'
-      : state === READINESS_STATES.UNAVAILABLE ? '#f85149' : 'inherit';
+      : state === READINESS_STATES.UNAVAILABLE ? '#f85149'
+        : state === READINESS_STATES.NOT_APPLICABLE ? '#7d8590' : 'inherit';
   return {
     fontSize: 10.5, fontWeight: 650, padding: '1px 7px', borderRadius: 99,
     border: `1px solid ${state === READINESS_STATES.UNKNOWN ? 'rgba(128,128,128,0.35)' : color}`,
     color, opacity: state === READINESS_STATES.UNKNOWN ? 0.58 : 1,
   };
-}
-
-function modelCallability(readinessSnapshot: any) {
-  const rows = Array.isArray(readinessSnapshot?.readiness_matrix?.rows)
-    ? readinessSnapshot.readiness_matrix.rows : [];
-  const real = rows.find((row: any) => ['worker_primary_callable', 'model_execution', 'worker_escalation_callable', 'deepseek_flash', 'deepseek_pro'].includes(row?.id) && row?.status === 'PASS');
-  if (real) return READINESS_STATES.READY;
-  if (rows.some((row: any) => row?.id === 'provider_health' && row?.status === 'FAIL')) return READINESS_STATES.UNAVAILABLE;
-  if (rows.some((row: any) => ['provider_health', 'provider_catalog'].includes(row?.id) && ['PASS', 'NOT_RUN', 'SKIP'].includes(row?.status))) return READINESS_STATES.DEGRADED;
-  return READINESS_STATES.UNKNOWN;
 }
 
 function MinimalCrewPanel({ locale, surface, runtime }: { locale: string; surface: string; runtime: any }) {
@@ -651,6 +643,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (ph?.ok) setProviderHealth(ph.health ?? []);
       if (cr?.ok) { setCredentialRefs(cr.records ?? []); setCredentialUnverified(cr.unverified_purges ?? []); }
       if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
+      else setReadinessSnapshot(undefined);
     } catch { /* instance restarting */ }
   }, [get]);
 
@@ -659,9 +652,11 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
     const timer = setInterval(() => {
-      void Promise.all([get('/jobs'), get('/provider-health').catch(() => null)]).then(([j, health]) => {
+      void Promise.all([get('/jobs'), get('/provider-health').catch(() => null), get('/extension').catch(() => null)]).then(([j, health, ext]) => {
         if (j.ok) setJobs(j.jobs ?? []);
         if (health?.ok) setProviderHealth(health.health ?? []);
+        if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
+        else setReadinessSnapshot(undefined);
       }).catch(() => {});
     }, 3000);
     return () => clearInterval(timer);
@@ -1102,7 +1097,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     void applyPatch({ worker: { model_policy: { adaptive: next, ordering } } });
   };
   const modelActivity = aggregateModelInvocations(jobs);
-  const modelState = modelCallability(readinessSnapshot);
+  const modelState = modelCallabilityState(readinessSnapshot?.model_callability);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
   const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface, readinessSnapshot });
 

@@ -3,6 +3,7 @@ export const READINESS_STATES = Object.freeze({
   DEGRADED: 'DEGRADED',
   UNAVAILABLE: 'UNAVAILABLE',
   UNKNOWN: 'UNKNOWN',
+  NOT_APPLICABLE: 'NOT_APPLICABLE',
 });
 
 function componentState(status, keys, { aligned = false } = {}) {
@@ -31,9 +32,14 @@ function runtimeState(runtime, readinessSnapshot) {
   }
   if (runtime === undefined) return READINESS_STATES.UNKNOWN;
   if (runtime === null) return READINESS_STATES.UNAVAILABLE;
-  return runtime?.ok === true && runtime.service === 'dsh-crew-hub'
-    ? READINESS_STATES.READY
-    : READINESS_STATES.DEGRADED;
+  const exactIdentity = runtime?.ok === true
+    && runtime.service === 'dsh-crew-hub'
+    && runtime.execution_plane === 'hub-3210'
+    && runtime.profile === 'dsh-crew'
+    && Number(runtime.listen_port) === 3210
+    && typeof runtime.runtime_id === 'string'
+    && runtime.runtime_id.trim();
+  return exactIdentity ? READINESS_STATES.READY : READINESS_STATES.UNKNOWN;
 }
 
 function bridgeState(surface) {
@@ -41,7 +47,7 @@ function bridgeState(surface) {
   // absence must never degrade Crew readiness: on the native 3210 control
   // plane the bridge is simply not part of the picture.
   if (surface === 'official-bridge') return READINESS_STATES.READY;
-  if (surface === 'native-crew-harness') return READINESS_STATES.UNKNOWN;
+  if (surface === 'native-crew-harness') return READINESS_STATES.NOT_APPLICABLE;
   return READINESS_STATES.UNKNOWN;
 }
 

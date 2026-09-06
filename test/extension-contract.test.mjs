@@ -21,7 +21,7 @@ test('extension contract exposes only Crew capabilities and conservative readine
   assert.equal(contract.capabilities['executor.dispatch'], undefined);
   assert.equal(contract.readiness.components.harness.status, 'READY');
   assert.equal(contract.readiness.components.model.status, 'DEGRADED');
-  assert.equal(contract.readiness.components.model.reason_code, 'MODEL_CATALOG_ONLY');
+  assert.equal(contract.readiness.components.model.reason_code, 'MODEL_CALLABILITY_NOT_PROJECTED');
   assert.equal(contract.readiness.components.reviewer.status, 'DEGRADED');
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
@@ -40,6 +40,7 @@ test('real generic execution evidence proves the selected model and disabled opt
       { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
       { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
     ] },
+    readinessSnapshot: { model_callability: { overall: 'CALLABLE', captured_at: 100, current_runtime_id: 'runtime-1' } },
     workspace: { ok: true, context: null },
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
@@ -55,10 +56,11 @@ test('dynamic primary callability evidence is accepted without provider-specific
       { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' },
       { id: 'worker_primary_callable', status: 'PASS', reason_code: 'WORKER_PRIMARY_CALLABLE' },
     ] },
+    readinessSnapshot: { model_callability: { overall: 'CALLABLE', captured_at: 100, current_runtime_id: 'runtime-1' } },
     workspace: { ok: true, context: null },
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
-  assert.equal(contract.readiness.components.model.reason_code, 'WORKER_PRIMARY_CALLABLE');
+  assert.equal(contract.readiness.components.model.reason_code, 'CURRENT_MODEL_CALLABLE');
 });
 
 test('current provider catalog FAIL is not masked by historical model execution PASS', () => {
@@ -76,7 +78,7 @@ test('current provider catalog FAIL is not masked by historical model execution 
   assert.equal(contract.readiness.status, 'UNAVAILABLE');
 });
 
-test('deepseek-official SKIP remains valid alongside historical model execution PASS', () => {
+test('historical model execution PASS is not a current callability projection', () => {
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
     readinessMatrix: { rows: [
@@ -86,8 +88,8 @@ test('deepseek-official SKIP remains valid alongside historical model execution 
     ] },
     workspace: { ok: true, context: null },
   });
-  assert.equal(contract.readiness.components.model.status, 'READY');
-  assert.equal(contract.readiness.components.model.reason_code, 'REAL_EXECUTION_PASSED');
+  assert.equal(contract.readiness.components.model.status, 'DEGRADED');
+  assert.equal(contract.readiness.components.model.reason_code, 'MODEL_CALLABILITY_NOT_PROJECTED');
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
 
