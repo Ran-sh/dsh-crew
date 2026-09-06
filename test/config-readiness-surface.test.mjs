@@ -8,7 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const serverSource = readFileSync(join(here, '..', 'src', 'server.mjs'), 'utf8');
 
 test('dsh_worker_config consumes the Hub extension readiness snapshot as its matrix authority', () => {
-  assert.match(serverSource, /import \{ buildRuntimeReadinessSnapshot \} from '\.\/runtime-readiness-snapshot\.mjs';/);
+  assert.match(serverSource, /import \{ buildRuntimeReadinessSnapshot, reprojectRuntimeModelCallability \} from '\.\/runtime-readiness-snapshot\.mjs';/);
   assert.match(serverSource, /providerCatalogChecked = true;[\s\S]*const res = await fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/models`, \{ signal: AbortSignal\.timeout\(800\) \}\);[\s\S]*providerCatalogBody = body;/);
   assert.match(serverSource, /fetch\(`\$\{globalConfig\.hub_url\}\/\_dsh\/dsh-crew\/extension`, \{ signal: AbortSignal\.timeout\(800\) \}\)/);
   assert.match(serverSource, /hubStatus\(\{ force: true, base: globalConfig\.hub_url \}\)/);
