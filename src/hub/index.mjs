@@ -1573,6 +1573,7 @@ export async function apply(ctx) {
             reviewer: currentSelections.reviewer ?? null,
           },
           health: Array.isArray(providerHealthBody?.health) ? providerHealthBody.health.slice(0, 128) : [],
+          health_status: providerHealthBody.ok === true ? 'AVAILABLE' : 'UNAVAILABLE',
           jobs: boundedJobs,
           workspace: workspaceReadiness,
           enabled_roles: {

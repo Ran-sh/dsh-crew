@@ -2,7 +2,7 @@
 // global worker configuration, and the live jobs table.
 // Talks only to the plugin's own loopback routes.
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import {
   openSections,
@@ -13,6 +13,7 @@ import {
 import { ActivationSummary } from './activation-summary';
 import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
 import { modelCallabilityState } from './model-callability-view.mjs';
+import { acceptReadinessResponse } from './readiness-envelope.mjs';
 import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
 import { aggregateModelInvocations } from './task-telemetry.mjs';
 import { PanelHeader, PanelStyles } from './panel-chrome';
@@ -551,8 +552,10 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
   const [surface, setSurface] = useState<string>('detecting');
-  const [runtimeInfo, setRuntimeInfo] = useState<any>(undefined);
-  const [readinessSnapshot, setReadinessSnapshot] = useState<any>(undefined);
+  const [readinessEnvelope, setReadinessEnvelope] = useState<{ runtime?: any; snapshot?: any }>({});
+  const readinessGeneration = useRef(0);
+  const runtimeInfo = readinessEnvelope.runtime;
+  const readinessSnapshot = readinessEnvelope.snapshot;
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
@@ -620,13 +623,14 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       readOptional('/bridge-status'),
       readOptional('/runtime'),
     ]);
-    setRuntimeInfo(runtime);
     setSurface(classifyCrewSurface({ bridgeStatus, runtime }));
   }, []);
 
   useEffect(() => { void detectSurface(); }, [detectSurface]);
 
   const refreshAll = useCallback(async () => {
+    const generation = ++readinessGeneration.current;
+    setReadinessEnvelope({});
     try {
       const [j, s, c, pr, pi, ph, cr, ext] = await Promise.all([
         get('/jobs'), get('/install/status'), get('/config'), get('/presets'),
@@ -642,9 +646,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (pi?.ok) setProviderInventory(pi);
       if (ph?.ok) setProviderHealth(ph.health ?? []);
       if (cr?.ok) { setCredentialRefs(cr.records ?? []); setCredentialUnverified(cr.unverified_purges ?? []); }
-      if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
-      else setReadinessSnapshot(undefined);
-    } catch { /* instance restarting */ }
+      if (generation === readinessGeneration.current) {
+        const accepted = acceptReadinessResponse(ext, { generation, latestGeneration: readinessGeneration.current });
+        if (accepted.accepted) setReadinessEnvelope(accepted.envelope);
+      }
+    } catch {
+      if (generation === readinessGeneration.current) setReadinessEnvelope({});
+    }
   }, [get]);
 
   useEffect(() => {
@@ -652,11 +660,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
     const timer = setInterval(() => {
+      const generation = ++readinessGeneration.current;
       void Promise.all([get('/jobs').catch(() => null), get('/provider-health').catch(() => null), get('/extension').catch(() => null)]).then(([j, health, ext]) => {
+        if (generation !== readinessGeneration.current) return;
         if (j?.ok) setJobs(j.jobs ?? []);
         if (health?.ok) setProviderHealth(health.health ?? []);
-        if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
-        else setReadinessSnapshot(undefined);
+        const accepted = acceptReadinessResponse(ext, { generation, latestGeneration: readinessGeneration.current });
+        if (accepted.accepted) setReadinessEnvelope(accepted.envelope);
       }).catch(() => {});
     }, 3000);
     return () => clearInterval(timer);

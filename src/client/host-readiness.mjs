@@ -1,3 +1,5 @@
+import { isCompleteRuntimeIdentity, isExactNativeCrewIdentity, sameCompleteRuntimeIdentity } from '../runtime-identity-contract.mjs';
+
 export const READINESS_STATES = Object.freeze({
   READY: 'READY',
   DEGRADED: 'DEGRADED',
@@ -21,11 +23,10 @@ function componentState(status, keys, { aligned = false } = {}) {
 function runtimeState(runtime, readinessSnapshot) {
   if (readinessSnapshot && typeof readinessSnapshot === 'object') {
     const identity = readinessSnapshot.runtime;
-    if (!(identity?.execution_plane === 'hub-3210' && identity.profile === 'dsh-crew'
-      && Number(identity.listen_port) === 3210 && typeof identity.runtime_id === 'string' && identity.runtime_id.trim())) {
+    if (!isExactNativeCrewIdentity(identity)) {
       return READINESS_STATES.UNAVAILABLE;
     }
-    if (typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim() && runtime.runtime_id !== identity.runtime_id) {
+    if (runtime && (!isCompleteRuntimeIdentity(runtime) || !sameCompleteRuntimeIdentity(runtime, identity))) {
       return READINESS_STATES.UNKNOWN;
     }
     if (!Number.isFinite(readinessSnapshot.captured_at)) return READINESS_STATES.UNKNOWN;
@@ -40,13 +41,7 @@ function runtimeState(runtime, readinessSnapshot) {
   }
   if (runtime === undefined) return READINESS_STATES.UNKNOWN;
   if (runtime === null) return READINESS_STATES.UNAVAILABLE;
-  const exactIdentity = runtime?.ok === true
-    && runtime.service === 'dsh-crew-hub'
-    && runtime.execution_plane === 'hub-3210'
-    && runtime.profile === 'dsh-crew'
-    && Number(runtime.listen_port) === 3210
-    && typeof runtime.runtime_id === 'string'
-    && runtime.runtime_id.trim();
+  const exactIdentity = runtime?.ok === true && isExactNativeCrewIdentity(runtime);
   return exactIdentity ? READINESS_STATES.READY : READINESS_STATES.UNKNOWN;
 }
 

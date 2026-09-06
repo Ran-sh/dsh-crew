@@ -2,6 +2,9 @@
 // describes only DSH Crew and deliberately never advertises itself as a top-
 // level Executor or control plane.
 
+import { isCompleteRuntimeIdentity, sameCompleteRuntimeIdentity } from './runtime-identity-contract.mjs';
+import { MODEL_CALLABILITY_SCHEMA_VERSION } from './runtime-readiness-snapshot.mjs';
+
 export const EXTENSION_CONTRACT_SCHEMA_VERSION = 1;
 
 function row(matrix, id) {
@@ -35,10 +38,12 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
 }
 
 function validProjectionIdentity(callability, runtime, now = Date.now()) {
-  return callability && typeof callability === 'object' && callability.schema_version === 1
+  return callability && typeof callability === 'object' && callability.schema_version === MODEL_CALLABILITY_SCHEMA_VERSION
     && Number.isFinite(callability.captured_at) && callability.captured_at <= now
-    && typeof callability.current_runtime_id === 'string' && callability.current_runtime_id.trim()
-    && callability.current_runtime_id === runtime?.runtime_id;
+    && isCompleteRuntimeIdentity(callability.runtime_identity)
+    && isCompleteRuntimeIdentity(runtime)
+    && sameCompleteRuntimeIdentity(callability.runtime_identity, runtime)
+    && callability.current_runtime_id === callability.runtime_identity.runtime_id;
 }
 
 function validCallableProjection(callability, runtime, now = Date.now()) {
@@ -46,26 +51,45 @@ function validCallableProjection(callability, runtime, now = Date.now()) {
     || !Number.isFinite(callability.expires_at) || callability.expires_at <= now
     || !callability.enabled_roles || typeof callability.enabled_roles !== 'object'
     || !callability.roles || typeof callability.roles !== 'object') return false;
+  const allowedRoles = new Set(['worker', 'reviewer']);
+  if (Object.keys(callability.enabled_roles).some((role) => !allowedRoles.has(role))
+    || Object.keys(callability.roles).some((role) => !allowedRoles.has(role))) return false;
   const activeRoles = Object.entries(callability.enabled_roles).filter(([, enabled]) => enabled === true).map(([role]) => role);
-  return activeRoles.length > 0 && activeRoles.every((role) => callability.roles?.[role]?.state === 'CALLABLE');
+  return activeRoles.length > 0
+    && activeRoles.every((role) => callability.roles?.[role]?.state === 'CALLABLE')
+    && Object.entries(callability.enabled_roles).every(([role, enabled]) => enabled === true || callability.roles?.[role]?.state === 'NOT_APPLICABLE');
+}
+
+function validNotCallableProjection(callability, runtime, now = Date.now()) {
+  if (!validProjectionIdentity(callability, runtime, now)
+    || !callability.enabled_roles || typeof callability.enabled_roles !== 'object'
+    || !callability.roles || typeof callability.roles !== 'object') return false;
+  const allowedRoles = new Set(['worker', 'reviewer']);
+  if (Object.keys(callability.enabled_roles).some((role) => !allowedRoles.has(role))
+    || Object.keys(callability.roles).some((role) => !allowedRoles.has(role))) return false;
+  const activeRoles = Object.entries(callability.enabled_roles).filter(([, enabled]) => enabled === true).map(([role]) => role);
+  return activeRoles.length > 0
+    && activeRoles.some((role) => callability.roles?.[role]?.state === 'NOT_CALLABLE'
+      && Number.isFinite(callability.roles?.[role]?.expires_at) && callability.roles[role].expires_at > now)
+    && Object.entries(callability.enabled_roles).every(([role, enabled]) => enabled === true || callability.roles?.[role]?.state === 'NOT_APPLICABLE');
 }
 
 function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, now = Date.now()) {
   const callability = readinessSnapshot?.model_callability;
   const providerHealthEvidence = row(matrix, 'provider_health');
   const catalogEvidence = row(matrix, 'provider_catalog');
-  if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
-  if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
   if (callability && typeof callability === 'object') {
-    const roles = callability.roles && typeof callability.roles === 'object' ? Object.values(callability.roles) : [];
     if (callability.overall === 'CALLABLE' && validCallableProjection(callability, runtime, now)) return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
-    if (validProjectionIdentity(callability, runtime, now) && (roles.some((role) => role?.state === 'NOT_CALLABLE') || callability.overall === 'NOT_CALLABLE')) return component('UNAVAILABLE', roles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    const enabledRoles = callability.enabled_roles && typeof callability.enabled_roles === 'object' ? callability.enabled_roles : {};
+    const activeRoleNames = Object.entries(enabledRoles).filter(([, enabled]) => enabled === true).map(([name]) => name);
+    const activeRoles = activeRoleNames.map((name) => callability.roles?.[name]).filter(Boolean);
+    if (callability.overall === 'NOT_CALLABLE' && validNotCallableProjection(callability, runtime, now)) return component('UNAVAILABLE', activeRoles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
     if (!validProjectionIdentity(callability, runtime, now)) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_CURRENT');
-    if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
-    if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
     if (callability.overall === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
     return component('DEGRADED', 'MODEL_CALLABILITY_UNKNOWN');
   }
+  if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
+  if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
   if (providerHealthEvidence || catalogEvidence) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_PROJECTED');
   return component('UNAVAILABLE', 'MODEL_CALLABILITY_NOT_PROJECTED');
 }

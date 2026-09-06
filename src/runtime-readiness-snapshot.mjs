@@ -2,10 +2,14 @@
 // MCP diagnostics and the client. It consumes already-collected evidence and
 // never performs I/O or carries raw task/result/error/credential content.
 
+import { isCompleteRuntimeIdentity, isExactNativeCrewIdentity, sameCompleteRuntimeIdentity } from './runtime-identity-contract.mjs';
+
 const MAX_HEALTH = 128;
+export const MODEL_CALLABILITY_SCHEMA_VERSION = 2;
 const DEFAULT_EXECUTION_EVIDENCE_TTL_MS = 5 * 60 * 1000;
 const MIN_EXECUTION_EVIDENCE_TTL_MS = 1_000;
 const MAX_EXECUTION_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
+const CLOCK_SKEW_MS = 30_000;
 
 function text(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 
@@ -14,9 +18,20 @@ function projectRuntime(runtime) {
   return {
     execution_plane: text(runtime.execution_plane),
     profile: text(runtime.profile),
-    listen_port: Number.isFinite(Number(runtime.listen_port)) ? Number(runtime.listen_port) : null,
+    listen_port: Number.isInteger(runtime.listen_port) ? runtime.listen_port : null,
     runtime_id: text(runtime.runtime_id),
   };
+}
+
+function runtimeIdentity(runtime) {
+  return isExactNativeCrewIdentity(runtime)
+    ? {
+        execution_plane: runtime.execution_plane,
+        profile: runtime.profile,
+        listen_port: runtime.listen_port,
+        runtime_id: runtime.runtime_id,
+      }
+    : null;
 }
 
 function projectSelection(value) {
@@ -66,47 +81,52 @@ function normalizeExecutionEvidenceTtl(value) {
   return Math.min(Math.floor(parsed), MAX_EXECUTION_EVIDENCE_TTL_MS);
 }
 
-function sameRuntimeIdentity(left, right) {
-  return left?.runtime_id && right?.runtime_id
-    && left.runtime_id === right.runtime_id
-    && left.execution_plane === right.execution_plane
-    && left.profile === right.profile
-    && Number(left.listen_port) === Number(right.listen_port);
-}
-
 function projectModelRole({ role, selected, health, jobs, runtime, now, executionEvidenceTtlMs, enabled }) {
   if (enabled === false) return { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED', selected: selected ?? null, last_success: null };
   const route = routeKey(selected);
-  if (!route || !runtime?.runtime_id) return { state: 'UNKNOWN', reason_code: 'MODEL_ROUTE_UNAVAILABLE', selected: selected ?? null, last_success: null };
-  const matchingHealth = (Array.isArray(health) ? health : []).find((entry) => routeKey(entry) === route);
+  if (!route || !isExactNativeCrewIdentity(runtime)) return { state: 'UNKNOWN', reason_code: 'MODEL_ROUTE_UNAVAILABLE', selected: selected ?? null, last_success: null };
+  const matchingHealth = (Array.isArray(health) ? health : [])
+    .filter((entry) => routeKey(entry) === route)
+    .sort((left, right) => {
+      const observedDelta = (Number(right?.observed_at) || 0) - (Number(left?.observed_at) || 0);
+      if (observedDelta !== 0) return observedDelta;
+      if (left?.state === 'callable' && right?.state !== 'callable') return 1;
+      if (left?.state !== 'callable' && right?.state === 'callable') return -1;
+      return 0;
+    })[0];
   const expiresAt = Number.isFinite(matchingHealth?.expires_at) ? matchingHealth.expires_at : null;
-  const healthCurrent = matchingHealth && matchingHealth.fresh === true && expiresAt !== null && expiresAt > now;
+  const observedAt = Number.isFinite(matchingHealth?.observed_at) ? matchingHealth.observed_at : null;
+  if (matchingHealth) {
+    if (observedAt === null || observedAt > now + CLOCK_SKEW_MS || expiresAt === null || expiresAt <= now
+      || expiresAt - observedAt > MAX_EXECUTION_EVIDENCE_TTL_MS) {
+      return { state: 'STALE', reason_code: 'PROVIDER_HEALTH_STALE_OR_INVALID', selected, observed_at: observedAt, expires_at: expiresAt, source: 'provider_health', last_success: null };
+    }
+  }
+  const healthCurrent = matchingHealth && matchingHealth.fresh === true;
   if (healthCurrent && matchingHealth.state !== 'callable') {
     return { state: 'NOT_CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_ROUTE_UNCALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
   if (healthCurrent && matchingHealth.state === 'callable') {
     return { state: 'CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_CALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
-  if (matchingHealth && expiresAt !== null && expiresAt <= now) {
-    return { state: 'STALE', reason_code: 'PROVIDER_HEALTH_EXPIRED', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
-  }
   const completed = (Array.isArray(jobs) ? jobs : [])
     .filter((job) => job?.role === role && job?.provider === selected.provider && job?.model === selected.model
       && job?.status === 'done' && job?.task_status === 'success'
-      && sameRuntimeIdentity(job.execution_context, runtime))
+      && sameCompleteRuntimeIdentity(job.execution_context, runtime))
     .map((job) => ({ job, endedAt: Date.parse(job.endedAt ?? '') }))
     .filter(({ endedAt }) => Number.isFinite(endedAt))
     .sort((a, b) => b.endedAt - a.endedAt)[0];
   if (completed) {
     const expires = completed.endedAt + executionEvidenceTtlMs;
     const lastSuccess = { observed_at: completed.endedAt, expires_at: expires, job_id: completed.job.id };
+    if (completed.endedAt > now) return { state: 'STALE', reason_code: 'EXECUTION_EVIDENCE_FUTURE_DATED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
     if (expires > now) return { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
     return { state: 'STALE', reason_code: 'EXECUTION_EVIDENCE_EXPIRED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
   }
   return { state: 'UNKNOWN', reason_code: 'NO_CURRENT_MODEL_EVIDENCE', selected, last_success: null };
 }
 
-export function projectModelCallability({ runtime = null, selections = {}, health = [], jobs = [], now = Date.now(), execution_evidence_ttl_ms = DEFAULT_EXECUTION_EVIDENCE_TTL_MS, enabled_roles = {} } = {}) {
+export function projectModelCallability({ runtime = null, selections = {}, health = [], health_status = 'AVAILABLE', jobs = [], now = Date.now(), execution_evidence_ttl_ms = DEFAULT_EXECUTION_EVIDENCE_TTL_MS, enabled_roles = {} } = {}) {
   const ttl = normalizeExecutionEvidenceTtl(execution_evidence_ttl_ms);
   const enabledRoles = {
     worker: enabled_roles?.worker !== false,
@@ -116,6 +136,11 @@ export function projectModelCallability({ runtime = null, selections = {}, healt
     worker: projectModelRole({ role: 'worker', selected: selections.worker ?? selections.flash, health, jobs, runtime, now, executionEvidenceTtlMs: ttl, enabled: enabledRoles.worker }),
     reviewer: projectModelRole({ role: 'reviewer', selected: selections.reviewer ?? selections.pro, health, jobs, runtime, now, executionEvidenceTtlMs: ttl, enabled: enabledRoles.reviewer }),
   };
+  if (health_status !== 'AVAILABLE') {
+    for (const [name, enabled] of Object.entries(enabledRoles)) {
+      if (enabled) roles[name] = { ...roles[name], state: 'UNKNOWN', reason_code: 'PROVIDER_HEALTH_UNAVAILABLE', source: 'provider_health' };
+    }
+  }
   const states = Object.entries(roles).filter(([name]) => enabledRoles[name]).map(([, role]) => role.state);
   const overall = states.length === 0 ? 'UNKNOWN'
     : states.includes('NOT_CALLABLE') ? 'NOT_CALLABLE'
@@ -125,10 +150,11 @@ export function projectModelCallability({ runtime = null, selections = {}, healt
     .map((role) => role?.expires_at)
     .filter((value) => Number.isFinite(value));
   return {
-    schema_version: 1,
+    schema_version: MODEL_CALLABILITY_SCHEMA_VERSION,
     captured_at: now,
     expires_at: expirations.length ? Math.min(...expirations) : null,
     current_runtime_id: runtime?.runtime_id ?? null,
+    runtime_identity: runtimeIdentity(runtime),
     execution_evidence_ttl_ms: ttl,
     enabled_roles: enabledRoles,
     overall,
@@ -141,24 +167,31 @@ export function buildRuntimeReadinessSnapshot({
   readinessMatrix = null,
   selections = {},
   health = [],
+  health_status = null,
   jobs = [],
   workspace = null,
   enabled_roles = {},
   now = Date.now(),
 } = {}) {
-  const projectedHealth = (Array.isArray(health) ? health : []).map(projectHealth).filter(Boolean).slice(0, MAX_HEALTH);
+  const healthObservations = Array.isArray(health) ? health : (Array.isArray(health?.observations) ? health.observations : []);
+  const resolvedHealthStatus = health_status
+    ?? (health && !Array.isArray(health) ? health.status : null)
+    ?? (Array.isArray(health) && health.length > 0 ? 'AVAILABLE' : 'UNKNOWN');
+  const projectedHealth = healthObservations.map(projectHealth).filter(Boolean).slice(0, MAX_HEALTH);
   const projectedJobs = Array.isArray(jobs) ? jobs : [];
   const verified = projectedJobs.filter((job) => job?.status === 'done' && job?.task_status === 'success' && job?.delivery_complete === true).length;
   const workerJobs = projectedJobs.filter((job) => job?.role === 'worker').length;
   const reviewerJobs = projectedJobs.filter((job) => job?.role === 'reviewer').length;
   const workerSelection = projectSelection(selections.worker ?? selections.flash);
   const reviewerSelection = projectSelection(selections.reviewer ?? selections.pro);
-  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealth, jobs: projectedJobs, enabled_roles, now });
+  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealth, health_status: resolvedHealthStatus, jobs: projectedJobs, enabled_roles, now });
   return {
     schema_version: 1,
     captured_at: now,
     expires_at: modelCallability.expires_at,
+    health_status: resolvedHealthStatus,
     runtime: projectRuntime(runtime),
+    runtime_identity: runtimeIdentity(runtime),
     readiness_matrix: readinessMatrix && typeof readinessMatrix === 'object' ? structuredClone(readinessMatrix) : null,
     provider_lifecycle: matrixRow(readinessMatrix, 'provider_lifecycle_consistent'),
     health: projectedHealth,
@@ -173,4 +206,18 @@ export function buildRuntimeReadinessSnapshot({
     workspace: projectWorkspace(workspace),
     model_callability: modelCallability,
   };
+}
+
+/** Re-project a Hub snapshot when the MCP session changes role enablement. */
+export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {}, now = Date.now() } = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  return projectModelCallability({
+    runtime: snapshot.runtime,
+    selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
+    health: snapshot.health ?? [],
+    health_status: snapshot.health_status ?? 'UNKNOWN',
+    jobs: [],
+    enabled_roles,
+    now,
+  });
 }

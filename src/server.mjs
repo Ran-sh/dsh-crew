@@ -10,7 +10,7 @@ import { RUNTIME_VERSION, getHubRuntimeIdentity } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
-import { buildRuntimeReadinessSnapshot } from './runtime-readiness-snapshot.mjs';
+import { buildRuntimeReadinessSnapshot, reprojectRuntimeModelCallability } from './runtime-readiness-snapshot.mjs';
 import { classifyFailure, classifyFailureCode } from './failure-classification.mjs';
 import {
   normalizeGlobalConfig,
@@ -407,24 +407,30 @@ async function buildConfigReport() {
   const readinessMatrix = hubReadinessSnapshot?.readiness_matrix ?? fallbackReadinessMatrix;
   const roleProfiles = loadRoleProfiles();
   const workspaceReadiness = await assessWorkspaceReadiness({ cwd: process.cwd() });
+  const enabledRoles = {
+    worker: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.worker_state !== 'disabled',
+    reviewer: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.review_state !== 'disabled',
+  };
   const readinessSnapshot = hubReadinessSnapshot
-    ? {
-        ...structuredClone(hubReadinessSnapshot),
-        readiness_matrix: readinessMatrix,
-        workspace: {
-          status: workspaceReadiness.status ?? (workspaceReadiness.ok === true ? 'READY' : 'UNAVAILABLE'),
-          reason_code: workspaceReadiness.reason_code ?? workspaceReadiness.code ?? 'WORKSPACE_NOT_CHECKED',
-        },
-      }
+    ? (() => {
+        const snapshot = {
+          ...structuredClone(hubReadinessSnapshot),
+          readiness_matrix: readinessMatrix,
+          workspace: {
+            status: workspaceReadiness.status ?? (workspaceReadiness.ok === true ? 'READY' : 'UNAVAILABLE'),
+            reason_code: workspaceReadiness.reason_code ?? workspaceReadiness.code ?? 'WORKSPACE_NOT_CHECKED',
+          },
+        };
+        const modelCallability = reprojectRuntimeModelCallability(snapshot, { enabled_roles });
+        return modelCallability ? { ...snapshot, model_callability: modelCallability } : snapshot;
+      })()
     : buildRuntimeReadinessSnapshot({
         runtime: getHubRuntimeIdentity(),
         readinessMatrix,
-        selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
-        workspace: workspaceReadiness,
-        enabled_roles: {
-          worker: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.worker_state !== 'disabled',
-          reviewer: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.review_state !== 'disabled',
-        },
+      selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
+      health_status: 'UNAVAILABLE',
+      workspace: workspaceReadiness,
+        enabled_roles: enabledRoles,
       });
   const extensionRuntime = hubExtension?.runtime ?? getHubRuntimeIdentity();
   const extensionContract = buildExtensionContract({

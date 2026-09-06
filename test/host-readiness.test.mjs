@@ -104,7 +104,7 @@ test('explicit not-installed evidence projects UNAVAILABLE', () => {
 test('Crew Harness readiness consumes the shared runtime snapshot when available', () => {
   const rows = projectHostReadiness({
     installStatus: completeStatus(),
-    runtime: { ok: true, service: 'dsh-crew-hub', runtime_version: '0.5.7', surface: 'native-crew-harness' },
+    runtime: { ok: true, service: 'dsh-crew-hub', runtime_version: '0.5.7', surface: 'native-crew-harness', execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
     surface: 'official-bridge',
     readinessSnapshot: {
       captured_at: Date.now(),

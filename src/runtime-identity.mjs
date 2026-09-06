@@ -17,13 +17,23 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import {
+  PRODUCTION_EXECUTION_PLANE,
+  PRODUCTION_PROFILE,
+  PRODUCTION_LISTEN_PORT,
+} from './runtime-identity-contract.mjs';
+export {
+  PRODUCTION_EXECUTION_PLANE,
+  PRODUCTION_PROFILE,
+  PRODUCTION_LISTEN_PORT,
+  isCompleteRuntimeIdentity,
+  sameCompleteRuntimeIdentity,
+  isExactNativeCrewIdentity,
+} from './runtime-identity-contract.mjs';
 
 // Production Crew execution is intentionally bound to the isolated 3210 Hub.
 // These fields are public provenance only; no credential or session secret is
 // included in the identity contract.
-export const PRODUCTION_EXECUTION_PLANE = 'hub-3210';
-export const PRODUCTION_PROFILE = 'dsh-crew';
-export const PRODUCTION_LISTEN_PORT = 3210;
 const RUNTIME_ID = randomUUID();
 
 export const RUNTIME_VERSION = '1.2.0-rc.4';

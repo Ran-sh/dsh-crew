@@ -164,10 +164,10 @@ test('native 3210 is the full control plane; official 3080 is quick-only; unknow
 
 test('client consumes the Hub extension readiness snapshot instead of recomputing Crew state', () => {
   assert.match(panelSource, /get\('\/extension'\)\.catch\(\(\) => null\)/);
-  assert.match(panelSource, /setReadinessSnapshot\(ext\.extension\?\.readiness_snapshot/);
+  assert.match(panelSource, /acceptReadinessResponse\(ext, \{ generation, latestGeneration: readinessGeneration\.current \}\)/);
   assert.match(panelSource, /readinessSnapshot \}/);
   assert.match(panelSource, /get\('\/jobs'\)\.catch\(\(\) => null\)/);
-  assert.match(panelSource, /else setReadinessSnapshot\(undefined\)/);
+  assert.match(panelSource, /setReadinessEnvelope\(\{\}\)/);
 });
 
 test('3080 readiness matrix names every required host integration', () => {
