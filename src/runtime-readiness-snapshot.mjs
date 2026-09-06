@@ -176,14 +176,22 @@ export function buildRuntimeReadinessSnapshot({
   const resolvedHealthStatus = health_status
     ?? (health && !Array.isArray(health) ? health.status : null)
     ?? (Array.isArray(health) && health.length > 0 ? 'AVAILABLE' : 'UNKNOWN');
-  const projectedHealth = healthObservations.map(projectHealth).filter(Boolean).slice(0, MAX_HEALTH);
+  const projectedHealthAll = healthObservations.map(projectHealth).filter(Boolean);
   const projectedJobs = Array.isArray(jobs) ? jobs : [];
   const verified = projectedJobs.filter((job) => job?.status === 'done' && job?.task_status === 'success' && job?.delivery_complete === true).length;
   const workerJobs = projectedJobs.filter((job) => job?.role === 'worker').length;
   const reviewerJobs = projectedJobs.filter((job) => job?.role === 'reviewer').length;
   const workerSelection = projectSelection(selections.worker ?? selections.flash);
   const reviewerSelection = projectSelection(selections.reviewer ?? selections.pro);
-  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealth, health_status: resolvedHealthStatus, jobs: projectedJobs, enabled_roles, now });
+  const selectedRoutes = [workerSelection, reviewerSelection].filter(Boolean);
+  const selectedHealth = selectedRoutes.map((selection) => projectedHealthAll
+    .filter((entry) => entry.provider === selection.provider && entry.model === selection.model)
+    .sort((left, right) => (right.observed_at ?? 0) - (left.observed_at ?? 0))[0]).filter(Boolean);
+  const selectedKeys = new Set(selectedHealth.map((entry) => `${entry.provider}\u0000${entry.model}`));
+  const projectedHealth = [...selectedHealth, ...projectedHealthAll
+    .filter((entry) => !selectedKeys.has(`${entry.provider}\u0000${entry.model}`))]
+    .slice(0, MAX_HEALTH);
+  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealthAll, health_status: resolvedHealthStatus, jobs: projectedJobs, enabled_roles, now });
   return {
     schema_version: 1,
     captured_at: now,
@@ -229,47 +237,49 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
       now,
     });
   }
-  const retainedExpiry = {};
-  const historicalJobs = Object.entries({ worker: snapshot.worker, reviewer: snapshot.reviewer })
-    .filter(([role, value]) => enabled_roles?.[role] !== false && value?.selected?.provider && value?.selected?.model)
-    .map(([role, value]) => {
-      const evidence = sourceValidation.ok ? sourceProjection?.roles?.[role] : null;
-      const lastSuccess = evidence?.source === 'execution' && evidence?.state === 'CALLABLE' ? evidence.last_success : null;
-      if (!lastSuccess || !Number.isFinite(lastSuccess.observed_at)
-        || !Number.isFinite(lastSuccess.expires_at) || lastSuccess.expires_at <= now || lastSuccess.observed_at > now
-        || !isExactNativeCrewIdentity(snapshot.runtime)
-        || !sameCompleteRuntimeIdentity(snapshot.runtime, sourceProjection?.runtime_identity)
-        || !evidence.selected?.provider || !evidence.selected?.model
-        || evidence.selected.provider !== value.selected.provider || evidence.selected.model !== value.selected.model
-        || lastSuccess.observed_at !== evidence.observed_at || lastSuccess.expires_at !== evidence.expires_at) return null;
-      retainedExpiry[role] = lastSuccess.expires_at;
-      return {
-        id: lastSuccess.job_id,
-        role,
-        provider: value.selected.provider,
-        model: value.selected.model,
-        status: 'done',
-        task_status: 'success',
-        endedAt: new Date(lastSuccess.observed_at).toISOString(),
-        execution_context: snapshot.runtime,
-      };
-    }).filter(Boolean);
-  const projected = projectModelCallability({
-    runtime: snapshot.runtime,
-    selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
-    health: snapshot.health ?? [],
-    health_status: snapshot.health_status ?? 'UNKNOWN',
-    jobs: historicalJobs,
-    enabled_roles,
-    now,
-  });
-  for (const [role, expiry] of Object.entries(retainedExpiry)) {
-    if (projected.roles?.[role]?.source === 'execution' && Number.isFinite(projected.roles[role].expires_at)) {
-      projected.roles[role].expires_at = Math.min(projected.roles[role].expires_at, expiry);
-      if (projected.roles[role].last_success) projected.roles[role].last_success.expires_at = Math.min(projected.roles[role].last_success.expires_at, expiry);
+  const roles = {};
+  for (const role of ['worker', 'reviewer']) {
+    if (enabled_roles?.[role] === false) {
+      roles[role] = { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED', selected: null, last_success: null };
+    } else if (sourceProjection.enabled_roles?.[role] === true) {
+      roles[role] = structuredClone(sourceProjection.roles[role]);
+    } else {
+      roles[role] = { state: 'UNKNOWN', reason_code: 'ROLE_EVIDENCE_NOT_ENABLED', selected: snapshot[role]?.selected ?? null, last_success: null };
     }
   }
-  const expirations = Object.values(projected.roles).map((role) => role?.expires_at).filter((value) => Number.isFinite(value));
-  projected.expires_at = expirations.length ? Math.min(...expirations) : null;
+  const activeStates = Object.entries(roles).filter(([role]) => enabled_roles?.[role] === true).map(([, role]) => role.state);
+  const overall = activeStates.includes('NOT_CALLABLE') ? 'NOT_CALLABLE'
+    : activeStates.length > 0 && activeStates.every((state) => state === 'CALLABLE') ? 'CALLABLE'
+      : activeStates.includes('STALE') ? 'STALE' : 'UNKNOWN';
+  const expirations = Object.values(roles).map((role) => role?.expires_at).filter((value) => Number.isFinite(value));
+  const projected = {
+    ...structuredClone(sourceProjection),
+    captured_at: now,
+    enabled_roles: { worker: enabled_roles.worker === true, reviewer: enabled_roles.reviewer === true },
+    roles,
+    overall,
+    expires_at: expirations.length ? Math.min(...expirations) : null,
+  };
+  const validation = validateModelCallabilityV2({
+    projection: projected,
+    runtime: snapshot.runtime,
+    expectedEnabledRoles: projected.enabled_roles,
+    expectedSelections: {
+      worker: enabled_roles.worker === true ? snapshot.worker?.selected ?? null : null,
+      reviewer: enabled_roles.reviewer === true ? snapshot.reviewer?.selected ?? null : null,
+    },
+    now,
+  });
+  if (!validation.ok) {
+    return projectModelCallability({
+      runtime: snapshot.runtime,
+      selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
+      health: [],
+      health_status: 'UNAVAILABLE',
+      jobs: [],
+      enabled_roles,
+      now,
+    });
+  }
   return projected;
 }

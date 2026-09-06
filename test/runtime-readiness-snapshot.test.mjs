@@ -112,6 +112,23 @@ test('health store equal-time failure remains authoritative in the canonical sna
   assert.equal(snapshot.model_callability.roles.worker.state, 'NOT_CALLABLE');
 });
 
+test('selected-route health survives the bounded diagnostics list before callability projection', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const unrelated = Array.from({ length: 128 }, (_, index) => ({ provider: `other-${index}`, model: 'm', state: 'callable', fresh: true, observed_at: 9_000, expires_at: 20_000 }));
+  const selectedFailure = { provider: 'p', model: 'm', state: 'quota-exhausted', fresh: true, observed_at: 9_500, expires_at: 20_000 };
+  const snapshot = buildRuntimeReadinessSnapshot({
+    runtime,
+    selections: { worker: { provider: 'p', model: 'm' } },
+    health: [...unrelated, selectedFailure],
+    health_status: 'AVAILABLE',
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    enabled_roles: { worker: true, reviewer: false },
+    now: 10_000,
+  });
+  assert.equal(snapshot.health.some((entry) => entry.provider === 'p' && entry.model === 'm'), true);
+  assert.equal(snapshot.model_callability.roles.worker.state, 'NOT_CALLABLE');
+});
+
 test('session re-projection does not transplant or renew execution evidence', () => {
   const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
   const snapshot = buildRuntimeReadinessSnapshot({
