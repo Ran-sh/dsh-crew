@@ -136,4 +136,11 @@ test('session re-projection does not transplant or renew execution evidence', ()
   delete malformed.model_callability.roles.worker.last_success.job_id;
   const malformedProjection = reprojectRuntimeModelCallability(malformed, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
   assert.equal(malformedProjection.roles.worker.state, 'UNKNOWN');
+  const invalidWithHealth = structuredClone(snapshot);
+  invalidWithHealth.worker.selected = { provider: 'p1', model: 'm1' };
+  invalidWithHealth.model_callability.runtime_identity = null;
+  invalidWithHealth.health = [{ provider: 'p1', model: 'm1', state: 'callable', fresh: true, observed_at: 9_000, expires_at: 20_000 }];
+  invalidWithHealth.health_status = 'AVAILABLE';
+  const invalidHealthProjection = reprojectRuntimeModelCallability(invalidWithHealth, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
+  assert.equal(invalidHealthProjection.roles.worker.state, 'UNKNOWN');
 });

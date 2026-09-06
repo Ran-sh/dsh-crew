@@ -218,6 +218,17 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
     expectedSelections: { worker: snapshot.worker?.selected ?? null, reviewer: snapshot.reviewer?.selected ?? null },
     now,
   });
+  if (!sourceValidation.ok) {
+    return projectModelCallability({
+      runtime: snapshot.runtime,
+      selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
+      health: [],
+      health_status: 'UNAVAILABLE',
+      jobs: [],
+      enabled_roles,
+      now,
+    });
+  }
   const retainedExpiry = {};
   const historicalJobs = Object.entries({ worker: snapshot.worker, reviewer: snapshot.reviewer })
     .filter(([role, value]) => enabled_roles?.[role] !== false && value?.selected?.provider && value?.selected?.model)

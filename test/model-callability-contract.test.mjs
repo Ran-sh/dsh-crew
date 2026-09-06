@@ -35,4 +35,11 @@ test('schema-v2 validator enforces configured role enablement and complete runti
   assert.equal(validateModelCallabilityV2({ projection: base, runtime, expectedSelections: { worker: { provider: 'other', model: 'm' }, reviewer: null }, now }).ok, false);
   assert.equal(validateModelCallabilityV2({ projection: base, runtime, expectedSelections: { worker: null, reviewer: null }, now }).ok, false);
   assert.equal(validateModelCallabilityV2({ projection: base, runtime: { ...runtime, listen_port: 3080 }, now }).ok, false);
+  const disabledRoute = structuredClone(base);
+  disabledRoute.roles.reviewer.selected = { provider: 'wrong', model: 'route' };
+  assert.equal(validateModelCallabilityV2({ projection: disabledRoute, runtime, expectedSelections: { worker: base.roles.worker.selected, reviewer: null }, now }).ok, false);
+  const enabledNotApplicable = structuredClone(base);
+  enabledNotApplicable.enabled_roles.reviewer = true;
+  enabledNotApplicable.roles.reviewer = { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' };
+  assert.equal(validateModelCallabilityV2({ projection: enabledNotApplicable, runtime, expectedEnabledRoles: { worker: true, reviewer: true }, expectedSelections: { worker: base.roles.worker.selected, reviewer: null }, now }).ok, false);
 });

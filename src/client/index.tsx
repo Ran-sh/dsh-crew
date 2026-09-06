@@ -640,9 +640,9 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const generation = ++readinessGeneration.current;
     setReadinessEnvelope({});
     try {
-      const [j, s, c, pr, pi, ph, cr, ext] = await Promise.all([
+      const [j, s, c, pr, pi, ph, cr] = await Promise.all([
         get('/jobs'), get('/install/status'), get('/config'), get('/presets'),
-        get('/providers').catch(() => null), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null), get('/extension').catch(() => null),
+        get('/providers').catch(() => null), get('/provider-health').catch(() => null), get('/credential-references').catch(() => null),
       ]);
       if (j.ok) setJobs(j.jobs ?? []);
       if (s.ok) setStatus(s.status);
@@ -654,10 +654,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
       if (pi?.ok) setProviderInventory(pi);
       if (ph?.ok) setProviderHealth(ph.health ?? []);
       if (cr?.ok) { setCredentialRefs(cr.records ?? []); setCredentialUnverified(cr.unverified_purges ?? []); }
-      if (generation === readinessGeneration.current) {
-        const accepted = acceptReadinessResponse(ext, { generation, latestGeneration: readinessGeneration.current });
-        if (accepted.accepted) setReadinessEnvelope(accepted.envelope);
-      }
     } catch {
       if (generation === readinessGeneration.current) setReadinessEnvelope({});
     }

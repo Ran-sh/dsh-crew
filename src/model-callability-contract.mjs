@@ -45,10 +45,6 @@ export function validateModelCallabilityV2({ projection, runtime, expectedEnable
   for (const roleName of ROLES) {
     const role = projection.roles[roleName];
     if (!role || !STATES.has(role.state)) return fail('MODEL_CALLABILITY_ROLE_STATE_INVALID');
-    if (projection.enabled_roles[roleName] === false) {
-      if (role.state !== 'NOT_APPLICABLE' || role.reason_code !== 'ROLE_DISABLED') return fail('MODEL_CALLABILITY_DISABLED_ROLE_INVALID');
-      continue;
-    }
     const selected = route(role.selected);
     if (role.selected !== undefined && role.selected !== null && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
     if (expectedSelections) {
@@ -57,6 +53,10 @@ export function validateModelCallabilityV2({ projection, runtime, expectedEnable
       if (expectedRaw !== null && !expected) return fail('MODEL_CALLABILITY_EXPECTED_SELECTION_INVALID');
       if ((expected === null) !== (selected === null)
         || expected && (expected.provider !== selected.provider || expected.model !== selected.model)) return fail('MODEL_CALLABILITY_SELECTION_MISMATCH');
+    }
+    if (projection.enabled_roles[roleName] === false) {
+      if (role.state !== 'NOT_APPLICABLE' || role.reason_code !== 'ROLE_DISABLED') return fail('MODEL_CALLABILITY_DISABLED_ROLE_INVALID');
+      continue;
     }
     if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state) && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
     if (projection.enabled_roles[roleName] === true && role.state === 'NOT_APPLICABLE') return fail('MODEL_CALLABILITY_ENABLED_ROLE_NOT_APPLICABLE');
