@@ -20,6 +20,8 @@ function callableSnapshot({ reviewer = false } = {}) {
       },
       overall: 'CALLABLE',
     },
+    worker: { selected: { provider: 'p', model: 'worker' } },
+    reviewer: { selected: reviewer ? { provider: 'p', model: 'reviewer' } : null },
   };
 }
 

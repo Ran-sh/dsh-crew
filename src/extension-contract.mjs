@@ -45,7 +45,7 @@ function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, expected
       projection: callability,
       runtime,
       expectedEnabledRoles,
-      expectedSelections: { worker: readinessSnapshot?.worker?.selected, reviewer: readinessSnapshot?.reviewer?.selected },
+      expectedSelections: { worker: readinessSnapshot?.worker?.selected ?? null, reviewer: readinessSnapshot?.reviewer?.selected ?? null },
       now,
     });
     if (validation.ok && validation.state === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });

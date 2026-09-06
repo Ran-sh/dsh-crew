@@ -132,4 +132,8 @@ test('session re-projection does not transplant or renew execution evidence', ()
   expired.expires_at = 9_999;
   const expiredProjection = reprojectRuntimeModelCallability(expired, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
   assert.equal(expiredProjection.roles.worker.state, 'UNKNOWN');
+  const malformed = structuredClone(snapshot);
+  delete malformed.model_callability.roles.worker.last_success.job_id;
+  const malformedProjection = reprojectRuntimeModelCallability(malformed, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
+  assert.equal(malformedProjection.roles.worker.state, 'UNKNOWN');
 });

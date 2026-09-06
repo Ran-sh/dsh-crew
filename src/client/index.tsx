@@ -667,17 +667,28 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const responsibilities = surfaceResponsibilities(surface);
     if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
-    const timer = setInterval(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
       const generation = ++readinessGeneration.current;
-      void Promise.all([get('/jobs', 5_000).catch(() => null), get('/provider-health', 5_000).catch(() => null), get('/extension', 5_000).catch(() => null)]).then(([j, health, ext]) => {
-        if (generation !== readinessGeneration.current) return;
+      try {
+        const ext = await get('/extension', 5_000);
+        if (!cancelled && generation === readinessGeneration.current) {
+          const accepted = acceptReadinessResponse(ext, { generation, latestGeneration: readinessGeneration.current });
+          if (accepted.accepted) setReadinessEnvelope(accepted.envelope);
+        }
+      } catch {
+        if (!cancelled && generation === readinessGeneration.current) setReadinessEnvelope({});
+      }
+      void Promise.all([get('/jobs', 5_000).catch(() => null), get('/provider-health', 5_000).catch(() => null)]).then(([j, health]) => {
+        if (cancelled) return;
         if (j?.ok) setJobs(j.jobs ?? []);
         if (health?.ok) setProviderHealth(health.health ?? []);
-        const accepted = acceptReadinessResponse(ext, { generation, latestGeneration: readinessGeneration.current });
-        if (accepted.accepted) setReadinessEnvelope(accepted.envelope);
       }).catch(() => {});
-    }, 3000);
-    return () => clearInterval(timer);
+      if (!cancelled) timer = setTimeout(() => { void poll(); }, 3_000);
+    };
+    void poll();
+    return () => { cancelled = true; readinessGeneration.current += 1; if (timer) clearTimeout(timer); };
   }, [surface, refreshAll, get]);
 
   const refreshHarnessModels = useCallback(async () => {

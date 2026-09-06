@@ -169,6 +169,8 @@ test('client consumes the Hub extension readiness snapshot instead of recomputin
   assert.match(panelSource, /get\('\/jobs', 5_000\)\.catch\(\(\) => null\)/);
   assert.match(panelSource, /AbortSignal\.timeout/);
   assert.match(panelSource, /setTimeout\(\(\) => setReadinessEnvelope/);
+  assert.match(panelSource, /const poll = async \(\) =>/);
+  assert.match(panelSource, /setTimeout\(\(\) => \{ void poll\(\); \}, 3_000\)/);
   assert.match(panelSource, /setReadinessEnvelope\(\{\}\)/);
 });
 

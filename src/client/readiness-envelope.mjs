@@ -26,7 +26,7 @@ export function acceptReadinessResponse(response, { generation, latestGeneration
     projection: snapshot.model_callability,
     runtime: extensionRuntime,
     expectedEnabledRoles,
-    expectedSelections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
+    expectedSelections: { worker: snapshot.worker?.selected ?? null, reviewer: snapshot.reviewer?.selected ?? null },
   }) : { ok: false };
   return { accepted: true, envelope: valid && projection.ok
     ? { runtime: extensionRuntime, snapshot, expiresAt: snapshot.model_callability.expires_at }

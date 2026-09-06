@@ -3,7 +3,7 @@
 // never performs I/O or carries raw task/result/error/credential content.
 
 import { isCompleteRuntimeIdentity, isExactNativeCrewIdentity, sameCompleteRuntimeIdentity } from './runtime-identity-contract.mjs';
-import { MODEL_CALLABILITY_SCHEMA_VERSION } from './model-callability-contract.mjs';
+import { MODEL_CALLABILITY_SCHEMA_VERSION, validateModelCallabilityV2 } from './model-callability-contract.mjs';
 
 const MAX_HEALTH = 128;
 const DEFAULT_EXECUTION_EVIDENCE_TTL_MS = 5 * 60 * 1000;
@@ -210,24 +210,30 @@ export function buildRuntimeReadinessSnapshot({
 /** Re-project a Hub snapshot when the MCP session changes role enablement. */
 export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {}, now = Date.now() } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return null;
+  const sourceProjection = snapshot.model_callability;
+  const sourceValidation = validateModelCallabilityV2({
+    projection: sourceProjection,
+    runtime: snapshot.runtime,
+    expectedEnabledRoles: sourceProjection?.enabled_roles,
+    expectedSelections: { worker: snapshot.worker?.selected ?? null, reviewer: snapshot.reviewer?.selected ?? null },
+    now,
+  });
   const retainedExpiry = {};
   const historicalJobs = Object.entries({ worker: snapshot.worker, reviewer: snapshot.reviewer })
     .filter(([role, value]) => enabled_roles?.[role] !== false && value?.selected?.provider && value?.selected?.model)
     .map(([role, value]) => {
-      const evidence = snapshot.model_callability?.roles?.[role];
+      const evidence = sourceValidation.ok ? sourceProjection?.roles?.[role] : null;
       const lastSuccess = evidence?.source === 'execution' && evidence?.state === 'CALLABLE' ? evidence.last_success : null;
       if (!lastSuccess || !Number.isFinite(lastSuccess.observed_at)
         || !Number.isFinite(lastSuccess.expires_at) || lastSuccess.expires_at <= now || lastSuccess.observed_at > now
         || !isExactNativeCrewIdentity(snapshot.runtime)
-        || !sameCompleteRuntimeIdentity(snapshot.runtime, snapshot.model_callability?.runtime_identity)
-        || !sameCompleteRuntimeIdentity(snapshot.runtime, evidence.runtime_identity ?? snapshot.model_callability.runtime_identity)
-        || !sameCompleteRuntimeIdentity(snapshot.runtime, evidence.selected_runtime_identity ?? snapshot.runtime)
+        || !sameCompleteRuntimeIdentity(snapshot.runtime, sourceProjection?.runtime_identity)
         || !evidence.selected?.provider || !evidence.selected?.model
         || evidence.selected.provider !== value.selected.provider || evidence.selected.model !== value.selected.model
         || lastSuccess.observed_at !== evidence.observed_at || lastSuccess.expires_at !== evidence.expires_at) return null;
       retainedExpiry[role] = lastSuccess.expires_at;
       return {
-        id: lastSuccess.job_id ?? `reprojected-${role}`,
+        id: lastSuccess.job_id,
         role,
         provider: value.selected.provider,
         model: value.selected.model,

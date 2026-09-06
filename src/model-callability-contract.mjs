@@ -39,6 +39,7 @@ export function validateModelCallabilityV2({ projection, runtime, expectedEnable
   if (!Number.isFinite(projection.captured_at) || projection.captured_at > now) return fail('MODEL_CALLABILITY_CAPTURE_INVALID');
   if (!exactKeys(projection.enabled_roles, ROLES) || ROLES.some((role) => typeof projection.enabled_roles[role] !== 'boolean')) return fail('MODEL_CALLABILITY_ROLES_INVALID');
   if (expectedEnabledRoles && (!exactKeys(expectedEnabledRoles, ROLES) || ROLES.some((role) => projection.enabled_roles[role] !== expectedEnabledRoles[role]))) return fail('MODEL_CALLABILITY_ROLE_CONFIG_MISMATCH');
+  if (expectedSelections && !exactKeys(expectedSelections, ROLES)) return fail('MODEL_CALLABILITY_EXPECTED_SELECTIONS_INVALID');
   if (!exactKeys(projection.roles, ROLES)) return fail('MODEL_CALLABILITY_ROLE_EVIDENCE_MISSING');
 
   for (const roleName of ROLES) {
@@ -50,11 +51,15 @@ export function validateModelCallabilityV2({ projection, runtime, expectedEnable
     }
     const selected = route(role.selected);
     if (role.selected !== undefined && role.selected !== null && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
-    if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state) && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
-    if (expectedSelections?.[roleName]) {
-      const expected = route(expectedSelections[roleName]);
-      if (!expected || !selected || expected.provider !== selected.provider || expected.model !== selected.model) return fail('MODEL_CALLABILITY_SELECTION_MISMATCH');
+    if (expectedSelections) {
+      const expectedRaw = expectedSelections[roleName];
+      const expected = expectedRaw === null ? null : route(expectedRaw);
+      if (expectedRaw !== null && !expected) return fail('MODEL_CALLABILITY_EXPECTED_SELECTION_INVALID');
+      if ((expected === null) !== (selected === null)
+        || expected && (expected.provider !== selected.provider || expected.model !== selected.model)) return fail('MODEL_CALLABILITY_SELECTION_MISMATCH');
     }
+    if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state) && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
+    if (projection.enabled_roles[roleName] === true && role.state === 'NOT_APPLICABLE') return fail('MODEL_CALLABILITY_ENABLED_ROLE_NOT_APPLICABLE');
     if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state)) {
       if (!validEvidence(role, now)) return fail('MODEL_CALLABILITY_EVIDENCE_INVALID');
     }
