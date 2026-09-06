@@ -652,8 +652,8 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     if (!responsibilities.fullControlPlane) return undefined;
     void refreshAll();
     const timer = setInterval(() => {
-      void Promise.all([get('/jobs'), get('/provider-health').catch(() => null), get('/extension').catch(() => null)]).then(([j, health, ext]) => {
-        if (j.ok) setJobs(j.jobs ?? []);
+      void Promise.all([get('/jobs').catch(() => null), get('/provider-health').catch(() => null), get('/extension').catch(() => null)]).then(([j, health, ext]) => {
+        if (j?.ok) setJobs(j.jobs ?? []);
         if (health?.ok) setProviderHealth(health.health ?? []);
         if (ext?.ok) setReadinessSnapshot(ext.extension?.readiness_snapshot ?? undefined);
         else setReadinessSnapshot(undefined);
@@ -1097,7 +1097,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     void applyPatch({ worker: { model_policy: { adaptive: next, ordering } } });
   };
   const modelActivity = aggregateModelInvocations(jobs);
-  const modelState = modelCallabilityState(readinessSnapshot?.model_callability);
+  const modelState = modelCallabilityState(readinessSnapshot?.model_callability, runtimeInfo);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
   const hostReadiness = projectHostReadiness({ installStatus: status, runtime: runtimeInfo, surface, readinessSnapshot });
 

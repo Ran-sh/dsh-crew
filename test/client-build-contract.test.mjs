@@ -166,6 +166,8 @@ test('client consumes the Hub extension readiness snapshot instead of recomputin
   assert.match(panelSource, /get\('\/extension'\)\.catch\(\(\) => null\)/);
   assert.match(panelSource, /setReadinessSnapshot\(ext\.extension\?\.readiness_snapshot/);
   assert.match(panelSource, /readinessSnapshot \}/);
+  assert.match(panelSource, /get\('\/jobs'\)\.catch\(\(\) => null\)/);
+  assert.match(panelSource, /else setReadinessSnapshot\(undefined\)/);
 });
 
 test('3080 readiness matrix names every required host integration', () => {
@@ -181,7 +183,7 @@ test('integration installation readiness is distinct from model callability', ()
   assert.doesNotMatch(panelSource, /installed: '已安装'.*ready: '可调用'/s);
   assert.match(panelSource, /readinessSnapshot/);
   assert.doesNotMatch(panelSource, /readiness_matrix\?\.rows/);
-  assert.match(panelSource, /modelCallabilityState\(readinessSnapshot\?\.model_callability\)/);
+  assert.match(panelSource, /modelCallabilityState\(readinessSnapshot\?\.model_callability, runtimeInfo\)/);
 });
 
 test('quick bundle is capability-light compared to the full bundle', async () => {

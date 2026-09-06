@@ -12,16 +12,16 @@ test('runtime readiness snapshot centralizes provenance, selections, health and 
     runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['jobs'] },
     readinessMatrix: matrix,
     selections: { worker: { provider: 'opencode-muse', model: 'mimo-v2.5', source: 'priority' } },
-    health: [{ provider: 'opencode-muse', model: 'mimo-v2.5', state: 'callable', fresh: true }],
+    health: [{ provider: 'opencode-muse', model: 'mimo-v2.5', state: 'callable', fresh: true, expires_at: 99_999_999_999_999 }],
     jobs: [{ id: 'job-1', role: 'worker', task: 'SECRET TASK', result: 'SECRET RESULT' }],
   });
   assert.equal(snapshot.schema_version, 1);
   assert.equal(typeof snapshot.captured_at, 'number');
-  assert.equal(snapshot.expires_at, null);
+  assert.equal(snapshot.expires_at, 99_999_999_999_999);
   assert.equal(snapshot.model_callability.roles.worker.state, 'CALLABLE');
   assert.deepEqual(snapshot.runtime, { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' });
   assert.deepEqual(snapshot.worker.selected, { provider: 'opencode-muse', model: 'mimo-v2.5', source: 'priority' });
-  assert.deepEqual(snapshot.worker.health, [{ provider: 'opencode-muse', model: 'mimo-v2.5', state: 'callable', fresh: true }]);
+  assert.deepEqual(snapshot.worker.health, [{ provider: 'opencode-muse', model: 'mimo-v2.5', state: 'callable', expires_at: 99_999_999_999_999, fresh: true }]);
   assert.deepEqual(snapshot.readiness_matrix, matrix);
   assert.equal(JSON.stringify(snapshot).includes('SECRET'), false);
 });

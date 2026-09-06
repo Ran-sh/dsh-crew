@@ -4,6 +4,8 @@
 
 const MAX_HEALTH = 128;
 const DEFAULT_EXECUTION_EVIDENCE_TTL_MS = 5 * 60 * 1000;
+const MIN_EXECUTION_EVIDENCE_TTL_MS = 1_000;
+const MAX_EXECUTION_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function text(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 
@@ -58,12 +60,27 @@ function routeKey(value) {
   return value?.provider && value?.model ? `${value.provider}\u0000${value.model}` : null;
 }
 
-function projectModelRole({ role, selected, health, jobs, runtime, now, executionEvidenceTtlMs }) {
+function normalizeExecutionEvidenceTtl(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < MIN_EXECUTION_EVIDENCE_TTL_MS) return DEFAULT_EXECUTION_EVIDENCE_TTL_MS;
+  return Math.min(Math.floor(parsed), MAX_EXECUTION_EVIDENCE_TTL_MS);
+}
+
+function sameRuntimeIdentity(left, right) {
+  return left?.runtime_id && right?.runtime_id
+    && left.runtime_id === right.runtime_id
+    && left.execution_plane === right.execution_plane
+    && left.profile === right.profile
+    && Number(left.listen_port) === Number(right.listen_port);
+}
+
+function projectModelRole({ role, selected, health, jobs, runtime, now, executionEvidenceTtlMs, enabled }) {
+  if (enabled === false) return { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED', selected: selected ?? null, last_success: null };
   const route = routeKey(selected);
   if (!route || !runtime?.runtime_id) return { state: 'UNKNOWN', reason_code: 'MODEL_ROUTE_UNAVAILABLE', selected: selected ?? null, last_success: null };
   const matchingHealth = (Array.isArray(health) ? health : []).find((entry) => routeKey(entry) === route);
   const expiresAt = Number.isFinite(matchingHealth?.expires_at) ? matchingHealth.expires_at : null;
-  const healthCurrent = matchingHealth && matchingHealth.fresh === true && (expiresAt === null || expiresAt > now);
+  const healthCurrent = matchingHealth && matchingHealth.fresh === true && expiresAt !== null && expiresAt > now;
   if (healthCurrent && matchingHealth.state !== 'callable') {
     return { state: 'NOT_CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_ROUTE_UNCALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
@@ -76,7 +93,7 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
   const completed = (Array.isArray(jobs) ? jobs : [])
     .filter((job) => job?.role === role && job?.provider === selected.provider && job?.model === selected.model
       && job?.status === 'done' && job?.task_status === 'success'
-      && job?.execution_context?.runtime_id === runtime.runtime_id)
+      && sameRuntimeIdentity(job.execution_context, runtime))
     .map((job) => ({ job, endedAt: Date.parse(job.endedAt ?? '') }))
     .filter(({ endedAt }) => Number.isFinite(endedAt))
     .sort((a, b) => b.endedAt - a.endedAt)[0];
@@ -89,13 +106,21 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
   return { state: 'UNKNOWN', reason_code: 'NO_CURRENT_MODEL_EVIDENCE', selected, last_success: null };
 }
 
-export function projectModelCallability({ runtime = null, selections = {}, health = [], jobs = [], now = Date.now(), execution_evidence_ttl_ms = DEFAULT_EXECUTION_EVIDENCE_TTL_MS } = {}) {
-  const roles = {
-    worker: projectModelRole({ role: 'worker', selected: selections.worker ?? selections.flash, health, jobs, runtime, now, executionEvidenceTtlMs: execution_evidence_ttl_ms }),
-    reviewer: projectModelRole({ role: 'reviewer', selected: selections.reviewer ?? selections.pro, health, jobs, runtime, now, executionEvidenceTtlMs: execution_evidence_ttl_ms }),
+export function projectModelCallability({ runtime = null, selections = {}, health = [], jobs = [], now = Date.now(), execution_evidence_ttl_ms = DEFAULT_EXECUTION_EVIDENCE_TTL_MS, enabled_roles = {} } = {}) {
+  const ttl = normalizeExecutionEvidenceTtl(execution_evidence_ttl_ms);
+  const enabledRoles = {
+    worker: enabled_roles?.worker !== false,
+    reviewer: enabled_roles?.reviewer !== false,
   };
-  const states = Object.values(roles).map((role) => role.state);
-  const overall = states.includes('NOT_CALLABLE') ? 'NOT_CALLABLE' : states.every((state) => state === 'CALLABLE') ? 'CALLABLE' : states.some((state) => state === 'STALE') ? 'STALE' : 'UNKNOWN';
+  const roles = {
+    worker: projectModelRole({ role: 'worker', selected: selections.worker ?? selections.flash, health, jobs, runtime, now, executionEvidenceTtlMs: ttl, enabled: enabledRoles.worker }),
+    reviewer: projectModelRole({ role: 'reviewer', selected: selections.reviewer ?? selections.pro, health, jobs, runtime, now, executionEvidenceTtlMs: ttl, enabled: enabledRoles.reviewer }),
+  };
+  const states = Object.entries(roles).filter(([name]) => enabledRoles[name]).map(([, role]) => role.state);
+  const overall = states.length === 0 ? 'UNKNOWN'
+    : states.includes('NOT_CALLABLE') ? 'NOT_CALLABLE'
+      : states.every((state) => state === 'CALLABLE') ? 'CALLABLE'
+        : states.some((state) => state === 'STALE') ? 'STALE' : 'UNKNOWN';
   const expirations = Object.values(roles)
     .map((role) => role?.expires_at)
     .filter((value) => Number.isFinite(value));
@@ -104,7 +129,8 @@ export function projectModelCallability({ runtime = null, selections = {}, healt
     captured_at: now,
     expires_at: expirations.length ? Math.min(...expirations) : null,
     current_runtime_id: runtime?.runtime_id ?? null,
-    execution_evidence_ttl_ms,
+    execution_evidence_ttl_ms: ttl,
+    enabled_roles: enabledRoles,
     overall,
     roles,
   };
@@ -117,6 +143,7 @@ export function buildRuntimeReadinessSnapshot({
   health = [],
   jobs = [],
   workspace = null,
+  enabled_roles = {},
   now = Date.now(),
 } = {}) {
   const projectedHealth = (Array.isArray(health) ? health : []).map(projectHealth).filter(Boolean).slice(0, MAX_HEALTH);
@@ -126,7 +153,7 @@ export function buildRuntimeReadinessSnapshot({
   const reviewerJobs = projectedJobs.filter((job) => job?.role === 'reviewer').length;
   const workerSelection = projectSelection(selections.worker ?? selections.flash);
   const reviewerSelection = projectSelection(selections.reviewer ?? selections.pro);
-  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealth, jobs: projectedJobs, now });
+  const modelCallability = projectModelCallability({ runtime, selections: { worker: workerSelection, reviewer: reviewerSelection }, health: projectedHealth, jobs: projectedJobs, enabled_roles, now });
   return {
     schema_version: 1,
     captured_at: now,

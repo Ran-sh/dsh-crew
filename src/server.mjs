@@ -421,6 +421,10 @@ async function buildConfigReport() {
         readinessMatrix,
         selections: { worker: effectiveWorkerSelection.worker ?? effectiveWorkerSelection.flash, reviewer: effectiveWorkerSelection.reviewer ?? effectiveWorkerSelection.pro },
         workspace: workspaceReadiness,
+        enabled_roles: {
+          worker: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.worker_state !== 'disabled',
+          reviewer: sessionConfig.enabled !== false && globalConfig.subagents_enabled !== false && globalConfig.review_state !== 'disabled',
+        },
       });
   const extensionRuntime = hubExtension?.runtime ?? getHubRuntimeIdentity();
   const extensionContract = buildExtensionContract({

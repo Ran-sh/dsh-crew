@@ -1575,6 +1575,10 @@ export async function apply(ctx) {
           health: Array.isArray(providerHealthBody?.health) ? providerHealthBody.health.slice(0, 128) : [],
           jobs: boundedJobs,
           workspace: workspaceReadiness,
+          enabled_roles: {
+            worker: config.subagents_enabled !== false && config.worker_state !== 'disabled',
+            reviewer: config.subagents_enabled !== false && config.review_state !== 'disabled',
+          },
         });
         const contract = buildExtensionContract({
           config,

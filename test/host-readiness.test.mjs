@@ -71,6 +71,27 @@ test('native surface bridge is not applicable and incomplete runtime identity is
   assert.equal(rows.find((row) => row.id === 'official_bridge').state, READINESS_STATES.NOT_APPLICABLE);
 });
 
+test('stale or foreign runtime snapshots never become READY', () => {
+  const base = {
+    runtime: { ok: true, service: 'dsh-crew-hub', runtime_id: 'runtime-current' },
+    readiness_matrix: { rows: [{ id: 'hub_compatibility', status: 'PASS' }] },
+  };
+  const staleRows = projectHostReadiness({
+    installStatus: completeStatus(),
+    runtime: { ...base.runtime, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210 },
+    surface: 'official-bridge',
+    readinessSnapshot: { ...base, captured_at: Date.now() - (6 * 60 * 1000), runtime: { ...base.runtime, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-current' } },
+  });
+  assert.equal(staleRows.find((row) => row.id === 'crew_harness').state, READINESS_STATES.DEGRADED);
+  const foreignRows = projectHostReadiness({
+    installStatus: completeStatus(),
+    runtime: { ...base.runtime, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210 },
+    surface: 'official-bridge',
+    readinessSnapshot: { ...base, captured_at: Date.now(), runtime: { ...base.runtime, execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-old' } },
+  });
+  assert.equal(foreignRows.find((row) => row.id === 'crew_harness').state, READINESS_STATES.UNKNOWN);
+});
+
 test('explicit not-installed evidence projects UNAVAILABLE', () => {
   const rows = projectHostReadiness({
     installStatus: { codex: { installed: false }, claude: { installed: false }, zcode: { installed: false } },
@@ -86,6 +107,7 @@ test('Crew Harness readiness consumes the shared runtime snapshot when available
     runtime: { ok: true, service: 'dsh-crew-hub', runtime_version: '0.5.7', surface: 'native-crew-harness' },
     surface: 'official-bridge',
     readinessSnapshot: {
+      captured_at: Date.now(),
       runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
       readiness_matrix: { rows: [{ id: 'hub_compatibility', status: 'FAIL', reason_code: 'HUB_UNREACHABLE' }] },
     },

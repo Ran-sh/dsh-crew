@@ -3,6 +3,24 @@ import assert from 'node:assert/strict';
 import { buildExtensionContract } from '../src/extension-contract.mjs';
 import { buildRuntimeReadinessSnapshot } from '../src/runtime-readiness-snapshot.mjs';
 
+function callableSnapshot({ reviewer = false } = {}) {
+  const now = Date.now();
+  return {
+    model_callability: {
+      schema_version: 1,
+      captured_at: now,
+      expires_at: now + 60_000,
+      current_runtime_id: 'runtime-1',
+      enabled_roles: { worker: true, reviewer },
+      roles: {
+        worker: { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED' },
+        reviewer: reviewer ? { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED' } : { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' },
+      },
+      overall: 'CALLABLE',
+    },
+  };
+}
+
 test('extension contract exposes only Crew capabilities and conservative readiness', () => {
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'manual', isolation: 'worktree', escalate_on_failure: true },
@@ -36,11 +54,12 @@ test('missing readiness evidence never becomes READY', () => {
 test('real generic execution evidence proves the selected model and disabled optional review only degrades', () => {
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { runtime_id: 'runtime-1' },
     readinessMatrix: { rows: [
       { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
       { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED' },
     ] },
-    readinessSnapshot: { model_callability: { overall: 'CALLABLE', captured_at: 100, current_runtime_id: 'runtime-1' } },
+    readinessSnapshot: callableSnapshot(),
     workspace: { ok: true, context: null },
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
@@ -51,12 +70,13 @@ test('real generic execution evidence proves the selected model and disabled opt
 test('dynamic primary callability evidence is accepted without provider-specific release ids', () => {
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { runtime_id: 'runtime-1' },
     readinessMatrix: { rows: [
       { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
       { id: 'provider_catalog', status: 'PASS', reason_code: 'PROVIDER_CATALOG_RESOLVED' },
       { id: 'worker_primary_callable', status: 'PASS', reason_code: 'WORKER_PRIMARY_CALLABLE' },
     ] },
-    readinessSnapshot: { model_callability: { overall: 'CALLABLE', captured_at: 100, current_runtime_id: 'runtime-1' } },
+    readinessSnapshot: callableSnapshot(),
     workspace: { ok: true, context: null },
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
@@ -123,6 +143,21 @@ test('fresh current-route health failures are not masked by historical success',
   assert.equal(contract.readiness.components.reviewer.status, 'UNAVAILABLE');
   assert.equal(contract.readiness.components.reviewer.reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
   assert.equal(contract.readiness.status, 'UNAVAILABLE');
+});
+
+test('provider health failure wins over an inconsistent callable projection', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { runtime_id: 'runtime-1' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS', reason_code: 'LIVE_CHECK_PASSED' },
+      { id: 'provider_health', status: 'FAIL', reason_code: 'PROVIDER_ROUTE_UNCALLABLE' },
+    ] },
+    readinessSnapshot: callableSnapshot(),
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.model.status, 'UNAVAILABLE');
+  assert.equal(contract.readiness.components.model.reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
 });
 
 test('extension contract consumes the unified readiness snapshot as its matrix authority', () => {

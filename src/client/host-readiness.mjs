@@ -6,6 +6,8 @@ export const READINESS_STATES = Object.freeze({
   NOT_APPLICABLE: 'NOT_APPLICABLE',
 });
 
+const MAX_RUNTIME_SNAPSHOT_AGE_MS = 5 * 60 * 1000;
+
 function componentState(status, keys, { aligned = false } = {}) {
   if (status === undefined || status === null || typeof status !== 'object') return READINESS_STATES.UNKNOWN;
   if (status.installed === false) return READINESS_STATES.UNAVAILABLE;
@@ -23,6 +25,12 @@ function runtimeState(runtime, readinessSnapshot) {
       && Number(identity.listen_port) === 3210 && typeof identity.runtime_id === 'string' && identity.runtime_id.trim())) {
       return READINESS_STATES.UNAVAILABLE;
     }
+    if (typeof runtime?.runtime_id === 'string' && runtime.runtime_id.trim() && runtime.runtime_id !== identity.runtime_id) {
+      return READINESS_STATES.UNKNOWN;
+    }
+    if (!Number.isFinite(readinessSnapshot.captured_at)) return READINESS_STATES.UNKNOWN;
+    if (readinessSnapshot.captured_at > Date.now() + 30_000) return READINESS_STATES.UNKNOWN;
+    if (Date.now() - readinessSnapshot.captured_at > MAX_RUNTIME_SNAPSHOT_AGE_MS) return READINESS_STATES.DEGRADED;
     const row = Array.isArray(readinessSnapshot.readiness_matrix?.rows)
       ? readinessSnapshot.readiness_matrix.rows.find((entry) => entry?.id === 'hub_compatibility') : undefined;
     if (row?.status === 'PASS') return READINESS_STATES.READY;

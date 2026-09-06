@@ -34,21 +34,38 @@ function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }
 
-function modelReadinessFromSnapshot(readinessSnapshot, matrix) {
+function validProjectionIdentity(callability, runtime, now = Date.now()) {
+  return callability && typeof callability === 'object' && callability.schema_version === 1
+    && Number.isFinite(callability.captured_at) && callability.captured_at <= now
+    && typeof callability.current_runtime_id === 'string' && callability.current_runtime_id.trim()
+    && callability.current_runtime_id === runtime?.runtime_id;
+}
+
+function validCallableProjection(callability, runtime, now = Date.now()) {
+  if (!validProjectionIdentity(callability, runtime, now)
+    || !Number.isFinite(callability.expires_at) || callability.expires_at <= now
+    || !callability.enabled_roles || typeof callability.enabled_roles !== 'object'
+    || !callability.roles || typeof callability.roles !== 'object') return false;
+  const activeRoles = Object.entries(callability.enabled_roles).filter(([, enabled]) => enabled === true).map(([role]) => role);
+  return activeRoles.length > 0 && activeRoles.every((role) => callability.roles?.[role]?.state === 'CALLABLE');
+}
+
+function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, now = Date.now()) {
   const callability = readinessSnapshot?.model_callability;
   const providerHealthEvidence = row(matrix, 'provider_health');
   const catalogEvidence = row(matrix, 'provider_catalog');
+  if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
+  if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
   if (callability && typeof callability === 'object') {
     const roles = callability.roles && typeof callability.roles === 'object' ? Object.values(callability.roles) : [];
-    if (callability.overall === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, runtime_id: callability.current_runtime_id });
-    if (roles.some((role) => role?.state === 'NOT_CALLABLE') || callability.overall === 'NOT_CALLABLE') return component('UNAVAILABLE', roles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    if (callability.overall === 'CALLABLE' && validCallableProjection(callability, runtime, now)) return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
+    if (validProjectionIdentity(callability, runtime, now) && (roles.some((role) => role?.state === 'NOT_CALLABLE') || callability.overall === 'NOT_CALLABLE')) return component('UNAVAILABLE', roles.find((role) => role?.state === 'NOT_CALLABLE')?.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    if (!validProjectionIdentity(callability, runtime, now)) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_CURRENT');
     if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
     if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
     if (callability.overall === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
     return component('DEGRADED', 'MODEL_CALLABILITY_UNKNOWN');
   }
-  if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);
-  if (catalogEvidence?.status === 'FAIL') return readinessFromRow(catalogEvidence);
   if (providerHealthEvidence || catalogEvidence) return component('DEGRADED', 'MODEL_CALLABILITY_NOT_PROJECTED');
   return component('UNAVAILABLE', 'MODEL_CALLABILITY_NOT_PROJECTED');
 }
@@ -59,7 +76,7 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, read
   const reviewerEnabled = config.subagents_enabled !== false && config.review_state !== 'disabled';
   const reviewerHealthEvidence = row(matrix, 'reviewer_health');
   const lifecycleEvidence = row(matrix, 'provider_lifecycle_consistent');
-  const modelReadiness = modelReadinessFromSnapshot(readinessSnapshot, matrix);
+  const modelReadiness = modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime);
   const components = {
     harness: readinessFromRow(row(matrix, 'hub_compatibility')),
     provider_lifecycle: lifecycleEvidence
