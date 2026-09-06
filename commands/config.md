@@ -1,11 +1,23 @@
 ---
-description: Show or set this session's DSH worker defaults (tier / effort / mode / timeout / on-off / collaboration policy)
+description: Read or set session DSH worker configuration using the live tool schema
 ---
 
 User input: $ARGUMENTS
 
-Parse the input into key=value pairs. Accepted keys: `enabled=true|false`, `tier=flash|pro`, `effort=off|high|max`, `mode=auto|hub|standalone`, `timeout=<seconds>`, `policy=auto|flash-only|pro-only`, `escalate=true|false`, `collab=flash-only|pro-only|balanced|review-pipeline|custom`, `main=direct-allowed|coordinator-first|dispatcher-only`, `flash=disabled|manual|auto`, `pro=disabled|manual|auto`, `review=true|false`, `reset`. Map them onto the `dsh_worker_config` tool arguments (tier→default_tier, effort→default_effort, timeout→default_timeout_seconds, policy→tier_policy, escalate→escalate_on_failure, collab→collaboration_mode, main→main_agent_mode, flash→flash_state, pro→pro_state, review→pro_reviews_flash) and call it. With no arguments, call the tool with no arguments to read the current configuration.
+Read or update this session with dsh_worker_config. With no arguments, pass {}.
+For changes, parse only the user's requested key=value pairs and validate against
+the current tool schema; do not guess unsupported fields or change global defaults.
 
-Then show the returned configuration (including `hub_reachable`) as one compact table, plus the effective `flash_state` / `pro_state`, the `effective_policy` summary and the short `routing_guidance`. Name the fields that changed if anything did. Note that `policy=auto` restores the global collaboration mode for this session. Reply in the language the user is writing in. Do nothing else.
+Aliases → tool fields:
+- enabled → enabled; tier → default_tier; effort → default_effort
+- mode → mode; timeout → default_timeout_seconds; policy → tier_policy
+- escalate → escalate_on_failure; collab → collaboration_mode; main → main_agent_mode
+- flash → flash_state; pro → pro_state; review → pro_reviews_flash
+- reset → reset: true
 
-DSH Crew routing policy is runtime-configurable. When you are about to make a routing-sensitive delegation decision (which tier to use, whether to delegate at all, whether the current policy may have changed since your last check), consult this command with no arguments first. Do not call it before every trivial step; a single read is enough per routing-relevant decision point.
+Current writable modes are auto|hub; standalone is legacy read/migration only.
+Crew effort is off|high|max, not the host model's reasoning setting.
+Other values must match the live schema. Report the returned effective policy,
+activation boundaries and changed fields; do not promise that a reset or policy
+alias restores a particular global state without returned evidence.
+Use a compact response in the user's language. No unrelated actions.

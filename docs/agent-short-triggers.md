@@ -1,6 +1,6 @@
 # Short Triggers
 
-All compatible executors use the same authoritative task:
+For explicitly requested contract handoffs, all compatible executors use the same task:
 
 `docs/agent-tasks/ACTIVE_TASK.json`
 

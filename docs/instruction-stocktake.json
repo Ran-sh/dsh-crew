@@ -1,0 +1,149 @@
+{
+  "evaluated_at": "2026-09-06T04:04:42Z",
+  "mode": "full",
+  "scope": "repository-only",
+  "baseline_commit": "cc03df16d938dde77e460e9a7b0118303c8d09dc",
+  "batch_progress": {
+    "total": 9,
+    "evaluated": 9,
+    "unit": "instruction groups and skills",
+    "status": "completed"
+  },
+  "usage_7d": null,
+  "usage_30d": null,
+  "usage_note": "No per-file invocation telemetry was available; no frequency claims inferred.",
+  "sources": [
+    "https://developers.openai.com/api/docs/guides/latest-model",
+    "https://learn.chatgpt.com/docs/agent-configuration/agents-md",
+    "https://learn.chatgpt.com/docs/build-skills"
+  ],
+  "metrics": {
+    "unit": "UTF-8 bytes, normalized LF",
+    "policy": {
+      "before": 7804,
+      "after": 5542,
+      "reductionPercent": 29
+    },
+    "workflow": {
+      "before": 11111,
+      "after": 7415,
+      "reductionPercent": 33
+    },
+    "dispatchers": {
+      "before": 18438,
+      "after": 16643,
+      "reductionPercent": 10
+    },
+    "new_files": {
+      "AGENTS.md": 2644,
+      "SKILL.md": 2743
+    }
+  },
+  "skills": {
+    "dsh-crew-development": {
+      "path": ".agents/skills/dsh-crew-development/SKILL.md",
+      "verdict": "Keep",
+      "reason": "New repo-only skill: selective file routing and validation commands, without duplicating a generic coding manual or installing global policy."
+    }
+  },
+  "groups": [
+    {
+      "paths": [
+        "AGENTS.md"
+      ],
+      "verdict": "Improve",
+      "reason": "Root guidance was absent; added task-mode routing, project isolation and concise completion rules."
+    },
+    {
+      "paths": [
+        "codex/AGENTS.md",
+        "zcode/AGENTS.md"
+      ],
+      "verdict": "Improve",
+      "reason": "Condensed Codex policy while retaining operator pause and Harness redlines; clarified nonterminal waits and review failures in separately installed ZCode policy."
+    },
+    {
+      "paths": [
+        "agents/*.md",
+        "codex/agents/*.toml",
+        "zcode/agents/*.md"
+      ],
+      "verdict": "Update",
+      "reason": "Replaced raw verbatim forwarding with bounded complete objectives and compact evidence; track one async workflow and preserve aliases, live policy and read-only roles."
+    },
+    {
+      "paths": [
+        "commands/config.md",
+        "codex/prompts/dsh-config.md",
+        "zcode/commands/dsh-config.md"
+      ],
+      "verdict": "Update",
+      "reason": "Removed unsupported writable standalone mode, aligned alias mappings with src/server.mjs, and stopped claiming policy=auto necessarily restores global state."
+    },
+    {
+      "paths": [
+        "commands/status.md",
+        "codex/prompts/dsh-status.md",
+        "zcode/commands/dsh-status.md"
+      ],
+      "verdict": "Improve",
+      "reason": "Report available workflow fields without invented counters; keep commands read-only."
+    },
+    {
+      "paths": [
+        "commands/on.md",
+        "commands/off.md"
+      ],
+      "verdict": "Keep",
+      "reason": "Already small, explicit session-level mutations with no redundant workflow."
+    },
+    {
+      "paths": [
+        "docs/agent-workflow.md",
+        "docs/agent-short-triggers.md",
+        "docs/agent-tasks/*"
+      ],
+      "verdict": "Improve",
+      "reason": "Scope mandatory ACTIVE protocol to explicit handoffs; preserve source SHA enforcement, writable-path limits and stamped Result v2 semantics; use LATEST in template and proportionate validation."
+    },
+    {
+      "paths": [
+        ".github/workflows/ci.yml",
+        "src/workflow.mjs",
+        "src/workflow-runtime.mjs",
+        "src/information-flow.mjs",
+        "docs/agent-results/README.md",
+        ".agent-workflow/"
+      ],
+      "verdict": "Keep",
+      "reason": "Product runtime/schema/CI semantics are not host prompting knobs; retain executable contracts and historical evidence. No runtime algorithm or release behavior changed."
+    }
+  ],
+  "validation": {
+    "installer_dispatcher_tests": {
+      "passed": 48,
+      "failed": 0
+    },
+    "toml_files": 4,
+    "agent_frontmatters": 6,
+    "skill_validator": "PASS",
+    "task_template_validator": "PASS",
+    "forward_scenarios": 8,
+    "independent_review": "APPROVE after restoring explicit source SHA match"
+  },
+  "constraints_preserved": [
+    "DSH unavailable operator gate",
+    "manual and disabled capabilities",
+    "official ~/.dsh isolation",
+    "review-only semantics",
+    "Result Contract validator ownership",
+    "no implicit external-write authority"
+  ],
+  "side_effects": {
+    "global_policy_changed": false,
+    "model_routing_changed": false,
+    "services_restarted": false,
+    "npm_published": false
+  },
+  "performance_note": "Instruction size and scenario decisions were checked. No before/after GPT-6 Astra latency, token-usage or task-quality A/B benchmark was run."
+}

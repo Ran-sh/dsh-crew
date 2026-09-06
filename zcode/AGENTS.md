@@ -18,9 +18,12 @@ work only after its live capability and readiness surfaces have been checked.
 - If Crew is selected and any required capability is unavailable, non-callable,
   or returns an unknown/runtime/configuration/credential/routing/timeout error,
   pause. Report the evidence and wait for the operator to choose repair Crew or
-  continue locally; never silently fall back or retry blindly.
+  continue locally; do not repair/reconfigure, silently fall back or retry blindly
+  before that decision. A nonterminal bounded wait is not a transport timeout.
 - Validate returned evidence, changed scope, tests and completion state before
   accepting delegated work. Do not expose credentials or raw provider payloads.
+- Continue the authorized task after a successful subtask; do not stop at its
+  checkpoint. Missing evidence or requested review changes are not approval.
 
 ## Harness upgrade redlines
 

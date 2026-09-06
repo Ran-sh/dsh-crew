@@ -1,6 +1,7 @@
 # Agent Task Contracts
 
-Task Contracts define work. They do not define which executor must perform it.
+Task Contracts define explicitly invoked handoff work, not ordinary direct user
+requests. They do not define which executor must perform it.
 
 Supported modes:
 
@@ -57,7 +58,7 @@ node .agent-workflow/validator/validate-contract.mjs task docs/agent-tasks/ACTIV
 
 ## Source of authority
 
-Permissions come only from the active Task Contract, especially:
+Within an authorized handoff, the active Task Contract narrows permissions through:
 
 - `mode`;
 - `source_branch` and `source_commit`;

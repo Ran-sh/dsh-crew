@@ -2,7 +2,7 @@
   "id": "TASK-REPLACE-ME",
   "mode": "IMPLEMENT",
   "source_branch": "main",
-  "source_commit": "REPLACE_WITH_COMMIT_SHA_OR_LATEST_DEFAULT_BRANCH",
+  "source_commit": "LATEST",
   "objective": "Replace with the concrete task outcome.",
   "context": "Replace with only the context required to execute the task.",
   "allowed_changes": [
