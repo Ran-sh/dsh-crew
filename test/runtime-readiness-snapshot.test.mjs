@@ -78,3 +78,18 @@ test('session role disablement re-projects a Hub snapshot without reviewer block
   assert.equal(projected.overall, 'CALLABLE');
   assert.equal(projected.roles.reviewer.state, 'NOT_APPLICABLE');
 });
+
+test('session re-projection preserves bounded same-runtime execution evidence', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const snapshot = buildRuntimeReadinessSnapshot({
+    runtime,
+    selections: { worker: { provider: 'p', model: 'worker' } },
+    health_status: 'AVAILABLE',
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'worker', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    enabled_roles: { worker: true, reviewer: false },
+    now: 10_000,
+  });
+  const projected = reprojectRuntimeModelCallability(snapshot, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
+  assert.equal(projected.roles.worker.state, 'CALLABLE');
+  assert.equal(projected.overall, 'CALLABLE');
+});

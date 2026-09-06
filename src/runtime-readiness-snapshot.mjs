@@ -211,12 +211,31 @@ export function buildRuntimeReadinessSnapshot({
 /** Re-project a Hub snapshot when the MCP session changes role enablement. */
 export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {}, now = Date.now() } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return null;
+  const historicalJobs = Object.entries({ worker: snapshot.worker, reviewer: snapshot.reviewer })
+    .filter(([role, value]) => enabled_roles?.[role] !== false && value?.selected?.provider && value?.selected?.model)
+    .map(([role, value]) => {
+      const evidence = snapshot.model_callability?.roles?.[role];
+      const lastSuccess = evidence?.source === 'execution' && evidence?.state === 'CALLABLE' ? evidence.last_success : null;
+      if (!lastSuccess || !Number.isFinite(lastSuccess.observed_at)
+        || !isExactNativeCrewIdentity(snapshot.runtime)
+        || !sameCompleteRuntimeIdentity(snapshot.runtime, snapshot.model_callability?.runtime_identity)) return null;
+      return {
+        id: lastSuccess.job_id ?? `reprojected-${role}`,
+        role,
+        provider: value.selected.provider,
+        model: value.selected.model,
+        status: 'done',
+        task_status: 'success',
+        endedAt: new Date(lastSuccess.observed_at).toISOString(),
+        execution_context: snapshot.runtime,
+      };
+    }).filter(Boolean);
   return projectModelCallability({
     runtime: snapshot.runtime,
     selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
     health: snapshot.health ?? [],
     health_status: snapshot.health_status ?? 'UNKNOWN',
-    jobs: [],
+    jobs: historicalJobs,
     enabled_roles,
     now,
   });
