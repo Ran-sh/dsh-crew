@@ -111,3 +111,25 @@ test('health store equal-time failure remains authoritative in the canonical sna
   });
   assert.equal(snapshot.model_callability.roles.worker.state, 'NOT_CALLABLE');
 });
+
+test('session re-projection does not transplant or renew execution evidence', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const snapshot = buildRuntimeReadinessSnapshot({
+    runtime,
+    selections: { worker: { provider: 'p1', model: 'm1' } },
+    health_status: 'AVAILABLE',
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p1', model: 'm1', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    enabled_roles: { worker: true, reviewer: false },
+    now: 10_000,
+  });
+  snapshot.worker.selected = { provider: 'p2', model: 'm2' };
+  const mismatched = reprojectRuntimeModelCallability(snapshot, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
+  assert.equal(mismatched.roles.worker.state, 'UNKNOWN');
+  const expired = structuredClone(snapshot);
+  expired.worker.selected = { provider: 'p1', model: 'm1' };
+  expired.model_callability.roles.worker.last_success.expires_at = 9_999;
+  expired.model_callability.roles.worker.expires_at = 9_999;
+  expired.expires_at = 9_999;
+  const expiredProjection = reprojectRuntimeModelCallability(expired, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
+  assert.equal(expiredProjection.roles.worker.state, 'UNKNOWN');
+});

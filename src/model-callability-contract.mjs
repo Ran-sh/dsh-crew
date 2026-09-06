@@ -11,14 +11,26 @@ function exactKeys(value, keys) {
     && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
+function route(value) {
+  return typeof value?.provider === 'string' && value.provider.trim()
+    && typeof value?.model === 'string' && value.model.trim()
+    ? { provider: value.provider.trim(), model: value.model.trim() } : null;
+}
+
 function validEvidence(role, now) {
   if (!SOURCES.has(role.source) || !Number.isFinite(role.observed_at) || role.observed_at > now
     || !Number.isFinite(role.expires_at) || role.expires_at <= now
     || role.expires_at - role.observed_at > MAX_EVIDENCE_TTL_MS) return false;
+  if (role.source === 'execution') {
+    if (!role.last_success || typeof role.last_success !== 'object'
+      || typeof role.last_success.job_id !== 'string' || !role.last_success.job_id.trim()
+      || role.last_success.observed_at !== role.observed_at
+      || role.last_success.expires_at !== role.expires_at) return false;
+  }
   return true;
 }
 
-export function validateModelCallabilityV2({ projection, runtime, expectedEnabledRoles, now = Date.now() } = {}) {
+export function validateModelCallabilityV2({ projection, runtime, expectedEnabledRoles, expectedSelections, now = Date.now() } = {}) {
   const fail = (reason_code) => ({ ok: false, reason_code, state: 'UNKNOWN' });
   if (!projection || typeof projection !== 'object' || projection.schema_version !== MODEL_CALLABILITY_SCHEMA_VERSION) return fail('MODEL_CALLABILITY_SCHEMA_INVALID');
   if (!isExactNativeCrewIdentity(runtime) || !isExactNativeCrewIdentity(projection.runtime_identity)
@@ -36,8 +48,15 @@ export function validateModelCallabilityV2({ projection, runtime, expectedEnable
       if (role.state !== 'NOT_APPLICABLE' || role.reason_code !== 'ROLE_DISABLED') return fail('MODEL_CALLABILITY_DISABLED_ROLE_INVALID');
       continue;
     }
+    const selected = route(role.selected);
+    if (role.selected !== undefined && role.selected !== null && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
+    if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state) && !selected) return fail('MODEL_CALLABILITY_SELECTION_INVALID');
+    if (expectedSelections?.[roleName]) {
+      const expected = route(expectedSelections[roleName]);
+      if (!expected || !selected || expected.provider !== selected.provider || expected.model !== selected.model) return fail('MODEL_CALLABILITY_SELECTION_MISMATCH');
+    }
     if (['CALLABLE', 'NOT_CALLABLE'].includes(role.state)) {
-      if (!role.selected?.provider || !role.selected?.model || !validEvidence(role, now)) return fail('MODEL_CALLABILITY_EVIDENCE_INVALID');
+      if (!validEvidence(role, now)) return fail('MODEL_CALLABILITY_EVIDENCE_INVALID');
     }
   }
 

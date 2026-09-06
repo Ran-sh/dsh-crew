@@ -23,6 +23,7 @@ test('schema-v2 validator rejects incomplete, contradictory, and expired role ev
     { ...base, roles: { ...base.roles, reviewer: { state: 'UNKNOWN' } } },
     { ...base, roles: { ...base.roles, worker: { ...base.roles.worker, expires_at: 9_999 } } },
     { ...base, roles: { ...base.roles, worker: { ...base.roles.worker, selected: null } } },
+    { ...base, roles: { ...base.roles, worker: { ...base.roles.worker, selected: { provider: {}, model: 42 } } } },
     { ...base, overall: 'UNKNOWN' },
   ]) {
     assert.equal(validateModelCallabilityV2({ projection, runtime, now }).ok, false);
@@ -31,5 +32,6 @@ test('schema-v2 validator rejects incomplete, contradictory, and expired role ev
 
 test('schema-v2 validator enforces configured role enablement and complete runtime', () => {
   assert.equal(validateModelCallabilityV2({ projection: base, runtime, expectedEnabledRoles: { worker: true, reviewer: true }, now }).ok, false);
+  assert.equal(validateModelCallabilityV2({ projection: base, runtime, expectedSelections: { worker: { provider: 'other', model: 'm' }, reviewer: null }, now }).ok, false);
   assert.equal(validateModelCallabilityV2({ projection: base, runtime: { ...runtime, listen_port: 3080 }, now }).ok, false);
 });

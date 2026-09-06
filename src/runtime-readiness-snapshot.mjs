@@ -9,7 +9,6 @@ const MAX_HEALTH = 128;
 const DEFAULT_EXECUTION_EVIDENCE_TTL_MS = 5 * 60 * 1000;
 const MIN_EXECUTION_EVIDENCE_TTL_MS = 1_000;
 const MAX_EXECUTION_EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000;
-const CLOCK_SKEW_MS = 30_000;
 
 function text(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 
@@ -97,7 +96,7 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
   const expiresAt = Number.isFinite(matchingHealth?.expires_at) ? matchingHealth.expires_at : null;
   const observedAt = Number.isFinite(matchingHealth?.observed_at) ? matchingHealth.observed_at : null;
   if (matchingHealth) {
-    if (observedAt === null || observedAt > now + CLOCK_SKEW_MS || expiresAt === null || expiresAt <= now
+    if (observedAt === null || observedAt > now || expiresAt === null || expiresAt <= now
       || expiresAt - observedAt > MAX_EXECUTION_EVIDENCE_TTL_MS) {
       return { state: 'STALE', reason_code: 'PROVIDER_HEALTH_STALE_OR_INVALID', selected, observed_at: observedAt, expires_at: expiresAt, source: 'provider_health', last_success: null };
     }
@@ -211,14 +210,22 @@ export function buildRuntimeReadinessSnapshot({
 /** Re-project a Hub snapshot when the MCP session changes role enablement. */
 export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {}, now = Date.now() } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return null;
+  const retainedExpiry = {};
   const historicalJobs = Object.entries({ worker: snapshot.worker, reviewer: snapshot.reviewer })
     .filter(([role, value]) => enabled_roles?.[role] !== false && value?.selected?.provider && value?.selected?.model)
     .map(([role, value]) => {
       const evidence = snapshot.model_callability?.roles?.[role];
       const lastSuccess = evidence?.source === 'execution' && evidence?.state === 'CALLABLE' ? evidence.last_success : null;
       if (!lastSuccess || !Number.isFinite(lastSuccess.observed_at)
+        || !Number.isFinite(lastSuccess.expires_at) || lastSuccess.expires_at <= now || lastSuccess.observed_at > now
         || !isExactNativeCrewIdentity(snapshot.runtime)
-        || !sameCompleteRuntimeIdentity(snapshot.runtime, snapshot.model_callability?.runtime_identity)) return null;
+        || !sameCompleteRuntimeIdentity(snapshot.runtime, snapshot.model_callability?.runtime_identity)
+        || !sameCompleteRuntimeIdentity(snapshot.runtime, evidence.runtime_identity ?? snapshot.model_callability.runtime_identity)
+        || !sameCompleteRuntimeIdentity(snapshot.runtime, evidence.selected_runtime_identity ?? snapshot.runtime)
+        || !evidence.selected?.provider || !evidence.selected?.model
+        || evidence.selected.provider !== value.selected.provider || evidence.selected.model !== value.selected.model
+        || lastSuccess.observed_at !== evidence.observed_at || lastSuccess.expires_at !== evidence.expires_at) return null;
+      retainedExpiry[role] = lastSuccess.expires_at;
       return {
         id: lastSuccess.job_id ?? `reprojected-${role}`,
         role,
@@ -230,7 +237,7 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
         execution_context: snapshot.runtime,
       };
     }).filter(Boolean);
-  return projectModelCallability({
+  const projected = projectModelCallability({
     runtime: snapshot.runtime,
     selections: { worker: snapshot.worker?.selected, reviewer: snapshot.reviewer?.selected },
     health: snapshot.health ?? [],
@@ -239,4 +246,13 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
     enabled_roles,
     now,
   });
+  for (const [role, expiry] of Object.entries(retainedExpiry)) {
+    if (projected.roles?.[role]?.source === 'execution' && Number.isFinite(projected.roles[role].expires_at)) {
+      projected.roles[role].expires_at = Math.min(projected.roles[role].expires_at, expiry);
+      if (projected.roles[role].last_success) projected.roles[role].last_success.expires_at = Math.min(projected.roles[role].last_success.expires_at, expiry);
+    }
+  }
+  const expirations = Object.values(projected.roles).map((role) => role?.expires_at).filter((value) => Number.isFinite(value));
+  projected.expires_at = expirations.length ? Math.min(...expirations) : null;
+  return projected;
 }

@@ -10,7 +10,7 @@ test('client maps only the server model_callability projection', () => {
     schema_version: 2, captured_at: now, expires_at: now + 10_000, current_runtime_id: 'r1',
     runtime_identity: runtime,
     enabled_roles: { worker: true, reviewer: false },
-    roles: { worker: { state: 'CALLABLE', selected: { provider: 'p', model: 'm' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 10_000 }, reviewer: { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' } }, overall: 'CALLABLE',
+    roles: { worker: { state: 'CALLABLE', selected: { provider: 'p', model: 'm' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 10_000, last_success: { job_id: 'job-1', observed_at: now - 1_000, expires_at: now + 10_000 } }, reviewer: { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' } }, overall: 'CALLABLE',
   };
   assert.equal(modelCallabilityState(callable, runtime, now), READINESS_STATES.READY);
   assert.equal(modelCallabilityState({ ...callable, schema_version: 1 }, runtime, now), READINESS_STATES.UNKNOWN);

@@ -88,3 +88,11 @@ test('future-dated execution evidence is not callable', () => {
   assert.equal(result.roles.worker.state, 'STALE');
   assert.equal(result.roles.worker.reason_code, 'EXECUTION_EVIDENCE_FUTURE_DATED');
 });
+
+test('future-dated provider health is never callable', () => {
+  const result = projectModelCallability({ ...base,
+    health: [{ provider: 'p', model: 'm', state: 'callable', fresh: true, observed_at: 10_001, expires_at: 20_000 }],
+  });
+  assert.equal(result.roles.worker.state, 'STALE');
+  assert.equal(result.roles.worker.reason_code, 'PROVIDER_HEALTH_STALE_OR_INVALID');
+});

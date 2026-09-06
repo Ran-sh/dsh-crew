@@ -13,7 +13,7 @@ import {
 import { ActivationSummary } from './activation-summary';
 import { projectHostReadiness, READINESS_STATES } from './host-readiness.mjs';
 import { modelCallabilityState } from './model-callability-view.mjs';
-import { acceptReadinessResponse } from './readiness-envelope.mjs';
+import { acceptReadinessResponse, readinessExpiryDelay } from './readiness-envelope.mjs';
 import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from './surface-detection.mjs';
 import { aggregateModelInvocations } from './task-telemetry.mjs';
 import { PanelHeader, PanelStyles } from './panel-chrome';
@@ -552,10 +552,18 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
   const [surface, setSurface] = useState<string>('detecting');
-  const [readinessEnvelope, setReadinessEnvelope] = useState<{ runtime?: any; snapshot?: any }>({});
+  const [readinessEnvelope, setReadinessEnvelope] = useState<{ runtime?: any; snapshot?: any; expiresAt?: number | null }>({});
   const readinessGeneration = useRef(0);
   const runtimeInfo = readinessEnvelope.runtime;
   const readinessSnapshot = readinessEnvelope.snapshot;
+
+  useEffect(() => {
+    const delay = readinessExpiryDelay(readinessEnvelope.expiresAt);
+    if (delay === null) return undefined;
+    const expected = readinessEnvelope;
+    const timer = setTimeout(() => setReadinessEnvelope((current) => current === expected ? {} : current), delay);
+    return () => clearTimeout(timer);
+  }, [readinessEnvelope]);
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
@@ -604,7 +612,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   /** Every request carries the active locale: the panel is the authority on it
    * (DSH's setting may be unset), and the hub localizes its own strings from it. */
   const withLang = useCallback((path: string) => `${API}${path}${path.includes('?') ? '&' : '?'}lang=${locale === 'zh' ? 'zh' : 'en'}`, [locale]);
-  const get = useCallback(async (path: string) => readJson(await fetch(withLang(path), { cache: 'no-store' }), path), [readJson, withLang]);
+  const get = useCallback(async (path: string, timeoutMs = 8_000) => readJson(await fetch(withLang(path), { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) }), path), [readJson, withLang]);
   const post = useCallback(async (path: string, body: any) => readJson(await fetch(withLang(path), {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...body, lang: locale === 'zh' ? 'zh' : 'en' }),
@@ -661,7 +669,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     void refreshAll();
     const timer = setInterval(() => {
       const generation = ++readinessGeneration.current;
-      void Promise.all([get('/jobs').catch(() => null), get('/provider-health').catch(() => null), get('/extension').catch(() => null)]).then(([j, health, ext]) => {
+      void Promise.all([get('/jobs', 5_000).catch(() => null), get('/provider-health', 5_000).catch(() => null), get('/extension', 5_000).catch(() => null)]).then(([j, health, ext]) => {
         if (generation !== readinessGeneration.current) return;
         if (j?.ok) setJobs(j.jobs ?? []);
         if (health?.ok) setProviderHealth(health.health ?? []);

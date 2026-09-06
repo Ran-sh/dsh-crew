@@ -166,7 +166,9 @@ test('client consumes the Hub extension readiness snapshot instead of recomputin
   assert.match(panelSource, /get\('\/extension'\)\.catch\(\(\) => null\)/);
   assert.match(panelSource, /acceptReadinessResponse\(ext, \{ generation, latestGeneration: readinessGeneration\.current \}\)/);
   assert.match(panelSource, /readinessSnapshot \}/);
-  assert.match(panelSource, /get\('\/jobs'\)\.catch\(\(\) => null\)/);
+  assert.match(panelSource, /get\('\/jobs', 5_000\)\.catch\(\(\) => null\)/);
+  assert.match(panelSource, /AbortSignal\.timeout/);
+  assert.match(panelSource, /setTimeout\(\(\) => setReadinessEnvelope/);
   assert.match(panelSource, /setReadinessEnvelope\(\{\}\)/);
 });
 

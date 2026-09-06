@@ -41,7 +41,13 @@ function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, expected
   const providerHealthEvidence = row(matrix, 'provider_health');
   const catalogEvidence = row(matrix, 'provider_catalog');
   if (callability && typeof callability === 'object') {
-    const validation = validateModelCallabilityV2({ projection: callability, runtime, expectedEnabledRoles, now });
+    const validation = validateModelCallabilityV2({
+      projection: callability,
+      runtime,
+      expectedEnabledRoles,
+      expectedSelections: { worker: readinessSnapshot?.worker?.selected, reviewer: readinessSnapshot?.reviewer?.selected },
+      now,
+    });
     if (validation.ok && validation.state === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
     if (validation.ok && validation.state === 'NOT_CALLABLE') return component('UNAVAILABLE', callability.roles.worker?.state === 'NOT_CALLABLE' ? callability.roles.worker.reason_code : callability.roles.reviewer.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
     if (validation.ok && validation.state === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
@@ -71,9 +77,9 @@ export function buildExtensionContract({ config = {}, readinessMatrix = {}, read
       ? reviewerHealthEvidence?.status === 'FAIL'
         ? readinessFromRow(reviewerHealthEvidence)
         : readinessFromRow(row(matrix, 'reviewer_pipeline'))
-      : component('DEGRADED', 'REVIEWER_DISABLED'),
+      : component('NOT_APPLICABLE', 'REVIEWER_DISABLED'),
   };
-  const states = Object.values(components).map((entry) => entry.status);
+  const states = Object.entries(components).filter(([key]) => key !== 'reviewer' || reviewerEnabled).map(([, entry]) => entry.status);
   const readiness = states.includes('UNAVAILABLE') ? 'UNAVAILABLE' : states.includes('DEGRADED') ? 'DEGRADED' : 'READY';
   return {
     schema_version: EXTENSION_CONTRACT_SCHEMA_VERSION,

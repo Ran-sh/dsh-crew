@@ -15,8 +15,8 @@ function callableSnapshot({ reviewer = false } = {}) {
       runtime_identity: runtime,
       enabled_roles: { worker: true, reviewer },
       roles: {
-        worker: { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'worker' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000 },
-        reviewer: reviewer ? { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'reviewer' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000 } : { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' },
+        worker: { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'worker' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000, last_success: { job_id: 'job-worker', observed_at: now - 1_000, expires_at: now + 60_000 } },
+        reviewer: reviewer ? { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected: { provider: 'p', model: 'reviewer' }, source: 'execution', observed_at: now - 1_000, expires_at: now + 60_000, last_success: { job_id: 'job-reviewer', observed_at: now - 1_000, expires_at: now + 60_000 } } : { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED' },
       },
       overall: 'CALLABLE',
     },
@@ -65,7 +65,7 @@ test('real generic execution evidence proves the selected model and disabled opt
     workspace: { ok: true, context: null },
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
-  assert.equal(contract.readiness.components.reviewer.status, 'DEGRADED');
+  assert.equal(contract.readiness.components.reviewer.status, 'NOT_APPLICABLE');
   assert.equal(contract.readiness.status, 'DEGRADED');
 });
 
@@ -145,6 +145,21 @@ test('fresh current-route health failures are not masked by historical success',
   assert.equal(contract.readiness.components.reviewer.status, 'UNAVAILABLE');
   assert.equal(contract.readiness.components.reviewer.reason_code, 'PROVIDER_ROUTE_UNCALLABLE');
   assert.equal(contract.readiness.status, 'UNAVAILABLE');
+});
+
+test('disabled reviewer is not part of the extension readiness aggregate', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'PASS' },
+      { id: 'provider_lifecycle_consistent', status: 'PASS' },
+    ] },
+    readinessSnapshot: callableSnapshot(),
+    workspace: { status: 'READY' },
+  });
+  assert.equal(contract.readiness.components.reviewer.status, 'NOT_APPLICABLE');
+  assert.equal(contract.readiness.status, 'READY');
 });
 
 test('validated canonical projection is the single model readiness answer', () => {
