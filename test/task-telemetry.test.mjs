@@ -41,8 +41,29 @@ test('telemetry ignores jobs without a concrete model and never mutates input', 
   ]);
   assert.deepEqual(aggregateModelInvocations(jobs), [{
     provider: 'p', model: 'm', count: 1, task_sources: ['api'], selection_sources: ['unknown'],
-    roles: ['worker'], last_called_at: null,
+    roles: [], last_called_at: null,
   }]);
+});
+
+test('telemetry does not infer worker for missing or unknown roles', () => {
+  const rows = aggregateModelInvocations([
+    { provider: 'p', model: 'm', turn: 1, role: undefined, startedAt: '2026-08-26T01:00:00.000Z' },
+    { provider: 'p', model: 'm', turn: 1, role: 'future-role', startedAt: '2026-08-26T02:00:00.000Z' },
+    { provider: 'p', model: 'm', turn: 1, role: 'worker', startedAt: '2026-08-26T03:00:00.000Z' },
+    { provider: 'p', model: 'm', turn: 1, role: 'reviewer', startedAt: '2026-08-26T04:00:00.000Z' },
+  ]);
+
+  assert.deepEqual(rows[0].roles, ['reviewer', 'worker']);
+  assert.equal(rows[0].count, 4, 'count remains qualifying jobs, independent of role validity');
+});
+
+test('telemetry counts qualifying jobs once, not inferred model turns', () => {
+  const rows = aggregateModelInvocations([
+    { provider: 'p', model: 'm', role: 'worker', turn: 8, toolCalls: 12, startedAt: '2026-08-26T01:00:00.000Z' },
+    { provider: 'p', model: 'm', role: 'worker', turn: 1, toolCalls: 1, startedAt: '2026-08-26T02:00:00.000Z' },
+  ]);
+
+  assert.equal(rows[0].count, 2);
 });
 
 test('telemetry bounds both the inspected job window and rendered model rows', () => {

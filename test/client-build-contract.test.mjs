@@ -74,6 +74,13 @@ test('model activity table exposes complete ARIA table semantics', () => {
   }
 });
 
+test('model activity wording reflects job-level evidence instead of inferred call totals', () => {
+  assert.match(panelSource, /模型按任务计数/);
+  assert.match(panelSource, /each model is counted once per qualifying job/);
+  assert.match(panelSource, /calls: ['"]任务数['"]/);
+  assert.match(panelSource, /calls: ['"]Jobs['"]/);
+});
+
 test('task status uses the compact table layout instead of stacked list cards', () => {
   assert.match(panelSource, /<table\b/);
   assert.match(panelSource, /copy\.col\.role/);

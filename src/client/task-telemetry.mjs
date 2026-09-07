@@ -21,9 +21,11 @@ function hasInvocationEvidence(job) {
 }
 
 /**
- * Build a bounded, presentation-only model activity summary from the jobs the
- * Hub already exposes. No prompts, results, credentials, or new persistence
- * are introduced here.
+ * Build a bounded, presentation-only, job-level model activity summary from
+ * the jobs the Hub already exposes. Each qualifying job contributes one row
+ * count for its selected provider/model; the count is not an inferred number
+ * of underlying model turns. No prompts, results, credentials, or new
+ * persistence are introduced here.
  */
 export function aggregateModelInvocations(jobs = []) {
   const groups = new Map();
@@ -45,7 +47,12 @@ export function aggregateModelInvocations(jobs = []) {
     current.count += 1;
     current.taskSources.add(clean(job?.source, 'api'));
     current.selectionSources.add(clean(job?.selection_source, 'unknown'));
-    current.roles.add(job?.role === 'reviewer' ? 'reviewer' : 'worker');
+    // Do not infer a role from malformed, missing, or future role values. The
+    // summary is presentation evidence and must never assert a role the job
+    // did not provide.
+    if (job?.role === 'worker' || job?.role === 'reviewer') {
+      current.roles.add(job.role);
+    }
     const calledAt = validTimestamp(job?.startedAt);
     if (calledAt && (!current.lastCalledAt || Date.parse(calledAt) > Date.parse(current.lastCalledAt))) {
       current.lastCalledAt = calledAt;

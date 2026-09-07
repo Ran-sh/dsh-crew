@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const maybe = process.platform === 'win32' ? test : test.skip;
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
@@ -55,4 +58,42 @@ maybe('desktop launch refuses an unverified foreign 3080 listener', () => {
   const result = launchScenario('occupied', false);
   assert.equal(result.failed, true);
   assert.equal(result.calls.length, 0);
+});
+
+maybe('Windows PowerShell 5.1 parses the root-array frontend overlay', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-crew-overlay-'));
+  try {
+    const revision = 'a'.repeat(64);
+    const entry = join(home, '.config', 'dsh-crew', 'frontend', 'revisions', revision, 'official-web-bridge', 'entry.mjs');
+    const overlay = join(home, '.config', 'dsh-crew', 'frontend', 'official-web.patch.json');
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, 'export function apply() {}\n');
+    writeFileSync(join(dirname(entry), 'package.json'), JSON.stringify({
+      dshCrewManagedFrontend: true,
+      dshCrewFrontendRevision: revision,
+    }));
+    mkdirSync(dirname(overlay), { recursive: true });
+    writeFileSync(overlay, JSON.stringify([{
+      insert: [{ id: 'dsh-crew-official-web-bridge', name: pathToFileURL(entry).href }],
+    }]));
+
+    const command = [
+      '$env:DSH_CREW_LAUNCHER_TEST_IMPORT="1"',
+      `. '${helper.replaceAll("'", "''")}'`,
+      '$x=Get-OfficialFrontendOverlay',
+      '@{path=$x.Path;revision=$x.Revision} | ConvertTo-Json -Compress',
+    ].join('; ');
+    const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 15_000,
+      env: { ...process.env, USERPROFILE: home, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.path, overlay);
+    assert.equal(parsed.revision, revision);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

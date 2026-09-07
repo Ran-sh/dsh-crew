@@ -163,8 +163,8 @@ const COPY = {
     save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 Worker / Reviewer 任务。',
     adaptiveTitle: '自适应模型路由（实验）', adaptiveHint: '默认关闭；只重排系统自动候选，手动模型优先级始终保持原序。健康信号仅来自本进程已观察到的成功、失败、超时与粗粒度延迟，重启后清空。',
     adaptiveEnabled: '启用自适应路由', adaptiveWindow: '健康窗口', adaptiveSamples: '最少样本', adaptiveBoundary: '下一个工作流生效',
-    modelActivity: '模型调用概览', modelActivityHint: '聚合本 Hub 内存中最近 500 个任务的真实调用证据，最多显示 50 个模型；不保存提示词、结果或凭据。', noModelActivity: '还没有真实模型调用。',
-    calls: '调用次数', invocationSource: '任务来源', routingSource: '路由来源', lastCalled: '最近调用', role: '角色', model: '模型', never: '—',
+    modelActivity: '模型活动概览', modelActivityHint: '聚合本 Hub 内存中最近 500 个含真实调用证据的任务；每个模型按任务计数（不是推测底层轮次），最多显示 50 个模型。不保存提示词、结果或凭据。', noModelActivity: '还没有真实模型活动。',
+    calls: '任务数', invocationSource: '任务来源', routingSource: '路由来源', lastCalled: '最近调用', role: '角色', model: '模型', never: '—',
     col: { id: '任务', role: '角色', source: '来源', model: '模型', tier: '档位', status: '状态', progress: '进度', tokens: 'tokens ⇅', task: '内容' },
     working: '处理中…',
     tips: {
@@ -305,8 +305,8 @@ const COPY = {
     save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No Worker / Reviewer jobs yet.',
     adaptiveTitle: 'Adaptive model routing (experimental)', adaptiveHint: 'Off by default. Only system-derived candidates may be reordered; explicit model priorities always keep their order. Health uses only process-local success, failure, timeout, and coarse latency observations and resets on restart.',
     adaptiveEnabled: 'Enable adaptive routing', adaptiveWindow: 'Health window', adaptiveSamples: 'Minimum samples', adaptiveBoundary: 'Effective for the next workflow',
-    modelActivity: 'Model invocation overview', modelActivityHint: 'Aggregates real invocation evidence from the latest 500 in-memory Hub jobs and shows at most 50 models; prompts, results, and credentials are never stored here.', noModelActivity: 'No real model invocations yet.',
-    calls: 'Calls', invocationSource: 'Task source', routingSource: 'Routing source', lastCalled: 'Last called', role: 'Role', model: 'Model', never: '—',
+    modelActivity: 'Model activity overview', modelActivityHint: 'Aggregates the latest 500 in-memory Hub jobs with real model-activity evidence; each model is counted once per qualifying job (not an inferred turn count). Shows at most 50 models; prompts, results, and credentials are never stored here.', noModelActivity: 'No real model activity yet.',
+    calls: 'Jobs', invocationSource: 'Task source', routingSource: 'Routing source', lastCalled: 'Last called', role: 'Role', model: 'Model', never: '—',
     col: { id: 'job', role: 'role', source: 'source', model: 'model', tier: 'tier', status: 'status', progress: 'progress', tokens: 'tokens ⇅', task: 'task' },
     working: 'Working…',
     tips: {
@@ -1838,7 +1838,7 @@ function WorkersPanel({ ctx }: { ctx: any }) {
                   <div role="row" key={`${entry.provider}/${entry.model}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(190px, 1.35fr) 72px minmax(170px, 1fr) 125px', gap: 10, alignItems: 'center', padding: '7px 6px', borderTop: '1px solid rgba(128,128,128,0.16)' }}>
                     <span role="cell" style={{ minWidth: 0 }}><strong style={{ display: 'block', fontSize: 12 }}>{entry.model}</strong><span style={{ ...S.mono, opacity: 0.55 }}>{entry.provider}</span></span>
                     <span role="cell" style={{ ...S.mono, fontSize: 15, fontWeight: 650 }}>{entry.count}</span>
-                    <span role="cell" style={{ minWidth: 0, fontSize: 11.5 }}><span style={{ display: 'block' }}>{entry.task_sources.map(sourceLabel).join(' · ')}</span><span style={{ display: 'block', opacity: 0.55 }}>{entry.selection_sources.join(' · ')} · {entry.roles.join(' / ')}</span></span>
+                    <span role="cell" style={{ minWidth: 0, fontSize: 11.5 }}><span style={{ display: 'block' }}>{entry.task_sources.map(sourceLabel).join(' · ')}</span><span style={{ display: 'block', opacity: 0.55 }}>{entry.selection_sources.join(' · ')} · {entry.roles.length > 0 ? entry.roles.join(' / ') : copy.never}</span></span>
                     <span role="cell" style={{ ...S.mono, fontSize: 10.5 }}>{formatTimestamp(entry.last_called_at, locale)}</span>
                   </div>
                 ))}

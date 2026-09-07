@@ -86,11 +86,24 @@ function Get-OfficialFrontendOverlay {
   $frontendRoot = Join-Path $env:USERPROFILE '.config\dsh-crew\frontend'
   $path = Join-Path $frontendRoot 'official-web.patch.json'
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Crew frontend overlay is missing. Run dsh-crew update with the current GitHub candidate.' }
-  $patch = @(Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
-  if ($patch.Count -ne 1 -or @($patch[0].insert).Count -ne 1 -or $patch[0].insert[0].id -ne 'dsh-crew-official-web-bridge') {
+  # Windows PowerShell 5.1 keeps a JSON root array as one pipeline object;
+  # direct `$patch[0].insert[0]` therefore resolves `insert` as IList.Insert
+  # instead of indexing the JSON property. Flatten both PowerShell generations
+  # explicitly and read properties through PSObject so StrictMode reports a
+  # useful validation error instead of "property id cannot be found".
+  $parsed = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  $patch = @($parsed | ForEach-Object { $_ })
+  $root = if ($patch.Count -eq 1) { $patch[0] } else { $null }
+  $insertProperty = if ($null -ne $root) { $root.PSObject.Properties['insert'] } else { $null }
+  $insertValue = if ($null -ne $insertProperty) { $insertProperty.Value } else { $null }
+  $inserts = @($insertValue | ForEach-Object { $_ })
+  $bridge = if ($inserts.Count -eq 1) { $inserts[0] } else { $null }
+  $idProperty = if ($null -ne $bridge) { $bridge.PSObject.Properties['id'] } else { $null }
+  $nameProperty = if ($null -ne $bridge) { $bridge.PSObject.Properties['name'] } else { $null }
+  if ($patch.Count -ne 1 -or $inserts.Count -ne 1 -or $null -eq $idProperty -or [string] $idProperty.Value -ne 'dsh-crew-official-web-bridge' -or $null -eq $nameProperty) {
     throw 'Crew frontend overlay has an unexpected structure.'
   }
-  $uri = [Uri] ([string] $patch[0].insert[0].name)
+  $uri = [Uri] ([string] $nameProperty.Value)
   if (-not $uri.IsFile) { throw 'Crew frontend must load from its local snapshot.' }
   $entry = [IO.Path]::GetFullPath($uri.LocalPath)
   $prefix = [IO.Path]::GetFullPath((Join-Path $frontendRoot 'revisions')) + [IO.Path]::DirectorySeparatorChar
