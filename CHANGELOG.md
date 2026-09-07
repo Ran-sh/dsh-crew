@@ -4,6 +4,11 @@
 
 Future changes go here.
 
+## 1.2.0-rc.6 — 2026-09-07
+
+- Aligns the runtime identity with the published Crew release so Windows
+  supervisor handoff verification can complete after npm installation.
+
 ## 1.2.0-rc.5 — 2026-09-07
 
 - Fixes Windows PowerShell 5.1 parsing of the official 3080 overlay during
