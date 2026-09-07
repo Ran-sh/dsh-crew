@@ -4,6 +4,13 @@
 
 Future changes go here.
 
+## 1.2.0-rc.5 — 2026-09-07
+
+- Fixes Windows PowerShell 5.1 parsing of the official 3080 overlay during
+  desktop startup.
+- Makes model activity telemetry preserve unknown roles and labels its count as
+  qualifying jobs rather than inferred model calls.
+
 ## 1.2.0-rc.4 — 2026-09-05
 
 - Reports complete standalone Reviewer evidence without requiring a Worker
