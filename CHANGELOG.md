@@ -4,6 +4,37 @@
 
 Future changes go here.
 
+## 1.4.0 — 2026-09-11
+
+- Scopes cleanup by who created the session. A Crew worker's session and the
+  operator's own session are otherwise indistinguishable — one shared store, the
+  same header shape, and no field recording who asked for it — so the previous
+  range selector could only offer "everything", which removed the operator's own
+  conversations along with Crew's. The hub now records the session id of every
+  dispatch in an append-only ledger (`session-origins.jsonl`), and the panel
+  defaults to a new **Crew-created only** scope. **Crew worktrees** narrows
+  further to isolated-workspace sessions, and **everything** keeps the old
+  behaviour for deliberate use. A session the ledger cannot vouch for is the
+  operator's: absence is never treated as Crew authorship, so neither a session
+  predating the ledger nor a lost line can widen the range.
+- Stops the maintenance runner from being killed by the stop it requested, which
+  left cleanup stranded. The runner stops 3210, rewrites the session store, then
+  starts it again, so it must outlive the hub; but the supervisor stops a service
+  by killing that service's whole tracked process tree, walked through
+  `ParentProcessId`, and a runner spawned directly by the hub sits inside it. The
+  runner is now launched through an intermediate that exits immediately, leaving
+  it parented to a dead process and outside the tree. Previously a cleanup could
+  freeze in `STOPPING` with a stale update lock and no operator-side way to
+  finish it, recoverable only by running `dsh-crew history recover` by hand.
+- Stops the history cleanup admission fence from latching on forever. The fence
+  treated a non-empty agent registry as "a conversation is in use", but the
+  session controller resumes a session into that registry as soon as the web UI
+  opens it and never releases it — so on any machine whose UI had ever shown a
+  session, every cleanup transaction stayed blocked behind `ACTIVE_SESSIONS`
+  with no way to clear it. Registration is not activity: only an agent whose
+  status is `running` now fences the operation, and a creation still awaiting
+  publication is guarded separately as before.
+
 ## 1.3.2 — 2026-09-11
 
 - Stops the history cleanup admission fence from latching on forever. The fence

@@ -101,6 +101,7 @@ function seedLangFromHost(ctx) {
 }
 
 import { setLang } from '../i18n.mjs';
+import { appendSessionOrigin } from '../session-origins.mjs';
 
 const ROUTE_BASE = '/_dsh/dsh-crew';
 // Quick-config allowlist: the ONLY config keys writable from the official
@@ -809,6 +810,10 @@ export class WorkerRegistry {  constructor(ctx) {
       isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot };
     }
     const sessionId = `session-${randomUUID()}`;
+    // Record provenance while it is still knowable: a session header carries no
+    // field naming who asked for the session, so a later Crew-scoped cleanup can
+    // only tell Crew's own work apart from the operator's by this ledger.
+    appendSessionOrigin({ sessionId, role: jobRole, jobId: id });
     const job = {
       id, client_job_id: client_job_id ?? null, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
       selection_source: selection.source, selection_trace: selection.selection_trace ?? null,

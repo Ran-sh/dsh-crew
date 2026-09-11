@@ -71,3 +71,39 @@ test('same selection has stable revision; new records, active state or source re
   input.sessions[0].revision = 'r1'; input.activeSessionIds = ['active'];
   assert.notEqual(plan(input, { scope: 'all' }).revision, first.revision);
 });
+
+// Provenance scoping exists because a Crew worker's session and the operator's
+// own session are otherwise indistinguishable: same store, same header shape.
+// A header carries no field naming who asked for it, so scope can only come from
+// what Crew recorded at dispatch time.
+test('crew scope selects only recorded Crew sessions and never guesses', async () => {
+  const plan = await planner();
+  const input = snapshot();
+  input.crewSessionIds = ['old-session'];
+  const crew = plan(input, { scope: 'crew' });
+  assert.deepEqual(crew.sessionIds, ['old-session']);
+  assert.deepEqual(crew.workspaceIds, ['old-workspace'], 'only a fully covered workspace follows');
+
+  // An unrecorded session is the operator's, even when it looks like Crew work.
+  input.sessions.push({ id: 'unrecorded', createdAt: old, revision: 'r9', cwd: 'C:/tmp/dsh-crew-worktrees/x' });
+  const stillCrew = plan(input, { scope: 'crew' });
+  assert.ok(!stillCrew.sessionIds.includes('unrecorded'), 'absence from the ledger must never be treated as Crew authorship');
+  assert.ok(plan(input, { scope: 'all' }).sessionIds.includes('unrecorded'), 'all still reaches it');
+});
+
+test('worktree scope narrows crew sessions to the isolated-workspace subset', async () => {
+  const plan = await planner();
+  const input = snapshot();
+  input.sessions[0].worktree = true;      // old-session
+  input.sessions[1].worktree = false;     // old-in-mixed
+  input.crewSessionIds = ['old-session', 'old-in-mixed'];
+  assert.deepEqual(plan(input, { scope: 'worktree' }).sessionIds, ['old-session']);
+  assert.deepEqual(plan(input, { scope: 'crew' }).sessionIds, ['old-in-mixed', 'old-session']);
+});
+
+test('scope defaults to crew so a forgotten range cannot reach the operator sessions', async () => {
+  const plan = await planner();
+  const input = snapshot();
+  input.crewSessionIds = ['old-session'];
+  assert.deepEqual(plan(input).sessionIds, ['old-session'], 'the default must be the narrow scope');
+});

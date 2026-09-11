@@ -17,8 +17,15 @@ export function registerRuntimeHistory(ctx) {
     const service = createHistoryService({ crewRoot, agents: host.agents, persistence: host.sessionPersistence,
       runtimeId: runtime.runtime_id, launch(id, recover = false) {
         return new Promise((accept, reject) => {
-          const child = spawn(process.execPath, [fileURLToPath(new URL('./runner.mjs', import.meta.url)), id, ...(recover ? ['--recover'] : [])], {
-            detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env },
+          // Spawn through a launcher that exits immediately: a runner parented by
+          // this hub would sit inside the hub's tracked process tree and be killed
+          // by the stop it requested. See runner-detach.mjs.
+          const child = spawn(process.execPath, [
+            fileURLToPath(new URL('./runner-detach.mjs', import.meta.url)),
+            fileURLToPath(new URL('./runner.mjs', import.meta.url)),
+            id, ...(recover ? ['--recover'] : []),
+          ], {
+            windowsHide: true, stdio: 'ignore', env: { ...process.env },
           });
           child.once('error', reject); child.once('spawn', () => { child.unref(); accept(); });
         });

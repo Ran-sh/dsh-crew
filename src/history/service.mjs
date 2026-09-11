@@ -5,6 +5,8 @@ import { planHistoryCleanup } from './cleanup-plan.mjs';
 import { installHistoryAdmissionGate } from './admission-gate.mjs';
 import { historyHash, historyPath, readHistoryBytes, decodeWorkspaceStore, readHistoryManifest, isSessionArtifactPath } from './archive-store.mjs';
 import { readHistoryState, writeHistoryState, historyPending, publicHistoryState } from './state.mjs';
+import { readSessionOrigins } from '../session-origins.mjs';
+import { defaultWorktreeRoot } from '../workspace-isolation.mjs';
 
 export function createHistoryService({ crewRoot, agents, persistence, runtimeId, launch, now = Date.now }) {
   const gate = installHistoryAdmissionGate(agents, () => historyPending(crewRoot));
@@ -60,12 +62,21 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
       }
       const raw = readHistoryBytes(historyPath(crewRoot, path)); total += raw.length;
       if (total > 512 * 1024 * 1024) throw Error('HISTORY_INVENTORY_TOO_LARGE');
-      return { id: header.id, createdAt: header.createdAt, parentSession: header.parentSession,
+      return { id: header.id, createdAt: header.createdAt, parentSession: header.parentSession, cwd: header.cwd,
         revision: JSON.stringify([header.revision, historyHash(raw)]), artifact: { sessionId: header.id, relativePath: path, sha256: historyHash(raw) } };
     });
     // A retained child keeps its ancestor chain; do not leave a newer fork orphaned.
     const workspaces = Object.entries(store.tables.workspaces).map(([id, row]) => ({ id, ...row }));
-    const plan = planHistoryCleanup({ workspaces, sessions, activeSessionIds: gate.idle() ? [] : ['active-agent'] }, options);
+    const crewSessionIds = [...readSessionOrigins()];
+    const crewSet = new Set(crewSessionIds);
+    for (const row of sessions) if (crewSet.has(row.id)) row.crew = true;
+    // The isolated-workspace marker: the hub stamps every worktree session with a
+    // cwd under the Crew worktree root, so that subset is scopeable on its own.
+    const worktreeRoot = defaultWorktreeRoot().replaceAll('\\', '/').toLowerCase();
+    for (const row of sessions) {
+      if (row.crew === true && typeof row.cwd === 'string' && row.cwd.replaceAll('\\', '/').toLowerCase().startsWith(worktreeRoot)) row.worktree = true;
+    }
+    const plan = planHistoryCleanup({ workspaces, sessions, crewSessionIds, activeSessionIds: gate.idle() ? [] : ['active-agent'] }, options);
     const selected = new Set(plan.sessionIds);
     const byId = new Map(sessions.map(row => [row.id, row]));
     const queue = sessions.filter(row => !selected.has(row.id));

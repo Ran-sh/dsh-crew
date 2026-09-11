@@ -5,7 +5,7 @@ const pending = (phase?: string) => !!phase && !['IDLE', 'DONE', 'FAILED', 'ROLL
 const copy = {
   zh: {
     title: '工作区与会话清理', intro: '仅影响 3210 的工作区记录与会话日志；不删除项目文件、附件或 3080 数据。',
-    operation: '操作', archive: '归档（可恢复）', delete: '删除（不可恢复）', scope: '时间范围', all: '全部', before: '指定时间之前',
+    operation: '操作', archive: '归档（可恢复）', delete: '删除（不可恢复）', scope: '范围', all: '全部（含你自己的会话）', crew: '仅 Crew 创建（推荐）', worktree: '仅 Crew 工作树', before: '指定时间之前',
     time: '创建时间早于', timeHint: '按本机时区选择，严格按创建时间筛选；包含新会话的工作区会保留。',
     preview: '预览清理范围', confirm: '确认执行', acknowledgement: '删除确认：请输入 DELETE', idle: '会短暂停止并重启 3210；请先结束或关闭所有正在使用的 3210 会话。',
     consent: '我已确认范围，并同意短暂重启 3210', restore: '恢复', archives: '已归档批次', empty: '暂无可恢复的归档',
@@ -17,7 +17,7 @@ const copy = {
   },
   en: {
     title: 'Workspace & session cleanup', intro: 'Only 3210 workspace records and session logs. Project files, attachments and 3080 data are untouched.',
-    operation: 'Action', archive: 'Archive (restorable)', delete: 'Delete (permanent)', scope: 'Time range', all: 'All', before: 'Before a date',
+    operation: 'Action', archive: 'Archive (restorable)', delete: 'Delete (permanent)', scope: 'Scope', all: 'Everything (includes your own sessions)', crew: 'Crew-created only (recommended)', worktree: 'Crew worktrees only', before: 'Before a date',
     time: 'Created before', timeHint: 'Local timezone; strict creation-time cutoff. Workspaces with newer sessions are kept.',
     preview: 'Preview cleanup', confirm: 'Confirm operation', acknowledgement: 'Type DELETE to confirm deletion', idle: '3210 will briefly stop and restart. End or close all active 3210 conversations first.',
     consent: 'I reviewed the scope and agree to restart 3210', restore: 'Restore', archives: 'Archived batches', empty: 'No restorable archives',
@@ -33,7 +33,7 @@ export function HistoryPanel({ locale }: { locale: string }) {
   const t = copy[locale === 'zh' ? 'zh' : 'en'];
   const [open, setOpen] = useState(false);
   const [operation, setOperation] = useState('archive');
-  const [scope, setScope] = useState('all');
+  const [scope, setScope] = useState('crew');
   const [before, setBefore] = useState('');
   const [preview, setPreview] = useState<any>(null);
   const [status, setStatus] = useState<any>({ phase: 'IDLE' });
@@ -81,7 +81,7 @@ export function HistoryPanel({ locale }: { locale: string }) {
       <p style={{ margin: 0, opacity: .75 }}>{t.intro}</p>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <label>{t.operation} <select style={style} value={operation} disabled={locked} onChange={e => { setOperation(e.target.value); invalidate(); }}><option value="archive">{t.archive}</option><option value="delete">{t.delete}</option></select></label>
-        <label>{t.scope} <select style={style} value={scope} disabled={locked} onChange={e => { setScope(e.target.value); invalidate(); }}><option value="all">{t.all}</option><option value="before">{t.before}</option></select></label>
+        <label>{t.scope} <select style={style} value={scope} disabled={locked} onChange={e => { setScope(e.target.value); invalidate(); }}><option value="crew">{t.crew}</option><option value="worktree">{t.worktree}</option><option value="all">{t.all}</option><option value="before">{t.before}</option></select></label>
       </div>
       {scope === 'before' && <label>{t.time} <input type="datetime-local" style={style} value={before} disabled={locked} onChange={e => { setBefore(e.target.value); invalidate(); }} /></label>}
       <div style={{ fontSize: 11.5, opacity: .7 }}>{t.timeHint}</div>

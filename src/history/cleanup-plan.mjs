@@ -28,18 +28,42 @@ function records(values) {
   return [...values].sort((a, b) => a.id.localeCompare(b.id, 'en'));
 }
 
-/** Pure preview only. No filesystem or project-path operations are performed. */
-export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'all', before } = {}) {
-  if (!['archive', 'delete'].includes(operation) || !['all', 'before'].includes(scope)) throw new Error('HISTORY_INVALID_OPTIONS');
+/**
+ * Pure preview only. No filesystem or project-path operations are performed.
+ *
+ * `scope` defaults to `crew`: a caller that forgets to narrow the range gets the
+ * one range that cannot remove sessions the operator opened themselves. Widening
+ * to `all` is always an explicit choice.
+ */
+export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'crew', before } = {}) {
+  if (!['archive', 'delete'].includes(operation) || !['all', 'crew', 'worktree', 'before'].includes(scope)) throw new Error('HISTORY_INVALID_OPTIONS');
   const cutoff = scope === 'before' ? instant(before) : null;
   if (scope === 'before' && (typeof before !== 'string' || cutoff === null)) throw new Error('HISTORY_INVALID_CUTOFF');
   const workspaces = records(snapshot.workspaces);
   const sessions = records(snapshot.sessions);
   const active = ids(snapshot.activeSessionIds);
-  const selected = new Set(sessions.filter(row => scope === 'all' || (instant(row.createdAt) !== null && instant(row.createdAt) < cutoff)).map(row => row.id));
+  // `crew` and `worktree` narrow by provenance, never by project path: a session
+  // is Crew's own only when Crew recorded creating it, and worktree scope adds
+  // the isolated-workspace marker the hub stamps at dispatch.
+  const origin = new Set(Array.isArray(snapshot.crewSessionIds) ? snapshot.crewSessionIds : []);
+  const admitted = (row) => {
+    if (scope === 'crew') return origin.has(row.id);
+    if (scope === 'worktree') return origin.has(row.id) && row.worktree === true;
+    return true;
+  };
+  const withinTime = (row) => cutoff === null
+    || (instant(row.createdAt) !== null && instant(row.createdAt) < cutoff);
+  const selected = new Set(sessions.filter(row => admitted(row) && withinTime(row)).map(row => row.id));
+  // A workspace carries no provenance of its own: it follows its sessions, and
+  // only when every one of them is selected. Checking `admitted(row)` here would
+  // test a workspace id against a session ledger and always fail. A provenance
+  // scope additionally requires at least one selected child — an empty workspace
+  // holds no Crew work, so it is not Crew's to remove; `all` keeps its historical
+  // behaviour of following an empty workspace.
+  const requiresOwnedChild = scope === 'crew' || scope === 'worktree';
   const workspaceIds = workspaces.filter(row => {
     const children = ids(row.sessionIds);
-    return (scope === 'all' || (instant(row.createdAt) !== null && instant(row.createdAt) < cutoff))
+    return withinTime(row) && (!requiresOwnedChild || children.length > 0)
       && children.every(id => selected.has(id));
   }).map(row => row.id).sort();
   const sessionIds = [...selected].sort();
@@ -48,6 +72,7 @@ export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'a
     workspaces: workspaces.map(row => ({ id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt, sessionIds: ids(row.sessionIds) })),
     sessions: sessions.map(row => ({ id: row.id, createdAt: row.createdAt, revision: row.revision })),
     active,
+    crewSessionIds: [...origin].sort(),
   };
   return {
     schemaVersion: 1, operation, scope,

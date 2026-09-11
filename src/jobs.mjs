@@ -19,6 +19,7 @@ import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } 
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 import { raceWaiters } from './removable-waiter.mjs';
 import { buildDirectSelectionTrace } from './model-routing.mjs';
+import { appendSessionOrigin } from './session-origins.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
@@ -178,6 +179,10 @@ export function startJob({
     .catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
 
   const sessionId = id;
+  // Standalone dispatches write into the same shared session store as the hub,
+  // so they need the same provenance record or a Crew-scoped cleanup would leave
+  // them behind.
+  appendSessionOrigin({ sessionId, role, jobId: id });
   const onNotification = (n) => {
     if (n.method === 'session.status') return;
     if (n.method !== 'session.event') return;
