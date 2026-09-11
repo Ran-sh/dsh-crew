@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 1.3.0 — 2026-09-11
+
+- Moves the pinned Harness cohort from `0.1.2-rc.1` to `0.1.5-rc.2`.
+- Adapts the worker overlay to the 0.1.5 profile contract: `system-prompt`'s
+  `persona` key is renamed to `personaPrefix`, and the `fs-local` provider that
+  sdk-minimal no longer ships becomes a Crew-owned insert row (the Crew tool
+  suite still injects the `fs` service).
+- Derives the history runtime's cohort checks from `src/dsh-cohort.mjs` instead
+  of hardcoding the pinned version in `src/history/`.
+- Rebases the Windows launcher on the Crew-managed Harness entry. The CLI is now
+  selected as `DSH_CREW_DSH_CLI` → the Crew npm runtime → a source cohort
+  validated against its own manifest, and the 3080 frontend boots that same
+  entry instead of a hardcoded alpha source tree. No cohort value is pinned in
+  the launcher, so a cohort bump no longer needs a matching launcher edit.
+
 ## 1.2.0-rc.6 — 2026-09-07
 
 - Aligns the runtime identity with the published Crew release so Windows

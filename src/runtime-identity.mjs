@@ -5,7 +5,7 @@
 // - HUB_PROTOCOL_VERSION changes only when Hub <-> MCP wire semantics become
 //   incompatible.
 //
-// The Harness/DSH cohort version (e.g. 0.1.2-rc.1) is a THIRD, independent
+// The Harness/DSH cohort version (e.g. 0.1.5-rc.2) is a THIRD, independent
 // domain: it identifies the installed @deepseek-ai/dsh package generation,
 // never the Crew release. Verifiers must compare the cohort against
 // dsh_version, never against runtime_version.
@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import {
   PRODUCTION_EXECUTION_PLANE,
   PRODUCTION_PROFILE,
@@ -36,7 +36,7 @@ export {
 // included in the identity contract.
 const RUNTIME_ID = randomUUID();
 
-export const RUNTIME_VERSION = '1.2.0-rc.6';
+export const RUNTIME_VERSION = '1.3.0';
 export const HUB_PROTOCOL_VERSION = 1;
 
 export const HUB_CAPABILITIES = Object.freeze([
@@ -92,6 +92,43 @@ function normalizedCapabilities(value) {
   return [...new Set(value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()))];
 }
 
+function readVersionManifest(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    if (parsed?.name !== '@deepseek-ai/dsh') return null;
+    return typeof parsed.version === 'string' && parsed.version.trim() ? parsed.version.trim() : null;
+  } catch { return null; }
+}
+
+/**
+ * Resolve the @deepseek-ai/dsh manifest belonging to an explicit CLI entry.
+ *
+ * This intentionally accepts only a package manifest whose name is the
+ * official Harness package. It lets a Crew-owned source checkout (for example
+ * the GitHub-only dsh-v0.1.3-alpha.1 tag) report its real cohort without ever
+ * reading the official ~/.dsh profile or trusting an arbitrary package.json.
+ */
+function readExplicitCliVersion(entry) {
+  if (typeof entry !== 'string' || !entry.trim()) return null;
+  let cursor;
+  try { cursor = resolve(entry); } catch { return null; }
+  if (extname(cursor).toLowerCase() !== '.js') {
+    // A Windows shim normally lives at <root>/node_modules/.bin/dsh.cmd.
+    // Starting at its parent still finds the sibling @deepseek-ai/dsh tree.
+    cursor = dirname(cursor);
+  }
+  for (let depth = 0; depth < 12; depth += 1) {
+    const direct = readVersionManifest(join(cursor, 'package.json'));
+    if (direct) return direct;
+    const nested = readVersionManifest(join(cursor, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'));
+    if (nested) return nested;
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return null;
+}
+
 export function getHubRuntimeIdentity() {
   return {
     service: 'dsh-crew-hub',
@@ -109,10 +146,15 @@ export function getHubRuntimeIdentity() {
 }
 
 // Installed Harness cohort version (the @deepseek-ai/dsh package under the
-// Crew-owned DSH home). Null when unreadable: callers treat null as
-// "unknown cohort", never as a match. This is the ONLY field cohort
-// verifiers may compare against TARGET_DSH_VERSION.
-export function readCrewDshVersion({ home = homedir() } = {}) {
+// Crew-owned DSH home, or an explicit Crew-owned CLI source checkout). Null
+// when unreadable: callers treat null as "unknown cohort", never as a match.
+// This is the ONLY field cohort verifiers may compare against TARGET_DSH_VERSION.
+export function readCrewDshVersion({ home = homedir(), env = process.env } = {}) {
+  // Only the Crew-scoped override is trusted here. A generic DSH_CLI may
+  // point at the official web profile and must never become Crew provenance.
+  const explicit = env?.DSH_CREW_DSH_CLI;
+  const explicitVersion = readExplicitCliVersion(explicit);
+  if (explicitVersion) return explicitVersion;
   try {
     const file = join(home, '.config', 'dsh-crew', 'harness', 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
     if (!existsSync(file)) return null;

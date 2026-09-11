@@ -3,13 +3,14 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
+import { TARGET_DSH_VERSION } from '../dsh-cohort.mjs';
 import { createHistoryService } from './service.mjs';
 import { registerHistoryHttp } from './http.mjs';
 
 export function registerRuntimeHistory(ctx) {
   const crewRoot = join(homedir(), '.config', 'dsh-crew');
   const runtime = getHubRuntimeIdentity();
-  const owned = process.platform === 'win32' && runtime.dsh_version === '0.1.2-rc.1'
+  const owned = process.platform === 'win32' && runtime.dsh_version === TARGET_DSH_VERSION
     && resolve(process.env.DSH_HOME ?? '').toLowerCase() === resolve(join(crewRoot, 'harness')).toLowerCase();
   if (!owned) return () => {};
   return ctx.inject(['webServer', 'sessionPersistence', 'agents'], host => {

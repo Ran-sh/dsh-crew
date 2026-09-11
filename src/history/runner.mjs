@@ -6,6 +6,7 @@ import { acquireUpdateLock, releaseUpdateLock, createCrewSupervisor } from '../i
 import { readMaintenanceSession } from '../supervisor/restart-request.mjs';
 import { runHistoryOperation } from './operation.mjs';
 import { readHistoryState } from './state.mjs';
+import { TARGET_DSH_VERSION } from '../dsh-cohort.mjs';
 
 async function portFree() {
   return new Promise(resolve => {
@@ -40,7 +41,7 @@ export async function runProductionHistory({ id, recover = false } = {}) {
         const runtime = await response.json();
         return response.ok && runtime.ok === true && runtime.service === 'dsh-crew-hub' && runtime.profile === 'dsh-crew'
           && runtime.execution_plane === 'hub-3210' && runtime.listen_port === 3210 && runtime.protocol_version === 1
-          && runtime.dsh_version === '0.1.2-rc.1' && typeof runtime.runtime_id === 'string' && runtime.runtime_id !== s.runtimeId;
+          && runtime.dsh_version === TARGET_DSH_VERSION && typeof runtime.runtime_id === 'string' && runtime.runtime_id !== s.runtimeId;
       } catch { return false; }
     },
   });

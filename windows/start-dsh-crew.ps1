@@ -9,7 +9,95 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $crewHome = Join-Path $env:USERPROFILE '.config\dsh-crew\harness'
-$dshCli = Join-Path $crewHome 'runtime\node_modules\.bin\dsh.cmd'
+$configuredDshCli = [string] $env:DSH_CREW_DSH_CLI
+if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT -eq '1') { $configuredDshCli = '' }
+if (-not $configuredDshCli.Trim() -and $env:DSH_CREW_LAUNCHER_TEST_IMPORT -ne '1') {
+  # Crew-managed npm runtime: the normal install path, written by dsh-crew
+  # update and carrying whatever cohort that release pinned. An explicit
+  # DSH_CREW_DSH_CLI always wins so an operator can still pin another entry.
+  $runtimeEntry = Join-Path $crewHome 'runtime\node_modules\@deepseek-ai\dsh\lib\bin.js'
+  if (Test-Path -LiteralPath $runtimeEntry -PathType Leaf) {
+    $configuredDshCli = $runtimeEntry
+  }
+}
+if (-not $configuredDshCli.Trim() -and $env:DSH_CREW_LAUNCHER_TEST_IMPORT -ne '1') {
+  # Crew-managed source cohort: a runtime-source-<label>.json sidecar names the
+  # CLI entry. The sidecar's recorded version must equal the checkout's own
+  # manifest, so a stale sidecar can never pin a half-updated tree.
+  foreach ($sidecar in @(Get-ChildItem -LiteralPath $crewHome -Filter 'runtime-source-*.json' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+    try {
+      $metadata = Get-Content -LiteralPath $sidecar.FullName -Raw | ConvertFrom-Json
+      if ($metadata.managed_by -ne 'dsh-crew') { continue }
+      $candidate = [string] $metadata.cli_entry
+      if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+      $sourceRoot = [IO.Path]::GetFullPath((Join-Path $crewHome ([IO.Path]::GetFileNameWithoutExtension($sidecar.Name))))
+      $candidateFull = [IO.Path]::GetFullPath($candidate)
+      $sourcePrefix = $sourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+      $sourceManifest = Join-Path $sourceRoot 'apps\cli\package.json'
+      $sourceVersion = if (Test-Path -LiteralPath $sourceManifest -PathType Leaf) {
+        [string] (Get-Content -LiteralPath $sourceManifest -Raw | ConvertFrom-Json).version
+      } else { $null }
+      $candidateValid = $sourceVersion -and $sourceVersion -eq [string] $metadata.version `
+        -and $candidateFull.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase) `
+        -and (Test-Path -LiteralPath $candidateFull -PathType Leaf)
+      if ($candidateValid) {
+        $configuredDshCli = $candidateFull
+        break
+      }
+    } catch { }
+  }
+}
+$dshCli = if ($configuredDshCli.Trim()) {
+  try { [IO.Path]::GetFullPath($configuredDshCli) } catch { $configuredDshCli }
+} else {
+  Join-Path $crewHome 'runtime\node_modules\.bin\dsh.cmd'
+}
+if ($configuredDshCli.Trim()) { $env:DSH_CREW_DSH_CLI = $dshCli }
+# DSH_HOME that owns the selected CLI. The managed npm runtime shares the Crew
+# home; a Crew-managed source cohort is its own home (its profiles, sessions and
+# settings live inside that tree). Derived from the selected entry so an explicit
+# DSH_CREW_DSH_CLI override resolves correctly too.
+$dshHome = $crewHome
+$sourceRootMatch = [regex]::Match($dshCli, '^(?<root>.+?[\\/]runtime-source-[^\\/]+)[\\/]')
+if ($sourceRootMatch.Success) {
+  $candidateRoot = $sourceRootMatch.Groups['root'].Value
+  if (Test-Path -LiteralPath (Join-Path $candidateRoot 'profiles') -PathType Container) { $dshHome = $candidateRoot }
+}
+$dshCliIsNodeEntry = [IO.Path]::GetExtension($dshCli).ToLowerInvariant() -eq '.js'
+$dshCommand = if ($dshCliIsNodeEntry) {
+  (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+} else { $dshCli }
+
+function Get-CrewDshManifest {
+  param([string] $Entry)
+  if (-not $Entry) { return $null }
+  try { $cursor = [IO.Path]::GetFullPath($Entry) } catch { return $null }
+  if ([IO.Path]::GetExtension($cursor).ToLowerInvariant() -eq '.js') {
+    $cursor = Split-Path -Parent $cursor
+  } else {
+    $cursor = Split-Path -Parent $cursor
+  }
+  for ($depth = 0; $depth -lt 12 -and $cursor; $depth += 1) {
+    $candidates = @(
+      (Join-Path $cursor 'package.json'),
+      (Join-Path $cursor 'node_modules\@deepseek-ai\dsh\package.json')
+    )
+    foreach ($candidate in $candidates) {
+      if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+      try {
+        $manifest = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+        $knownOfficial = -not $configuredDshCli.Trim() -or $manifest.name -eq '@deepseek-ai/dsh'
+        if ($knownOfficial -and [string] $manifest.version) { return $manifest }
+      } catch { }
+    }
+    $parent = Split-Path -Parent $cursor
+    if ($parent -eq $cursor) { break }
+    $cursor = $parent
+  }
+  return $null
+}
+
+$dshManifest = Get-CrewDshManifest -Entry $dshCli
 $logRoot = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
 $launcherLog = Join-Path $logRoot 'dsh-crew-launcher.log'
 $startedAt = Get-Date
@@ -25,7 +113,7 @@ try {
   } finally { $hashStream.Dispose() }
 } catch { $launcherHelperHash = $null }
 $services = @(
-  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $crewHome; Port = 3210; Url = 'http://127.0.0.1:3210'; CrewOwned = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
+  [pscustomobject]@{ Name = 'Crew backend'; Profile = 'dsh-crew'; Home = $dshHome; Port = 3210; Url = 'http://127.0.0.1:3210'; CrewOwned = $true; State = 'pending'; Process = $null; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null; ConsecutiveFailures = 0; LastError = $null }
 )
 
 function Write-LaunchLog {
@@ -58,7 +146,7 @@ function Resolve-OfficialHarnessCommand {
 }
 
 function Test-OfficialHarnessListener {
-  param([int] $OwnerPid, [pscustomobject] $Official)
+  param([int] $OwnerPid, [pscustomobject] $Official, [string] $Profile = 'web')
   if ($OwnerPid -le 0) { return $false }
   try {
     $owner = Get-CimInstance Win32_Process -Filter ('ProcessId={0}' -f $OwnerPid) -ErrorAction Stop
@@ -66,9 +154,152 @@ function Test-OfficialHarnessListener {
     $line = ([string] $owner.CommandLine).Replace('/', '\')
     $entry = [regex]::Escape($Official.Entry.Replace('/', '\'))
     $node = [regex]::Escape($Official.NodePath.Replace('/', '\'))
-    $pattern = '^\s*(?:"?' + $node + '"?|"?node(?:\.exe)?"?)\s+"?' + $entry + '"?\s+(?:"?web"?|--profile\s+"?web"?)(?:\s|$)'
+    $profileToken = [regex]::Escape($Profile)
+    $pattern = '^\s*(?:"?' + $node + '"?|"?node(?:\.exe)?"?)\s+"?' + $entry + '"?\s+(?:"?' + $profileToken + '"?|--profile\s+"?' + $profileToken + '"?)(?:\s|$)'
     return $line -match $pattern
   } catch { return $false }
+}
+
+function Test-CrewDshCliPreflight {
+  if ($null -eq $dshManifest -or [string]::IsNullOrWhiteSpace([string] $dshManifest.version)) {
+    throw "The DSH CLI at $dshCli is not a verified @deepseek-ai/dsh package entry."
+  }
+  if ($dshCliIsNodeEntry -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $dshHome 'profiles') 'web\package.json') -PathType Leaf)) {
+    throw ('The Harness web profile is missing under {0}. Run: dsh-crew update' -f $dshHome)
+  }
+  $versionArgs = if ($dshCliIsNodeEntry) { @($dshCli, '--version') } else { @('--version') }
+  $reported = try { (& $dshCommand @versionArgs 2>&1 | Out-String).Trim() } catch { '' }
+  if ($LASTEXITCODE -ne 0 -or $reported -ne [string] $dshManifest.version) {
+    throw ('DSH CLI preflight failed: manifest={0}, reported={1}' -f $dshManifest.version, ($reported -replace '\s+', ' '))
+  }
+}
+
+function Get-CrewWebSessionUrl {
+  param([string] $OutputLog = $null)
+  $logs = if ($OutputLog) {
+    @(Get-Item -LiteralPath $OutputLog -ErrorAction SilentlyContinue)
+  } else {
+    @(Get-ChildItem -LiteralPath $logRoot -Filter 'dsh-crew-web-*.out.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+  }
+  foreach ($log in $logs) {
+    try {
+      $text = Get-Content -LiteralPath $log.FullName -Raw -ErrorAction Stop
+      $match = [regex]::Match($text, 'https?://127\.0\.0\.1:3080/\?token=[^\s\r\n]+')
+      if ($match.Success) { return $match.Value }
+    } catch { }
+  }
+  return $null
+}
+
+function Open-CrewBrowserUrl {
+  param([Parameter(Mandatory = $true)] [string] $Url)
+  $edge = Get-Command msedge.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $edge) {
+    $edgeCandidates = @(
+      @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe')
+      ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+    )
+    if ($edgeCandidates.Count -gt 0) { $edge = [pscustomobject]@{ Source = $edgeCandidates[0] } }
+  }
+  if ($edge) {
+    Start-Process -FilePath $edge.Source -ArgumentList @('--new-window', $Url) | Out-Null
+    return
+  }
+  Start-Process $Url | Out-Null
+}
+
+function Test-CrewWebSessionUrl {
+  param([string] $Url)
+  if (-not $Url) { return $false }
+  try {
+    # The token endpoint intentionally answers with a 303 + Set-Cookie and
+    # redirects to `/`; do not follow it here or PowerShell loses the cookie
+    # and falsely reports the authenticated page as 404.
+    $response = Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri $Url -TimeoutSec 3
+    return [int] $response.StatusCode -ge 200 -and [int] $response.StatusCode -lt 400
+  } catch {
+    $status = if ($_.Exception.Response) { [int] $_.Exception.Response.StatusCode } else { 0 }
+    return $status -in @(301, 302, 303, 307, 308)
+  }
+}
+
+function Open-CrewManagedFrontend {
+  param([int] $TimeoutSeconds = 90)
+  # The 3080 frontend boots from the same Crew-managed Harness entry as 3210,
+  # against that entry's own DSH_HOME (npm runtime -> Crew home, source cohort
+  # -> its own tree). No official ~/.dsh state is read or written here.
+  $managedHome = $dshHome
+  $managedProfile = 'web'
+  $profileManifest = Join-Path (Join-Path $managedHome 'profiles') ('{0}\package.json' -f $managedProfile)
+  if (-not $dshCliIsNodeEntry -or -not (Test-Path -LiteralPath $profileManifest -PathType Leaf)) {
+    return $false
+  }
+  $official = [pscustomobject]@{ NodePath = $dshCommand; Entry = $dshCli; Profile = $managedProfile }
+  $frontend = Get-OfficialFrontendOverlay
+  $mutex = New-Object System.Threading.Mutex($false, 'Local\DSHCrewOfficialFrontendLauncher')
+  $locked = $false
+  try {
+    try { $locked = $mutex.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) { throw 'Another desktop launch is still starting the Crew-managed Harness frontend.' }
+    $port = Get-PortState -Port 3080
+    if ($port.State -eq 'unknown') { throw $port.Error }
+    if ($port.State -eq 'occupied') {
+      if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official -Profile $managedProfile)) {
+        throw 'Port 3080 is occupied by a non-Crew-managed process; it was left untouched.'
+      }
+      if (-not (Test-OfficialWebReady)) { throw 'The Crew-managed 3080 frontend is not ready; its process was left running.' }
+      $existingUrl = Get-CrewWebSessionUrl
+      if ($existingUrl -and (Test-CrewWebSessionUrl -Url $existingUrl)) {
+        Open-CrewBrowserUrl -Url $existingUrl
+        Write-LaunchLog 'Opened the existing Crew-managed Harness frontend on 3080 with its session URL.'
+        return $true
+      }
+      Write-LaunchLog 'The existing Crew-managed 3080 session URL is stale; restarting the verified listener.' 'WARN'
+      Stop-Process -Id $port.Pid -Force -ErrorAction Stop
+      $freeDeadline = (Get-Date).AddSeconds(5)
+      do { Start-Sleep -Milliseconds 250; $port = Get-PortState -Port 3080 } while ($port.State -ne 'free' -and (Get-Date) -lt $freeDeadline)
+      if ($port.State -ne 'free') { throw 'The stale Crew-managed 3080 listener did not release the port.' }
+    }
+
+    $stamp = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmssfff'), $PID
+    $stdout = Join-Path $logRoot ('dsh-crew-web-{0}.out.log' -f $stamp)
+    $stderr = Join-Path $logRoot ('dsh-crew-web-{0}.err.log' -f $stamp)
+    $previousHome = $env:DSH_HOME
+    $previousCli = $env:DSH_CREW_DSH_CLI
+    try {
+      $env:DSH_HOME = $managedHome
+      $env:DSH_CREW_DSH_CLI = $dshCli
+      $arguments = @($dshCli, '--profile', $managedProfile, '--patch', ('"{0}"' -f $frontend.Path), '--host', '127.0.0.1', '--port', '3080')
+      $process = Start-Process -FilePath $dshCommand -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    } finally {
+      $env:DSH_HOME = $previousHome
+      $env:DSH_CREW_DSH_CLI = $previousCli
+    }
+    Write-LaunchLog ('Started Crew-managed Harness on 3080; PID={0}. Logs: {1}, {2}' -f $process.Id, $stdout, $stderr)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+      $port = Get-PortState -Port 3080
+      if ($port.State -eq 'occupied') {
+        if (-not (Test-OfficialHarnessListener -OwnerPid $port.Pid -Official $official -Profile $managedProfile)) {
+          throw 'Port 3080 became occupied by an unverified process; it was left untouched.'
+        }
+        if (Test-OfficialWebReady) {
+          $startedUrl = Get-CrewWebSessionUrl -OutputLog $stdout
+          if ($startedUrl) { Open-CrewBrowserUrl -Url $startedUrl; return $true }
+        }
+      }
+      if ($process.HasExited) { throw ('Crew-managed Harness exited before readiness. Diagnostic log: {0}' -f $stderr) }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    throw ('The Crew-managed Harness did not become ready within {0}s; inspect {1}.' -f $TimeoutSeconds, $stderr)
+  } finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+  }
 }
 
 function Test-OfficialWebReady {
@@ -126,6 +357,10 @@ function Test-OfficialFrontendAttached {
 
 function Open-OfficialFrontend {
   param([int] $TimeoutSeconds = 90)
+  # Preferred path: the Crew-managed Harness serves 3080 with the Crew panel
+  # already loaded. The legacy fallback below (separate official install in
+  # ~/.dsh) is only reached when no Crew-managed frontend is available.
+  if (Open-CrewManagedFrontend -TimeoutSeconds $TimeoutSeconds) { return }
   $official = Resolve-OfficialHarnessCommand
   $frontend = Get-OfficialFrontendOverlay
   $mutex = New-Object System.Threading.Mutex($false, 'Local\DSHCrewOfficialFrontendLauncher')
@@ -196,12 +431,10 @@ function Get-HealthState {
       # the process cannot be proven to match the tree it will next boot.
       $expectedDshVersion = $null
       $diskReadable = $false
-      $runtimeManifest = Join-Path $crewHome 'runtime\node_modules\@deepseek-ai\dsh\package.json'
-      if (Test-Path -LiteralPath $runtimeManifest -PathType Leaf) {
-        try {
-          $expectedDshVersion = (Get-Content -LiteralPath $runtimeManifest -Raw | ConvertFrom-Json).version
-          if ($expectedDshVersion) { $diskReadable = $true }
-        } catch { $expectedDshVersion = $null }
+      $activeDshManifest = Get-CrewDshManifest -Entry $dshCli
+      if ($null -ne $activeDshManifest -and [string] $activeDshManifest.version) {
+        $expectedDshVersion = [string] $activeDshManifest.version
+        $diskReadable = $true
       }
       $cohortMatches = $diskReadable -and $runtime.dsh_version -eq $expectedDshVersion
       if ($response.ok -eq $true -and $version -and $cohortMatches) {
@@ -814,7 +1047,8 @@ function Start-CrewService {
   try {
     $env:DSH_HOME = $Service.Home
     $arguments = @('--profile', $Service.Profile, '--host', '127.0.0.1', '--port', [string] $Service.Port, '--no-open')
-    $process = Start-Process -FilePath $dshCli -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+    $launchArguments = if ($dshCliIsNodeEntry) { @($dshCli) + $arguments } else { $arguments }
+    $process = Start-Process -FilePath $dshCommand -ArgumentList $launchArguments -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $Service.Process = $process
     $Service.RootPid = $process.Id
@@ -1034,14 +1268,14 @@ if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT -eq '1') { return }
 try {
   New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
   Write-LaunchLog ('Launcher started; mode={0}; user={1}' -f $Mode, $env:USERNAME)
-  if ($Mode -eq 'open') { Open-OfficialFrontend }
-
   if (-not (Test-Path -LiteralPath $dshCli -PathType Leaf)) {
-    throw "DSH CLI was not found at $dshCli. Run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"
+    throw "DSH CLI was not found at $dshCli. Configure DSH_CREW_DSH_CLI to a Crew-owned official CLI entry, or run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"
   }
+  Test-CrewDshCliPreflight
   if (-not (Test-Path -LiteralPath (Join-Path $crewHome 'profiles\dsh-crew\package.json') -PathType Leaf)) {
     throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
   }
+  if ($Mode -eq 'open') { Open-OfficialFrontend }
   # Background/watch modes remain independent of the official frontend.
 
   if ($Mode -eq 'watch') {

@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   RUNTIME_VERSION,
   HUB_PROTOCOL_VERSION,
@@ -7,8 +10,26 @@ import {
   REQUIRED_HUB_CAPABILITIES,
   HUB_COMPATIBILITY_CODES,
   getHubRuntimeIdentity,
+  readCrewDshVersion,
   evaluateHubHandshake,
 } from '../src/runtime-identity.mjs';
+
+test('runtime identity reads an explicit Crew-owned source CLI cohort', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-alpha-cli-'));
+  try {
+    const entry = join(root, 'apps', 'cli', 'lib', 'bin.js');
+    mkdirSync(join(root, 'apps', 'cli', 'lib'), { recursive: true });
+    writeFileSync(entry, '// disposable source CLI\n');
+    writeFileSync(join(root, 'apps', 'cli', 'package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh',
+      version: '0.1.3-alpha.1',
+    }));
+    assert.equal(readCrewDshVersion({
+      home: root,
+      env: { DSH_CREW_DSH_CLI: entry },
+    }), '0.1.3-alpha.1');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('Hub identity advertises one shared runtime/protocol contract', () => {
   const identity = getHubRuntimeIdentity();

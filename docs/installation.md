@@ -90,6 +90,36 @@ pnpm run build:client
 npm pack --dry-run
 ```
 
+## Harness CLI selection
+
+The Crew launcher and the 3210 Hub boot from one Crew-managed Harness entry,
+chosen in this order:
+
+1. `DSH_CREW_DSH_CLI`, when set to an explicit `@deepseek-ai/dsh` entry.
+2. The Crew-managed npm runtime at `<crew home>/runtime` (the normal install
+   path, written by `dsh-crew update`). It carries whatever cohort the installed
+   Crew release pinned; the launcher never substitutes a different version.
+3. A Crew-managed source cohort, discovered through a
+   `<crew home>/runtime-source-<label>.json` sidecar. The sidecar's recorded
+   `version` must equal the checkout's own `apps/cli/package.json`, so a stale
+   sidecar can never pin a half-updated tree.
+
+For the npm runtime the launcher uses the Crew home as `DSH_HOME`; a source
+cohort is its own home, because its profiles, sessions and settings live inside
+that tree. The launcher then derives `dsh_version` from the verified
+`@deepseek-ai/dsh` manifest and requires the Hub to report that same version, so
+a process left over from a previous cohort is never treated as healthy.
+
+Only override `DSH_CREW_DSH_CLI` deliberately — it wins over the managed runtime.
+Never point it at the official `~/.dsh` tree, which the Crew launcher treats as a
+read-only boundary.
+
+To build a source cohort instead of the npm runtime (for example to test an
+unpublished tag), clone the tag into `<crew home>/runtime-source-<label>`, build
+its CLI, and write the matching sidecar. On Windows a source install needs the
+native toolchain for its `fs-ext` dependency; a failed native build is reported
+as a runtime failure rather than silently falling back to another cohort.
+
 ## Rollback vs uninstall
 
 ```bash

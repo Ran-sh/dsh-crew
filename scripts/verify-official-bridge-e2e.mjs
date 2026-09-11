@@ -17,6 +17,7 @@ import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { npxInstall, npxIntegrate } from '../src/install/npx-lifecycle.mjs';
+import { TARGET_DSH_VERSION } from '../src/dsh-cohort.mjs';
 
 // RETIRED as a release gate: the legacy 3080 -> 3210 bridge is retired and
 // npxIntegrate()/npxDetach() always return OFFICIAL_WEB_PROFILE_READ_ONLY, so
@@ -139,7 +140,7 @@ try {
       const target = join(harnessHome, 'runtime');
       mkdirSync(dirname(target), { recursive: true });
       symlinkSync(realpathSync(runtimeRoot), target, process.platform === 'win32' ? 'junction' : 'dir');
-      return { ok: true, version: '0.1.2-rc.1' };
+      return { ok: true, version: TARGET_DSH_VERSION };
     },
   });
   assert(installed.ok, `disposable install failed: ${logs.join(' | ')}`);

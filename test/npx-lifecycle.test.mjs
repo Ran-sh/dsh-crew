@@ -221,11 +221,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 1.2.0-rc.6', () => {
+test('package, runtime identity, and changelog identify candidate 1.3.0', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.0-rc.6');
+  assert.equal(manifest.version, '1.3.0');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '1.2.0-rc.6');
+  assert.equal(RUNTIME_VERSION, '1.3.0');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });

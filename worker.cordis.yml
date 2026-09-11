@@ -20,15 +20,11 @@
     mode: !!js process.env.DSH_SANDBOX_MODE ?? 'workspace-write'
     workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
 
-- id: fs-local
-  config:
-    cwd: !!js process.env.DSH_CWD ?? process.cwd()
-
 - id: system-prompt
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a focused coding worker. Complete the assigned task, then summarize what you did in your final message.'
+    personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a focused coding worker. Complete the assigned task, then summarize what you did in your final message.'
 
 - id: agent-loop
   config:
@@ -40,6 +36,14 @@
     compression: zstd
 
 - insert:
+    # sdk-minimal dropped its own fs-local row in the 0.1.5 cohort, but the
+    # Crew tool suite still injects the `fs` service, so Crew owns the row and
+    # keeps the worker's editor rooted at the task workspace.
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
     - id: fs-observation-policy
       name: '@deepseek-ai/dsh-fs-observation-policy'
 

@@ -14,9 +14,11 @@ const insertSection = workerSource.slice(workerSource.indexOf('- insert:'));
 const insertIds = [...insertSection.matchAll(/^ + *- id: ([A-Za-z0-9_/-]+)/gm)].map((m) => m[1]);
 const overrideIds = workerIds.filter((id) => !insertIds.includes(id));
 
-// Fixed alpha.5 sdk-minimal base rows (from the published cordis.patch.yml).
+// Fixed 0.1.5-rc.2 sdk-minimal base rows (from the published cordis.patch.yml).
 // Any non-insert overlay row must hit one of these, otherwise the patch would
 // silently add a second row instead of overriding the base config.
+// The 0.1.5 cohort dropped both `fs-local` and `str-replace-editor`; fs-local is
+// now a Crew-owned insert row instead (see the overlay's own comment).
 const SDK_MINIMAL_BASE_IDS = new Set([
   'sdk-app-startup',
   'sdk-jsonrpc-server',
@@ -31,7 +33,6 @@ const SDK_MINIMAL_BASE_IDS = new Set([
   'pty',
   'terminal-bash',
   'terminal-pwsh',
-  'fs-local',
   'timer',
   'llm',
   'session',
@@ -49,15 +50,14 @@ const SDK_MINIMAL_BASE_IDS = new Set([
   'agent-loop',
   'persistent-bash',
   'persistent-pwsh',
-  'str-replace-editor',
   'sessions',
 ]);
 
 test('worker overlay top-level rows all hit sdk-minimal base ids', () => {
   assert.deepEqual(
     [...overrideIds].sort(),
-    ['agent-loop', 'fs-local', 'llm-deepseek', 'sandbox-policy', 'sdk-jsonrpc-server', 'sessions', 'system-prompt'],
-    'overlay overrides must be exactly the 7 sdk-minimal base rows',
+    ['agent-loop', 'llm-deepseek', 'sandbox-policy', 'sdk-jsonrpc-server', 'sessions', 'system-prompt'],
+    'overlay overrides must be exactly the 6 sdk-minimal base rows',
   );
   for (const id of overrideIds) {
     assert.ok(SDK_MINIMAL_BASE_IDS.has(id), `overlay row ${id} has no sdk-minimal base row to override`);
@@ -73,9 +73,22 @@ test('worker overlay carries no removed-package rows', () => {
 test('worker overlay covers the mandatory agent kernel rows', () => {
   assert.deepEqual(
     [...insertIds].sort(),
-    ['compaction-basic', 'fs-observation-policy', 'token-meter', 'tool-fs', 'tool-todo'],
-    'overlay inserts must be exactly the 5 Crew-only rows',
+    ['compaction-basic', 'fs-local', 'fs-observation-policy', 'token-meter', 'tool-fs', 'tool-todo'],
+    'overlay inserts must be exactly the 6 Crew-only rows',
   );
+});
+
+// The 0.1.5 cohort renamed system-prompt's `persona` to `personaPrefix`; the
+// old key is silently ignored, which would drop the worker's whole persona.
+test('worker overlay uses the 0.1.5 system-prompt persona key', () => {
+  assert.match(workerSource, /^\s*personaPrefix:/m);
+  assert.doesNotMatch(workerSource, /^\s*persona:/m);
+});
+
+// tool-fs injects the `fs` service and 0.1.5's sdk-minimal no longer provides
+// it, so the overlay must own an fs provider or the worker never boots.
+test('worker overlay owns an fs provider for the Crew tool suite', () => {
+  assert.match(insertSection, /- id: fs-local\s*\n\s*name: '@deepseek-ai\/dsh-fs-local'/);
 });
 
 test('jobs.mjs uses SDK-native launch without explicit dshBin', () => {

@@ -4,7 +4,7 @@
 // resolve to this exact version. All other modules re-export from here so a
 // cohort bump touches exactly one file (plus package.json's 48 DSH pins).
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
-export const TARGET_DSH_VERSION = '0.1.2-rc.1';
+export const TARGET_DSH_VERSION = '0.1.5-rc.2';
 export const TARGET_DSH_SPEC = `${DSH_CLI_PACKAGE}@${TARGET_DSH_VERSION}`;
 
 // Retained-cohort support: when a release's manifest pins an older DSH
