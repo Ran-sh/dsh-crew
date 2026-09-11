@@ -707,9 +707,36 @@ export class WorkerRegistry {  constructor(ctx) {
       // peak `block` must still apply: otherwise enabling the schedule would be
       // silently ignored on every dispatch that uses this provider mode.
       const strictRef = { provider: 'deepseek-official', model: legacyModel };
-      const strictPeak = scheduleAdmission(cfg.model_schedule, strictRef);
+      const strictAt = new Date();
+      const strictPeak = scheduleAdmission(cfg.model_schedule, strictRef, strictAt);
       if (strictPeak?.mode === 'block') {
-        throw Object.assign(new Error('MODEL_BLOCKED_PEAK'), { policyCode: 'MODEL_BLOCKED_PEAK' });
+        // Carry the same structured evidence the catalog path produces. The
+        // strict branch has no candidate list to fall through, so the trace is
+        // the operator's only record of why the dispatch died.
+        const blockedTrace = buildDirectSelectionTrace({
+          role: effRole,
+          logicalAttempt: attempt,
+          modelClassHint: effTier,
+          strategy: 'legacy-strict',
+          candidateSet: attempt > 0 ? 'escalation' : 'primary',
+          provider: strictRef.provider,
+          model: strictRef.model,
+          source: 'legacy-strict',
+        });
+        blockedTrace.ordered_candidates = [{
+          provider: strictRef.provider,
+          model: strictRef.model,
+          source: 'legacy-strict',
+          status: 'skipped',
+          reason_code: 'PEAK_RESTRICTED',
+        }];
+        blockedTrace.fallback_reason = 'PEAK_RESTRICTED';
+        throw Object.assign(new Error('MODEL_BLOCKED_PEAK'), {
+          policyCode: 'MODEL_BLOCKED_PEAK',
+          provider: strictRef.provider,
+          model: strictRef.model,
+          selection_trace: blockedTrace,
+        });
       }
       selection = {
         ok: true,
@@ -830,6 +857,10 @@ export class WorkerRegistry {  constructor(ctx) {
     const job = {
       id, client_job_id: client_job_id ?? null, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
       selection_source: selection.source, selection_trace: selection.selection_trace ?? null,
+      // Routing already reports a peak `warn` as a top-level flag; carry it onto
+      // the job so a job consumer sees the same signal the router produced
+      // without having to re-derive it from the trace.
+      peak_advisory: selection.peak_advisory === true,
       effort, reasoning_effort: selection.reasoningEffort,
       task, source, cwd: executionCwd, requested_cwd: cwd,
       isolation: isolatedWorkspace ? 'worktree' : 'shared',
@@ -1548,6 +1579,9 @@ export async function apply(ctx) {
               healthGate: policy.health_gate ?? config.health_gate ?? config.worker?.model_policy?.health_gate,
               allowFallback: config.allow_fallback !== false,
               tombstones: lifecycleState.tombstones,
+              // A projection must reflect the decision dispatch would make, or
+              // the panel reports a model that routing would skip at peak.
+              schedule: config.model_schedule,
             });
           }
         }
@@ -1786,6 +1820,9 @@ export async function apply(ctx) {
                 healthGate,
                 allowFallback: config.allow_fallback !== false,
                 tombstones: lifecycleState.tombstones,
+                // Same reason as the extension projection: report what dispatch
+                // would actually pick.
+                schedule: config.model_schedule,
               });
               selections[tier] = selected.ok
                 ? { provider: selected.provider, model: selected.model, source: selected.source }

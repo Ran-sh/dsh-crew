@@ -18,6 +18,11 @@ import { CREW_UI_SURFACES, classifyCrewSurface, surfaceResponsibilities } from '
 import { aggregateModelInvocations } from './task-telemetry.mjs';
 import { PanelHeader, PanelStyles } from './panel-chrome';
 import { HistoryPanel } from './history-panel';
+// The schedule contract is shared, not mirrored: model-schedule.mjs imports
+// nothing, so the panel can use the same normalization and peak test the router
+// does. A hand-maintained copy could accept less than the server and then write
+// the difference back on save.
+import { normalizeModelSchedule, isPeakAt } from '../model-schedule.mjs';
 
 export const inject = ['slots', 'locale'];
 
@@ -42,66 +47,6 @@ function normalizeAdaptive(value: any): AdaptiveConfig {
   };
 }
 
-// Browser-safe mirror of src/model-schedule.mjs. The panel only needs to render
-// the stored shape and say whether peak is active right now; the backend remains
-// authoritative for routing, so this stays a display-side coercion. It must not
-// import the server module, which the profile realm resolves differently.
-const SCHEDULE_DEFAULT_OFFSET = 8 * 60;
-function scheduleClock(value: any): number | null {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value ?? '').trim());
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return null;
-  return hours * 60 + minutes;
-}
-function normalizeSchedule(value: any) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  const unset = (field: any) => field === undefined || field === null;
-  const offset = unset(source.timezone_offset_minutes) ? SCHEDULE_DEFAULT_OFFSET
-    : (Number.isInteger(source.timezone_offset_minutes) && Math.abs(source.timezone_offset_minutes) <= 840
-      ? source.timezone_offset_minutes : null);
-  const weekdays = unset(source.weekdays) ? [1, 2, 3, 4, 5]
-    : (Array.isArray(source.weekdays)
-      ? [...new Set(source.weekdays.filter((d: any) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a: any, b: any) => a - b)
-      : null);
-  const windows = unset(source.peak_windows) ? [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }]
-    : (Array.isArray(source.peak_windows)
-      ? source.peak_windows.filter((w: any) => scheduleClock(w?.start) !== null && scheduleClock(w?.end) !== null
-        && scheduleClock(w.start) !== scheduleClock(w.end))
-        .map((w: any) => ({ start: String(w.start).trim(), end: String(w.end).trim() }))
-      : null);
-  const seen = new Set();
-  const models = (Array.isArray(source.models) ? source.models : []).filter((row: any) => {
-    const key = `${row?.provider}\0${row?.model}`;
-    if (!row?.provider || !row?.model || !['warn', 'block'].includes(row?.mode) || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map((row: any) => ({ provider: row.provider, model: row.model, mode: row.mode }));
-  // A broken container means the schedule restricts nothing, matching the
-  // server's fail-open coercion. The model rules are kept so a corrupted window
-  // does not also discard the operator's per-model choices.
-  if (offset === null || weekdays === null || windows === null) {
-    return { timezone_offset_minutes: SCHEDULE_DEFAULT_OFFSET, weekdays: [], peak_windows: [], models };
-  }
-  return { timezone_offset_minutes: offset, weekdays, peak_windows: windows, models };
-}
-function scheduleIsPeak(schedule: any, now = new Date()) {
-  if (schedule.weekdays.length === 0) return false;
-  const shifted = new Date(now.getTime() + schedule.timezone_offset_minutes * 60_000);
-  const weekday = shifted.getUTCDay();
-  const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-  for (const window of schedule.peak_windows) {
-    const start = scheduleClock(window.start);
-    const end = scheduleClock(window.end);
-    if (start === null || end === null) continue;
-    const inside = start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
-    if (!inside) continue;
-    const owner = start < end || minutes >= start ? weekday : (weekday + 6) % 7;
-    if (schedule.weekdays.includes(owner)) return true;
-  }
-  return false;
-}
 
 const COPY = {
   zh: {
@@ -1197,13 +1142,13 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   // ---- per-model peak/off-peak scheduling ----
   // The schedule replaces as a whole (windows and model modes only mean anything
   // together), so every edit saves the complete object.
-  const schedule = normalizeSchedule(config?.model_schedule);
+  const schedule = normalizeModelSchedule(config?.model_schedule);
   const saveSchedule = (candidate: any) => {
-    const next = normalizeSchedule(candidate);
+    const next = normalizeModelSchedule(candidate);
     setConfig((current: any) => ({ ...current, model_schedule: next }));
     void applyPatch({ model_schedule: next });
   };
-  const schedulePeakNow = scheduleIsPeak(schedule);
+  const schedulePeakNow = isPeakAt(schedule);
   const scheduleModeOf = (ref: any) => schedule.models.find(
     (entry: any) => entry.provider === ref.provider && entry.model === ref.model,
   )?.mode ?? 'off';
@@ -1213,14 +1158,29 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     );
     saveSchedule({ ...schedule, models: mode === 'off' ? others : [...others, { ...ref, mode }] });
   };
+  // Every model the router can actually select, not just what the flat tier
+  // mirrors happen to expose. The Pro mirror collapses worker-escalation and
+  // reviewer priority into one list — it shows whichever is set and hides the
+  // other — so a reviewer-only model would be routable yet impossible to
+  // restrict. Harness Default and the catalog are included for the same reason:
+  // routing can land on a model that is in no priority list at all.
   const scheduleModelRefs = (() => {
     const seen = new Map<string, any>();
-    for (const tier of ['flash', 'pro'] as const) {
-      for (const ref of config?.[`${tier}_model_priority`] ?? []) {
-        if (ref?.provider && ref?.model) seen.set(`${ref.provider}\0${ref.model}`, ref);
-      }
+    const add = (ref: any) => {
+      if (ref?.provider && ref?.model) seen.set(`${ref.provider}\0${ref.model}`, { provider: ref.provider, model: ref.model });
+    };
+    for (const ref of config?.flash_model_priority ?? []) add(ref);
+    for (const ref of config?.pro_model_priority ?? []) add(ref);
+    for (const role of ['worker', 'review'] as const) {
+      const policy = config?.[role]?.model_policy;
+      for (const ref of policy?.priority ?? []) add(ref);
+      for (const ref of policy?.escalation_priority ?? []) add(ref);
     }
-    for (const entry of schedule.models) seen.set(`${entry.provider}\0${entry.model}`, entry);
+    add(modelCatalog?.harness_default);
+    for (const provider of modelCatalog?.providers ?? []) {
+      for (const model of provider?.models ?? []) add({ provider: provider.id, model: model?.id });
+    }
+    for (const entry of schedule.models) add(entry);
     return [...seen.values()];
   })();
   const scheduleWeekdayNames = locale === 'zh'
@@ -1586,10 +1546,20 @@ function WorkersPanel({ ctx }: { ctx: any }) {
             <label style={S.field}><span style={S.fieldLabel}>{copy.scheduleTimezone}</span>
               <CustomSelect value={String(schedule.timezone_offset_minutes)}
                 onChange={(v) => saveSchedule({ ...schedule, timezone_offset_minutes: Number(v) })}
-                options={Array.from({ length: 29 }, (_, i) => (i - 14) * 60).map((minutes) => ({
-                  value: String(minutes),
-                  label: `UTC${minutes >= 0 ? '+' : '-'}${Math.abs(minutes) / 60}`,
-                }))} /></label>
+                options={(() => {
+                  // Real-world fixed offsets, not just whole hours: a stored
+                  // minute-level offset with no matching option would render as
+                  // a different value than it holds.
+                  const offsets = new Set<number>();
+                  for (let h = -14; h <= 14; h++) offsets.add(h * 60);
+                  for (const minutes of [330, 345, 570, -210, -570]) offsets.add(minutes);
+                  offsets.add(schedule.timezone_offset_minutes);
+                  return [...offsets].sort((a, b) => a - b).map((minutes) => ({
+                    value: String(minutes),
+                    label: `UTC${minutes >= 0 ? '+' : '-'}${Math.floor(Math.abs(minutes) / 60)}`
+                      + (Math.abs(minutes) % 60 ? `:${String(Math.abs(minutes) % 60).padStart(2, '0')}` : ''),
+                  }));
+                })()} /></label>
             <div style={{ gridColumn: '1 / -1' }}>
               <span style={{ ...S.fieldLabel, display: 'block', marginBottom: 5 }}>{copy.scheduleWeekdays}</span>
               <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>

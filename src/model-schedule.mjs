@@ -106,16 +106,25 @@ function modelModes(value) {
  */
 export function normalizeModelSchedule(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const offset = offsetMinutes(source.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
-  const weekdays = weekdayList(source.weekdays, DEFAULT_PEAK_WEEKDAYS);
-  const windows = peakWindows(source.peak_windows, DEFAULT_PEAK_WINDOWS);
   // Keep the per-model rules even when the schedule turns inert: with no windows
   // nothing is ever peak, so the rules cannot fire, and preserving them means a
   // corrupted window does not also destroy the operator's model choices once the
   // coerced config is written back.
   const models = modelModes(source.models);
+  const offset = offsetMinutes(source.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
+  const weekdays = weekdayList(source.weekdays, DEFAULT_PEAK_WEEKDAYS);
+  const windows = peakWindows(source.peak_windows, DEFAULT_PEAK_WINDOWS);
   if (offset === null || weekdays === null || windows === null) {
-    return { timezone_offset_minutes: DEFAULT_TIMEZONE_OFFSET_MINUTES, weekdays: [], peak_windows: [], models };
+    // Fail open by emptying the axis that activates restrictions — weekdays
+    // schedule the windows — while keeping every field that still parses. A
+    // whole-schedule reset would discard a valid custom offset and windows, and
+    // the panel writes the schedule as a whole, so that loss could stick.
+    return {
+      timezone_offset_minutes: offset === null ? DEFAULT_TIMEZONE_OFFSET_MINUTES : offset,
+      weekdays: [],
+      peak_windows: windows === null ? [] : windows,
+      models,
+    };
   }
   return {
     timezone_offset_minutes: offset,

@@ -23,10 +23,32 @@ Future changes go here.
   its documented default, but a field that is present and unusable — a string
   where a list belongs, a non-integer offset such as `"480garbage"` — makes the
   schedule inert instead of substituting defaults, because substituting would
-  switch on restrictions the operator never asked for. The per-model rules
-  survive that coercion, so a corrupted window does not also erase them. Inside a
-  valid container, an unparseable window is dropped rather than widened to all
-  day, and an unknown mode is not a rule.
+  switch on restrictions the operator never asked for. A broken field empties only
+  the axis that activates restrictions; the fields and per-model rules that still
+  parse are kept, so corruption is not also collateral damage. Inside a valid
+  container, an unparseable window is dropped rather than widened to all day, and
+  an unknown mode is not a rule.
+- The panel uses `src/model-schedule.mjs` directly instead of keeping a
+  hand-maintained copy of its normalization and peak test. The module imports
+  nothing, so both realms can share it; a copy that accepted less than the server
+  would rewrite a server-valid config differently on the next save, because the
+  panel writes the normalized schedule as a whole.
+- Every path that resolves a model now honours the schedule. Besides the catalog
+  paths, this covers the strict `deepseek-official` dispatch, the standalone
+  `jobs.mjs` dispatch, and the extension and provider projections the panel reads;
+  a projection that ignored the schedule would report a model routing would skip.
+  Model resolution also reads the clock once per resolution rather than per
+  candidate, so a resolution that straddles a peak boundary cannot judge its
+  candidates against different instants.
+- The panel can configure a rule for any model the router can select, not only
+  those in the flat tier mirrors. The Pro mirror exposes worker-escalation *or*
+  reviewer priority — whichever is set — so a reviewer-only model was routable but
+  unconfigurable. More models are now offered: both roles' primary and escalation
+  lists, Harness Default, and the catalog.
+- Records a `warn` verdict on the job as `peak_advisory`, matching the routing
+  result, and gives a peak-blocked strict dispatch the same structured trace and
+  provider/model evidence the catalog path produces. The timezone selector offers
+  real-world minute offsets, so a stored offset always has a matching option.
 - Fixes three defects found in review. A `warn` model selected through the
   multi-provider preferred-default path lost its advisory, because only the
   surviving candidate object was kept while the verdict was discarded. Filtering

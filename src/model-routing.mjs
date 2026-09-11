@@ -290,6 +290,12 @@ export function resolveWorkerModel({
     escalationReason: traceContext.escalationReason ?? null,
   });
 
+  // One clock read for the whole resolution. Calling `new Date()` per admission
+  // would let a resolution that straddles a peak boundary judge candidates
+  // against different instants — the filter and the all-blocked rescan below
+  // could then disagree about the same candidate.
+  const selectionAt = at ?? new Date();
+
   // Explicit priority — including an intentionally empty configured list — is
   // authoritative. Adaptive mode records that bypass but never reorders it.
   if (priorityConfigured || normalizedPriority.length > 0) {
@@ -316,7 +322,7 @@ export function resolveWorkerModel({
     }
     // A peak-blocked model is skipped so the next candidate can serve the job;
     // only an explicit no-fallback call turns it into a hard failure.
-    const peak = peakAdmission(schedule, ref, at);
+    const peak = peakAdmission(schedule, ref, selectionAt);
     if (peak?.mode === 'block') {
       trace.ordered_candidates.push(candidateDecision(ref, prioritySource, 'skipped', {
         reasonCode: MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED, advertised,
@@ -351,7 +357,7 @@ export function resolveWorkerModel({
     if (matches.length === 1) {
       const preferred = matches[0];
       const healthReason = healthAdmissionReason(preferred, { healthStore, healthGate, tombstones });
-      const peak = healthReason ? null : peakAdmission(schedule, preferred, at);
+      const peak = healthReason ? null : peakAdmission(schedule, preferred, selectionAt);
       const blockReason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
       if (blockReason) {
         trace.ordered_candidates.push(candidateDecision(preferred, 'preferred-default', 'skipped', {
@@ -379,7 +385,7 @@ export function resolveWorkerModel({
       const verdicts = new Map();
       const availableMatches = matches.filter((candidate) => {
         const healthReason = healthAdmissionReason(candidate, { healthStore, healthGate, tombstones });
-        const peak = healthReason ? null : peakAdmission(schedule, candidate, at);
+        const peak = healthReason ? null : peakAdmission(schedule, candidate, selectionAt);
         const reason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
         if (!reason) {
           verdicts.set(modelRefKey(candidate), peak ?? null);
@@ -392,7 +398,7 @@ export function resolveWorkerModel({
       });
       if (availableMatches.length === 0) {
         const blocked = matches.find((candidate) => healthAdmissionReason(candidate, { healthStore, healthGate, tombstones })
-          || peakAdmission(schedule, candidate, at)?.mode === 'block');
+          || peakAdmission(schedule, candidate, selectionAt)?.mode === 'block');
         if (blocked && allowFallback === false) {
           const reason = healthAdmissionReason(blocked, { healthStore, healthGate, tombstones })
             ?? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED;
@@ -410,8 +416,12 @@ export function resolveWorkerModel({
       const baseline = deterministicMatch
         ? [deterministicMatch, ...availableMatches.filter((candidate) => candidate.provider !== deterministicMatch.provider)]
         : availableMatches;
-      const ranked = soleMatch ? null : rankForTrace(trace, baseline, { adaptive, adaptiveHealth });
-      const adaptiveChoice = ranked?.trace.decision_supported ? ranked.candidates[0] : null;
+      // Ranking still runs for a lone survivor so `trace.adaptive` reflects the
+      // configured policy in this shape too; the result is not consulted, because
+      // ranking orders candidates rather than admitting them and must never
+      // discard the only one that passed admission.
+      const ranked = rankForTrace(trace, soleMatch ? [soleMatch] : baseline, { adaptive, adaptiveHealth });
+      const adaptiveChoice = !soleMatch && ranked?.trace.decision_supported ? ranked.candidates[0] : null;
       const match = soleMatch ?? adaptiveChoice ?? deterministicMatch;
       if (match) {
         const decisionOrder = soleMatch ? [] : adaptiveChoice ? ranked.candidates : availableMatches;
@@ -481,7 +491,7 @@ export function resolveWorkerModel({
         ? MODEL_SELECTION_REASON_CODES.ESCALATION_CANDIDATES_EXHAUSTED
         : MODEL_SELECTION_REASON_CODES.PRIMARY_CANDIDATES_EXHAUSTED;
       const healthReason = healthAdmissionReason(defaultRef, { healthStore, healthGate, tombstones });
-      const peak = healthReason ? null : peakAdmission(schedule, defaultRef, at);
+      const peak = healthReason ? null : peakAdmission(schedule, defaultRef, selectionAt);
       const blockReason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
       if (blockReason) {
         trace.ordered_candidates.push(candidateDecision(defaultRef, 'harness-default', 'skipped', {

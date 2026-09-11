@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   isPeakAt,
   modelScheduleMode,
@@ -132,6 +133,7 @@ test('malformed entries inside a valid container are dropped, not widened', () =
 // unusable container makes the schedule non-restricting instead.
 test('a present but unusable container fails open rather than to the defaults', () => {
   const restrictive = [{ provider: 'p', model: 'm', mode: 'block' }];
+  const peak = at('2026-09-14T02:00:00Z');
   for (const bad of [
     { peak_windows: 'corrupt', models: restrictive },
     { weekdays: 'corrupt', models: restrictive },
@@ -139,15 +141,39 @@ test('a present but unusable container fails open rather than to the defaults', 
     { timezone_offset_minutes: 480.9, models: restrictive },
     { timezone_offset_minutes: 99_99, models: restrictive },
   ]) {
-    const schedule = normalizeModelSchedule({ ...bad, models: restrictive });
+    const schedule = normalizeModelSchedule(bad);
+    // Empty weekdays is the activation axis, so nothing can ever be peak.
     assert.deepEqual(schedule.weekdays, [], `must not restrict on ${JSON.stringify(bad)}`);
-    assert.deepEqual(schedule.peak_windows, []);
-    assert.equal(isPeakAt(schedule, at('2026-09-14T02:00:00Z')), false, 'corruption must never activate a window');
-    assert.equal(scheduleAdmission(schedule, { provider: 'p', model: 'm' }, at('2026-09-14T02:00:00Z')), null);
-    // The rule itself survives: with no windows nothing can be peak, and keeping
-    // it means a corrupted window does not also erase the operator's choices.
+    assert.equal(isPeakAt(schedule, peak), false, 'corruption must never activate a window');
+    assert.equal(scheduleAdmission(schedule, { provider: 'p', model: 'm' }, peak), null);
+    // The rule itself survives: with no active weekday nothing can be peak, and
+    // keeping it means a corrupted field does not also erase the operator's
+    // choices when the coerced config is written back.
     assert.deepEqual(schedule.models, restrictive, 'the per-model rules must not be destroyed');
   }
+});
+
+// A broken field must not discard fields that still parse. The panel saves the
+// schedule as a whole, so throwing away a valid offset or window here would make
+// the loss permanent on the next save.
+test('fail-open preserves the fields that are still valid', () => {
+  const good = { start: '01:00', end: '05:00' };
+  const badWeekdays = normalizeModelSchedule({ weekdays: 'corrupt', timezone_offset_minutes: 60, peak_windows: [good] });
+  assert.equal(badWeekdays.timezone_offset_minutes, 60, 'a valid offset survives');
+  assert.deepEqual(badWeekdays.peak_windows, [good], 'valid windows survive');
+  assert.deepEqual(badWeekdays.weekdays, [], 'only the activating axis is emptied');
+
+  const badWindows = normalizeModelSchedule({ peak_windows: 'corrupt', timezone_offset_minutes: 60, weekdays: [6] });
+  assert.equal(badWindows.timezone_offset_minutes, 60, 'a valid offset survives');
+  assert.deepEqual(badWindows.weekdays, [], 'activation is still forced off');
+  assert.deepEqual(badWindows.peak_windows, []);
+
+  // An unusable offset cannot be repaired by guessing, so the default stands in
+  // while the valid window is still kept for the operator to see.
+  const badOffset = normalizeModelSchedule({ timezone_offset_minutes: 'nope', weekdays: [6], peak_windows: [good] });
+  assert.equal(badOffset.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
+  assert.deepEqual(badOffset.peak_windows, [good], 'the window is not collateral damage');
+  assert.deepEqual(badOffset.weekdays, [], 'activation is still forced off');
 });
 
 test('a missing field still receives its documented default', () => {
@@ -161,4 +187,15 @@ test('a non-object schedule normalizes to the defaults', () => {
   for (const raw of [null, undefined, 'nope', 42, []]) {
     assert.deepEqual(normalizeModelSchedule(raw), defaultModelSchedule(), `raw=${JSON.stringify(raw)}`);
   }
+});
+
+// The panel imports this module directly instead of keeping a copy, because a
+// mirror that accepted less than the server would rewrite a server-valid config
+// differently on the next save. This pins the single-source property so a future
+// edit cannot quietly reintroduce a second implementation.
+test('the panel uses this module rather than a private mirror', () => {
+  const panel = readFileSync(new URL('../src/client/index.tsx', import.meta.url), 'utf8');
+  assert.match(panel, /from '\.\.\/model-schedule\.mjs'/, 'the panel must import the shared schedule module');
+  assert.doesNotMatch(panel, /function normalizeSchedule\s*\(/, 'no second normalizer may exist in the panel');
+  assert.doesNotMatch(panel, /function scheduleIsPeak\s*\(/, 'no second peak test may exist in the panel');
 });

@@ -19,13 +19,22 @@ import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } 
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 import { raceWaiters } from './removable-waiter.mjs';
 import { buildDirectSelectionTrace } from './model-routing.mjs';
+import { normalizeModelSchedule, scheduleAdmission } from './model-schedule.mjs';
 import { appendSessionOrigin } from './session-origins.mjs';
+import { readGlobalConfig } from './install/install.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREW_DSH_HOME = join(homedir(), '.config', 'dsh-crew', 'harness');
 const STATUS_FILE = join(CONFIG_DIR, 'status.json');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
+
+// Read the operator's schedule once per dispatch. An unreadable config must not
+// block a job: a missing or damaged file means no restriction, matching how the
+// router treats an absent schedule.
+function readModelSchedule() {
+  try { return normalizeModelSchedule(readGlobalConfig().model_schedule); } catch { return normalizeModelSchedule(undefined); }
+}
 
 export const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
@@ -110,6 +119,14 @@ export function startJob({
 }) {
   const tierInfo = TIERS[tier];
   if (!tierInfo) throw new Error(`unknown tier "${tier}" (expected: ${Object.keys(TIERS).join(', ')})`);
+  // Standalone dispatch names its provider/model directly rather than walking a
+  // catalog, but a peak `block` still applies: without this the schedule would be
+  // silently ignored on every standalone job.
+  const standaloneRef = { provider: 'deepseek-official', model: tierInfo.model };
+  const standaloneAt = new Date();
+  if (scheduleAdmission(readModelSchedule(), standaloneRef, standaloneAt)?.mode === 'block') {
+    throw Object.assign(new Error('MODEL_BLOCKED_PEAK'), { policyCode: 'MODEL_BLOCKED_PEAK' });
+  }
   if (!ROLES[role]) throw new Error(`unknown role "${role}" (expected: ${Object.keys(ROLES).join(', ')})`);
   if (!['off', 'high', 'max'].includes(effort)) throw new Error(`unknown effort "${effort}" (expected: off, high, max)`);
   if (!existsSync(CORDIS)) throw new Error(`worker overlay not found at ${CORDIS}`);
