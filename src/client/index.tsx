@@ -57,16 +57,20 @@ function scheduleClock(value: any): number | null {
 }
 function normalizeSchedule(value: any) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  const offset = Number.isInteger(source.timezone_offset_minutes) && Math.abs(source.timezone_offset_minutes) <= 840
-    ? source.timezone_offset_minutes : SCHEDULE_DEFAULT_OFFSET;
-  const weekdays = Array.isArray(source.weekdays)
-    ? [...new Set(source.weekdays.filter((d: any) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a: any, b: any) => a - b)
-    : [1, 2, 3, 4, 5];
-  const windows = Array.isArray(source.peak_windows)
-    ? source.peak_windows.filter((w: any) => scheduleClock(w?.start) !== null && scheduleClock(w?.end) !== null
-      && scheduleClock(w.start) !== scheduleClock(w.end))
-      .map((w: any) => ({ start: String(w.start).trim(), end: String(w.end).trim() }))
-    : [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }];
+  const unset = (field: any) => field === undefined || field === null;
+  const offset = unset(source.timezone_offset_minutes) ? SCHEDULE_DEFAULT_OFFSET
+    : (Number.isInteger(source.timezone_offset_minutes) && Math.abs(source.timezone_offset_minutes) <= 840
+      ? source.timezone_offset_minutes : null);
+  const weekdays = unset(source.weekdays) ? [1, 2, 3, 4, 5]
+    : (Array.isArray(source.weekdays)
+      ? [...new Set(source.weekdays.filter((d: any) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a: any, b: any) => a - b)
+      : null);
+  const windows = unset(source.peak_windows) ? [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }]
+    : (Array.isArray(source.peak_windows)
+      ? source.peak_windows.filter((w: any) => scheduleClock(w?.start) !== null && scheduleClock(w?.end) !== null
+        && scheduleClock(w.start) !== scheduleClock(w.end))
+        .map((w: any) => ({ start: String(w.start).trim(), end: String(w.end).trim() }))
+      : null);
   const seen = new Set();
   const models = (Array.isArray(source.models) ? source.models : []).filter((row: any) => {
     const key = `${row?.provider}\0${row?.model}`;
@@ -74,6 +78,12 @@ function normalizeSchedule(value: any) {
     seen.add(key);
     return true;
   }).map((row: any) => ({ provider: row.provider, model: row.model, mode: row.mode }));
+  // A broken container means the schedule restricts nothing, matching the
+  // server's fail-open coercion. The model rules are kept so a corrupted window
+  // does not also discard the operator's per-model choices.
+  if (offset === null || weekdays === null || windows === null) {
+    return { timezone_offset_minutes: SCHEDULE_DEFAULT_OFFSET, weekdays: [], peak_windows: [], models };
+  }
   return { timezone_offset_minutes: offset, weekdays, peak_windows: windows, models };
 }
 function scheduleIsPeak(schedule: any, now = new Date()) {

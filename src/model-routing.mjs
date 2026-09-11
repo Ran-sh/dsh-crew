@@ -206,6 +206,7 @@ export function buildDirectSelectionTrace({
   model,
   source = 'legacy-strict',
   escalationReason = null,
+  peakAdvisory = false,
 } = {}) {
   const trace = traceBase({ role, logicalAttempt, modelClassHint, strategy, candidateSet, escalationReason });
   const ref = normalizeModelRef({ provider, model });
@@ -213,7 +214,9 @@ export function buildDirectSelectionTrace({
     trace.fallback_reason = MODEL_SELECTION_REASON_CODES.NO_AVAILABLE_MODEL;
     return trace;
   }
-  return selectTrace(trace, ref, source);
+  return selectTrace(trace, ref, source, {
+    reasonCode: peakAdvisory ? MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY : null,
+  });
 }
 
 /**
@@ -370,11 +373,18 @@ export function resolveWorkerModel({
       }
     }
     if (matches.length > 1) {
+      // Keep each admitted candidate's advisory verdict alongside it: a `warn`
+      // rule is only advisory if the caller learns about it, and recomputing it
+      // after the pick would re-evaluate a clock already read once.
+      const verdicts = new Map();
       const availableMatches = matches.filter((candidate) => {
         const healthReason = healthAdmissionReason(candidate, { healthStore, healthGate, tombstones });
         const peak = healthReason ? null : peakAdmission(schedule, candidate, at);
         const reason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
-        if (!reason) return true;
+        if (!reason) {
+          verdicts.set(modelRefKey(candidate), peak ?? null);
+          return true;
+        }
         trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
           reasonCode: reason,
         }));
@@ -391,14 +401,20 @@ export function resolveWorkerModel({
       }
       const preferredProvider = normalizeModelRef(harnessDefault)?.provider;
       const deterministicMatch = availableMatches.find((candidate) => candidate.provider === preferredProvider) ?? null;
+      // Filtering can leave exactly one admissible candidate while removing the
+      // one that matched the Harness Default provider, which leaves both the
+      // deterministic match and the adaptive choice empty. Ambiguity only means
+      // something with two or more candidates left, so a lone survivor is picked
+      // outright rather than reported as ambiguous and dropped.
+      const soleMatch = availableMatches.length === 1 ? availableMatches[0] : null;
       const baseline = deterministicMatch
         ? [deterministicMatch, ...availableMatches.filter((candidate) => candidate.provider !== deterministicMatch.provider)]
         : availableMatches;
-      const ranked = rankForTrace(trace, baseline, { adaptive, adaptiveHealth });
-      const adaptiveChoice = ranked.trace.decision_supported ? ranked.candidates[0] : null;
-      const match = adaptiveChoice ?? deterministicMatch;
+      const ranked = soleMatch ? null : rankForTrace(trace, baseline, { adaptive, adaptiveHealth });
+      const adaptiveChoice = ranked?.trace.decision_supported ? ranked.candidates[0] : null;
+      const match = soleMatch ?? adaptiveChoice ?? deterministicMatch;
       if (match) {
-        const decisionOrder = adaptiveChoice ? ranked.candidates : availableMatches;
+        const decisionOrder = soleMatch ? [] : adaptiveChoice ? ranked.candidates : availableMatches;
         for (const candidate of decisionOrder) {
           if (candidate.provider === match.provider && candidate.model === match.model) continue;
           trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
@@ -407,10 +423,21 @@ export function resolveWorkerModel({
               : MODEL_SELECTION_REASON_CODES.PREFERRED_MODEL_AMBIGUOUS,
           }));
         }
-        selectTrace(trace, match, 'preferred-default');
-        return { ok: true, ...match, source: 'preferred-default', selection_trace: trace };
+        const verdict = verdicts.get(modelRefKey(match)) ?? null;
+        selectTrace(trace, match, 'preferred-default', {
+          reasonCode: verdict?.mode === 'warn' ? MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY : null,
+        });
+        return {
+          ok: true,
+          ...match,
+          source: 'preferred-default',
+          ...(verdict?.mode === 'warn' ? { peak_advisory: true } : {}),
+          selection_trace: trace,
+        };
       }
-      for (const candidate of matches) {
+      // Only the candidates still in play can be ambiguous; one already rejected
+      // for a concrete reason keeps that reason and appears once.
+      for (const candidate of availableMatches) {
         trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
           reasonCode: MODEL_SELECTION_REASON_CODES.PREFERRED_MODEL_AMBIGUOUS,
         }));
@@ -432,10 +459,19 @@ export function resolveWorkerModel({
 
   if (fallback === 'harness-default') {
     const defaultRef = normalizeModelRef(harnessDefault);
+    // The Harness Default is often also a priority or preferred candidate, and
+    // that candidate has already been judged. Recording it a second time with a
+    // different reason would make the trace contradict itself, so a ref that
+    // already has a verdict keeps it.
+    const alreadyJudged = defaultRef
+      ? trace.ordered_candidates.some((row) => row.provider === defaultRef.provider && row.model === defaultRef.model)
+      : false;
     if (!defaultRef) {
       trace.ordered_candidates.push(candidateDecision(null, 'harness-default', 'skipped', {
         reasonCode: MODEL_SELECTION_REASON_CODES.HARNESS_DEFAULT_INVALID,
       }));
+    } else if (alreadyJudged) {
+      // Keep its existing verdict; nothing further to record.
     } else if (!providers.has(defaultRef.provider)) {
       trace.ordered_candidates.push(candidateDecision(defaultRef, 'harness-default', 'skipped', {
         reasonCode: MODEL_SELECTION_REASON_CODES.HARNESS_DEFAULT_PROVIDER_UNAVAILABLE,

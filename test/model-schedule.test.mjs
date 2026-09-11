@@ -114,18 +114,47 @@ test("mode 'off' is the absence of a rule and is never stored", () => {
   assert.equal(modelScheduleMode(schedule, model), 'off');
 });
 
-test('malformed entries are dropped rather than widening the restriction', () => {
+test('malformed entries inside a valid container are dropped, not widened', () => {
   const schedule = normalizeModelSchedule({
-    timezone_offset_minutes: 99_99,
+    timezone_offset_minutes: null, // absent, so the default applies
     peak_windows: [{ start: 'nope', end: '10:00' }, { start: '01:00', end: '05:00' }, { start: '07:00', end: '07:00' }],
     weekdays: [1, 1, 9, -1, 3],
     models: [{ provider: '', model: 'x', mode: 'block' }, { provider: 'p', model: 'm', mode: 'nope' }, { provider: 'p', model: 'm', mode: 'block' }],
   });
-  // An out-of-range offset falls back rather than shifting every window.
   assert.equal(schedule.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
   assert.deepEqual(schedule.peak_windows, [{ start: '01:00', end: '05:00' }], 'unparseable and zero-length windows are dropped');
   assert.deepEqual(schedule.weekdays, [1, 3], 'duplicates and out-of-range days are dropped');
   assert.deepEqual(schedule.models, [{ provider: 'p', model: 'm', mode: 'block' }]);
+});
+
+// The failure direction matters: substituting defaults for a *broken* field
+// would switch on restrictions the operator never asked for, so a present but
+// unusable container makes the schedule non-restricting instead.
+test('a present but unusable container fails open rather than to the defaults', () => {
+  const restrictive = [{ provider: 'p', model: 'm', mode: 'block' }];
+  for (const bad of [
+    { peak_windows: 'corrupt', models: restrictive },
+    { weekdays: 'corrupt', models: restrictive },
+    { timezone_offset_minutes: '480garbage', models: restrictive },
+    { timezone_offset_minutes: 480.9, models: restrictive },
+    { timezone_offset_minutes: 99_99, models: restrictive },
+  ]) {
+    const schedule = normalizeModelSchedule({ ...bad, models: restrictive });
+    assert.deepEqual(schedule.weekdays, [], `must not restrict on ${JSON.stringify(bad)}`);
+    assert.deepEqual(schedule.peak_windows, []);
+    assert.equal(isPeakAt(schedule, at('2026-09-14T02:00:00Z')), false, 'corruption must never activate a window');
+    assert.equal(scheduleAdmission(schedule, { provider: 'p', model: 'm' }, at('2026-09-14T02:00:00Z')), null);
+    // The rule itself survives: with no windows nothing can be peak, and keeping
+    // it means a corrupted window does not also erase the operator's choices.
+    assert.deepEqual(schedule.models, restrictive, 'the per-model rules must not be destroyed');
+  }
+});
+
+test('a missing field still receives its documented default', () => {
+  const schedule = normalizeModelSchedule({ models: [] });
+  assert.equal(schedule.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
+  assert.deepEqual(schedule.weekdays, [...DEFAULT_PEAK_WEEKDAYS]);
+  assert.deepEqual(schedule.peak_windows, DEFAULT_PEAK_WINDOWS.map((window) => ({ ...window })));
 });
 
 test('a non-object schedule normalizes to the defaults', () => {

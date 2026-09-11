@@ -45,19 +45,26 @@ function clockMinutes(value) {
 }
 
 function offsetMinutes(value, fallback) {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || Math.abs(parsed) > MAX_OFFSET_MINUTES) return fallback;
+  if (value === undefined || value === null) return fallback;
+  // Strict: a partially numeric string ("480garbage") or a float is a broken
+  // value, not a request for 480, and must not silently move the clock.
+  if (typeof value === 'number' ? !Number.isInteger(value) : !/^-?\d+$/.test(String(value).trim())) return null;
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value).trim(), 10);
+  if (Math.abs(parsed) > MAX_OFFSET_MINUTES) return null;
   return parsed;
 }
 
 function weekdayList(value, fallback) {
-  if (!Array.isArray(value)) return [...fallback];
-  const days = [...new Set(value.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b);
-  return days;
+  if (value === undefined || value === null) return [...fallback];
+  // A present-but-unusable container is not a request for Mon-Fri: treating it
+  // as one could switch on restrictions the operator never specified.
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b);
 }
 
 function peakWindows(value, fallback) {
-  if (!Array.isArray(value)) return fallback.map((window) => ({ ...window }));
+  if (value === undefined || value === null) return fallback.map((window) => ({ ...window }));
+  if (!Array.isArray(value)) return null;
   const windows = [];
   for (const entry of value) {
     const start = clockMinutes(entry?.start);
@@ -89,17 +96,32 @@ function modelModes(value) {
 }
 
 /**
- * Coerce a stored or user-supplied schedule into the canonical shape. Lenient by
- * design, matching the other config normalizers: unparseable entries are dropped
- * rather than throwing, so a damaged config cannot make routing unusable.
+ * Coerce a stored or user-supplied schedule into the canonical shape.
+ *
+ * Lenient toward *missing* fields, strict toward *broken* ones. A missing field
+ * gets its documented default; a field that is present but unusable (a string
+ * where a list belongs, a non-integer offset) makes the whole schedule
+ * non-restricting instead of substituting defaults. Substituting would let
+ * accidental corruption switch on restrictions the operator never asked for.
  */
 export function normalizeModelSchedule(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const offset = offsetMinutes(source.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES);
+  const weekdays = weekdayList(source.weekdays, DEFAULT_PEAK_WEEKDAYS);
+  const windows = peakWindows(source.peak_windows, DEFAULT_PEAK_WINDOWS);
+  // Keep the per-model rules even when the schedule turns inert: with no windows
+  // nothing is ever peak, so the rules cannot fire, and preserving them means a
+  // corrupted window does not also destroy the operator's model choices once the
+  // coerced config is written back.
+  const models = modelModes(source.models);
+  if (offset === null || weekdays === null || windows === null) {
+    return { timezone_offset_minutes: DEFAULT_TIMEZONE_OFFSET_MINUTES, weekdays: [], peak_windows: [], models };
+  }
   return {
-    timezone_offset_minutes: offsetMinutes(source.timezone_offset_minutes, DEFAULT_TIMEZONE_OFFSET_MINUTES),
-    weekdays: weekdayList(source.weekdays, DEFAULT_PEAK_WEEKDAYS),
-    peak_windows: peakWindows(source.peak_windows, DEFAULT_PEAK_WINDOWS),
-    models: modelModes(source.models),
+    timezone_offset_minutes: offset,
+    weekdays,
+    peak_windows: windows,
+    models,
   };
 }
 

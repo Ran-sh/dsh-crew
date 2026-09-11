@@ -18,6 +18,7 @@ import {
   resolveRoleTierHint,
 } from '../policy.mjs';
 import { buildDirectSelectionTrace, resolveWorkerModel, resolveModel } from '../model-routing.mjs';
+import { scheduleAdmission } from '../model-schedule.mjs';
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
@@ -702,12 +703,21 @@ export class WorkerRegistry {  constructor(ctx) {
     const getCurrentSelection = () => this.ctx.get('agentDefaultModel')?.currentSelection?.();
     let selection;
     if (workerProviderMode === 'deepseek-official') {
+      // Strict mode names its model directly instead of walking a catalog, but a
+      // peak `block` must still apply: otherwise enabling the schedule would be
+      // silently ignored on every dispatch that uses this provider mode.
+      const strictRef = { provider: 'deepseek-official', model: legacyModel };
+      const strictPeak = scheduleAdmission(cfg.model_schedule, strictRef);
+      if (strictPeak?.mode === 'block') {
+        throw Object.assign(new Error('MODEL_BLOCKED_PEAK'), { policyCode: 'MODEL_BLOCKED_PEAK' });
+      }
       selection = {
         ok: true,
         provider: 'deepseek-official',
         model: legacyModel,
         source: 'legacy-strict',
         reasoningEffort: effort,
+        ...(strictPeak?.mode === 'warn' ? { peak_advisory: true } : {}),
         selection_trace: buildDirectSelectionTrace({
           role: effRole,
           logicalAttempt: attempt,
@@ -717,6 +727,7 @@ export class WorkerRegistry {  constructor(ctx) {
           provider: 'deepseek-official',
           model: legacyModel,
           source: 'legacy-strict',
+          ...(strictPeak?.mode === 'warn' ? { peakAdvisory: true } : {}),
         }),
       };
     } else {

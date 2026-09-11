@@ -303,18 +303,33 @@ test('a schedule patch replaces the whole schedule', (t) => {
   });
 });
 
-test('a malformed saved schedule is coerced to usable values, never thrown', (t) => {
+test('a malformed saved schedule fails open rather than to restrictive defaults', (t) => {
   const file = fixture(t);
   writeGlobalConfig({ model_schedule: {
     timezone_offset_minutes: 'nonsense',
     weekdays: [1, 99],
     peak_windows: [{ start: 'bad', end: '10:00' }],
+    models: [{ provider: 'a', model: 'x', mode: 'block' }],
+  } }, { configFile: file });
+  const read = readGlobalConfig({ configFile: file });
+  // A present-but-broken offset must not silently become UTC+8, because that
+  // would activate the windows against a clock the operator never chose; the
+  // schedule is inert instead.
+  assert.deepEqual(read.model_schedule.weekdays, [], 'a broken container must not restrict');
+  assert.deepEqual(read.model_schedule.peak_windows, []);
+  assert.deepEqual(read.model_schedule.models, [{ provider: 'a', model: 'x', mode: 'block' }], 'the rule itself is still stored');
+});
+
+test('a schedule with only in-container damage keeps the good entries', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({ model_schedule: {
+    weekdays: [1, 99],
+    peak_windows: [{ start: 'bad', end: '10:00' }, { start: '01:00', end: '05:00' }],
     models: [{ provider: 'a', model: 'x', mode: 'nope' }],
   } }, { configFile: file });
   const read = readGlobalConfig({ configFile: file });
-  assert.equal(read.model_schedule.timezone_offset_minutes, 480, 'falls back to the documented default');
-  assert.deepEqual(read.model_schedule.weekdays, [1]);
-  assert.deepEqual(read.model_schedule.peak_windows, [], 'an unparseable window is dropped, not widened');
+  assert.deepEqual(read.model_schedule.weekdays, [1], 'out-of-range days are dropped');
+  assert.deepEqual(read.model_schedule.peak_windows, [{ start: '01:00', end: '05:00' }], 'a good window survives a bad sibling');
   assert.deepEqual(read.model_schedule.models, [], 'an unknown mode is not a rule');
 });
 

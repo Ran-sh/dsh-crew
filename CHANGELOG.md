@@ -19,9 +19,25 @@ Future changes go here.
   window's early-morning half belongs to the weekday it started on.
 - The schedule is matched per `{provider, model}`, so the same model name on two
   providers is restricted independently, and a rule is inert outside peak.
-  Malformed config is coerced rather than thrown: an unparseable window is
-  dropped instead of widening to all day, out-of-range offsets fall back to the
-  default, and an unknown mode is not a rule.
+- Malformed config fails **open**, never toward restriction. A missing field gets
+  its documented default, but a field that is present and unusable — a string
+  where a list belongs, a non-integer offset such as `"480garbage"` — makes the
+  schedule inert instead of substituting defaults, because substituting would
+  switch on restrictions the operator never asked for. The per-model rules
+  survive that coercion, so a corrupted window does not also erase them. Inside a
+  valid container, an unparseable window is dropped rather than widened to all
+  day, and an unknown mode is not a rule.
+- Fixes three defects found in review. A `warn` model selected through the
+  multi-provider preferred-default path lost its advisory, because only the
+  surviving candidate object was kept while the verdict was discarded. Filtering
+  that left exactly one admissible candidate could still report no model
+  available when the removed candidate was the one matching the Harness Default
+  provider, since both the deterministic and adaptive choices came back empty.
+  And a candidate already rejected for a concrete reason was recorded a second
+  time as ambiguous, contradicting its own trace entry.
+- The strict `deepseek-official` dispatch path, which names its model directly
+  instead of walking a catalog, now honours a peak `block` too. Previously the
+  whole feature was silently inert on every dispatch using that provider mode.
 
 ## 1.4.0 — 2026-09-11
 

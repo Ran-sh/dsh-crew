@@ -249,3 +249,58 @@ test('routing without a schedule is unchanged', () => {
   assert.equal(result.model, 'expensive');
   assert.equal(result.peak_advisory, undefined);
 });
+
+// ---- Oracle review regressions ----
+
+// D1: filtering computes a peak verdict per candidate, but only the surviving
+// candidate object used to be kept, so a `warn` selected through the
+// multi-provider path lost its advisory entirely.
+test('a warn verdict survives the multi-provider preferred-default path', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priority: [], priorityConfigured: false,
+    catalog: catalog([provider('a', ['deepseek-v4-pro']), provider('b', ['deepseek-v4-pro'])]),
+    harnessDefault: { provider: 'a', model: 'deepseek-v4-pro' },
+    schedule: schedule([{ provider: 'a', model: 'deepseek-v4-pro', mode: 'warn' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.peak_advisory, true, 'the advisory must reach the caller');
+  const selected = result.selection_trace.ordered_candidates.find((row) => row.status === 'selected');
+  assert.equal(selected.reason_code, MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY);
+});
+
+// D2: when filtering leaves exactly one admissible candidate but removes the one
+// matching the Harness Default provider, both the deterministic and adaptive
+// choices were empty, so the survivor was reported ambiguous and the resolver
+// fell through to Harness Default — which was itself blocked — and failed.
+test('a lone admissible candidate is selected rather than called ambiguous', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priority: [], priorityConfigured: false,
+    catalog: catalog([provider('a', ['deepseek-v4-pro']), provider('b', ['deepseek-v4-pro'])]),
+    harnessDefault: { provider: 'a', model: 'deepseek-v4-pro' },
+    schedule: schedule([{ provider: 'a', model: 'deepseek-v4-pro', mode: 'block' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, true, 'an admissible candidate existed and must be used');
+  assert.equal(result.provider, 'b');
+  assert.equal(result.model, 'deepseek-v4-pro');
+});
+
+// D4: a candidate rejected for a concrete reason must appear once, with that
+// reason — not again as ambiguous.
+test('a blocked preferred candidate is recorded once, with its real reason', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priority: [], priorityConfigured: false,
+    catalog: catalog([provider('a', ['deepseek-v4-pro']), provider('b', ['deepseek-v4-pro'])]),
+    harnessDefault: { provider: 'a', model: 'deepseek-v4-pro' },
+    schedule: schedule([
+      { provider: 'a', model: 'deepseek-v4-pro', mode: 'block' },
+      { provider: 'b', model: 'deepseek-v4-pro', mode: 'block' },
+    ]),
+    at: monPeak,
+  });
+  const rows = result.selection_trace.ordered_candidates
+    .filter((row) => row.provider === 'a' && row.model === 'deepseek-v4-pro');
+  assert.equal(rows.length, 1, 'a rejected candidate must not be recorded twice');
+  assert.equal(rows[0].reason_code, MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED);
+});
