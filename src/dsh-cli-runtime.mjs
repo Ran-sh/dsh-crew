@@ -784,6 +784,75 @@ function ensureProfileScaffold(profileRoot) {
   return changed;
 }
 
+function readPackageVersionAt(dir, read = readFileSync) {
+  try {
+    const parsed = JSON.parse(read(join(dir, 'package.json'), 'utf8'));
+    return typeof parsed.version === 'string' && parsed.version ? parsed.version : null;
+  } catch { return null; }
+}
+
+// Nearest `<dir>/node_modules/<name>` walking up from `dir`, mirroring the
+// resolution a require() from that directory would take.
+export function resolveNearestBundleVersion(dir, name, { exists = defaultExists, read = readFileSync } = {}) {
+  let cursor = dir;
+  for (let depth = 0; depth < 12; depth += 1) {
+    const candidate = join(cursor, 'node_modules', ...name.split('/'));
+    if (exists(candidate)) return readPackageVersionAt(candidate, read);
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return null;
+}
+
+/**
+ * Stop a profile from resolving its bundle packages out of a foreign cohort.
+ *
+ * A profile first installed against a source checkout records `dsh-base` and
+ * `dsh-web-app` as links into that checkout. Switching the CLI to another
+ * cohort leaves those links behind, and because they sit in the profile's own
+ * node_modules they shadow the matching packages installed beside the profile.
+ * The host then composes the web app of one cohort while the plugin table comes
+ * from another; the client module table is built per cohort, so the mismatched
+ * plugin dies at require time with "missed the module table".
+ *
+ * Only an entry whose fallthrough provably resolves the target cohort is
+ * removed. A profile that deliberately tracks a different cohort keeps its
+ * links and is reported as skipped, never as an error.
+ */
+export function reconcileProfileBundleCohort({
+  home = homedir(),
+  profileRoot,
+  version = TARGET_DSH_VERSION,
+  bundles = CREW_PROFILE_DEFAULT_BUNDLES,
+  exists = defaultExists,
+  read = readFileSync,
+  remove = (path) => rmSync(path, { recursive: true, force: true }),
+} = {}) {
+  const root = profileRoot ?? crewProfileDir({ home });
+  if (typeof root !== 'string' || !isAbsolute(root)) return { ok: false, code: 'INVALID_PROFILE_ROOT' };
+  const modulesDir = join(root, 'node_modules');
+  const parentDir = dirname(root);
+  const unshadowed = [];
+  const skipped = [];
+  const removeBundle = (path) => remove(path);
+  for (const name of bundles) {
+    const shadowPath = join(modulesDir, ...name.split('/'));
+    if (!exists(shadowPath)) continue;
+    const shadowed = readPackageVersionAt(shadowPath, read);
+    if (shadowed === version) continue;
+    const fallthrough = resolveNearestBundleVersion(parentDir, name, { exists, read });
+    if (fallthrough !== version) {
+      skipped.push({ bundle: name, shadowed: shadowed ?? null, fallthrough: fallthrough ?? null });
+      continue;
+    }
+    try { removeBundle(shadowPath); } catch { return { ok: false, code: 'PROFILE_BUNDLE_UNSHADOW_FAILED', profileRoot: root, bundle: name }; }
+    if (exists(shadowPath)) return { ok: false, code: 'PROFILE_BUNDLE_UNSHADOW_FAILED', profileRoot: root, bundle: name };
+    unshadowed.push({ bundle: name, shadowed: shadowed ?? null });
+  }
+  return { ok: true, changed: unshadowed.length > 0, profileRoot: root, unshadowed, skipped };
+}
+
 function readCrewTombstones(home) {
   const lifecycleFile = join(dirname(crewDshHome({ home })), 'provider-lifecycle.json');
   if (!existsSync(lifecycleFile)) return { ok: true, tombstones: {} };
@@ -894,9 +963,16 @@ export function ensurePluginRegistration({
 export function ensureCrewPluginRegistration({ home = homedir(), root, name } = {}) {
   const result = ensurePluginRegistration({ profileRoot: crewProfileDir({ home }), root, name });
   if (!result.ok) return result;
+  const reconciliation = reconcileProfileBundleCohort({ home, profileRoot: result.profileRoot });
+  if (!reconciliation.ok) return reconciliation;
   const reconciled = reconcileCrewProfileProviders({ home, profileRoot: result.profileRoot });
   if (!reconciled.ok) return reconciled;
-  return { ...result, changed: result.changed || reconciled.changed, provider_reconciliation: reconciled.removed ?? [] };
+  return {
+    ...result,
+    changed: result.changed || reconciled.changed || reconciliation.changed,
+    provider_reconciliation: reconciled.removed ?? [],
+    bundle_reconciliation: reconciliation.unshadowed ?? [],
+  };
 }
 
 /**

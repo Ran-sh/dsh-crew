@@ -3,36 +3,65 @@ import { existsSync, readdirSync } from 'node:fs';
 import { relative } from 'node:path';
 import { planHistoryCleanup } from './cleanup-plan.mjs';
 import { installHistoryAdmissionGate } from './admission-gate.mjs';
-import { historyHash, historyPath, readHistoryBytes, decodeWorkspaceStore, readHistoryManifest } from './archive-store.mjs';
+import { historyHash, historyPath, readHistoryBytes, decodeWorkspaceStore, readHistoryManifest, isSessionArtifactPath } from './archive-store.mjs';
 import { readHistoryState, writeHistoryState, historyPending, publicHistoryState } from './state.mjs';
 
 export function createHistoryService({ crewRoot, agents, persistence, runtimeId, launch, now = Date.now }) {
   const gate = installHistoryAdmissionGate(agents, () => historyPending(crewRoot));
   const plans = new Map();
   let entering = false;
+  // One row per materialized session: the header to archive and the artifact
+  // location the backend reported. The 0.1.5 jsonl backend resolves each
+  // session's current immutable generation itself and hands back a concrete
+  // path through `listArtifacts()`. The earlier backend listed snapshots and
+  // only hinted at a location, leaving the encoding to be probed below.
+  async function readInventory() {
+    if (typeof persistence?.listArtifacts === 'function') {
+      const artifacts = await persistence.listArtifacts();
+      if (!Array.isArray(artifacts)) throw Error('HISTORY_INVENTORY_INVALID');
+      return artifacts.map(({ header, path }) => {
+        if (typeof path !== 'string') throw Error('HISTORY_STORAGE_UNSUPPORTED');
+        return { header, located: path, resolved: true };
+      });
+    }
+    if (typeof persistence?.listSnapshots === 'function') {
+      const rows = await persistence.listSnapshots();
+      if (!Array.isArray(rows)) throw Error('HISTORY_INVENTORY_INVALID');
+      return rows.map(({ header }) => {
+        const location = persistence.locate(header);
+        if (location?.kind !== 'jsonl') throw Error('HISTORY_STORAGE_UNSUPPORTED');
+        return { header, located: location.path, resolved: false };
+      });
+    }
+    throw Error('HISTORY_STORAGE_UNSUPPORTED');
+  }
   async function snapshot(options) {
-    if (typeof persistence?.listSnapshots !== 'function' || typeof persistence?.locate !== 'function'
-      || persistence.supportsRawArtifacts !== true) throw Error('HISTORY_STORAGE_UNSUPPORTED');
+    if (typeof persistence?.locate !== 'function') throw Error('HISTORY_STORAGE_UNSUPPORTED');
+    // Refuse only a backend that explicitly declares it exposes no per-session
+    // raw artifact. The 0.1.5 backend dropped the flag rather than setting it
+    // false, and the artifact path itself is validated below either way.
+    if (persistence.supportsRawArtifacts === false) throw Error('HISTORY_STORAGE_UNSUPPORTED');
     const bytes = readHistoryBytes(historyPath(crewRoot, 'harness/storages/workspace.json'));
     const store = decodeWorkspaceStore(bytes);
-    const listed = await persistence.listSnapshots();
-    if (!Array.isArray(listed) || listed.length > 10000) throw Error('HISTORY_INVENTORY_TOO_LARGE');
+    const listed = await readInventory();
+    if (listed.length > 10000) throw Error('HISTORY_INVENTORY_TOO_LARGE');
     let total = 0;
-    const sessions = listed.map(({ header, revision }) => {
+    const sessions = listed.map(({ header, located, resolved }) => {
       if (!header || typeof header.id !== 'string') throw Error('HISTORY_INVENTORY_INVALID');
-      const location = persistence.locate(header);
-      if (location?.kind !== 'jsonl') throw Error('HISTORY_STORAGE_UNSUPPORTED');
-      let path = relative(crewRoot, location.path).replaceAll('\\', '/');
-      if (!/^harness\/sessions\/[^/]+\/[^/]+\/session\.jsonl(?:\.zstd)?$/.test(path)
-        || path.split('/')[3] !== header.id) throw Error('HISTORY_STORAGE_UNSUPPORTED');
-      const plain = path.replace(/\.zstd$/, '');
-      const existing = [plain, `${plain}.zstd`].filter(candidate => existsSync(historyPath(crewRoot, candidate)));
-      if (existing.length !== 1) throw Error('HISTORY_ARTIFACT_AMBIGUOUS');
-      path = existing[0];
+      let path = relative(crewRoot, located).replaceAll('\\', '/');
+      if (!isSessionArtifactPath(path, header.id)) throw Error('HISTORY_STORAGE_UNSUPPORTED');
+      if (!resolved) {
+        // An unresolved location is a hint that may not name the encoding that
+        // actually exists, so exactly one candidate must be present on disk.
+        const plain = path.replace(/\.zstd$/, '');
+        const existing = [plain, `${plain}.zstd`].filter(candidate => existsSync(historyPath(crewRoot, candidate)));
+        if (existing.length !== 1) throw Error('HISTORY_ARTIFACT_AMBIGUOUS');
+        path = existing[0];
+      }
       const raw = readHistoryBytes(historyPath(crewRoot, path)); total += raw.length;
       if (total > 512 * 1024 * 1024) throw Error('HISTORY_INVENTORY_TOO_LARGE');
       return { id: header.id, createdAt: header.createdAt, parentSession: header.parentSession,
-        revision: JSON.stringify([revision, historyHash(raw)]), artifact: { sessionId: header.id, relativePath: path, sha256: historyHash(raw) } };
+        revision: JSON.stringify([header.revision, historyHash(raw)]), artifact: { sessionId: header.id, relativePath: path, sha256: historyHash(raw) } };
     });
     // A retained child keeps its ancestor chain; do not leave a newer fork orphaned.
     const workspaces = Object.entries(store.tables.workspaces).map(([id, row]) => ({ id, ...row }));

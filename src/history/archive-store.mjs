@@ -26,10 +26,21 @@ function pathInside(root, relativePath) {
   return current;
 }
 
+// One canonical session artifact path. The jsonl backend keeps one immutable
+// file per Session format generation: `session.jsonl` for version 0 and
+// `session.vN.jsonl` (N >= 1) after that, each optionally zstd-compressed.
+// Sharing the shape between the inventory and the archive guard keeps both in
+// step when the backend's naming changes.
+export const SESSION_ARTIFACT_PATTERN = /^harness\/sessions\/[^/]+\/[^/]+\/session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/;
+
+export function isSessionArtifactPath(relativePath, sessionId) {
+  return typeof relativePath === 'string'
+    && SESSION_ARTIFACT_PATTERN.test(relativePath)
+    && relativePath.split('/')[3] === sessionId;
+}
+
 function artifactPath(root, file) {
-  if (!validId(file?.sessionId) || typeof file.relativePath !== 'string'
-    || !/^harness\/sessions\/[^/]+\/[^/]+\/session\.jsonl(?:\.zstd)?$/.test(file.relativePath)
-    || file.relativePath.split('/')[3] !== file.sessionId) fail('INVALID_ARTIFACT');
+  if (!validId(file?.sessionId) || !isSessionArtifactPath(file.relativePath, file.sessionId)) fail('INVALID_ARTIFACT');
   return pathInside(root, file.relativePath);
 }
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   DSH_CLI_PACKAGE,
@@ -13,6 +13,8 @@ import {
   ensureCrewDshRuntime,
   ensureCrewPluginRegistration,
   removeCrewPluginRegistration,
+  reconcileProfileBundleCohort,
+  resolveNearestBundleVersion,
   buildDshInvocation,
   runResolvedDsh,
   quoteWindowsArg,
@@ -288,6 +290,96 @@ test('offline Crew registration fails closed on malformed metadata and link conf
     assert.equal(result.code, 'CREW_PLUGIN_LINK_CONFLICT');
     assert.equal(existsSync(join(linkDir, 'do-not-delete.txt')), true);
   } finally { conflict.cleanup(); }
+});
+
+// A profile first created against a source checkout records its bundles as
+// links into that checkout. Switching the CLI to another cohort leaves those
+// links behind, and they shadow the cohort installed beside the profile — the
+// host then composes the web app of one cohort while the client plugin table
+// comes from another, and the mismatched plugin dies at require time.
+function seedBundle(dir, name, version) {
+  const moduleDir = join(dir, 'node_modules', ...name.split('/'));
+  mkdirSync(moduleDir, { recursive: true });
+  writeFileSync(join(moduleDir, 'package.json'), JSON.stringify({ name, version }, null, 2));
+  return moduleDir;
+}
+
+test('a foreign-cohort profile bundle is unshadowed so the CLI cohort resolves', () => {
+  const t = tempHome();
+  try {
+    const profileDir = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    mkdirSync(profileDir, { recursive: true });
+    // Stale shadow recorded by the source cohort.
+    const stale = seedBundle(profileDir, '@deepseek-ai/dsh-web-app', '0.1.3-alpha.1');
+    // Correct cohort installed beside the profile, as the runtime tree provides.
+    seedBundle(dirname(profileDir), '@deepseek-ai/dsh-web-app', TARGET_DSH_VERSION);
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-dsh-crew',
+      private: true,
+      dependencies: { '@deepseek-ai/dsh-web-app': 'workspace:*' },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
+    }, null, 2));
+
+    const result = reconcileProfileBundleCohort({ home: t.dir, profileRoot: profileDir });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.changed, true);
+    assert.deepEqual(result.unshadowed, [{ bundle: '@deepseek-ai/dsh-web-app', shadowed: '0.1.3-alpha.1' }]);
+    assert.equal(existsSync(stale), false, 'the foreign-cohort shadow must be gone');
+    // The cohort beside the profile is now what a require resolves.
+    assert.equal(
+      resolveNearestBundleVersion(dirname(profileDir), '@deepseek-ai/dsh-web-app'),
+      TARGET_DSH_VERSION,
+    );
+  } finally { t.cleanup(); }
+});
+
+test('a profile bundle already on the target cohort is left untouched', () => {
+  const t = tempHome();
+  try {
+    const profileDir = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    const current = seedBundle(profileDir, '@deepseek-ai/dsh-base', TARGET_DSH_VERSION);
+    const result = reconcileProfileBundleCohort({ home: t.dir, profileRoot: profileDir });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.changed, false);
+    assert.deepEqual(result.unshadowed, []);
+    assert.equal(existsSync(current), true);
+  } finally { t.cleanup(); }
+});
+
+// A profile deliberately tracking another cohort keeps its links: removing them
+// without a proven target-cohort fallthrough would silently change what runs.
+test('a foreign-cohort bundle without a target fallthrough is skipped, never removed', () => {
+  const t = tempHome();
+  try {
+    const profileDir = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    const deliberate = seedBundle(profileDir, '@deepseek-ai/dsh-base', '9.9.9-pinned-on-purpose');
+    const result = reconcileProfileBundleCohort({ home: t.dir, profileRoot: profileDir });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.changed, false);
+    assert.deepEqual(result.unshadowed, []);
+    assert.deepEqual(result.skipped, [{
+      bundle: '@deepseek-ai/dsh-base',
+      shadowed: '9.9.9-pinned-on-purpose',
+      fallthrough: null,
+    }]);
+    assert.equal(existsSync(deliberate), true, 'a deliberate cohort pin must survive');
+  } finally { t.cleanup(); }
+});
+
+test('an unshadow that cannot be verified after removal fails closed', () => {
+  const t = tempHome();
+  try {
+    const profileDir = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew');
+    seedBundle(profileDir, '@deepseek-ai/dsh-base', '0.0.1-other');
+    seedBundle(dirname(profileDir), '@deepseek-ai/dsh-base', TARGET_DSH_VERSION);
+    const result = reconcileProfileBundleCohort({
+      home: t.dir,
+      profileRoot: profileDir,
+      remove: () => {}, // pretend the deletion silently did nothing
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'PROFILE_BUNDLE_UNSHADOW_FAILED');
+  } finally { t.cleanup(); }
 });
 
 test('offline Crew registration removal is symmetric, safe, and idempotent', () => {

@@ -128,6 +128,44 @@ test('a stale executor never overwrites a later operation state after acquiring 
   assert.equal(readHistoryState(f.root).id, nextId);
 });
 
+// The 0.1.5 jsonl backend resolves each session's current immutable generation
+// itself and reports the artifact path through `listArtifacts()`, and it no
+// longer declares `supportsRawArtifacts`. The inventory must read that surface,
+// or the whole cleanup feature stays UNSUPPORTED on the current cohort.
+test('a 0.1.5-style backend is read through listArtifacts without the raw flag', async t => {
+  const f = await fixture(t);
+  delete f.persistence.listSnapshots;
+  delete f.persistence.supportsRawArtifacts;
+  f.persistence.listArtifacts = async () => existsSync(f.file)
+    ? [{ header: { id: 'session-a', createdAt: 1767225600000 }, path: f.file }]
+    : [];
+  const p = await f.service.preview({ scope: 'all' });
+  assert.equal(p.counts.sessions, 1);
+  assert.equal(p.counts.workspaces, 1);
+});
+
+// Format version 3 names the artifact `session.v3.jsonl`; version 0 keeps the
+// original `session.jsonl`. Both are canonical generations of the same session.
+test('a versioned generation artifact is archived alongside the legacy name', async t => {
+  const f = await fixture(t);
+  const versioned = join(f.root, 'harness/sessions/example/session-a/session.v3.jsonl.zstd');
+  rmSync(f.file);
+  writeFileSync(versioned, 'test conversation');
+  delete f.persistence.listSnapshots;
+  f.persistence.listArtifacts = async () => [
+    { header: { id: 'session-a', createdAt: 1767225600000 }, path: versioned },
+  ];
+  const p = await f.service.preview({ scope: 'all' });
+  assert.equal(p.counts.sessions, 1, 'a vN generation must be a valid archive source');
+});
+
+// A backend that refuses raw artifacts outright is still a hard refusal.
+test('a backend that declares no raw artifacts stays unsupported', async t => {
+  const f = await fixture(t);
+  f.persistence.supportsRawArtifacts = false;
+  await assert.rejects(f.service.preview({ scope: 'all' }), /HISTORY_STORAGE_UNSUPPORTED/);
+});
+
 test('a newer fork protects its selected older parent and workspace from cleanup', async t => {
   const f = await fixture(t);
   const childFile = join(f.root, 'harness/sessions/example/session-child/session.jsonl');

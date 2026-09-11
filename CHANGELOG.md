@@ -4,6 +4,20 @@
 
 Future changes go here.
 
+## 1.3.1 — 2026-09-11
+
+- Stops a profile from resolving its web bundles out of a foreign cohort. A
+  profile first installed against a source checkout records `dsh-base` and
+  `dsh-web-app` as links into that checkout; switching the CLI to another
+  cohort left those links behind, and because they sit in the profile's own
+  `node_modules` they shadowed the matching packages installed beside it. The
+  host then composed the web app of one cohort while the client plugin table
+  came from another, so a plugin added by the newer cohort died at require time
+  with `client-modules: require(...) missed the module table` and the UI
+  rendered "Failed to load plugins". Registration now unshadows such an entry
+  whenever the package installed beside the profile provably resolves to the
+  pinned cohort, and leaves a deliberately different cohort pin untouched.
+
 ## 1.3.0 — 2026-09-11
 
 - Moves the pinned Harness cohort from `0.1.2-rc.1` to `0.1.5-rc.2`.
