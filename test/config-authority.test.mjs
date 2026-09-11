@@ -266,3 +266,66 @@ test('cache-busted config imports still resolve the v0.3 authority facade', asyn
   assert.equal(after.config_authority, 'canonical');
   assert.equal(after.execution.max_parallel, 4);
 });
+
+// ---- per-model peak/off-peak scheduling persistence ----
+
+test('a model schedule round-trips through the config file', (t) => {
+  const file = fixture(t);
+  const schedule = {
+    timezone_offset_minutes: 60,
+    weekdays: [2, 4],
+    peak_windows: [{ start: '08:30', end: '11:15' }],
+    models: [{ provider: 'deepseek-official', model: 'deepseek-v4-pro', mode: 'block' }],
+  };
+  const saved = writeGlobalConfig({ model_schedule: schedule }, { configFile: file });
+  assert.equal(saved.config_schema_version, GLOBAL_CONFIG_SCHEMA_VERSION);
+  const read = readGlobalConfig({ configFile: file });
+  assert.deepEqual(read.model_schedule, schedule);
+});
+
+// Windows, weekdays, offset and model modes only mean anything together, so a
+// patch replaces the whole schedule rather than merging parts of two configs.
+test('a schedule patch replaces the whole schedule', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({ model_schedule: {
+    timezone_offset_minutes: 480, weekdays: [1, 2, 3, 4, 5],
+    peak_windows: [{ start: '09:00', end: '12:00' }],
+    models: [{ provider: 'a', model: 'x', mode: 'block' }],
+  } }, { configFile: file });
+  writeGlobalConfig({ model_schedule: {
+    timezone_offset_minutes: 0, weekdays: [6],
+    peak_windows: [{ start: '01:00', end: '05:00' }], models: [],
+  } }, { configFile: file });
+  const read = readGlobalConfig({ configFile: file });
+  assert.deepEqual(read.model_schedule, {
+    timezone_offset_minutes: 0, weekdays: [6],
+    peak_windows: [{ start: '01:00', end: '05:00' }], models: [],
+  });
+});
+
+test('a malformed saved schedule is coerced to usable values, never thrown', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({ model_schedule: {
+    timezone_offset_minutes: 'nonsense',
+    weekdays: [1, 99],
+    peak_windows: [{ start: 'bad', end: '10:00' }],
+    models: [{ provider: 'a', model: 'x', mode: 'nope' }],
+  } }, { configFile: file });
+  const read = readGlobalConfig({ configFile: file });
+  assert.equal(read.model_schedule.timezone_offset_minutes, 480, 'falls back to the documented default');
+  assert.deepEqual(read.model_schedule.weekdays, [1]);
+  assert.deepEqual(read.model_schedule.peak_windows, [], 'an unparseable window is dropped, not widened');
+  assert.deepEqual(read.model_schedule.models, [], 'an unknown mode is not a rule');
+});
+
+test('the normalized canonical view exposes the schedule and defaults it on', (t) => {
+  const file = fixture(t);
+  writeGlobalConfig({}, { configFile: file });
+  const canonical = normalizeGlobalConfig(readGlobalConfig({ configFile: file }));
+  assert.equal(canonical.model_schedule.timezone_offset_minutes, 480);
+  assert.deepEqual(canonical.model_schedule.peak_windows, [
+    { start: '09:00', end: '12:00' },
+    { start: '14:00', end: '18:00' },
+  ]);
+  assert.deepEqual(canonical.model_schedule.models, [], 'nothing is restricted until named');
+});

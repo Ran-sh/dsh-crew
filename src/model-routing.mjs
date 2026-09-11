@@ -5,6 +5,7 @@
 // routing boundary.
 
 import { rankAdaptiveCandidates } from './adaptive-routing.mjs';
+import { scheduleAdmission } from './model-schedule.mjs';
 
 export const DEFAULT_TIER_MODEL_PREFERENCES = Object.freeze({
   flash: 'deepseek-v4-flash',
@@ -31,6 +32,8 @@ export const MODEL_SELECTION_REASON_CODES = Object.freeze({
   CREDENTIAL_MISSING: 'CREDENTIAL_MISSING',
   QUOTA_EXHAUSTED: 'QUOTA_EXHAUSTED',
   RATE_LIMITED: 'RATE_LIMITED',
+  PEAK_RESTRICTED: 'PEAK_RESTRICTED',
+  PEAK_ADVISORY: 'PEAK_ADVISORY',
   PROBE_TIMEOUT: 'PROBE_TIMEOUT',
   PROVIDER_INTERNAL_ERROR: 'PROVIDER_INTERNAL_ERROR',
   HARNESS_DEFAULT_INVALID: 'HARNESS_DEFAULT_INVALID',
@@ -55,6 +58,7 @@ const BLOCKED_MODEL_CODES = Object.freeze({
   [MODEL_SELECTION_REASON_CODES.PROBE_TIMEOUT]: 'MODEL_BLOCKED_TIMEOUT',
   [MODEL_SELECTION_REASON_CODES.PROVIDER_INTERNAL_ERROR]: 'MODEL_BLOCKED_PROVIDER',
   [MODEL_SELECTION_REASON_CODES.PROVIDER_TOMBSTONED]: 'MODEL_BLOCKED_TOMBSTONED',
+  [MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED]: 'MODEL_BLOCKED_PEAK',
 });
 
 export function normalizeModelRef(raw) {
@@ -143,6 +147,18 @@ function healthAdmissionReason(ref, { healthStore, healthGate, tombstones } = {}
   return HEALTH_BLOCK_REASONS[observation.state] ?? null;
 }
 
+/**
+ * Peak/off-peak admission for one candidate.
+ *
+ * Returns `null` when the model is unrestricted or off-peak; otherwise the
+ * schedule's verdict, which the caller applies. A `warn` rule is advisory — the
+ * candidate is still selected, and the trace records why.
+ */
+function peakAdmission(schedule, ref, at) {
+  if (!schedule) return null;
+  return scheduleAdmission(schedule, ref, at);
+}
+
 function blockedSelection(trace, ref, source, reasonCode) {
   trace.fallback_reason = reasonCode;
   return {
@@ -153,8 +169,8 @@ function blockedSelection(trace, ref, source, reasonCode) {
   };
 }
 
-function selectTrace(trace, ref, source, { advertised, fallbackReason } = {}) {
-  trace.ordered_candidates.push(candidateDecision(ref, source, 'selected', { advertised }));
+function selectTrace(trace, ref, source, { advertised, fallbackReason, reasonCode } = {}) {
+  trace.ordered_candidates.push(candidateDecision(ref, source, 'selected', { advertised, reasonCode }));
   trace.selected = { provider: ref.provider, model: ref.model, source };
   trace.selection_source = source;
   trace.fallback_reason = fallbackReason ?? null;
@@ -254,6 +270,8 @@ export function resolveWorkerModel({
   healthGate,
   allowFallback = true,
   tombstones,
+  schedule,
+  at,
 } = {}) {
   const providers = providerMap(catalog);
   const normalizedPriority = normalizeModelPriority(priority);
@@ -293,13 +311,27 @@ export function resolveWorkerModel({
       if (allowFallback === false) return blockedSelection(trace, ref, prioritySource, healthReason);
       continue;
     }
-    selectTrace(trace, ref, prioritySource, { advertised });
+    // A peak-blocked model is skipped so the next candidate can serve the job;
+    // only an explicit no-fallback call turns it into a hard failure.
+    const peak = peakAdmission(schedule, ref, at);
+    if (peak?.mode === 'block') {
+      trace.ordered_candidates.push(candidateDecision(ref, prioritySource, 'skipped', {
+        reasonCode: MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED, advertised,
+      }));
+      if (allowFallback === false) return blockedSelection(trace, ref, prioritySource, MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED);
+      continue;
+    }
+    selectTrace(trace, ref, prioritySource, {
+      advertised,
+      reasonCode: peak?.mode === 'warn' ? MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY : null,
+    });
     return {
       ok: true,
       ...ref,
       source: 'priority',
       matchedPriorityIndex: index,
       ...(advertised ? {} : { advertised: false }),
+      ...(peak?.mode === 'warn' ? { peak_advisory: true } : {}),
       selection_trace: trace,
     };
   }
@@ -316,30 +348,45 @@ export function resolveWorkerModel({
     if (matches.length === 1) {
       const preferred = matches[0];
       const healthReason = healthAdmissionReason(preferred, { healthStore, healthGate, tombstones });
-      if (healthReason) {
+      const peak = healthReason ? null : peakAdmission(schedule, preferred, at);
+      const blockReason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
+      if (blockReason) {
         trace.ordered_candidates.push(candidateDecision(preferred, 'preferred-default', 'skipped', {
-          reasonCode: healthReason,
+          reasonCode: blockReason,
         }));
-        if (allowFallback === false) return blockedSelection(trace, preferred, 'preferred-default', healthReason);
+        if (allowFallback === false) return blockedSelection(trace, preferred, 'preferred-default', blockReason);
       } else {
         rankForTrace(trace, matches, { adaptive, adaptiveHealth });
-        selectTrace(trace, preferred, 'preferred-default');
-        return { ok: true, ...preferred, source: 'preferred-default', selection_trace: trace };
+        selectTrace(trace, preferred, 'preferred-default', {
+          reasonCode: peak?.mode === 'warn' ? MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY : null,
+        });
+        return {
+          ok: true,
+          ...preferred,
+          source: 'preferred-default',
+          ...(peak?.mode === 'warn' ? { peak_advisory: true } : {}),
+          selection_trace: trace,
+        };
       }
     }
     if (matches.length > 1) {
       const availableMatches = matches.filter((candidate) => {
         const healthReason = healthAdmissionReason(candidate, { healthStore, healthGate, tombstones });
-        if (!healthReason) return true;
+        const peak = healthReason ? null : peakAdmission(schedule, candidate, at);
+        const reason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
+        if (!reason) return true;
         trace.ordered_candidates.push(candidateDecision(candidate, 'preferred-default', 'skipped', {
-          reasonCode: healthReason,
+          reasonCode: reason,
         }));
         return false;
       });
       if (availableMatches.length === 0) {
-        const blocked = matches.find((candidate) => healthAdmissionReason(candidate, { healthStore, healthGate, tombstones }));
+        const blocked = matches.find((candidate) => healthAdmissionReason(candidate, { healthStore, healthGate, tombstones })
+          || peakAdmission(schedule, candidate, at)?.mode === 'block');
         if (blocked && allowFallback === false) {
-          return blockedSelection(trace, blocked, 'preferred-default', healthAdmissionReason(blocked, { healthStore, healthGate, tombstones }));
+          const reason = healthAdmissionReason(blocked, { healthStore, healthGate, tombstones })
+            ?? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED;
+          return blockedSelection(trace, blocked, 'preferred-default', reason);
         }
       }
       const preferredProvider = normalizeModelRef(harnessDefault)?.provider;
@@ -398,17 +445,23 @@ export function resolveWorkerModel({
         ? MODEL_SELECTION_REASON_CODES.ESCALATION_CANDIDATES_EXHAUSTED
         : MODEL_SELECTION_REASON_CODES.PRIMARY_CANDIDATES_EXHAUSTED;
       const healthReason = healthAdmissionReason(defaultRef, { healthStore, healthGate, tombstones });
-      if (healthReason) {
+      const peak = healthReason ? null : peakAdmission(schedule, defaultRef, at);
+      const blockReason = healthReason ?? (peak?.mode === 'block' ? MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED : null);
+      if (blockReason) {
         trace.ordered_candidates.push(candidateDecision(defaultRef, 'harness-default', 'skipped', {
-          reasonCode: healthReason,
+          reasonCode: blockReason,
         }));
-        if (allowFallback === false) return blockedSelection(trace, defaultRef, 'harness-default', healthReason);
+        if (allowFallback === false) return blockedSelection(trace, defaultRef, 'harness-default', blockReason);
       } else {
-      selectTrace(trace, defaultRef, 'harness-default', { fallbackReason });
+      selectTrace(trace, defaultRef, 'harness-default', {
+        fallbackReason,
+        reasonCode: peak?.mode === 'warn' ? MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY : null,
+      });
       return {
         ok: true,
         ...defaultRef,
         source: 'harness-default',
+        ...(peak?.mode === 'warn' ? { peak_advisory: true } : {}),
         ...(typeof harnessDefault.reasoningEffort === 'string' && harnessDefault.reasoningEffort
           ? { reasoningEffort: harnessDefault.reasoningEffort }
           : {}),
@@ -446,6 +499,8 @@ export function resolveModel({
   healthGate,
   allowFallback = true,
   tombstones,
+  schedule,
+  at,
 } = {}) {
   const p = policy && typeof policy === 'object' ? policy : {};
   const escalated = Number.isInteger(attempt) && attempt > 0;
@@ -470,6 +525,8 @@ export function resolveModel({
     healthGate,
     allowFallback,
     tombstones,
+    schedule,
+    at,
     traceContext: {
       role,
       logicalAttempt: attempt,

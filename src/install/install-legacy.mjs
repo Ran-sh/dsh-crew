@@ -323,6 +323,14 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   worker_state: undefined,
   review_state: undefined,
   auto_review: undefined,
+  // ---- per-model peak/off-peak scheduling ----
+  // Some providers price by wall clock (DeepSeek doubles its rate during peak
+  // hours). `models` lists only the restricted models — one absent from it is
+  // unrestricted — each at `warn` (selectable, flagged) or `block` (skipped, so
+  // the next candidate serves the job). Times are the operator's local wall
+  // clock at `timezone_offset_minutes`, defaulting to UTC+8 with DeepSeek's
+  // published peak hours expressed in it.
+  model_schedule: undefined,
 };
 
 export function mergeStoredGlobalConfig(stored) {

@@ -42,6 +42,57 @@ function normalizeAdaptive(value: any): AdaptiveConfig {
   };
 }
 
+// Browser-safe mirror of src/model-schedule.mjs. The panel only needs to render
+// the stored shape and say whether peak is active right now; the backend remains
+// authoritative for routing, so this stays a display-side coercion. It must not
+// import the server module, which the profile realm resolves differently.
+const SCHEDULE_DEFAULT_OFFSET = 8 * 60;
+function scheduleClock(value: any): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+function normalizeSchedule(value: any) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const offset = Number.isInteger(source.timezone_offset_minutes) && Math.abs(source.timezone_offset_minutes) <= 840
+    ? source.timezone_offset_minutes : SCHEDULE_DEFAULT_OFFSET;
+  const weekdays = Array.isArray(source.weekdays)
+    ? [...new Set(source.weekdays.filter((d: any) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a: any, b: any) => a - b)
+    : [1, 2, 3, 4, 5];
+  const windows = Array.isArray(source.peak_windows)
+    ? source.peak_windows.filter((w: any) => scheduleClock(w?.start) !== null && scheduleClock(w?.end) !== null
+      && scheduleClock(w.start) !== scheduleClock(w.end))
+      .map((w: any) => ({ start: String(w.start).trim(), end: String(w.end).trim() }))
+    : [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }];
+  const seen = new Set();
+  const models = (Array.isArray(source.models) ? source.models : []).filter((row: any) => {
+    const key = `${row?.provider}\0${row?.model}`;
+    if (!row?.provider || !row?.model || !['warn', 'block'].includes(row?.mode) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((row: any) => ({ provider: row.provider, model: row.model, mode: row.mode }));
+  return { timezone_offset_minutes: offset, weekdays, peak_windows: windows, models };
+}
+function scheduleIsPeak(schedule: any, now = new Date()) {
+  if (schedule.weekdays.length === 0) return false;
+  const shifted = new Date(now.getTime() + schedule.timezone_offset_minutes * 60_000);
+  const weekday = shifted.getUTCDay();
+  const minutes = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+  for (const window of schedule.peak_windows) {
+    const start = scheduleClock(window.start);
+    const end = scheduleClock(window.end);
+    if (start === null || end === null) continue;
+    const inside = start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+    if (!inside) continue;
+    const owner = start < end || minutes >= start ? weekday : (weekday + 6) % 7;
+    if (schedule.weekdays.includes(owner)) return true;
+  }
+  return false;
+}
+
 const COPY = {
   zh: {
     label: 'DSH Crew',
@@ -57,7 +108,7 @@ const COPY = {
     expandAll: '全部展开', collapseAll: '全部折叠',
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', schedule: '波峰波谷调度', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
     harnessHint: 'DeepSeek 官方 Harness 的 dsh-crew profile：Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -163,6 +214,12 @@ const COPY = {
     save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 Worker / Reviewer 任务。',
     adaptiveTitle: '自适应模型路由（实验）', adaptiveHint: '默认关闭；只重排系统自动候选，手动模型优先级始终保持原序。健康信号仅来自本进程已观察到的成功、失败、超时与粗粒度延迟，重启后清空。',
     adaptiveEnabled: '启用自适应路由', adaptiveWindow: '健康窗口', adaptiveSamples: '最少样本', adaptiveBoundary: '下一个工作流生效',
+    scheduleTitle: '波峰波谷调度', scheduleHint: '按本地时间限制指定模型：波峰时被“阻止”的模型会被跳过，由下一个候选接替任务；“提醒”的仍会使用并在选择轨迹中标记。未列出的模型不受限制。默认时段为 DeepSeek 公布的波峰时间（工作日 09:00-12:00、14:00-18:00）。',
+    scheduleTimezone: '时区（相对 UTC）', scheduleWindows: '波峰时段', schedulePeak: '现在处于波峰', scheduleOffPeak: '现在处于波谷',
+    scheduleAddWindow: '添加时段', scheduleStart: '开始', scheduleEnd: '结束',
+    scheduleBlock: '阻止', scheduleWarn: '提醒', scheduleOff: '关闭',
+    scheduleRestricted: '受限模型', scheduleNoRestricted: '还没有受限模型；未列出的模型不受时间限制。',
+    scheduleWeekdays: '生效工作日', scheduleBoundary: '下次派发生效',
     modelActivity: '模型活动概览', modelActivityHint: '聚合本 Hub 内存中最近 500 个含真实调用证据的任务；每个模型按任务计数（不是推测底层轮次），最多显示 50 个模型。不保存提示词、结果或凭据。', noModelActivity: '还没有真实模型活动。',
     calls: '任务数', invocationSource: '任务来源', routingSource: '路由来源', lastCalled: '最近调用', role: '角色', model: '模型', never: '—',
     col: { id: '任务', role: '角色', source: '来源', model: '模型', tier: '档位', status: '状态', progress: '进度', tokens: 'tokens ⇅', task: '内容' },
@@ -199,7 +256,7 @@ const COPY = {
     expandAll: 'Expand all', collapseAll: 'Collapse all',
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', schedule: 'Peak / off-peak scheduling', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
     harnessHint: 'The official DeepSeek Harness dsh-crew profile: providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -305,6 +362,12 @@ const COPY = {
     save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No Worker / Reviewer jobs yet.',
     adaptiveTitle: 'Adaptive model routing (experimental)', adaptiveHint: 'Off by default. Only system-derived candidates may be reordered; explicit model priorities always keep their order. Health uses only process-local success, failure, timeout, and coarse latency observations and resets on restart.',
     adaptiveEnabled: 'Enable adaptive routing', adaptiveWindow: 'Health window', adaptiveSamples: 'Minimum samples', adaptiveBoundary: 'Effective for the next workflow',
+    scheduleTitle: 'Peak / off-peak scheduling', scheduleHint: 'Restricts chosen models by local wall clock. During peak, a "block" model is skipped and the next candidate serves the job; a "warn" model is still used and flagged in the selection trace. Models not listed are unrestricted. Defaults are DeepSeek\'s published peak hours (weekdays 09:00-12:00 and 14:00-18:00).',
+    scheduleTimezone: 'Timezone (relative to UTC)', scheduleWindows: 'Peak windows', schedulePeak: 'Peak hours now', scheduleOffPeak: 'Off-peak now',
+    scheduleAddWindow: 'Add window', scheduleStart: 'Start', scheduleEnd: 'End',
+    scheduleBlock: 'Block', scheduleWarn: 'Warn', scheduleOff: 'Off',
+    scheduleRestricted: 'Restricted models', scheduleNoRestricted: 'No restricted models yet; unlisted models have no time limit.',
+    scheduleWeekdays: 'Days the windows apply', scheduleBoundary: 'Effective for the next dispatch',
     modelActivity: 'Model activity overview', modelActivityHint: 'Aggregates the latest 500 in-memory Hub jobs with real model-activity evidence; each model is counted once per qualifying job (not an inferred turn count). Shows at most 50 models; prompts, results, and credentials are never stored here.', noModelActivity: 'No real model activity yet.',
     calls: 'Jobs', invocationSource: 'Task source', routingSource: 'Routing source', lastCalled: 'Last called', role: 'Role', model: 'Model', never: '—',
     col: { id: 'job', role: 'role', source: 'source', model: 'model', tier: 'tier', status: 'status', progress: 'progress', tokens: 'tokens ⇅', task: 'task' },
@@ -1121,6 +1184,44 @@ function WorkersPanel({ ctx }: { ctx: any }) {
     const { next, ordering } = setAdaptiveLocal(candidate);
     void applyPatch({ worker: { model_policy: { adaptive: next, ordering } } });
   };
+  // ---- per-model peak/off-peak scheduling ----
+  // The schedule replaces as a whole (windows and model modes only mean anything
+  // together), so every edit saves the complete object.
+  const schedule = normalizeSchedule(config?.model_schedule);
+  const saveSchedule = (candidate: any) => {
+    const next = normalizeSchedule(candidate);
+    setConfig((current: any) => ({ ...current, model_schedule: next }));
+    void applyPatch({ model_schedule: next });
+  };
+  const schedulePeakNow = scheduleIsPeak(schedule);
+  const scheduleModeOf = (ref: any) => schedule.models.find(
+    (entry: any) => entry.provider === ref.provider && entry.model === ref.model,
+  )?.mode ?? 'off';
+  const setScheduleMode = (ref: any, mode: string) => {
+    const others = schedule.models.filter(
+      (entry: any) => !(entry.provider === ref.provider && entry.model === ref.model),
+    );
+    saveSchedule({ ...schedule, models: mode === 'off' ? others : [...others, { ...ref, mode }] });
+  };
+  const scheduleModelRefs = (() => {
+    const seen = new Map<string, any>();
+    for (const tier of ['flash', 'pro'] as const) {
+      for (const ref of config?.[`${tier}_model_priority`] ?? []) {
+        if (ref?.provider && ref?.model) seen.set(`${ref.provider}\0${ref.model}`, ref);
+      }
+    }
+    for (const entry of schedule.models) seen.set(`${entry.provider}\0${entry.model}`, entry);
+    return [...seen.values()];
+  })();
+  const scheduleWeekdayNames = locale === 'zh'
+    ? ['日', '一', '二', '三', '四', '五', '六']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const toggleScheduleWeekday = (day: number) => {
+    const days = schedule.weekdays.includes(day)
+      ? schedule.weekdays.filter((value: number) => value !== day)
+      : [...schedule.weekdays, day].sort((a: number, b: number) => a - b);
+    saveSchedule({ ...schedule, weekdays: days });
+  };
   const modelActivity = aggregateModelInvocations(jobs);
   const modelState = modelCallabilityState(readinessSnapshot?.model_callability, runtimeInfo);
   const currentSurfaceResponsibilities = surfaceResponsibilities(surface);
@@ -1463,6 +1564,77 @@ function WorkersPanel({ ctx }: { ctx: any }) {
               <input type="number" min={1} max={adaptive.window_size} value={adaptive.min_samples} style={S.input}
                 onChange={(event) => setAdaptiveLocal({ ...adaptive, min_samples: clampInt(event.target.value, adaptive.min_samples, 1, adaptive.window_size) })}
                 onBlur={() => saveAdaptive(adaptive)} /></label>
+          </>))}
+        </CollapsibleSection>
+
+        <CollapsibleSection sectionId="schedule" title={copy.sectionNames.schedule}
+          summary={sectionSummary(schedulePeakNow ? copy.schedulePeak : copy.scheduleOffPeak,
+            `UTC${schedule.timezone_offset_minutes >= 0 ? '+' : '-'}${Math.abs(schedule.timezone_offset_minutes) / 60}`,
+            config?.model_schedule === undefined ? copy.scheduleOff : `${schedule.models.length} · ${copy.scheduleRestricted}`)}
+          expanded={!!expandedSections.schedule} onToggle={() => toggleSection('schedule')}>
+          {block({ t: copy.scheduleTitle, d: copy.scheduleHint }, (<>
+            <label style={S.field}><span style={S.fieldLabel}>{copy.scheduleTimezone}</span>
+              <CustomSelect value={String(schedule.timezone_offset_minutes)}
+                onChange={(v) => saveSchedule({ ...schedule, timezone_offset_minutes: Number(v) })}
+                options={Array.from({ length: 29 }, (_, i) => (i - 14) * 60).map((minutes) => ({
+                  value: String(minutes),
+                  label: `UTC${minutes >= 0 ? '+' : '-'}${Math.abs(minutes) / 60}`,
+                }))} /></label>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={{ ...S.fieldLabel, display: 'block', marginBottom: 5 }}>{copy.scheduleWeekdays}</span>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                {scheduleWeekdayNames.map((name: string, day: number) => (
+                  <button key={day} type="button"
+                    style={{ ...S.btn, padding: '3px 9px', opacity: schedule.weekdays.includes(day) ? 1 : 0.45 }}
+                    onClick={() => toggleScheduleWeekday(day)}>{name}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={{ ...S.fieldLabel, display: 'block', marginBottom: 5 }}>{copy.scheduleWindows}</span>
+              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 6 }}>
+                {schedule.peak_windows.map((window: any, index: number) => (
+                  <div key={`${window.start}-${window.end}-${index}`} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input type="time" value={window.start} style={S.input}
+                      onChange={(event) => {
+                        const next = schedule.peak_windows.map((row: any, i: number) => i === index ? { ...row, start: event.target.value } : row);
+                        saveSchedule({ ...schedule, peak_windows: next });
+                      }} />
+                    <span style={{ opacity: 0.6 }}>–</span>
+                    <input type="time" value={window.end} style={S.input}
+                      onChange={(event) => {
+                        const next = schedule.peak_windows.map((row: any, i: number) => i === index ? { ...row, end: event.target.value } : row);
+                        saveSchedule({ ...schedule, peak_windows: next });
+                      }} />
+                    <button type="button" style={{ ...S.btn, padding: '2px 8px' }}
+                      onClick={() => saveSchedule({ ...schedule, peak_windows: schedule.peak_windows.filter((_: any, i: number) => i !== index) })}>×</button>
+                  </div>
+                ))}
+                <button type="button" style={{ ...S.btn, alignSelf: 'flex-start' }}
+                  onClick={() => saveSchedule({ ...schedule, peak_windows: [...schedule.peak_windows, { start: '09:00', end: '12:00' }] })}>
+                  {copy.scheduleAddWindow}</button>
+              </div>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={{ ...S.fieldLabel, display: 'block', marginBottom: 5 }}>{copy.scheduleRestricted}</span>
+              {scheduleModelRefs.length === 0
+                ? <span style={{ fontSize: 11.5, opacity: 0.6 }}>{copy.scheduleNoRestricted}</span>
+                : <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 5 }}>
+                    {scheduleModelRefs.map((ref: any) => (
+                      <div key={`${ref.provider}\0${ref.model}`} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 8px', border: '1px solid rgba(128,128,128,0.2)', borderRadius: 6 }}>
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 11, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ref.provider} / {ref.model}</span>
+                        <CustomSelect value={scheduleModeOf(ref)}
+                          onChange={(v) => setScheduleMode(ref, v)}
+                          options={[
+                            { value: 'off', label: copy.scheduleOff },
+                            { value: 'warn', label: copy.scheduleWarn },
+                            { value: 'block', label: copy.scheduleBlock },
+                          ]} />
+                      </div>
+                    ))}
+                  </div>}
+              <span style={{ display: 'block', fontSize: 11, opacity: 0.55, marginTop: 5 }}>{copy.scheduleBoundary}</span>
+            </div>
           </>))}
         </CollapsibleSection>
 

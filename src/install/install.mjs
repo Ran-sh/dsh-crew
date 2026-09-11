@@ -13,6 +13,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import * as legacy from './install-legacy.mjs';
 import { normalizeModelPriority } from '../model-routing.mjs';
+import { normalizeModelSchedule } from '../model-schedule.mjs';
 import { runtimeActivationMetadata } from '../runtime-controls.mjs';
 import {
   CONFIG_SCHEMA_VERSION,
@@ -210,6 +211,10 @@ function mergeCanonicalPatch(current, patch) {
     };
   }
   if (validObject(patch.legacy)) next.legacy = { ...next.legacy, ...patch.legacy };
+  // The peak/off-peak schedule replaces as a whole: its parts (windows, weekdays,
+  // offset, per-model modes) only make sense together, so a partial merge could
+  // pair one operator's windows with another's model list.
+  if (validObject(patch.model_schedule)) next.model_schedule = normalizeModelSchedule(patch.model_schedule);
 
   // v0.3 still has one provider-mode control. A direct canonical patch is
   // allowed, but it cannot manufacture separate worker/reviewer authorities.
@@ -397,10 +402,13 @@ export function writeGlobalConfig(patch, { configFile = GLOBAL_CONFIG_FILE } = {
     ? mergeLegacyPatchIntoCanonical(current, compatibilityView, candidate, patch)
     : { ...candidate, legacy: legacySnapshotFrom(candidate) };
 
+  // `model_schedule` is canonical-only (it has no flat mirror), so it must open
+  // the canonical merge path on its own rather than ride along with worker/review.
   const hasCanonicalPatch = validObject(patch?.worker)
     || validObject(patch?.review)
     || validObject(patch?.execution)
-    || validObject(patch?.legacy);
+    || validObject(patch?.legacy)
+    || validObject(patch?.model_schedule);
   if (hasCanonicalPatch) normalized = mergeCanonicalPatch(normalized, patch);
 
   if (!validObject(normalized.legacy)) normalized.legacy = legacySnapshotFrom(candidate);

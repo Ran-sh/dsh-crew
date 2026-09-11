@@ -4,6 +4,25 @@
 
 Future changes go here.
 
+## 1.5.0 — 2026-09-11
+
+- Adds per-model peak/off-peak scheduling. Some providers price by wall clock —
+  DeepSeek doubles its rate during peak hours — and until now Crew had no way to
+  express that, so an operator could not steer expensive work away from the
+  expensive window. Each model in a priority list now carries its own rule:
+  **block** skips it during peak so the next candidate serves the job, **warn**
+  keeps using it and flags the choice in the selection trace, and an unlisted
+  model is unrestricted. One shared schedule holds the windows, the days they
+  apply to, and a fixed UTC offset (default UTC+8); the defaults are DeepSeek's
+  published peak hours — UTC 01:00-04:00 and 06:00-10:00, Mon-Fri — expressed in
+  that offset as 09:00-12:00 and 14:00-18:00. Windows may cross midnight, and a
+  window's early-morning half belongs to the weekday it started on.
+- The schedule is matched per `{provider, model}`, so the same model name on two
+  providers is restricted independently, and a rule is inert outside peak.
+  Malformed config is coerced rather than thrown: an unparseable window is
+  dropped instead of widening to all day, out-of-range offsets fall back to the
+  default, and an unknown mode is not a rule.
+
 ## 1.4.0 — 2026-09-11
 
 - Scopes cleanup by who created the session. A Crew worker's session and the

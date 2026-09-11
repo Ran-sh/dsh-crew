@@ -144,3 +144,108 @@ test('priority normalization removes invalid and duplicate refs but distinguishe
   assert.deepEqual(normalized, [{ provider: 'a', model: 'same' }, { provider: 'b', model: 'same' }]);
   assert.notEqual(modelRefKey(normalized[0]), modelRefKey(normalized[1]));
 });
+
+// ---- per-model peak/off-peak scheduling ----
+
+const schedule = (models) => ({ timezone_offset_minutes: 480, weekdays: [1, 2, 3, 4, 5],
+  peak_windows: [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }], models });
+const monPeak = new Date('2026-09-14T02:00:00Z');   // Mon 10:00 at UTC+8
+const monOffPeak = new Date('2026-09-14T11:00:00Z'); // Mon 19:00 at UTC+8
+
+test('a peak-blocked candidate is skipped and the next model serves the job', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'expensive' }, { provider: 'a', model: 'cheap' }],
+    catalog: catalog([provider('a', ['expensive', 'cheap'])]), harnessDefault,
+    schedule: schedule([{ provider: 'a', model: 'expensive', mode: 'block' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.model, 'cheap', 'the job still runs on the next candidate');
+  assert.equal(result.source, 'priority');
+  assert.equal(result.matchedPriorityIndex, 1);
+  const skipped = result.selection_trace.ordered_candidates.find((row) => row.model === 'expensive');
+  assert.equal(skipped.status, 'skipped');
+  assert.equal(skipped.reason_code, MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED);
+});
+
+test('a peak-blocked model is selectable again once the window closes', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'expensive' }, { provider: 'a', model: 'cheap' }],
+    catalog: catalog([provider('a', ['expensive', 'cheap'])]), harnessDefault,
+    schedule: schedule([{ provider: 'a', model: 'expensive', mode: 'block' }]),
+    at: monOffPeak,
+  });
+  assert.equal(result.model, 'expensive');
+  assert.equal(result.matchedPriorityIndex, 0);
+});
+
+// The third state the operator asked for: restricted in name only. The model is
+// still used during peak, and the trace records that it was.
+test('a warn-mode model stays selectable during peak and is flagged', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'watched' }, { provider: 'a', model: 'cheap' }],
+    catalog: catalog([provider('a', ['watched', 'cheap'])]), harnessDefault,
+    schedule: schedule([{ provider: 'a', model: 'watched', mode: 'warn' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.model, 'watched', 'warn must not divert the selection');
+  assert.equal(result.peak_advisory, true);
+  const selected = result.selection_trace.ordered_candidates.at(-1);
+  assert.equal(selected.status, 'selected');
+  assert.equal(selected.reason_code, MODEL_SELECTION_REASON_CODES.PEAK_ADVISORY);
+});
+
+test('an unrestricted model is unaffected by another model being blocked', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'unlisted' }],
+    catalog: catalog([provider('a', ['unlisted'])]), harnessDefault,
+    schedule: schedule([{ provider: 'a', model: 'other', mode: 'block' }]),
+    at: monPeak,
+  });
+  assert.equal(result.model, 'unlisted');
+  assert.equal(result.peak_advisory, undefined);
+});
+
+test('an explicit no-fallback dispatch reports the block instead of diverting', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'expensive' }, { provider: 'a', model: 'cheap' }],
+    catalog: catalog([provider('a', ['expensive', 'cheap'])]), harnessDefault,
+    allowFallback: false,
+    schedule: schedule([{ provider: 'a', model: 'expensive', mode: 'block' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'MODEL_BLOCKED_PEAK');
+});
+
+test('a block also applies along the preferred-default path', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priority: [], priorityConfigured: false,
+    catalog: catalog([provider('a', ['deepseek-v4-pro']), provider('default-provider', ['default-model'])]),
+    harnessDefault,
+    schedule: schedule([{ provider: 'a', model: 'deepseek-v4-pro', mode: 'block' }]),
+    at: monPeak,
+  });
+  assert.equal(result.ok, true);
+  assert.notEqual(result.model, 'deepseek-v4-pro', 'the preferred default must not slip past a block');
+  assert.equal(result.source, 'harness-default', 'it falls through to the Harness Default');
+  const blocked = result.selection_trace.ordered_candidates.find((row) => row.model === 'deepseek-v4-pro');
+  assert.equal(blocked.reason_code, MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED);
+});
+
+test('routing without a schedule is unchanged', () => {
+  const result = resolveWorkerModel({
+    tier: 'pro', priorityConfigured: true,
+    priority: [{ provider: 'a', model: 'expensive' }],
+    catalog: catalog([provider('a', ['expensive'])]), harnessDefault,
+    at: monPeak,
+  });
+  assert.equal(result.model, 'expensive');
+  assert.equal(result.peak_advisory, undefined);
+});

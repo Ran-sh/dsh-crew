@@ -9,6 +9,7 @@
 export * from './policy-legacy.mjs';
 import * as legacy from './policy-legacy.mjs';
 import { normalizeAdaptiveRouting } from './adaptive-routing.mjs';
+import { normalizeModelSchedule } from './model-schedule.mjs';
 
 export { normalizeAdaptiveRouting };
 export const CONFIG_SCHEMA_VERSION = 4;
@@ -109,6 +110,11 @@ function normalizeCanonical(raw) {
       provider_mode: providerMode,
       model_policy: modelPolicyWithAdaptive(base.review.model_policy, raw?.review?.model_policy),
     },
+    // One schedule regulates every restricted model; the per-model list decides
+    // who it applies to. Top-level rather than per-role because the same model
+    // can sit in either role's priority list, so the restriction is a property
+    // of the model, not of the role that happens to route to it.
+    model_schedule: normalizeModelSchedule(raw?.model_schedule),
   };
   canonical.legacy = normalizeLegacySnapshot(raw, canonical);
   return canonical;
@@ -170,6 +176,7 @@ export function normalizeGlobalConfig(raw = {}) {
     review_state: canonical.review.state,
     auto_review: canonical.review.auto_review === true,
     worker_provider_mode: canonical.worker.provider_mode,
+    model_schedule: canonical.model_schedule,
     flash_model_priority: [...canonical.worker.model_policy.priority],
     flash_model_priority_configured: canonical.worker.model_policy.priorityConfigured,
     flash_model_fallback: canonical.worker.model_policy.fallback,

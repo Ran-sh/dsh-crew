@@ -748,6 +748,7 @@ export class WorkerRegistry {  constructor(ctx) {
           healthGate: policy.health_gate ?? healthGate,
           allowFallback: cfg.allow_fallback !== false,
           tombstones: lifecycleState.tombstones,
+          schedule: cfg.model_schedule,
         });
       } else {
         selection = resolveWorkerModel({
@@ -761,6 +762,7 @@ export class WorkerRegistry {  constructor(ctx) {
           healthGate,
           allowFallback: cfg.allow_fallback !== false,
           tombstones: lifecycleState.tombstones,
+          schedule: cfg.model_schedule,
           traceContext: {
             role: effRole,
             logicalAttempt: attempt,
