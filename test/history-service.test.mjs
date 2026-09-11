@@ -45,7 +45,8 @@ test('delete needs DELETE acknowledgement; changed or expired previews do not la
 
 test('live native agents and failed executor spawn leave history untouched and admission restored', async t => {
   const f = await fixture(t); const p = await f.service.preview({ scope: 'all' });
-  f.agents.list = () => [{ id: 'native-agent' }];
+  // A native agent actively driving a turn must fence the cleanup.
+  f.agents.list = () => [{ id: 'native-agent', status: 'running' }];
   await assert.rejects(f.service.execute({ planId: p.planId, confirm: true }), /ACTIVE/);
   assert.equal(f.launched.length, 0); assert.equal(existsSync(f.file), true);
 });

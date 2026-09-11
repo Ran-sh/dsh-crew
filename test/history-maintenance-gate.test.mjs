@@ -20,11 +20,26 @@ test('maintenance fences pending creations as well as existing agents', async ()
   gate.dispose();
 });
 
-test('no active agent, including an idle native conversation, may be stopped for cleanup', async () => {
+// Registration is not activity. The session controller resumes a session into
+// the registry as soon as the web UI opens it and never releases it, so a
+// registry-only check stays false forever after any session has been touched —
+// which wedged cleanup permanently behind ACTIVE_SESSIONS.
+test('a registered but idle agent does not block cleanup', async () => {
   const { installHistoryAdmissionGate } = await load();
   const agents = { list: () => [{ status: 'idle' }], create: async () => ({}) };
   const gate = installHistoryAdmissionGate(agents, () => false);
-  assert.equal(gate.idle(), false);
+  assert.equal(gate.idle(), true);
+  gate.dispose();
+});
+
+test('an agent running a turn blocks cleanup until it settles', async () => {
+  const { installHistoryAdmissionGate } = await load();
+  let live = [{ status: 'running' }];
+  const agents = { list: () => live, create: async () => ({}) };
+  const gate = installHistoryAdmissionGate(agents, () => false);
+  assert.equal(gate.idle(), false, 'a running turn must not be interrupted');
+  live = [{ status: 'idle' }];
+  assert.equal(gate.idle(), true, 'settling the turn releases the fence');
   gate.dispose();
 });
 

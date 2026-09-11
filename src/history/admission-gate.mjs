@@ -13,6 +13,22 @@ function method(object, name) {
   }
 }
 
+/**
+ * Whether one registered agent currently owns a running turn.
+ *
+ * Registration is not activity: the session controller resumes a session into
+ * the registry as soon as it opens it, and leaves it there after the turn ends
+ * with `status: 'idle'`. Treating a non-empty registry as "in use" therefore
+ * wedged cleanup permanently behind ACTIVE_SESSIONS on a machine whose web UI had
+ * ever opened a session. Only a `running` status means work is actually in
+ * flight; anything else (idle, or a status an older agent does not expose) is
+ * treated as not running, and `creating > 0` remains the independent guard for a
+ * creation that has not published yet.
+ */
+function isRunning(agent) {
+  try { return agent?.status === 'running'; } catch { return false; }
+}
+
 export function installHistoryAdmissionGate(agents, isMaintenancePending) {
   if (typeof agents?.create !== 'function' || typeof agents?.list !== 'function'
     || typeof isMaintenancePending !== 'function') throw new Error('HISTORY_ADMISSION_UNAVAILABLE');
@@ -40,7 +56,7 @@ export function installHistoryAdmissionGate(agents, isMaintenancePending) {
       if (entries.some(entry => method(agents, entry.name) !== entry.wrapper)) return false;
       try {
         const live = agents.list();
-        return Array.isArray(live) && creating === 0 && live.length === 0;
+        return Array.isArray(live) && creating === 0 && !live.some(isRunning);
       } catch { return false; }
     },
     dispose() {

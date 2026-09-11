@@ -4,8 +4,26 @@
 
 Future changes go here.
 
+## 1.3.2 — 2026-09-11
+
+- Stops the history cleanup admission fence from latching on forever. The fence
+  treated a non-empty agent registry as "a conversation is in use", but the
+  session controller resumes a session into that registry as soon as the web UI
+  opens it and never releases it — so on any machine whose UI had ever shown a
+  session, every cleanup transaction stayed blocked behind `ACTIVE_SESSIONS`
+  with no way to clear it. Registration is not activity: only an agent whose
+  status is `running` now fences the operation, and a creation still awaiting
+  publication is guarded separately as before.
+
 ## 1.3.1 — 2026-09-11
 
+- Reads the 0.1.5 session-storage surface. The jsonl backend replaced
+  `listSnapshots()` with `listArtifacts()` and dropped `supportsRawArtifacts`,
+  and one artifact per Session format generation is now named `session.vN.jsonl`
+  rather than `session.jsonl`. The cleanup inventory understood neither, so
+  every preview failed with `HISTORY_STORAGE_UNSUPPORTED`; it now reads either
+  inventory surface and both the inventory and the archive guard accept the
+  versioned generation name.
 - Stops a profile from resolving its web bundles out of a foreign cohort. A
   profile first installed against a source checkout records `dsh-base` and
   `dsh-web-app` as links into that checkout; switching the CLI to another
