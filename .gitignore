@@ -11,3 +11,4 @@ docs/images/dsh-crew-logo-v*.png
 
 # transient environment artifacts
 .tmp-check-ports.ps1
+.oracle-review/
