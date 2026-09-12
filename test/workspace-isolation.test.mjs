@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -46,6 +46,30 @@ function fakeRunner(rules) {
 // has to answer that question, and answer it the same way for both paths.
 const REPO = resolve('/repo');
 const samePath = (a, b) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+
+// Git reports the spelling it resolved when a worktree was added, which on
+// Windows can turn an 8.3 temp name (`RUNNER~1`) into its long form. Compare the
+// way the source does, through the filesystem, or the assertion fails on a
+// machine whose temp directory is spelled the short way.
+const canon = (value) => {
+  const resolved = resolve(value);
+  try { return realpathSync.native ? realpathSync.native(resolved) : realpathSync(resolved); }
+  catch { return resolved; }
+};
+
+/**
+ * The 8.3 alias Windows keeps for a directory, or null when it has none. `for`
+ * has to be given the path unquoted for `%~sI` to expand it, so paths with
+ * spaces are not worth the fragility here.
+ */
+function windowsShortName(path) {
+  if (process.platform !== 'win32' || /\s/.test(path)) return null;
+  try {
+    const out = execFileSync('cmd', ['/c', `for %I in (${path}) do @echo %~sI`], { encoding: 'utf8' }).trim();
+    const value = out.split(/\r?\n/).pop().trim();
+    return value && value !== path ? value : null;
+  } catch { return null; }
+}
 
 const SAME_REPO = {
   pat: /^rev-parse --path-format=absolute --git-common-dir$/,
@@ -289,6 +313,55 @@ test('cleanupIsolatedWorkspace verified fallback success when registration and d
 // accident, so the fallback must not treat the name as proof of ownership. An
 // earlier revision did, and a directory belonging to an unrelated repository
 // would have been force-deleted for resembling Crew's.
+// Windows gives some directories an 8.3 alias (`C:\PROGRA~3`), and git records
+// the long form when it resolves a path it was handed. So the same location
+// arrives spelled two ways, and comparing the strings — even lower-cased —
+// treats a live worktree as a leftover. A report of "unowned" is enough to put
+// it in front of an operator as cleanup, so the path has to be recognised.
+//
+// The leaf must exist for the spelling to be resolvable at all, which is why
+// this creates one: a path that does not exist cannot be canonicalised, and a
+// fixture that never touches the disk would pass for the wrong reason.
+test('an 8.3 alias and its long form are the same worktree', async (t) => {
+  const name = `Crew_20260912_233000_alias-2`;
+  const candidate = ['C:\\ProgramData', tmpdir(), 'C:\\Program Files']
+    .map((root) => ({ long: canon(root), short: windowsShortName(root) }))
+    .find((entry) => entry.short && canon(entry.short) === entry.long && entry.short !== entry.long);
+  if (!candidate) return t.skip('this machine gives no writable directory an 8.3 alias');
+
+  const created = join(candidate.long, name);
+  try {
+    mkdirSync(created, { recursive: true });
+  } catch {
+    return t.skip(`cannot create under the aliased directory ${candidate.long}`);
+  }
+  try {
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${created}\nHEAD ${REV}\ndetached\n\n` } },
+    ]);
+    // Git reports the long spelling; the caller knows the worktree by the short one.
+    const allowed = [join(candidate.short, name)];
+    assert.notEqual(allowed[0], created, 'the fixture really does use two spellings');
+    assert.deepEqual(
+      await staleWorktrees({ git: runner, allowed }),
+      [],
+      'an allowed worktree is not stale just because the path is spelled differently',
+    );
+    // It must not merely fall through to the other list either: a path that misses
+    // the allowed set is reported as unowned, which is just as wrong — this is
+    // Crew's own live worktree, not a leftover.
+    assert.deepEqual(
+      await unownedWorktrees({ git: runner, allowed }),
+      [],
+      'it is recognised as the allowed worktree, not reclassified as a leftover',
+    );
+  } finally {
+    rmSync(created, { recursive: true, force: true });
+  }
+});
+
 // The defect this guards: the fallback deleted the directory first and asked git
 // afterwards. For a worktree git still tracks — the realistic case, where
 // `worktree remove` failed on a transient lock — that destroyed the files and
@@ -674,8 +747,8 @@ maybe('prune removes only what Crew recorded creating', async () => {
     execFileSync('git', ['worktree', 'add', '--detach', userPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
 
     const allowed = [active.worktreePath];
-    assert.deepEqual(await staleWorktrees({ allowed }), [leftover.worktreePath], 'only the recorded leftover is adoptable');
-    assert.deepEqual(await unownedWorktrees({ allowed }), [legacyPath], 'the hand-made one is reported, not adopted');
+    assert.deepEqual((await staleWorktrees({ allowed })).map(canon), [canon(leftover.worktreePath)], 'only the recorded leftover is adoptable');
+    assert.deepEqual((await unownedWorktrees({ allowed })).map(canon), [canon(legacyPath)], 'the hand-made one is reported, not adopted');
     // The repo's own directory starts with `dsh-crew-` here, which would match
     // the legacy prefix — but the main working tree is never a disposable
     // worktree, and treating it as one would put the cleanup path in a fight
@@ -688,7 +761,7 @@ maybe('prune removes only what Crew recorded creating', async () => {
     assert.equal(existsSync(legacyPath), true, 'the unrecorded legacy worktree survives');
     assert.equal(existsSync(userPath), true, 'the user worktree survives');
     assert.equal(existsSync(active.worktreePath), true, 'the active worktree survives');
-    assert.deepEqual(pruned.unowned, [legacyPath]);
+    assert.deepEqual(pruned.unowned.map(canon), [canon(legacyPath)]);
     await cleanupIsolatedWorkspace({ worktreePath: active.worktreePath });
     await cleanupIsolatedWorkspace({ worktreePath: userPath });
     await cleanupIsolatedWorkspace({ worktreePath: legacyPath, repoRoot: repo });

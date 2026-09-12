@@ -569,6 +569,12 @@ export async function cleanupIsolatedWorkspace({
  * Split the linked worktrees of this repository into the ones Crew recorded
  * creating and the ones it merely recognises. Only the first may be deleted;
  * the second are reported so a human can decide.
+ *
+ * Returned paths are canonical. Git reports the spelling it resolved when the
+ * worktree was added, which on Windows can expand an 8.3 temp name
+ * (`RUNNER~1`) into its long form, so a caller comparing its own path string
+ * against the answer would miss — and a miss here decides whether a live
+ * worktree looks like a leftover.
  */
 async function worktreeCandidates({ git, allowed = [] } = {}) {
   const run = git ?? defaultRunner;
@@ -594,11 +600,11 @@ async function worktreeCandidates({ git, allowed = [] } = {}) {
           // The name is not proof: `dsh-crew-backup-deadbeef` is a name a user
           // could plausibly pick, and `detached` describes HEAD, not who created
           // the tree. Only a recorded worktree is Crew's to remove.
-          if (isRecordedOwned({ worktreePath: abs })) stale.push(abs);
+          if (isRecordedOwned({ worktreePath: abs })) stale.push(pathIdentity(abs));
           // Crew creates every worktree detached, so the unrecorded ones worth
           // telling an operator about are the detached leftovers from a release
           // that predates the record.
-          else if (detached) unowned.push(abs);
+          else if (detached) unowned.push(pathIdentity(abs));
         }
       }
     }
