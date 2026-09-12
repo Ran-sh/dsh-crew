@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 1.9.1 — 2026-09-12
+
+- Releases publish from GitHub Actions through OIDC. Publishing needed a browser
+  approval every time because an npm session token cannot publish on its own; a
+  granular token with 2FA bypass would remove that at the cost of a long-lived
+  credential in a plaintext file that can publish with nobody present. OIDC has
+  neither problem: the credential is minted per run from the workflow's identity,
+  and pushing the tag is the authorization — the same action the release already
+  needed. Provenance is generated automatically. The job refuses a tag that
+  disagrees with `package.json`, refuses when the build changes a committed
+  artifact, and runs the suite first.
+
 ## 1.9.0 — 2026-09-12
 
 - Names a worktree for what it is: `Crew_<date>_<time>_<purpose>`, for example
