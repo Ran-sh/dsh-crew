@@ -7,6 +7,13 @@ name: Publish
 #
 # The merge or tag push is the authorization. Nothing else to approve.
 #
+# The job is split so that publish authority is never held by the steps that run
+# untrusted code: `verify` installs dependencies and runs tests, build and the
+# guards with NO `id-token` permission, then packs the exact tarball that will be
+# released. `publish` holds `id-token: write`, downloads that immutable artifact,
+# and publishes it with lifecycle scripts disabled — no dependency installation,
+# no build, and no package lifecycle scripts run in the job that can publish.
+#
 # Requires, once, on npmjs.com → the package → Settings → Trusted Publisher:
 #   Publisher      GitHub Actions
 #   Organization   Ran-sh
@@ -23,32 +30,24 @@ on:
 
 permissions:
   contents: read
-  id-token: write # Required for OIDC; without it the publish cannot authenticate
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 10
           run_install: false
 
-      # No dependency cache in a release build: a poisoned cache would run in
-      # the job that holds publish authority.
-      - uses: actions/setup-node@v4
+      # No dependency cache in a release build: a poisoned cache would run in the
+      # job that decides what gets released.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.14.0
-          registry-url: 'https://registry.npmjs.org'
-
-      # Trusted publishing needs npm CLI 11.5.1+; the one bundled with Node 22
-      # is older, and the failure it gives is an opaque 404 rather than a
-      # version complaint.
-      - name: Use an npm that supports trusted publishing
-        run: npm install -g npm@^11.5.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -64,11 +63,13 @@ jobs:
       - name: Build client
         run: pnpm run build:client
 
+      # Only tracked files: an untracked scratch file is not a changed artifact,
+      # and failing on one would block a release for nothing. What untracked
+      # files would actually ship is caught by packing below — npm packs by the
+      # files allowlist, not by git status.
       - name: Fail if the build changed a committed artifact
         shell: bash
         run: |
-          # Only tracked files: an untracked scratch file is not a changed
-          # artifact, and failing on one would block a release for nothing.
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             echo "::error::the build produced a different artifact than the commit;"
             echo "::error::rebuild and commit before tagging."
@@ -87,5 +88,44 @@ jobs:
             exit 1
           fi
 
-      - name: Publish
-        run: npm publish --access public
+      - name: Pack the release tarball
+        run: |
+          mkdir dist
+          npm pack --pack-destination dist
+          echo "TARBALL=$(find dist -name '*.tgz' -printf '%f')" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-tarball
+          path: dist/${{ env.TARBALL }}
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # Required for OIDC; without it the publish cannot authenticate
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-tarball
+          path: dist
+
+      # Trusted publishing needs npm CLI 11.5.1+; the one bundled with Node 22
+      # is older, and the failure it gives is an opaque 404 rather than a
+      # version complaint. Pinned to an exact tested version: this is the job
+      # that holds publish authority.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@11.19.1
+
+      - name: Publish the verified tarball
+        # `--ignore-scripts`: the tarball is already verified, and lifecycle
+        # scripts would run fresh code in the job that can publish.
+        run: npm publish dist/*.tgz --access public --ignore-scripts

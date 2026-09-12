@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -24,7 +24,7 @@ import {
 } from '../src/workspace-isolation.mjs';
 
 const REV = 'abc123';
-const WORKTREE = join(tmpdir(), 'dsh-crew-wt-test-00000000');
+const WORKTREE = join(tmpdir(), 'dsh-crew-wt-test-0000');
 
 function fakeRunner(rules) {
   const calls = [];
@@ -127,7 +127,7 @@ test('captureCandidate on a missing worktree path degrades without throwing', as
 
 test('cleanupIsolatedWorkspace removes via git worktree remove --force', async () => {
   const { runner, calls } = fakeRunner([
-    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD abc123\n\nworktree ${WORKTREE}\nHEAD ${REV}\n` } },
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     { pat: /^worktree remove --force /, out: { stdout: '' } },
   ]);
   const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner });
@@ -138,8 +138,9 @@ test('cleanupIsolatedWorkspace removes via git worktree remove --force', async (
 
 test('cleanupIsolatedWorkspace reports a locked worktree instead of hiding it', async () => {
   const { runner } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
-    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\n\n` } },
+    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${WORKTREE}\nHEAD ${REV}\n\nworktree /repo\nHEAD ${REV}\n\n` } },
   ]);
   const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
   assert.equal(r.ok, false);
@@ -149,7 +150,7 @@ test('cleanupIsolatedWorkspace reports a locked worktree instead of hiding it', 
 
 test('cleanupIsolatedWorkspace retries a transient lock and recovers', async () => {
   const { runner, calls } = fakeRunner([
-    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD abc123\n\nworktree ${WORKTREE}\nHEAD ${REV}\n` } },
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     {
       pat: /^worktree remove --force /,
       out: (calls) => {
@@ -167,8 +168,9 @@ test('cleanupIsolatedWorkspace retries a transient lock and recovers', async () 
 
 test('cleanupIsolatedWorkspace never claims success while the worktree stays registered', async () => {
   const { runner, calls } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unknown switch `x`\n' } },
-    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\n\n` } },
+    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${WORKTREE}\nHEAD ${REV}\n\nworktree /repo\nHEAD ${REV}\n\n` } },
   ]);
   const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
   assert.equal(r.ok, false);
@@ -179,11 +181,11 @@ test('cleanupIsolatedWorkspace never claims success while the worktree stays reg
 });
 
 test('cleanupIsolatedWorkspace verified fallback success when registration and directory are gone', async () => {
-  const prefix = join(mkdtempSync(join(tmpdir(), 'dsh-crew-fb-')), 'dsh-crew-fallback-00000000');
+  const prefix = mkdtempSync(join(tmpdir(), 'dsh-crew-fallback-'));
   try {
-    mkdirSync(prefix, { recursive: true });
     writeFileSync(join(prefix, 'keep.txt'), 'x');
     const { runner } = fakeRunner([
+      { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
       { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
       { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
     ]);
@@ -201,6 +203,7 @@ test('cleanupIsolatedWorkspace refuses to fs-delete non-Crew-owned paths', async
   try {
     writeFileSync(join(prefix, 'data.txt'), 'keep');
     const { runner } = fakeRunner([
+      { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
       { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
       { pat: /^worktree list --porcelain$/, out: { stdout: `worktree ${prefix}\nHEAD ${REV}\n\n` } },
     ]);
@@ -215,6 +218,7 @@ test('cleanupIsolatedWorkspace refuses to fs-delete non-Crew-owned paths', async
 
 test('cleanupIsolatedWorkspace never treats the primary repository root as disposable', async () => {
   const { runner } = fakeRunner([
+    { pat: /^rev-parse --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
     { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
   ]);
   const r = await cleanupIsolatedWorkspace({ worktreePath: '/repo', repoRoot: '/repo', git: runner, backoffMs: 0 });
@@ -228,7 +232,7 @@ test('staleWorktrees/prune identify only dsh-crew worktrees outside the allowed 
     { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
     {
       pat: /^worktree list --porcelain$/,
-      out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\n\nworktree ${join(tmpdir(), 'user-wt')}\nHEAD ${REV}\n\n` },
+      out: { stdout: `worktree ${WORKTREE}\nHEAD ${REV}\n\nworktree /repo\nHEAD ${REV}\n\nworktree ${join(tmpdir(), 'user-wt')}\nHEAD ${REV}\n\n` },
     },
   ]);
   const stale = await staleWorktrees({ git: runner, allowed: [WORKTREE] });
@@ -427,7 +431,7 @@ maybe('prune adopts the legacy prefix alongside the new one and spares user work
     // One from the new namer, one shaped like an older release left behind.
     const ours = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
     assert.equal(ours.ok, true, ours.error ?? '');
-    const legacyPath = join(root, 'dsh-crew-wf-legacy-00000000');
+    const legacyPath = join(root, 'dsh-crew-wf-legacy-release');
     execFileSync('git', ['worktree', 'add', '--detach', legacyPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
     // And one the user made themselves, which is never Crew's to remove.
     const userPath = join(root, 'user-kept');

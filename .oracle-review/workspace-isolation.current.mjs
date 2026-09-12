@@ -31,22 +31,17 @@ export const CANDIDATE_CAPTURE_FAILED = 'CANDIDATE_CAPTURE_FAILED';
 export const MAX_PARALLEL_CAP = 16;
 export const DEFAULT_MAX_PARALLEL = 3;
 // Worktree names read `Crew_YYYYMMDD_HHMMSS_<purpose>` so an operator can tell
-// from the directory alone when a job ran and what it was for. Worktrees from
-// an earlier release used `dsh-crew-<job>-<hex>` and stay recognised, so old
-// trees are still adopted and cleaned up rather than orphaned.
-//
-// The shapes are matched exactly rather than by prefix, because the prefix
-// alone is not proof of ownership: cleanup `--force`-deletes what it adopts,
-// and a directory a user happened to name Crew_manual-testing or
-// dsh-crew-backup would go with its uncommitted contents.
+// from the directory alone when a job ran and what it was for. The legacy
+// prefix stays recognised as ours, so worktrees created by an earlier release
+// are still adopted and cleaned up rather than orphaned.
 const WORKTREE_PREFIX = 'Crew_';
-const WORKTREE_NAME_RE = /^Crew_\d{8}_\d{6}_[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:-\d+)?$/;
-const LEGACY_WORKTREE_RE = /^dsh-crew-[A-Za-z0-9._-]+-[0-9a-f]{8}$/;
+const LEGACY_WORKTREE_PREFIXES = Object.freeze(['dsh-crew-']);
 
 /** Whether a directory name is a worktree Crew created. */
 export function isCrewWorktreeName(name) {
   const value = String(name ?? '');
-  return WORKTREE_NAME_RE.test(value) || LEGACY_WORKTREE_RE.test(value);
+  return value.startsWith(WORKTREE_PREFIX)
+    || LEGACY_WORKTREE_PREFIXES.some((prefix) => value.startsWith(prefix));
 }
 
 async function defaultRunner(args, { cwd }) {
@@ -99,11 +94,7 @@ function stamp(at) {
  * fails on EEXIST, which makes the suffix loop race-free.
  */
 function reserveWorktreeDir({ root, purpose, at }) {
-  try {
-    mkdirSync(root, { recursive: true });
-  } catch (error) {
-    return { ok: false, error: `cannot create worktree root: ${error?.message ?? error}` };
-  }
+  mkdirSync(root, { recursive: true });
   const safe = String(purpose ?? 'job').replace(/[^A-Za-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '').slice(0, PURPOSE_MAX) || 'job';
   const base = `${WORKTREE_PREFIX}${stamp(at)}_${safe}`;
@@ -149,10 +140,6 @@ export async function inspectRepository({ cwd, git, runner } = {}) {
 
 export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevision, at, root = defaultWorktreeRoot(), git } = {}) {
   const run = git ?? defaultRunner;
-  // A relative root would be resolved against this process's cwd for the
-  // mkdir reservation but against the repo root for the git invocation, so the
-  // two could land in different places. Anchor it once.
-  root = resolve(root);
   const repo = await inspectRepository({ cwd, git: run });
   if (!repo.ok) return { ok: false, reason: repo.reason, error: repo.error };
   const rev = baseRevision ?? repo.baseRevision;
@@ -161,11 +148,7 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
   const { dir, name } = reserved;
   const res = await runGit(run, ['worktree', 'add', '--detach', dir, rev], { cwd: repo.repoRoot });
   if (!res.ok) {
-    // A nonzero exit does not mean git did nothing: a failing post-checkout hook
-    // leaves the worktree registered and populated. Removing only the directory
-    // would strand that registration, and the next attempt on this name would
-    // fail because git still considers it taken. Unregister first, transactionally.
-    await runGit(run, ['worktree', 'remove', '--force', dir], { cwd: repo.repoRoot });
+    // Release the name so a retry is not blocked by an empty directory.
     try { rmSync(dir, { recursive: true, force: true }); } catch {}
     return { ok: false, reason: res.reason, error: res.error };
   }
@@ -346,16 +329,11 @@ function trackedIn(nameStatus, untracked) {
 }
 
 async function mainRepoRoot(run, worktreePath) {
-  // The main working tree is the first record of `git worktree list`; deriving
-  // it from `--git-common-dir` breaks for a bare main repository, where that
-  // path is the bare repository itself and its parent is not a git directory at
-  // all. The first record is the same ordering guarantee the stale-list scan
-  // already relies on.
-  const list = await runGit(run, ['worktree', 'list', '--porcelain'], { cwd: worktreePath });
-  if (!list.ok) return null;
-  const first = String(list.stdout ?? '').split('\n\n').find(Boolean) ?? '';
-  const main = first.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
-  return main ? resolve(main) : null;
+  const common = await runGit(run, ['rev-parse', '--git-common-dir'], { cwd: worktreePath });
+  if (!common.ok) return null;
+  const dir = String(common.stdout ?? '').trim();
+  if (!dir) return null;
+  return resolve(dir, '..');
 }
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
