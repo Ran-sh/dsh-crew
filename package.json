@@ -1,6 +1,6 @@
 {
   "name": "@ran-sh/dsh-crew",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "type": "module",
   "main": "./src/hub/entry.mjs",
   "bin": {
@@ -210,6 +210,7 @@
     "commands",
     "codex",
     "zcode",
+    "skills",
     "statusline",
     "official-web-bridge",
     "windows",

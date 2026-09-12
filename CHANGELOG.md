@@ -4,6 +4,14 @@
 
 Future changes go here.
 
+## 1.7.1 — 2026-09-12
+
+- Ships the skill template in the npm package. `skills/` was missing from the
+  `files` allowlist, so a published install failed every host integration with
+  `CREW_SKILL_TEMPLATE_MISSING`: the installer was packaged, the template it
+  copies was not. The distribution test now asserts both, which is the check that
+  would have caught it.
+
 ## 1.7.0 — 2026-09-12
 
 - Replaces the injected delegation policy with an on-demand skill. Crew used to

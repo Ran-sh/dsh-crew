@@ -23,10 +23,13 @@ test('fork package identity is consistent across manifest, Cordis, and client ar
     assert.equal(lifecycle in (manifest.scripts ?? {}), false, `${lifecycle} must not mutate host state`);
   }
   assert.ok(manifest.files.includes('windows'), 'Windows login-start assets must ship');
-  assert.ok(manifest.files.includes('codex'), 'global Codex policy template must ship');
-  assert.ok(manifest.files.includes('zcode'), 'ZCode policy/agent templates must ship');
-  assert.match(read('codex/AGENTS.md'), /Global capability-aware delegation policy/);
-  assert.match(read('zcode/AGENTS.md'), /Global capability-aware delegation policy for ZCode/);
+  assert.ok(manifest.files.includes('codex'), 'Codex role/prompt templates must ship');
+  assert.ok(manifest.files.includes('zcode'), 'ZCode agent/command templates must ship');
+  // The on-demand skill is installed from the payload, so it has to be packaged.
+  // Shipping the installer without the template makes every host integration
+  // fail with CREW_SKILL_TEMPLATE_MISSING on a real install.
+  assert.ok(manifest.files.includes('skills'), 'the Crew skill template must ship');
+  assert.match(read('skills/dsh-crew/SKILL.md'), /^name: dsh-crew$/m);
   const launcher = read('windows/start-dsh-crew.cmd');
   const helper = read('windows/start-dsh-crew.ps1');
   const startup = read('windows/start-dsh-crew.vbs');
