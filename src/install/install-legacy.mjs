@@ -8,6 +8,7 @@ import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { normalizeModelPriority } from '../model-routing.mjs';
+import { crewSkillFiles, installCrewSkill, readCrewSkill, removeCrewSkill } from './crew-skill.mjs';
 import { zcodeStatus } from './zcode.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -94,32 +95,13 @@ export function stripKnownLegacyCodexPolicy(text, { knownHashes = CODEX_LEGACY_P
   return `${keptPrefix}${match[0]}${keptSuffix}`;
 }
 
-function installGlobalCodexPolicy({ home, root, env = process.env }) {
-  const file = join(codexHomeDir(home, env), 'AGENTS.md');
-  const block = managedPolicyBlock(root);
-  if (!block) return { ok: false, action: 'global policy template missing' };
-  mkdirSync(dirname(file), { recursive: true });
-  const current = readText(file) ?? '';
-  const managed = new RegExp(`${POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
-  const template = readText(join(root, 'codex', 'AGENTS.md'))?.trim() ?? '';
-  let next;
-  if (managed.test(current)) next = current.replace(managed, block);
-  else if (current.trim() === template) next = `${block}\n`;
-  else next = `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${block}\n`;
-  next = stripKnownLegacyCodexPolicy(next);
-  if (next !== current) {
-    backup(file);
-    writeFileSync(file, next);
-  }
-  return { ok: true, action: `global policy: ${file}` };
+/** The installed skill is present and still matches the payload template. */
+function crewSkillInstalled({ home, root, env = process.env }) {
+  const expected = readCrewSkill({ root });
+  if (expected === null) return false;
+  // Every host directory must hold the current template, not just the first.
+  return crewSkillFiles({ home, env }).every((file) => readText(file) === expected);
 }
-
-function globalCodexPolicyReady({ home, root = ROOT, env = process.env }) {
-  const block = managedPolicyBlock(root);
-  const text = readText(join(codexHomeDir(home, env), 'AGENTS.md'));
-  return !!block && typeof text === 'string' && text.includes(block);
-}
-
 function uninstallGlobalCodexPolicy({ home, env = process.env }) {
   const file = join(codexHomeDir(home, env), 'AGENTS.md');
   const current = readText(file);
@@ -432,7 +414,7 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
     status_prompt: expectedStatusPrompt !== null && readText(join(codexRoot, 'prompts', 'dsh-status.md')) === expectedStatusPrompt,
     mcp: !!expectedTarget && mcpTarget === expectedTarget,
     target_alignment: !!expectedTarget && workerTarget === expectedTarget && reviewerTarget === expectedTarget && mcpTarget === expectedTarget,
-    global_policy: globalCodexPolicyReady({ home, root, env }),
+    skill: crewSkillInstalled({ home, root, env }),
   };
   const codexInstalled = Object.values(components).some(Boolean)
     || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
@@ -466,6 +448,8 @@ export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
   }
   const policyAction = uninstallGlobalCodexPolicy({ home, env });
   if (policyAction) actions.push(policyAction);
+  const skillAction = removeCrewSkill({ home, env });
+  if (skillAction.changed) actions.push(...skillAction.removed.map((dir) => `removed: ${dir}`));
   // Remove only the dsh-crew entry from [mcp_servers], keeping any other
   // MCP servers the user configured.
   const configFile = join(codexHomeDir(home, env), 'config.toml');
@@ -622,9 +606,15 @@ export function installCodex({ home = homedir(), scope, root = ROOT, env = proce
   if (scope !== 'project') {
     const act = writeGlobalCodexMcpServer(home, renderedPath, env);
     actions.push(...act);
-    const policy = installGlobalCodexPolicy({ home, root, env });
-    if (!policy.ok) return { ok: false, actions: [...actions, policy.action] };
-    actions.push(policy.action);
+    // Crew guidance is a skill now, loaded only when the operator asks for it.
+    // Removing the policy block here cleans up what an earlier release put in
+    // the host instruction file; ignoring the result keeps the first install on
+    // a machine that never had one quiet.
+    const droppedPolicy = uninstallGlobalCodexPolicy({ home, env });
+    if (droppedPolicy) actions.push(`removed delegating policy block: ${join(codexHomeDir(home, env), 'AGENTS.md')}`);
+    const skill = installCrewSkill({ home, root, env });
+    if (!skill.ok) return { ok: false, actions: [...actions, `crew skill: ${skill.code}`] };
+    actions.push(...skill.written.map((file) => `skill: ${file}`));
   }
   return { ok: true, actions };
 }

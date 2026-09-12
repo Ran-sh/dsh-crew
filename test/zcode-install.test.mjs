@@ -18,19 +18,20 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const makeHome = () => mkdtempSync(join(tmpdir(), 'dsh-crew-zcode-test-'));
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
-test('ZCode install writes managed policy, exact-tool agents, commands and native MCP config', () => {
+test('ZCode install writes the on-demand skill, exact-tool agents, commands and native MCP config', () => {
   const home = makeHome();
   try {
-    const result = installZCode({ home, root: ROOT });
+    const result = installZCode({ home, root: ROOT, env: {} });
     assert.equal(result.ok, true);
-    assert.ok(existsSync(join(home, '.zcode', 'AGENTS.md')));
+    // No delegating policy lands in the host instruction file any more.
+    assert.equal(existsSync(join(home, '.zcode', 'AGENTS.md')), false);
+    assert.ok(existsSync(join(home, '.agents', 'skills', 'dsh-crew', 'SKILL.md')));
     assert.ok(existsSync(join(home, '.zcode', 'agents', 'ds-worker.md')));
     assert.ok(existsSync(join(home, '.zcode', 'agents', 'ds-reviewer.md')));
     assert.ok(existsSync(join(home, '.zcode', 'commands', 'dsh-config.md')));
     assert.ok(existsSync(join(home, '.zcode', 'commands', 'dsh-status.md')));
     const worker = readFileSync(join(home, '.zcode', 'agents', 'ds-worker.md'), 'utf8');
     const reviewer = readFileSync(join(home, '.zcode', 'agents', 'ds-reviewer.md'), 'utf8');
-    const policy = readFileSync(join(home, '.zcode', 'AGENTS.md'), 'utf8');
     assert.match(worker, /mcpServers:\s*\n\s*- dsh-crew/);
     for (const tool of ZCODE_MCP_TOOLS) assert.match(worker, new RegExp(`mcp__dsh-crew__${tool}`));
     for (const dispatcher of [worker, reviewer]) {
@@ -42,8 +43,9 @@ test('ZCode install writes managed policy, exact-tool agents, commands and nativ
       assert.doesNotMatch(dispatcher, /pass the .* (?:task|request).*verbatim/i);
     }
     assert.match(worker, /allow_no_changes:\s*true/);
-    assert.match(policy, /asynchronous.*dsh_spawn_worker/i);
-    assert.match(policy, /never start a duplicate/i);
+    const skill = readFileSync(join(home, '.agents', 'skills', 'dsh-crew', 'SKILL.md'), 'utf8');
+    assert.match(skill, /on demand only/i);
+    assert.match(skill, /duplicate/i);
     const cfg = readJson(join(home, '.zcode', 'cli', 'config.json'));
     assert.equal(cfg.mcp.servers['dsh-crew'].command, 'node');
     assert.equal(cfg.mcp.servers['dsh-crew'].args[0].toLowerCase(), join(ROOT, 'src', 'server.mjs').toLowerCase());
@@ -62,7 +64,7 @@ test('ZCode installer prefers native config when it has servers and falls back t
     mkdirSync(join(home, '.agents'), { recursive: true });
     writeFileSync(join(home, '.zcode', 'cli', 'config.json'), JSON.stringify({ mcp: { servers: { native: { command: 'node', args: ['native.mjs'] } } } }));
     writeFileSync(join(home, '.agents', 'mcp.json'), JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
-    const result = installZCode({ home, root: ROOT });
+    const result = installZCode({ home, root: ROOT, env: {} });
     assert.equal(result.ok, true);
     assert.equal(result.config_file, join(home, '.zcode', 'cli', 'config.json'));
     assert.ok(readJson(join(home, '.zcode', 'cli', 'config.json')).mcp.servers['dsh-crew']);
@@ -77,7 +79,7 @@ test('ZCode installer uses .agents fallback when native config is absent/empty',
     mkdirSync(join(home, '.agents'), { recursive: true });
     writeFileSync(join(home, '.zcode', 'cli', 'config.json'), JSON.stringify({ mcp: { servers: {} } }));
     writeFileSync(join(home, '.agents', 'mcp.json'), JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
-    const result = installZCode({ home, root: ROOT });
+    const result = installZCode({ home, root: ROOT, env: {} });
     assert.equal(result.ok, true);
     assert.equal(result.config_file, join(home, '.agents', 'mcp.json'));
     assert.ok(readJson(join(home, '.agents', 'mcp.json')).mcpServers['dsh-crew']);
@@ -93,14 +95,14 @@ test('ZCode shared-to-native update removes stale shared Crew MCP and uninstall 
     writeFileSync(nativeFile, JSON.stringify({ mcp: { servers: {} } }));
     writeFileSync(sharedFile, JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
 
-    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
     assert.ok(readJson(sharedFile).mcpServers['dsh-crew']);
 
     // User adds a native MCP server, so ZCode now prefers native config.
     writeFileSync(nativeFile, JSON.stringify({
       mcp: { servers: { native: { command: 'node', args: ['native.mjs'] } } },
     }));
-    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
 
     let native = readJson(nativeFile);
     let shared = readJson(sharedFile);
@@ -131,13 +133,13 @@ test('ZCode native-to-shared update tracks prior native source so uninstall remo
     }));
     writeFileSync(sharedFile, JSON.stringify({ mcpServers: { shared: { command: 'node', args: ['shared.mjs'] } } }));
 
-    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
     assert.ok(readJson(nativeFile).mcp.servers['dsh-crew']);
 
     // Switch to shared by clearing the active native list; keep the prior
     // native source tracked so a stale Crew entry can still be uninstalled.
     writeFileSync(nativeFile, JSON.stringify({ mcp: { servers: {} } }));
-    const updated = installZCode({ home, root: ROOT });
+    const updated = installZCode({ home, root: ROOT, env: {} });
     assert.equal(updated.ok, true);
     assert.equal(updated.config_kind, 'shared');
     assert.equal(readJson(sharedFile).mcpServers['dsh-crew'] ? true : false, true);
@@ -167,7 +169,7 @@ test('ZCode install fails closed on an unowned MCP collision and preserves files
     const file = join(home, '.zcode', 'cli', 'config.json');
     const before = { mcp: { servers: { 'dsh-crew': { command: 'other', args: ['other.mjs'] } } } };
     writeFileSync(file, JSON.stringify(before));
-    const result = installZCode({ home, root: ROOT });
+    const result = installZCode({ home, root: ROOT, env: {} });
     assert.equal(result.ok, false);
     assert.equal(result.code, 'ZCODE_MCP_COLLISION');
     assert.deepEqual(readJson(file), before);
@@ -178,18 +180,20 @@ test('ZCode install fails closed on an unowned MCP collision and preserves files
 test('ZCode uninstall removes only owned artifacts and keeps user content', () => {
   const home = makeHome();
   try {
-    installZCode({ home, root: ROOT });
-    writeFileSync(join(home, '.zcode', 'AGENTS.md'), `${readFileSync(join(home, '.zcode', 'AGENTS.md'), 'utf8')}\n# user rule\n`);
+    installZCode({ home, root: ROOT, env: {} });
+    mkdirSync(join(home, '.zcode'), { recursive: true });
+    writeFileSync(join(home, '.zcode', 'AGENTS.md'), '# user rule\n');
     mkdirSync(join(home, '.zcode', 'agents'), { recursive: true });
     writeFileSync(join(home, '.zcode', 'agents', 'my-agent.md'), 'user agent\n');
     mkdirSync(join(home, '.zcode', 'cli'), { recursive: true });
-    const result = uninstallZCode({ home, root: ROOT });
+    const result = uninstallZCode({ home, root: ROOT, env: {} });
     assert.equal(result.ok, true);
     assert.match(readFileSync(join(home, '.zcode', 'AGENTS.md'), 'utf8'), /# user rule/);
     assert.ok(existsSync(join(home, '.zcode', 'agents', 'my-agent.md')));
     assert.equal(existsSync(join(home, '.zcode', 'agents', 'ds-worker.md')), false);
     assert.equal(existsSync(join(home, '.zcode', 'commands', 'dsh-status.md')), false);
     assert.equal(resolveZCodeMcpTarget({ home }), null);
+    assert.equal(existsSync(join(home, '.agents', 'skills', 'dsh-crew')), false, 'the skill goes too');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -199,7 +203,7 @@ test('ZCode uninstall restores a pre-existing same-name agent instead of deletin
     const file = join(home, '.zcode', 'agents', 'ds-worker.md');
     mkdirSync(join(home, '.zcode', 'agents'), { recursive: true });
     writeFileSync(file, '# personal worker\n');
-    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
     assert.notEqual(readFileSync(file, 'utf8'), '# personal worker\n');
     assert.equal(uninstallZCode({ home }).ok, true);
     assert.equal(readFileSync(file, 'utf8'), '# personal worker\n');
@@ -209,7 +213,7 @@ test('ZCode uninstall restores a pre-existing same-name agent instead of deletin
 test('installStatus exposes ZCode independently of Codex and Claude', () => {
   const home = makeHome();
   try {
-    installZCode({ home, root: ROOT });
+    installZCode({ home, root: ROOT, env: {} });
     const status = installStatus({ home , env: {} });
     assert.equal(status.zcode.installed, true);
     assert.equal(status.zcode.ready, true);
@@ -217,24 +221,18 @@ test('installStatus exposes ZCode independently of Codex and Claude', () => {
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test('ZCode readiness rejects modified but nonempty managed templates and policy', () => {
+test('ZCode readiness rejects modified but nonempty managed templates and skill', () => {
   const home = makeHome();
   try {
-    installZCode({ home, root: ROOT });
+    installZCode({ home, root: ROOT, env: {} });
     const worker = join(home, '.zcode', 'agents', 'ds-worker.md');
-    const policy = join(home, '.zcode', 'AGENTS.md');
+    const skill = join(home, '.agents', 'skills', 'dsh-crew', 'SKILL.md');
     writeFileSync(worker, `${readFileSync(worker, 'utf8').trimEnd()}\n# local drift\n`);
-    writeFileSync(
-      policy,
-      readFileSync(policy, 'utf8').replace(
-        '<!-- DSH CREW MANAGED ZCODE POLICY:START -->',
-        '<!-- DSH CREW MANAGED ZCODE POLICY:START -->\n# local drift',
-      ),
-    );
+    writeFileSync(skill, `${readFileSync(skill, 'utf8')}\n# local drift\n`);
 
-    const status = zcodeStatus({ home, root: ROOT });
+    const status = zcodeStatus({ home, root: ROOT, env: {} });
     assert.equal(status.components.worker_agent, false);
-    assert.equal(status.components.policy, false);
+    assert.equal(status.components.skill, false);
     assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
@@ -242,13 +240,13 @@ test('ZCode readiness rejects modified but nonempty managed templates and policy
 test('ZCode readiness rejects stale ownership hashes even when managed files still exist', () => {
   const home = makeHome();
   try {
-    installZCode({ home, root: ROOT });
+    installZCode({ home, root: ROOT, env: {} });
     const ownershipFile = join(home, '.config', 'dsh-crew', 'integrations', 'zcode.json');
     const ownership = readJson(ownershipFile);
     ownership.files[0].managed_sha256 = '0'.repeat(64);
     writeFileSync(ownershipFile, JSON.stringify(ownership, null, 2));
 
-    const status = zcodeStatus({ home, root: ROOT });
+    const status = zcodeStatus({ home, root: ROOT, env: {} });
     assert.equal(status.components.ownership, false);
     assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -257,17 +255,17 @@ test('ZCode readiness rejects stale ownership hashes even when managed files sti
 test('ZCode readiness rejects extra MCP arguments and never counts unrelated policy text as installed', () => {
   const home = makeHome();
   try {
-    installZCode({ home, root: ROOT });
+    installZCode({ home, root: ROOT, env: {} });
     const configFile = join(home, '.zcode', 'cli', 'config.json');
     const config = readJson(configFile);
     config.mcp.servers['dsh-crew'].args.push('--unexpected');
     writeFileSync(configFile, JSON.stringify(config, null, 2));
-    assert.equal(zcodeStatus({ home, root: ROOT }).components.mcp, false);
+    assert.equal(zcodeStatus({ home, root: ROOT, env: {} }).components.mcp, false);
 
     rmSync(home, { recursive: true, force: true });
     mkdirSync(join(home, '.zcode'), { recursive: true });
     writeFileSync(join(home, '.zcode', 'AGENTS.md'), '# unrelated user instructions\n');
-    const unrelated = zcodeStatus({ home, root: ROOT });
+    const unrelated = zcodeStatus({ home, root: ROOT, env: {} });
     assert.equal(unrelated.installed, false);
     assert.equal(unrelated.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -281,6 +279,6 @@ test('ZCode installer adopts an already-correct unowned MCP entry without a Wind
     writeFileSync(configFile, JSON.stringify({
       mcp: { servers: { 'dsh-crew': { command: 'node', args: [join(ROOT, 'src', 'server.mjs')] } } },
     }));
-    assert.equal(installZCode({ home, root: ROOT }).ok, true);
+    assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

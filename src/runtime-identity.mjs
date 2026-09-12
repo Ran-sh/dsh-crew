@@ -36,7 +36,7 @@ export {
 // included in the identity contract.
 const RUNTIME_ID = randomUUID();
 
-export const RUNTIME_VERSION = '1.6.2';
+export const RUNTIME_VERSION = '1.7.0';
 export const HUB_PROTOCOL_VERSION = 1;
 
 export const HUB_CAPABILITIES = Object.freeze([

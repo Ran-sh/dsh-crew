@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Future changes go here.
+
+## 1.7.0 — 2026-09-12
+
+- Replaces the injected delegation policy with an on-demand skill. Crew used to
+  write a "capability-aware delegation policy" block into each host's global
+  instruction file, so every Codex and ZCode session carried Crew's delegation
+  rules — and the operator gate that stops work when Crew is unavailable —
+  whether or not Crew was wanted that turn. That shapes how the host does its own
+  work, which is the opposite of what an optional capability should do.
+
+  The same guidance now ships as a skill, loaded only when the operator asks for
+  Crew. It is installed for each host the way the Oracle skill is: the shared
+  `~/.agents/skills` that ZCode reads, plus `$CODEX_HOME/skills` and
+  `~/.claude/skills`. Nothing about a host's default behaviour changes until the
+  skill is invoked.
+
+  `dsh-crew install` now **removes** any policy block a previous release wrote
+  into `~/.codex/AGENTS.md` or `~/.zcode/AGENTS.md` — user-authored text in those
+  files is untouched — and uninstall removes the skill. Readiness reports the
+  skill instead of the block.
+
+  The Codex and ZCode functions take an explicit `env` so tests no longer resolve
+  the developer's real `CODEX_HOME`.
+
 ## 1.6.2 — 2026-09-12
 
 - Cleans the removed bridge's keys from a canonical config, not only a legacy one.
@@ -8,10 +35,6 @@
   dead keys stayed in the file and in the `/config` response. The removal now
   happens before either branch, and the test covers the canonical case, which is
   the one a real machine has.
-
-## Unreleased
-
-Future changes go here.
 
 ## 1.6.1 — 2026-09-12
 

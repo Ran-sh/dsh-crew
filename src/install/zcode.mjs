@@ -9,6 +9,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
+import { crewSkillFiles, installCrewSkill, readCrewSkill, removeCrewSkill } from './crew-skill.mjs';
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HOST = 'zcode';
 const SERVER = 'dsh-crew';
@@ -101,27 +103,6 @@ export function resolveZCodeMcpTarget({ home = homedir() } = {}) {
 
 function expectedTarget({ root = ROOT } = {}) {
   return resolve(join(root, 'src', 'server.mjs'));
-}
-
-function managedPolicyBlock(root) {
-  const template = readText(join(root, 'zcode', 'AGENTS.md'))?.trim();
-  return template ? `${POLICY_START}\n${template}\n${POLICY_END}` : null;
-}
-
-function installPolicy({ home, root }) {
-  const file = join(home, '.zcode', 'AGENTS.md');
-  const block = managedPolicyBlock(root);
-  if (!block) return { ok: false, code: 'ZCODE_POLICY_TEMPLATE_MISSING' };
-  mkdirSync(dirname(file), { recursive: true });
-  const current = readText(file) ?? '';
-  const escapedStart = POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const escapedEnd = POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const managed = new RegExp(`${escapedStart}[\\s\\S]*?${escapedEnd}`, 'm');
-  const next = managed.test(current)
-    ? current.replace(managed, block)
-    : `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${block}\n`;
-  if (next !== current) { backup(file); writeFileSync(file, next); }
-  return { ok: true, file };
 }
 
 function removePolicy({ home }) {
@@ -277,7 +258,8 @@ function updateMcp({ home, root }) {
   return { ok: true, changed, config_file: source.file, config_kind: source.kind, target };
 }
 
-export function installZCode({ home = homedir(), root = ROOT } = {}) {
+export function installZCode({ home = homedir(), root = ROOT, env = process.env } = {}) {
+  const actions = [];
   const templates = templateFiles({ home, root });
   const missing = templates.find(({ source }) => !existsSync(source));
   if (missing) return { ok: false, code: 'ZCODE_TEMPLATE_MISSING', source: missing.source };
@@ -287,8 +269,14 @@ export function installZCode({ home = homedir(), root = ROOT } = {}) {
   // failed install is transaction-like and leaves user files untouched.
   const mcp = updateMcp({ home, root });
   if (!mcp.ok) return mcp;
-  const policy = installPolicy({ home, root });
-  if (!policy.ok) return policy;
+  // Crew guidance is a skill now, loaded only when the operator asks for it.
+  // The removal cleans up the policy block an earlier release wrote into the
+  // host instruction file; ignoring its result keeps a first install quiet.
+  const droppedPolicy = removePolicy({ home });
+  if (droppedPolicy) actions.push('policy: removed managed ZCode block');
+  const skill = installCrewSkill({ home, root, env });
+  if (!skill.ok) return { ok: false, code: skill.code, source: skill.source };
+  actions.push(...skill.written.map((file) => `skill: ${file}`));
   const installed = installTemplates({ home, root, priorFiles });
   if (!installed.ok) return installed;
   cleanupPriorMcpSources({ owned: previousOwnership, exceptFile: mcp.config_file });
@@ -303,16 +291,20 @@ export function installZCode({ home = homedir(), root = ROOT } = {}) {
     files: installed.records,
     configFiles: [currentSourceRecord, ...priorSourceRecords],
   });
-  return { ok: true, ...mcp, policy_file: policy.file, files: installed.actions };
+  return { ok: true, ...mcp, skill_files: skill.written, files: installed.actions };
 }
 
-function zcodeComponents({ home = homedir(), root = ROOT } = {}) {
+function zcodeComponents({ home = homedir(), root = ROOT, env = process.env } = {}) {
   const expected = normalizePath(expectedTarget({ root }));
   const source = configSource({ home });
   const configured = serverTarget(source.servers[SERVER]);
   const owned = ownership({ home });
-  const expectedPolicy = managedPolicyBlock(root);
-  const installedPolicy = readText(join(home, '.zcode', 'AGENTS.md'));
+  // The guidance is a skill now; a policy block in the host instruction file is
+  // no longer written and no longer part of readiness.
+  const expectedSkill = readCrewSkill({ root });
+  // A block written by an earlier release still counts as an installed
+  // footprint, so uninstall knows there is something of ours to clean up.
+  const legacyPolicyText = readText(join(home, '.zcode', 'AGENTS.md'));
   const templates = templateFiles({ home, root });
   const templateReady = (entry) => {
     if (!entry) return false;
@@ -335,7 +327,7 @@ function zcodeComponents({ home = homedir(), root = ROOT } = {}) {
   });
   const components = {
     mcp: configured === expected,
-    policy: !!expectedPolicy && typeof installedPolicy === 'string' && installedPolicy.includes(expectedPolicy),
+    skill: expectedSkill !== null && readText(crewSkillFiles({ home, env })[0]) === expectedSkill,
     worker_agent: templateReady(templateBySuffix(join('agents', 'ds-worker.md'))),
     reviewer_agent: templateReady(templateBySuffix(join('agents', 'ds-reviewer.md'))),
     config_prompt: templateReady(templateBySuffix(join('commands', 'dsh-config.md'))),
@@ -345,9 +337,9 @@ function zcodeComponents({ home = homedir(), root = ROOT } = {}) {
       && normalizePath(owned.target) === expected
       && ownershipFilesReady,
   };
-  const policyFootprint = typeof installedPolicy === 'string'
-    && installedPolicy.includes(POLICY_START)
-    && installedPolicy.includes(POLICY_END);
+  const policyFootprint = typeof legacyPolicyText === 'string'
+    && legacyPolicyText.includes(POLICY_START)
+    && legacyPolicyText.includes(POLICY_END);
   const installed = Object.hasOwn(source.servers, SERVER)
     || !!owned
     || policyFootprint
@@ -355,8 +347,8 @@ function zcodeComponents({ home = homedir(), root = ROOT } = {}) {
   return { components, source, expected, configured, owned, installed };
 }
 
-export function zcodeStatus({ home = homedir(), root = ROOT } = {}) {
-  const { components, source, expected, configured, installed } = zcodeComponents({ home, root });
+export function zcodeStatus({ home = homedir(), root = ROOT, env = process.env } = {}) {
+  const { components, source, expected, configured, installed } = zcodeComponents({ home, root, env });
   const missing = Object.entries(components).filter(([, value]) => !value).map(([key]) => key);
   return {
     installed,
@@ -369,7 +361,7 @@ export function zcodeStatus({ home = homedir(), root = ROOT } = {}) {
   };
 }
 
-export function uninstallZCode({ home = homedir() } = {}) {
+export function uninstallZCode({ home = homedir(), env = process.env } = {}) {
   const actions = [];
   const owned = ownership({ home });
   if (owned) {
@@ -381,6 +373,8 @@ export function uninstallZCode({ home = homedir() } = {}) {
     rmSync(OWNERSHIP_FILE({ home }), { force: true });
   }
   if (removePolicy({ home })) actions.push('policy: removed managed ZCode block');
+  const skillAction = removeCrewSkill({ home, env });
+  if (skillAction.changed) actions.push(...skillAction.removed.map((dir) => `removed: ${dir}`));
   const managedFiles = Array.isArray(owned?.files) && owned.files.length
     ? owned.files
     : ['agents/ds-worker.md', 'agents/ds-reviewer.md', 'commands/dsh-config.md', 'commands/dsh-status.md']
