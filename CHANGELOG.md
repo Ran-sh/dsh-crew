@@ -6,6 +6,30 @@ Future changes go here.
 
 ## 1.5.0 — 2026-09-11
 
+- Resolves the vision bridge's CLI instead of spawning a bare name. Codex
+  Desktop installs its binary under a versioned directory that is not on PATH,
+  and a GUI-launched Hub does not inherit the shell's PATH, so `describe_image`
+  failed with a bare `spawn codex ENOENT` even though the CLI was installed and
+  working. The bridge now resolves like the workspace code resolves git: the
+  platform locator first, then the known install locations, preferring something
+  `spawn` can actually execute — npm installs an extensionless shim beside a
+  `.cmd`, and taking the first hit resolved `claude` to a shell script that
+  `spawn` cannot run. A Windows `.cmd`/`.bat` shim is launched through `cmd.exe`
+  with argv, never a command string, so no argument is re-parsed by a shell.
+  `imagegen` shared the same resolution path. A name that resolves to nothing is
+  returned unchanged, and the spawn error now says which CLI, what was checked,
+  and what to do instead of only `ENOENT`.
+- Fixes the Codex vision invocation. `-i/--image` is variadic, so
+  `-i file.png "<prompt>"` made the CLI read the prompt as a second image and
+  fail with "no prompt provided via stdin". The prompt is passed first and the
+  image bound with `--image=` so it takes exactly one value.
+- Stops the CLI from failing silently. Actions return a structured failure rather
+  than throwing, and the dispatcher turned that into exit 1 without printing
+  anything — so `dsh-crew rollback` with no version or an unknown version exited
+  1 having said nothing at all. The failure reason is now printed.
+- Replaces a raw NUL byte in `src/multimodal.mjs` with the `'\0'` escape the rest
+  of the repo uses. It was inside a string literal so it worked, but it made the
+  file read as binary to editors and diff tooling.
 - Stops release retention from deleting a release a running process is executing.
   The Hub loads several modules lazily with a cache-busting query so a config
   edit is visible without a restart; those reads go to disk every time, so

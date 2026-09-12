@@ -3441,7 +3441,14 @@ export async function runNpxCli({
     else if (command === 'releases') result = await actions.releases({ args, log });
     else if (command === 'rollback') result = await actions.rollback({ version: args?.[0], args, log });
     else result = await actions[command]({ log });
-    return result?.ok === false ? 1 : 0;
+    // Surface why the command failed. Actions return a structured failure rather
+    // than throwing, so without this the CLI exits 1 having printed nothing —
+    // `dsh-crew rollback` with no version was a silent failure.
+    if (result?.ok === false) {
+      error(`dsh-crew ${command} failed: ${result.error ?? result.code ?? 'unknown error'}`);
+      return 1;
+    }
+    return 0;
   } catch (err) {
     error(`dsh-crew ${command} failed: ${err?.message ?? err}`);
     return 1;
