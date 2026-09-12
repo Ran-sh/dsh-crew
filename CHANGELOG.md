@@ -6,6 +6,19 @@ Future changes go here.
 
 ## 1.5.0 — 2026-09-11
 
+- Writes the Codex integration where Codex actually reads it. Codex honours
+  `CODEX_HOME` and falls back to `~/.codex`, but the installer only ever wrote the
+  latter — so for anyone who set `CODEX_HOME`, every install reported success
+  while Codex kept reading a registration frozen on whatever release was current
+  when the variable was set. On this machine that meant a `[mcp_servers]` entry
+  still pointing at a release deleted weeks earlier, with the dsh-crew tools
+  silently absent from Codex the whole time. The integration now resolves the
+  directory the same way Codex does, for the MCP entry, the role files, the
+  managed policy block, readiness and uninstall alike.
+- The Codex functions take an explicit `env` so tests no longer read the
+  developer's real `CODEX_HOME`. Without it a test that injects a temporary
+  `home` still resolved to the live Codex directory: the fixtures passed, but the
+  install had written into the operator's own config.
 - Fixes a `ReferenceError` that broke the `dsh_worker_config` tool outright. The
   config report passed `{ enabled_roles }` as a shorthand to a function whose
   parameter carries that name, but the local binding is camelCase — so the call

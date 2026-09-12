@@ -15,6 +15,20 @@ const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
 const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
 const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
+
+/**
+ * The directory Codex actually reads.
+ *
+ * Codex honours `CODEX_HOME` and falls back to `~/.codex`; writing only to the
+ * latter silently does nothing for anyone who set it — the registration stays
+ * frozen on whatever release was current when they set it, while every install
+ * reports success because the file it wrote really did change. Resolve the same
+ * way Codex does, and treat an empty or whitespace value as unset.
+ */
+export function codexHomeDir(home = homedir(), env = process.env) {
+  const override = typeof env?.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
+  return override ? resolve(override) : join(home, '.codex');
+}
 export const CODEX_LEGACY_POLICY_HASHES = Object.freeze([
   '2d6f3839bb3df4bda90f481726281292b1a4b4585298b1cf9ec56215295b5c78',
 ]);
@@ -80,8 +94,8 @@ export function stripKnownLegacyCodexPolicy(text, { knownHashes = CODEX_LEGACY_P
   return `${keptPrefix}${match[0]}${keptSuffix}`;
 }
 
-function installGlobalCodexPolicy({ home, root }) {
-  const file = join(home, '.codex', 'AGENTS.md');
+function installGlobalCodexPolicy({ home, root, env = process.env }) {
+  const file = join(codexHomeDir(home, env), 'AGENTS.md');
   const block = managedPolicyBlock(root);
   if (!block) return { ok: false, action: 'global policy template missing' };
   mkdirSync(dirname(file), { recursive: true });
@@ -100,14 +114,14 @@ function installGlobalCodexPolicy({ home, root }) {
   return { ok: true, action: `global policy: ${file}` };
 }
 
-function globalCodexPolicyReady({ home, root = ROOT }) {
+function globalCodexPolicyReady({ home, root = ROOT, env = process.env }) {
   const block = managedPolicyBlock(root);
-  const text = readText(join(home, '.codex', 'AGENTS.md'));
+  const text = readText(join(codexHomeDir(home, env), 'AGENTS.md'));
   return !!block && typeof text === 'string' && text.includes(block);
 }
 
-function uninstallGlobalCodexPolicy({ home }) {
-  const file = join(home, '.codex', 'AGENTS.md');
+function uninstallGlobalCodexPolicy({ home, env = process.env }) {
+  const file = join(codexHomeDir(home, env), 'AGENTS.md');
   const current = readText(file);
   if (typeof current !== 'string') return null;
   const managed = new RegExp(`(?:\\r?\\n){0,2}${POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${POLICY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\r?\\n)?`, 'm');
@@ -393,7 +407,7 @@ export function writeGlobalConfig(patch) {
 }
 
 /** What is currently installed where — drives the settings-page buttons. */
-export function installStatus({ home = homedir(), root = ROOT } = {}) {
+export function installStatus({ home = homedir(), root = ROOT, env = process.env } = {}) {
   const settings = readJson(join(home, '.claude', 'settings.json'), {});
   const enabled = settings.enabledPlugins;
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
@@ -409,7 +423,7 @@ export function installStatus({ home = homedir(), root = ROOT } = {}) {
     permissions: claudePermissionsReady(settings),
   };
   const claudeMissing = Object.entries(claudeComponents).filter(([, present]) => !present).map(([key]) => key);
-  const codexRoot = join(home, '.codex');
+  const codexRoot = codexHomeDir(home, env);
   const configFile = join(codexRoot, 'config.toml');
   const configText = readText(configFile) ?? '';
   const workerFile = join(codexRoot, 'agents', 'ds-worker.toml');
@@ -429,7 +443,7 @@ export function installStatus({ home = homedir(), root = ROOT } = {}) {
     status_prompt: expectedStatusPrompt !== null && readText(join(codexRoot, 'prompts', 'dsh-status.md')) === expectedStatusPrompt,
     mcp: !!expectedTarget && mcpTarget === expectedTarget,
     target_alignment: !!expectedTarget && workerTarget === expectedTarget && reviewerTarget === expectedTarget && mcpTarget === expectedTarget,
-    global_policy: globalCodexPolicyReady({ home, root }),
+    global_policy: globalCodexPolicyReady({ home, root, env }),
   };
   const codexInstalled = Object.values(components).some(Boolean)
     || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
@@ -448,24 +462,24 @@ export function installStatus({ home = homedir(), root = ROOT } = {}) {
   };
 }
 
-export function uninstallCodex({ home = homedir() } = {}) {
+export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
   const actions = [];
   // Both the v0.2 roles (ds-worker / ds-reviewer) and the deprecated v0.1
   // aliases (ds-flash / ds-pro) are dsh-crew managed; uninstall removes only
   // these, never a user's own role files.
   for (const f of ['ds-flash.toml', 'ds-pro.toml', 'ds-worker.toml', 'ds-reviewer.toml']) {
-    const p = join(home, '.codex', 'agents', f);
+    const p = join(codexHomeDir(home, env), 'agents', f);
     if (existsSync(p)) { backup(p); rmSync(p); actions.push(`removed: ${p} (backup kept)`); }
   }
   for (const f of ['dsh-config.md', 'dsh-status.md']) {
-    const p = join(home, '.codex', 'prompts', f);
+    const p = join(codexHomeDir(home, env), 'prompts', f);
     if (existsSync(p)) { rmSync(p); actions.push(`removed: ${p}`); }
   }
-  const policyAction = uninstallGlobalCodexPolicy({ home });
+  const policyAction = uninstallGlobalCodexPolicy({ home, env });
   if (policyAction) actions.push(policyAction);
   // Remove only the dsh-crew entry from [mcp_servers], keeping any other
   // MCP servers the user configured.
-  const configFile = join(home, '.codex', 'config.toml');
+  const configFile = join(codexHomeDir(home, env), 'config.toml');
   if (existsSync(configFile)) {
     const before = readFileSync(configFile, 'utf8');
     const lineRe = /(^|\n)[ \t]*dsh-crew\s*=\s*\{[^\n]*\}/;
@@ -590,9 +604,9 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   return { ok: true, actions };
 }
 
-export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
+export function installCodex({ home = homedir(), scope, root = ROOT, env = process.env } = {}) {
   const actions = [];
-  const agentsDir = scope === 'project' ? join(process.cwd(), '.codex', 'agents') : join(home, '.codex', 'agents');
+  const agentsDir = scope === 'project' ? join(process.cwd(), '.codex', 'agents') : join(codexHomeDir(home, env), 'agents');
   mkdirSync(agentsDir, { recursive: true });
   const srcDir = join(root, 'codex', 'agents');
   // Windows drive paths must render with forward slashes: backslashes in a
@@ -609,7 +623,7 @@ export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
     writeFileSync(dest, rendered);
     actions.push(`role: ${dest}`);
   }
-  const promptsDir = scope === 'project' ? join(process.cwd(), '.codex', 'prompts') : join(home, '.codex', 'prompts');
+  const promptsDir = scope === 'project' ? join(process.cwd(), '.codex', 'prompts') : join(codexHomeDir(home, env), 'prompts');
   mkdirSync(promptsDir, { recursive: true });
   const promptsSrc = join(root, 'codex', 'prompts');
   for (const f of readdirSync(promptsSrc).filter((f) => f.endsWith('.md'))) {
@@ -617,9 +631,9 @@ export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
     actions.push(`prompt: ${join(promptsDir, f)}`);
   }
   if (scope !== 'project') {
-    const act = writeGlobalCodexMcpServer(home, renderedPath);
+    const act = writeGlobalCodexMcpServer(home, renderedPath, env);
     actions.push(...act);
-    const policy = installGlobalCodexPolicy({ home, root });
+    const policy = installGlobalCodexPolicy({ home, root, env });
     if (!policy.ok) return { ok: false, actions: [...actions, policy.action] };
     actions.push(policy.action);
   }
@@ -634,8 +648,8 @@ export function installCodex({ home = homedir(), scope, root = ROOT } = {}) {
  * the user already configured. Idempotent (updates in place). Never requires
  * the codex CLI.
  */
-export function writeGlobalCodexMcpServer(home, renderedPath) {
-  const configFile = join(home, '.codex', 'config.toml');
+export function writeGlobalCodexMcpServer(home, renderedPath, env = process.env) {
+  const configFile = join(codexHomeDir(home, env), 'config.toml');
   const entry = `dsh-crew = { command = "node", args = ["${renderedPath}"] }`;
   const backupFile = backup(configFile);
   const existing = existsSync(configFile) ? readFileSync(configFile, 'utf8') : '';

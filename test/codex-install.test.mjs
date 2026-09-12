@@ -8,10 +8,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -94,7 +94,7 @@ test('Claude reinstall skips CLI only for matching registered marketplace and sn
 test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spawn)', async () => {
   const home = makeHome();
   try {
-    const r = installCodex({ home });
+    const r = installCodex({ home , env: {} });
     assert.equal(r.ok, true);
     assert.ok(existsSync(join(home, '.codex', 'agents', 'ds-flash.toml')));
     assert.ok(existsSync(join(home, '.codex', 'agents', 'ds-pro.toml')));
@@ -103,7 +103,7 @@ test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spaw
     const agentsPolicy = read(join(home, '.codex', 'AGENTS.md'));
     assert.match(agentsPolicy, /DSH CREW MANAGED POLICY:START/);
     assert.match(agentsPolicy, /Operator decision gate when DSH Crew is unavailable/);
-    const status = installStatus({ home });
+    const status = installStatus({ home , env: {} });
     assert.equal(status.codex.installed, true);
     assert.equal(status.codex.ready, true);
     assert.deepEqual(status.codex.missing, []);
@@ -125,7 +125,7 @@ test('Codex readiness distinguishes a partial legacy install from a complete int
   try {
     mkdirSync(join(home, '.codex', 'agents'), { recursive: true });
     writeFileSync(join(home, '.codex', 'agents', 'ds-flash.toml'), '[agent]\n');
-    const status = installStatus({ home }).codex;
+    const status = installStatus({ home , env: {} }).codex;
     assert.equal(status.installed, true);
     assert.equal(status.ready, false);
     assert.deepEqual(status.missing, ['worker_role', 'reviewer_role', 'config_prompt', 'status_prompt', 'mcp', 'target_alignment', 'global_policy']);
@@ -136,7 +136,7 @@ test('Codex readiness fails closed when config.toml is unreadable', () => {
   const home = makeHome();
   try {
     mkdirSync(join(home, '.codex', 'config.toml'), { recursive: true });
-    const status = installStatus({ home }).codex;
+    const status = installStatus({ home , env: {} }).codex;
     assert.equal(status.ready, false);
     assert.equal(status.components.mcp, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -148,19 +148,19 @@ test('Codex readiness rejects an unrelated TOML section and a missing MCP target
     const configDir = join(home, '.codex');
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.toml'), '[unrelated]\ndsh-crew = { command = "node", args = ["D:/missing/server.mjs"] }\n');
-    assert.equal(installStatus({ home }).codex.components.mcp, false);
+    assert.equal(installStatus({ home , env: {} }).codex.components.mcp, false);
 
     writeFileSync(join(configDir, 'config.toml'), '[mcp_servers]\ndsh-crew = { command = "node", args = ["D:/missing/server.mjs"] }\n');
-    assert.equal(installStatus({ home }).codex.components.mcp, false);
+    assert.equal(installStatus({ home , env: {} }).codex.components.mcp, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test('Codex readiness rejects a stale managed role target', () => {
   const home = makeHome();
   try {
-    installCodex({ home });
+    installCodex({ home , env: {} });
     writeFileSync(join(home, '.codex', 'agents', 'ds-worker.toml'), '[mcp_servers.dsh-crew]\ncommand = "node"\nargs = ["D:/missing/server.mjs"]\n');
-    const status = installStatus({ home }).codex;
+    const status = installStatus({ home , env: {} }).codex;
     assert.equal(status.components.worker_role, false);
     assert.equal(status.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -169,12 +169,12 @@ test('Codex readiness rejects a stale managed role target', () => {
 test('Codex readiness requires Worker, Reviewer, and global MCP to use one server target', () => {
   const home = makeHome();
   try {
-    installCodex({ home });
+    installCodex({ home , env: {} });
     const alternate = join(home, 'older-release', 'src', 'server.mjs');
     mkdirSync(join(home, 'older-release', 'src'), { recursive: true });
     writeFileSync(alternate, 'export {};\n');
     writeFileSync(join(home, '.codex', 'config.toml'), `[mcp_servers]\ndsh-crew = { command = "node", args = ["${alternate.replace(/\\/g, '/')}"] }\n`);
-    const status = installStatus({ home }).codex;
+    const status = installStatus({ home , env: {} }).codex;
     assert.equal(status.components.worker_role, true);
     assert.equal(status.components.reviewer_role, true);
     assert.equal(status.components.mcp, false);
@@ -188,9 +188,9 @@ test('Codex readiness rejects targets, templates, and policy installed from an o
   try {
     const oldRoot = makeIntegrationRoot(home, 'old-payload');
     const newRoot = makeIntegrationRoot(home, 'new-payload', '# payload revision: new');
-    installCodex({ home, root: oldRoot });
+    installCodex({ home, root: oldRoot , env: {} });
 
-    const status = installStatus({ home, root: newRoot }).codex;
+    const status = installStatus({ home, root: newRoot , env: {} }).codex;
     assert.equal(status.installed, true);
     assert.equal(status.ready, false);
     assert.equal(status.components.worker_role, false);
@@ -205,13 +205,13 @@ test('Codex readiness rejects targets, templates, and policy installed from an o
 test('Codex readiness rejects modified but nonempty managed role and prompt files', () => {
   const home = makeHome();
   try {
-    installCodex({ home, root: ROOT });
+    installCodex({ home, root: ROOT , env: {} });
     const worker = join(home, '.codex', 'agents', 'ds-worker.toml');
     const prompt = join(home, '.codex', 'prompts', 'dsh-config.md');
     writeFileSync(worker, `${read(worker).trimEnd()}\n# local drift\n`);
     writeFileSync(prompt, '# still nonempty, but no longer the managed prompt\n');
 
-    const status = installStatus({ home, root: ROOT }).codex;
+    const status = installStatus({ home, root: ROOT , env: {} }).codex;
     assert.equal(status.components.worker_role, false);
     assert.equal(status.components.config_prompt, false);
     assert.equal(status.ready, false);
@@ -225,7 +225,7 @@ test('Claude readiness does not equate an enabled setting with a callable plugin
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
       enabledPlugins: { 'dsh-crew@dsh-crew': true },
     }));
-    const status = installStatus({ home }).claude;
+    const status = installStatus({ home , env: {} }).claude;
     assert.equal(status.installed, true);
     assert.equal(status.ready, false);
     assert.deepEqual(status.missing, ['marketplace', 'snapshot', 'permissions']);
@@ -255,7 +255,7 @@ test('Claude readiness validates marketplace, installed snapshot, and tool permi
       extraKnownMarketplaces: { 'dsh-crew': { source: { source: 'directory', path: marketplace } } },
       permissions: { allow: MCP_TOOLS.map((tool) => `mcp__plugin_dsh-crew_dsh-crew__${tool}`) },
     }));
-    const status = installStatus({ home, root: marketplace }).claude;
+    const status = installStatus({ home, root: marketplace , env: {} }).claude;
     assert.equal(status.installed, true);
     assert.equal(status.ready, true);
     assert.deepEqual(status.missing, []);
@@ -281,7 +281,7 @@ test('Claude readiness rejects a marketplace and cached snapshot from an older p
       permissions: { allow: MCP_TOOLS.map((tool) => `mcp__plugin_dsh-crew_dsh-crew__${tool}`) },
     }));
 
-    const status = installStatus({ home, root: newRoot }).claude;
+    const status = installStatus({ home, root: newRoot , env: {} }).claude;
     assert.equal(status.installed, true);
     assert.equal(status.components.marketplace, false);
     assert.equal(status.components.snapshot, false);
@@ -292,7 +292,7 @@ test('Claude readiness rejects a marketplace and cached snapshot from an older p
 test('Case 4: installed role files render the local server.mjs path', async () => {
   const home = makeHome();
   try {
-    installCodex({ home });
+    installCodex({ home , env: {} });
     const flash = read(join(home, '.codex', 'agents', 'ds-flash.toml'));
     const pro = read(join(home, '.codex', 'agents', 'ds-pro.toml'));
     for (const toml of [flash, pro]) {
@@ -304,8 +304,8 @@ test('Case 4: installed role files render the local server.mjs path', async () =
 test('Case 5: repeat install is idempotent', async () => {
   const home = makeHome();
   try {
-    installCodex({ home });
-    installCodex({ home });
+    installCodex({ home , env: {} });
+    installCodex({ home , env: {} });
     const agents = readdirSync(join(home, '.codex', 'agents'));
     assert.equal(agents.filter((a) => a.startsWith('ds-') && a.endsWith('.toml')).length, 4);
     const prompts = readdirSync(join(home, '.codex', 'prompts'));
@@ -322,7 +322,7 @@ test('Case 3: existing user agents are preserved', async () => {
     const { mkdirSync } = await import('node:fs');
     mkdirSync(agentsDir, { recursive: true });
     writeFileSync(join(agentsDir, 'my-reviewer.toml'), 'name = "my-reviewer"\n');
-    installCodex({ home });
+    installCodex({ home , env: {} });
     assert.ok(existsSync(join(agentsDir, 'my-reviewer.toml')), 'user agent must survive');
     assert.ok(existsSync(join(agentsDir, 'ds-flash.toml')));
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -333,13 +333,13 @@ test('global capability policy preserves user-authored AGENTS instructions', () 
   try {
     mkdirSync(join(home, '.codex'), { recursive: true });
     writeFileSync(join(home, '.codex', 'AGENTS.md'), '# My rules\n\nKeep this sentence.\n');
-    installCodex({ home });
+    installCodex({ home , env: {} });
     const installed = read(join(home, '.codex', 'AGENTS.md'));
     assert.match(installed, /# My rules/);
     assert.match(installed, /Keep this sentence/);
     assert.match(installed, /DSH CREW MANAGED POLICY:START/);
 
-    uninstallCodex({ home });
+    uninstallCodex({ home , env: {} });
     const removed = read(join(home, '.codex', 'AGENTS.md'));
     assert.match(removed, /# My rules/);
     assert.match(removed, /Keep this sentence/);
@@ -368,7 +368,7 @@ test('Case 2: existing other MCP servers in config.toml are preserved', async ()
     const { mkdirSync } = await import('node:fs');
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(join(cfgDir, 'config.toml'), 'model = "gpt-x"\n[mcp_servers]\nother = { command = "other", args = ["-m"] }\n[desktop]\nfoo = 1\n');
-    installCodex({ home });
+    installCodex({ home , env: {} });
     const s = read(join(cfgDir, 'config.toml'));
     assert.match(s, /other = \{ command = "other"/, 'other MCP server must survive');
     assert.match(s, /dsh-crew = \{ command = "node"/, 'dsh-crew MCP entry must be added');
@@ -379,7 +379,7 @@ test('Case 2: existing other MCP servers in config.toml are preserved', async ()
 test('Case 7: Windows absolute path renders valid TOML (forward slashes, no backslash escapes)', async () => {
   const home = makeHome();
   try {
-    installCodex({ home });
+    installCodex({ home , env: {} });
     const toml = read(join(home, '.codex', 'agents', 'ds-flash.toml'));
     const m = toml.match(/args = \["([^"]*server\.mjs)"\]/);
     assert.ok(m, 'args line must exist');
@@ -401,8 +401,8 @@ test('Case 6: uninstall removes only dsh-crew artifacts', async () => {
     mkdirSync(join(cfgDir, 'prompts'), { recursive: true });
     writeFileSync(join(cfgDir, 'agents', 'my-reviewer.toml'), 'name = "my-reviewer"\n');
     writeFileSync(join(cfgDir, 'config.toml'), 'model = "gpt-x"\n[mcp_servers]\nother = { command = "other" }\ndsh-crew = { command = "node", args = ["D:/x/server.mjs"] }\n[desktop]\nfoo = 1\n');
-    installCodex({ home });
-    const u = uninstallCodex({ home });
+    installCodex({ home , env: {} });
+    const u = uninstallCodex({ home , env: {} });
     assert.equal(u.ok, true);
     assert.ok(!existsSync(join(cfgDir, 'agents', 'ds-flash.toml')));
     assert.ok(!existsSync(join(cfgDir, 'prompts', 'dsh-config.md')));
@@ -420,8 +420,8 @@ test('writeGlobalCodexMcpServer is idempotent (no duplicate entries)', async () 
   try {
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(home, '.codex'), { recursive: true });
-    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs');
-    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs');
+    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs', {});
+    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs', {});
     const s = read(join(home, '.codex', 'config.toml'));
     assert.equal((s.match(/dsh-crew = \{/g) || []).length, 1, 'only one dsh-crew entry');
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -433,9 +433,48 @@ test('writeGlobalCodexMcpServer appends a fresh [mcp_servers] when the file has 
     const { mkdirSync } = await import('node:fs');
     mkdirSync(join(home, '.codex'), { recursive: true });
     writeFileSync(join(home, '.codex', 'config.toml'), 'model = "gpt-x"\n');
-    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs');
+    writeGlobalCodexMcpServer(home, 'D:/proj/dsh-crew/src/server.mjs', {});
     const s = read(join(home, '.codex', 'config.toml'));
     assert.match(s, /\[mcp_servers\]\n\s*dsh-crew = \{ command = "node"/);
     assert.match(s, /model = "gpt-x"/, 'existing content preserved');
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// Codex honours CODEX_HOME and falls back to ~/.codex. Writing only to the
+// latter silently does nothing for a user who set it: the install reports
+// success because the file it wrote really did change, while Codex keeps reading
+// a registration frozen on whatever release was current when CODEX_HOME was set.
+test('CODEX_HOME decides where the registration is written', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-crew-codex-home-'));
+  const custom = mkdtempSync(join(tmpdir(), 'dsh-crew-codex-custom-'));
+  t.after(() => { rmSync(home, { recursive: true, force: true }); rmSync(custom, { recursive: true, force: true }); });
+
+  // installCodex renders the target from root; match what it will actually write.
+  const target = join(ROOT, 'src', 'server.mjs').split(sep).join('/');
+  const env = { CODEX_HOME: custom };
+  assert.equal(installCodex({ home, root: ROOT, env }).ok, true);
+
+  const customConfig = readFileSync(join(custom, 'config.toml'), 'utf8');
+  assert.match(customConfig, /dsh-crew = \{ command = "node"/, 'the override directory receives the registration');
+  assert.ok(customConfig.includes(target), `the override directory registers the real payload path (${target})`);
+  assert.equal(existsSync(join(home, '.codex', 'config.toml')), false, 'the default directory must not be written');
+  assert.equal(existsSync(join(custom, 'agents', 'ds-worker.toml')), true, 'role files follow the override too');
+
+  // Readiness must look in the same place, or a correct install reads as missing.
+  assert.equal(installStatus({ home, root: ROOT, env }).codex.components.mcp, true);
+
+  uninstallCodex({ home, env });
+  assert.doesNotMatch(readFileSync(join(custom, 'config.toml'), 'utf8'), /dsh-crew = \{/, 'uninstall clears the override directory');
+});
+
+test('an unset or blank CODEX_HOME falls back to ~/.codex', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-crew-codex-fallback-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  for (const env of [{}, { CODEX_HOME: '' }, { CODEX_HOME: '   ' }]) {
+    assert.equal(codexHomeDir(home, env), join(home, '.codex'), `env=${JSON.stringify(env)}`);
+  }
+  installCodex({ home, root: ROOT, env: {} });
+  assert.equal(existsSync(join(home, '.codex', 'config.toml')), true);
+  assert.equal(installStatus({ home, root: ROOT, env: {} }).codex.components.mcp, true);
 });

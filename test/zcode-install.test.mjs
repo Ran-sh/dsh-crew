@@ -210,7 +210,7 @@ test('installStatus exposes ZCode independently of Codex and Claude', () => {
   const home = makeHome();
   try {
     installZCode({ home, root: ROOT });
-    const status = installStatus({ home });
+    const status = installStatus({ home , env: {} });
     assert.equal(status.zcode.installed, true);
     assert.equal(status.zcode.ready, true);
     assert.deepEqual(status.zcode.missing, []);
