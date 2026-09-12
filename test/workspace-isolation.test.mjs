@@ -598,7 +598,9 @@ test('pruneWorktrees does not force away a worktree that holds changes', async (
     assert.deepEqual(pruned.failed, [canon(dir)]);
     assert.equal(existsSync(dir), true, 'the changes stay where they are');
     const remove = calls.find((c) => c.args[1] === 'remove');
-    assert.deepEqual(remove.args, ['worktree', 'remove', dir], 'removal is attempted without --force');
+    // Compared canonically: the source passes the resolved path, which on Windows
+    // differs from a temp path spelled with its 8.3 alias.
+    assert.deepEqual(remove.args, ['worktree', 'remove', canon(dir)], 'removal is attempted without --force');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
