@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GLOBAL_CONFIG_DEFAULTS, REMOVED_MULTIMODAL_KEYS, mergeStoredGlobalConfig, readGlobalConfig } from '../src/install/install.mjs';
@@ -107,4 +107,26 @@ test('a fresh config never gains the removed keys', () => {
   for (const dead of REMOVED_MULTIMODAL_KEYS) {
     assert.equal(dead in GLOBAL_CONFIG_DEFAULTS, false, `${dead} must not be a default`);
   }
+});
+
+// The canonical read path takes a different branch from the legacy one, and
+// spreads the stored object directly. Fixing only the legacy path left the dead
+// keys in every real config, because a real config is canonical.
+test('a canonical config is cleaned on read, not only a legacy one', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-canonical-clean-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'config.json');
+  writeFileSync(file, JSON.stringify({
+    config_schema_version: 4,
+    worker: { model_policy: { priority: [] } },
+    review: { model_policy: { priority: [] } },
+    execution: {},
+    vision_enabled: true,
+    custom_providers: [{ id: 'gone' }],
+    some_future_key: 'keep-me',
+  }));
+  const config = readGlobalConfig({ configFile: file });
+  assert.equal('vision_enabled' in config, false, 'canonical read must drop the dead key');
+  assert.equal('custom_providers' in config, false);
+  assert.equal(config.some_future_key, 'keep-me', 'an unknown key from another release survives');
 });

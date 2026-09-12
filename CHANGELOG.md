@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.2 — 2026-09-12
+
+- Cleans the removed bridge's keys from a canonical config, not only a legacy one.
+  The read path takes a different branch for a canonical file and spreads the
+  stored object directly, so the 1.6.1 cleanup never ran on a real config — the
+  dead keys stayed in the file and in the `/config` response. The removal now
+  happens before either branch, and the test covers the canonical case, which is
+  the one a real machine has.
+
 ## Unreleased
 
 Future changes go here.

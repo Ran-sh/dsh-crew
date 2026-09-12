@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import * as legacy from './install-legacy.mjs';
+import { REMOVED_MULTIMODAL_KEYS } from './install-legacy.mjs';
 import { normalizeModelPriority } from '../model-routing.mjs';
 import { normalizeModelSchedule } from '../model-schedule.mjs';
 import { runtimeActivationMetadata } from '../runtime-controls.mjs';
@@ -128,6 +129,16 @@ function migrateHubUrl(config, { legacyUrl = CREW_LEGACY_HUB_URL, dedicatedUrl =
 
 export function mergeStoredGlobalConfig(stored) {
   if (!validObject(stored)) return freshConfig();
+
+  // Drop the keys that belonged to the removed vision / image-generation
+  // bridge before either branch below, so a canonical config is cleaned as
+  // well as a legacy one. Both branches spread the stored object, and the
+  // merge deliberately keeps unknown keys, so without this the dead keys
+  // would survive every read. Only these known-dead keys go; a genuinely
+  // unknown key from a newer release is still preserved.
+  stored = Object.fromEntries(
+    Object.entries(stored).filter(([key]) => !REMOVED_MULTIMODAL_KEYS.includes(key)),
+  );
 
   const version = sourceVersion(stored);
   if (configHasCanonicalAuthority(stored)) {
