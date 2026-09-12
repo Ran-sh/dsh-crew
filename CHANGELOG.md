@@ -4,6 +4,32 @@
 
 Future changes go here.
 
+## 1.10.0 — 2026-09-12
+
+- Names a worktree for what it is: `Crew_<date>_<time>_<purpose>`, for example
+  `Crew_20260912_183045_worker`. The old name was a job id and random hex, so an
+  operator looking at the worktree list — or at a cleanup prompt — could not tell
+  when a job ran or whether a tree belonged to a worker or a reviewer. The
+  purpose is the job's role, which is what the job actually is. Worktrees from an
+  earlier release keep being recognised as Crew's under their old prefix, so they
+  are still adopted and cleaned up.
+- Reserves the worktree directory instead of probing for a free name. The name is
+  chosen before anything is created, so two jobs starting inside the same second
+  both saw it free, took it, and one lost the race on `git worktree add`. The
+  suffix that disambiguates them is allocated by `mkdir`, which fails on
+  collision and therefore cannot race; a refused `git worktree add` releases the
+  reservation.
+- Never treats the main working tree as a stale Crew worktree. Retention lists
+  every worktree whose directory starts with a Crew prefix and prunes the ones
+  outside the allowed set; a repo whose own directory starts that way — a
+  checkout named dsh-crew-something — would land in that list. Nothing was
+  destroyed (git refuses to remove a main working tree, and the fs fallback is
+  guarded), but every prune would have produced a confusing lock error against
+  the repo. `git worktree list` puts the main working tree first, and that
+  position is what identifies it — matching the repo root by path cannot work,
+  because inspecting from inside a linked worktree reports that worktree as the
+  top level.
+
 ## 1.9.1 — 2026-09-12
 
 - Releases publish from GitHub Actions through OIDC. Publishing needed a browser
