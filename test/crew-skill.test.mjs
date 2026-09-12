@@ -125,3 +125,22 @@ test('every test call site that can touch a host skill directory passes env', ()
   }
   assert.deepEqual(offenders, [], `these calls would use the real CODEX_HOME:\n${offenders.join('\n')}`);
 });
+
+// The skill tells a host what a failure code means, so its table has to match
+// the classification the code actually emits. A renamed or added code would
+// otherwise leave the skill confidently wrong.
+test('the skill documents every failure code the classifier can emit', async () => {
+  const { FAILURE_REASON_CODES } = await import('../src/failure-classification.mjs');
+  const content = readCrewSkill({ root: ROOT });
+  // NONE means success and CANCELLED says itself, so neither needs a row.
+  const documented = Object.values(FAILURE_REASON_CODES).filter((code) => code !== 'NONE' && code !== 'CANCELLED');
+  const missing = documented.filter((code) => !content.includes(code));
+  assert.deepEqual(missing, [], `the skill must explain: ${missing.join(', ')}`);
+});
+
+test('the skill names the phases the workflow can report', async () => {
+  const { JOB_PHASES } = await import('../src/workflow.mjs');
+  const content = readCrewSkill({ root: ROOT });
+  const missing = Object.values(JOB_PHASES).filter((phase) => !content.includes(phase));
+  assert.deepEqual(missing, [], `the skill must name: ${missing.join(', ')}`);
+});

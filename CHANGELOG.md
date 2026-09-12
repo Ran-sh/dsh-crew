@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 1.8.0 — 2026-09-12
+
+- Teaches the skill what a host actually trips on: how to dispatch, and how to
+  read what comes back. `phase: failed` is the part that misleads — it usually
+  means the delivery gate rejected the result, not that the worker broke, and
+  `terminal_reason: escalation_disabled` is the escalation policy declining to
+  retry rather than a separate failure. A reply-only task landing on
+  `DELIVERY_INCOMPLETE` looks like a defect and is the gate working. The skill
+  now carries a code table, the phase list, and the surprises worth knowing
+  before dispatching: isolated workspaces need git, `timeout_seconds` is per
+  attempt, and a worker cannot see the caller's conversation.
+- Pins the skill's factual claims to the code. Two tests read
+  `FAILURE_REASON_CODES` and `JOB_PHASES` and fail if the skill omits any, so a
+  renamed or added code cannot leave the guidance confidently wrong.
+
 ## 1.7.2 — 2026-09-12
 
 - Drops what the policy removal left behind. `codex/AGENTS.md` and

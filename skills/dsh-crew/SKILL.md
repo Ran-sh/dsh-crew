@@ -32,9 +32,45 @@ same `dsh-crew` MCP server, so the behaviour below is identical from any host.
 | `dsh_worker_cancel` | cancel a workflow |
 | `dsh_worker_config` | read/update session settings: enable dispatch, tier, effort, timeout, presets, policy |
 
+Dispatch takes `task` (make it self-contained — the worker sees nothing else),
+`role` (`worker` for implementation, `reviewer` for an independent review pass),
+`cwd` (the workspace; defaults to the current project) and `timeout_seconds`.
+Use `dsh_spawn_worker` when you have other work to do meanwhile, then
+`dsh_worker_result` with `wait_seconds` to collect it.
+
 `dsh_worker_config` with no arguments is the cheapest way to answer "what is
 Crew set to right now". Its settings last for the session only; persisted
 changes belong in the 3210 panel.
+
+## Reading a result
+
+A result carries a `phase` and, when it did not succeed, a failure code. The
+phases are `created`, `queued`, `running`, `verifying`, `escalating`,
+`reviewing`, `ready`, `completed`, `failed`, `cancelled`, `interrupted`.
+
+**`phase: failed` does not mean the worker broke.** Most often it means the
+workflow's delivery gate rejected the result, and the reason code says which
+gate. Read the code before reacting:
+
+| Code | Means |
+|---|---|
+| `DELIVERY_INCOMPLETE` | the worker returned no change where the contract required one — a reply-only or question-only task lands here, and it is not a defect |
+| `TESTS_FAILED` / `TESTS_NOT_RUN` | the worker's own test evidence is failing or absent |
+| `REVIEW_CHANGES_REQUESTED` | the reviewer asked for changes; act on them |
+| `REVIEW_INCONCLUSIVE` | the review could not reach a verdict |
+| `WORKSPACE_MISMATCH` | the worker's changes are not in the workspace the job was meant to touch |
+| `TASK_BLOCKED` / `TASK_PARTIAL` | the worker says it could not finish |
+| `ATTEMPT_TIMEOUT` / `RUNTIME_FAILURE` / `EXECUTION_FAILED` | the run itself failed |
+| `POLICY_REJECTED` | Crew's own policy refused the dispatch; change the request, not the worker |
+| `PROVIDER_UNAVAILABLE` / `HUB_INCOMPATIBLE` | no model or no reachable hub |
+
+`terminal_reason: escalation_disabled` is **not** a separate failure — it is the
+escalation policy declining to retry after a failure. The failure code above it
+is the real reason.
+
+The selection trace names the model actually used and every candidate that was
+skipped, with the reason. Reach for it whenever the chosen model is not the one
+you expected.
 
 ## Choosing what to dispatch
 
@@ -47,6 +83,19 @@ yourself. Trivial work stays local.
 Continue authorized work after a successful subtask; a returned workflow is a
 checkpoint, not the end of the task. If a worker's result is incomplete or its
 review asks for changes, that is a task result to act on — not approval.
+
+## Common ways a dispatch surprises you
+
+- **A task that only asks a question fails.** The delivery contract wants a
+  change; a reply-only task returns `DELIVERY_INCOMPLETE`. That is the gate
+  working, not the worker failing.
+- **Isolated workspaces need git.** The default `worktree` isolation fails with
+  `NOT_GIT_REPOSITORY` for a non-git workspace rather than silently sharing the
+  tree. Use `shared` deliberately if that is what you want.
+- **Long tasks need a longer timeout.** `timeout_seconds` is per attempt and
+  caps at 7200; the default is far shorter than a real refactor.
+- **A worker cannot see your conversation.** Anything it needs must be in
+  `task`, in the workspace, or in a file it can read.
 
 ## Configuration
 
