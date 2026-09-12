@@ -15,6 +15,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WorkerRegistry } from '../src/hub/index.mjs';
 
+// Windows path semantics: a drive letter is absolute on win32 and is not on
+// POSIX. Skipping these elsewhere lets one command run the whole suite.
+const maybe = process.platform === 'win32' ? test : test.skip;
+
 // Minimal ctx: spawn() only needs ctx.get('loader') synchronously; the rest
 // of the host API is never reached because the async run catches its own
 // failures inside the returned job.
@@ -36,21 +40,21 @@ test('spawn accepts a POSIX absolute cwd (regression baseline)', async () => {
   assert.equal(job.cwd, '/home/user/proj');
 });
 
-test('spawn accepts a Windows drive cwd with forward slashes (D:/...)', async () => {
+maybe('spawn accepts a Windows drive cwd with forward slashes (D:/...)', async () => {
   const reg = makeRegistry();
   const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: 'D:/Users/me/proj' });
   assert.equal(job.tier, 'flash');
   assert.equal(job.cwd, 'D:/Users/me/proj');
 });
 
-test('spawn accepts a Windows drive cwd with backslashes (D:\\...)', async () => {
+maybe('spawn accepts a Windows drive cwd with backslashes (D:\\...)', async () => {
   const reg = makeRegistry();
   const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: 'D:\\Users\\me\\proj' });
   assert.equal(job.tier, 'flash');
   assert.equal(job.cwd, 'D:\\Users\\me\\proj');
 });
 
-test('spawn accepts a lowercase drive cwd (d:\\...)', async () => {
+maybe('spawn accepts a lowercase drive cwd (d:\\...)', async () => {
   const reg = makeRegistry();
   const job = await reg.spawn({ task: 't', tier: 'flash', effort: 'off', cwd: 'd:\\users\\me\\proj' });
   assert.equal(job.tier, 'flash');

@@ -24,6 +24,10 @@ import {
   DIFF_LIMIT,
 } from '../src/workspace-audit.mjs';
 
+// Windows path semantics: a drive letter is absolute on win32 and is not on
+// POSIX. Skipping these elsewhere lets one command run the whole suite.
+const maybe = process.platform === 'win32' ? test : test.skip;
+
 /** Fake git runner: map of joined-args → stdout string or {stdout, stderr}. */
 function fakeRunner(map) {
   return async (args, _opts) => {
@@ -55,7 +59,7 @@ test('git timeout degrades with GIT_TIMEOUT instead of failing the worker', asyn
   assert.equal(result.reason, GIT_TIMEOUT);
 });
 
-test('Windows Git resolver prefers where.exe and applies the audit timeout', async () => {
+maybe('Windows Git resolver prefers where.exe and applies the audit timeout', async () => {
   let options;
   const resolved = await resolveWindowsGit({
     exec: async (file, args, opts) => { options = { file, args, opts }; return { stdout: 'C:\\Git\\cmd\\git.exe\r\nC:\\Git\\bin\\git.exe\r\n' }; },
@@ -67,7 +71,7 @@ test('Windows Git resolver prefers where.exe and applies the audit timeout', asy
   assert.equal(options.opts.timeout, GIT_TIMEOUT_MS);
 });
 
-test('Windows Git resolver falls back to bounded known install paths', async () => {
+maybe('Windows Git resolver falls back to bounded known install paths', async () => {
   const expected = 'C:\\Program Files\\Git\\bin\\git.exe';
   const checked = [];
   const resolved = await resolveWindowsGit({
