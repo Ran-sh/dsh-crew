@@ -4,7 +4,7 @@
 
 Future changes go here.
 
-## 1.5.0 — 2026-09-11
+## 1.5.1 — 2026-09-12
 
 - Resolves the vision bridge's CLI instead of spawning a bare name. Codex
   Desktop installs its binary under a versioned directory that is not on PATH,
@@ -56,6 +56,9 @@ Future changes go here.
   developer's real `CODEX_HOME`. Without it a test that injects a temporary
   `home` still resolved to the live Codex directory: the fixtures passed, but the
   install had written into the operator's own config.
+
+## 1.5.0 — 2026-09-11
+
 - Fixes a `ReferenceError` that broke the `dsh_worker_config` tool outright. The
   config report passed `{ enabled_roles }` as a shorthand to a function whose
   parameter carries that name, but the local binding is camelCase — so the call
