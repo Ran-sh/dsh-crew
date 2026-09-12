@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Future changes go here.
+
+## 1.6.1 — 2026-09-12
+
+- Drops the removed bridge's keys from configs written before it went away. The
+  stored-config merge keeps unknown keys on purpose, so those six would otherwise
+  sit in the file forever — inert, but there and confusing. Only the known-dead
+  keys are deleted; any genuinely unknown key from a newer release is kept.
+
 ## 1.6.0 — 2026-09-12
 
 - Removes the vision and image-generation bridge entirely. It existed only to
@@ -21,10 +32,6 @@
 
   Settings that no longer exist are simply dropped on the next config write;
   nothing else in the panel or the workflow reads them.
-
-## Unreleased
-
-Future changes go here.
 
 ## 1.5.1 — 2026-09-12
 

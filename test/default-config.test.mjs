@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GLOBAL_CONFIG_DEFAULTS, mergeStoredGlobalConfig, readGlobalConfig } from '../src/install/install.mjs';
+import { GLOBAL_CONFIG_DEFAULTS, REMOVED_MULTIMODAL_KEYS, mergeStoredGlobalConfig, readGlobalConfig } from '../src/install/install.mjs';
 import { normalizeGlobalConfig } from '../src/policy.mjs';
 
 test('fresh defaults are the minimal Codex to Flash workflow', () => {
@@ -85,4 +85,26 @@ test('v0.2 role-state overrides normalize into the canonical shape (writable via
   assert.equal(normalized.worker.state, 'manual');
   assert.equal(normalized.review.state, 'disabled');
   assert.equal(normalized.review.auto_review, true);
+});
+
+// The removed bridge left its keys in every config written before it went. The
+// merge keeps unknown stored keys for forward compatibility, so they would
+// otherwise sit in the file forever, inert but confusing.
+test('the removed multimodal keys are dropped while other unknown keys survive', () => {
+  const merged = mergeStoredGlobalConfig({
+    vision_enabled: true, imagegen_enabled: true, vision_provider: 'codex',
+    vision_model: 'gpt-5.6', imagegen_provider: 'codex', custom_providers: [{ id: 'x' }],
+    some_future_key: 'keep-me', default_tier: 'pro',
+  });
+  for (const dead of REMOVED_MULTIMODAL_KEYS) {
+    assert.equal(dead in merged, false, `${dead} must be dropped`);
+  }
+  assert.equal(merged.some_future_key, 'keep-me', 'an unknown key from another release is kept');
+  assert.equal(merged.default_tier, 'pro', 'a live key is untouched');
+});
+
+test('a fresh config never gains the removed keys', () => {
+  for (const dead of REMOVED_MULTIMODAL_KEYS) {
+    assert.equal(dead in GLOBAL_CONFIG_DEFAULTS, false, `${dead} must not be a default`);
+  }
 });

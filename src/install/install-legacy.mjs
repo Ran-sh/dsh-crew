@@ -327,10 +327,21 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   model_schedule: undefined,
 };
 
+/** Config keys removed with the vision / image-generation bridge. */
+export const REMOVED_MULTIMODAL_KEYS = Object.freeze([
+  'vision_enabled', 'imagegen_enabled', 'vision_provider', 'vision_model',
+  'imagegen_provider', 'custom_providers',
+]);
+
 export function mergeStoredGlobalConfig(stored) {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return { ...GLOBAL_CONFIG_DEFAULTS };
   const has = (key) => Object.prototype.hasOwnProperty.call(stored, key);
   const merged = { ...GLOBAL_CONFIG_DEFAULTS, ...stored };
+  // Keys that belonged to the removed vision / image-generation bridge. The
+  // merge above keeps unknown stored keys for forward compatibility, so a file
+  // written by an older release would otherwise carry them forever. These are
+  // known-dead, so drop exactly them and leave every other unknown key alone.
+  for (const dead of REMOVED_MULTIMODAL_KEYS) delete merged[dead];
   // Fields introduced by configurable Crew keep the prior release's behavior
   // when an existing file predates them. Only a genuinely fresh config gets
   // the new minimal defaults above.
