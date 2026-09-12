@@ -5,8 +5,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join, resolve, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import {
@@ -370,30 +370,43 @@ test('an 8.3 alias and its long form are the same worktree', async (t) => {
 test('a recorded worktree an operator has taken over is retained, not removed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-retained-'));
   const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
   try {
-    mkdirSync(join(dir, '.git'), { recursive: true });
-    mkdirSync(join(root, '.crew-owned'), { recursive: true });
-    writeFileSync(join(root, '.crew-owned', 'Crew_20260912_233000_worker.json'), JSON.stringify({
-      schemaVersion: 1,
-      name: 'Crew_20260912_233000_worker',
-      worktree: canon(dir),
-      repo: canon('/repo/.git'),
-      purpose: 'worker',
-      created_at: 1,
-    }));
-    const { runner } = fakeRunner([
-      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
-      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
-      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
-      // Recorded, and on a branch: the operator's.
-      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\nbranch refs/heads/operator-work\n\n` } },
-      { pat: /^worktree remove --force /, out: { code: 0 } },
-    ]);
-    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'not adoptable');
-    assert.deepEqual(await unownedWorktrees({ git: runner, allowed: [] }), [], 'and not unowned either');
-    assert.deepEqual(await retainedWorktrees({ git: runner, allowed: [] }), [canon(dir)]);
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    // On a branch: unambiguously the operator's.
+    const onBranch = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo
+HEAD ${REV}
 
-    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+worktree ${dir}
+HEAD ${REV}
+branch refs/heads/operator-work
+
+` } },
+      { pat: /^worktree remove --force /, out: { code: 0 } },
+    ]));
+    assert.deepEqual(await staleWorktrees({ git: onBranch.runner, allowed: [] }), [], 'not adoptable');
+    assert.deepEqual(await unownedWorktrees({ git: onBranch.runner, allowed: [] }), [], 'and not unowned either');
+    assert.deepEqual(await retainedWorktrees({ git: onBranch.runner, allowed: [] }), [canon(dir)]);
+
+    // Detached, but moved off the revision Crew left it at: still a takeover,
+    // and one that being on a branch would not have caught.
+    const moved = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo
+HEAD ${REV}
+
+worktree ${dir}
+HEAD deadbee
+detached
+
+` } },
+      { pat: /^worktree remove --force /, out: { code: 0 } },
+    ]));
+    assert.deepEqual(await staleWorktrees({ git: moved.runner, allowed: [] }), [], 'a moved HEAD is not adoptable');
+    assert.deepEqual(await retainedWorktrees({ git: moved.runner, allowed: [] }), [canon(dir)]);
+
+    const pruned = await pruneWorktrees({ git: onBranch.runner, allowed: [] });
     assert.equal(pruned.removed, 0);
     assert.deepEqual(pruned.retained, [canon(dir)]);
     assert.equal(existsSync(dir), true, 'the operator worktree is left alone');
@@ -402,38 +415,54 @@ test('a recorded worktree an operator has taken over is retained, not removed', 
   }
 });
 
-// A record that cannot be shown to belong to this repository, or that does not
-// describe this path, is not evidence. Reading it as ownership is how a stale
-// file would license deleting someone else's worktree.
-test('a record for another repository or another path is not ownership', async () => {
+// A record that cannot be shown to describe *this* worktree, or that has lost
+// its incarnation, is not evidence. Reading one as ownership is how a stale file
+// would license deleting someone else's worktree.
+test('a record for another repository, path or incarnation is not ownership', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-stalemarker-'));
   const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
   try {
-    mkdirSync(join(dir, '.git'), { recursive: true });
-    mkdirSync(join(root, '.crew-owned'), { recursive: true });
-    const marker = join(root, '.crew-owned', 'Crew_20260912_233000_worker.json');
-    const { runner } = fakeRunner([
-      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
-      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
-      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
-      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
-    ]);
+    mkdirSync(dir, { recursive: true });
+    const marker = writeOwnership({ root, dir, gitDir });
+    const runner = () => fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo
+HEAD ${REV}
+
+worktree ${dir}
+HEAD ${REV}
+detached
+
+` } },
+    ])).runner;
+    const base = JSON.parse(readFileSync(marker, 'utf8'));
     const cases = {
-      'another repository': { schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/somewhere-else') },
-      'another path': { schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon('/elsewhere/Crew_20260912_233000_worker'), repo: canon('/repo/.git') },
-      'another name': { schemaVersion: 1, name: 'Crew_20260912_233000_reviewer', worktree: canon(dir), repo: canon('/repo/.git') },
-      'an older schema': { schemaVersion: 0, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/repo/.git') },
+      'another repository': { repo: canon('/somewhere-else/.git') },
+      'another path': { worktree: canon('/elsewhere/Crew_20260912_233000_worker') },
+      'another name': { name: 'Crew_20260912_233000_reviewer' },
+      'an older schema': { schemaVersion: 1 },
+      'no incarnation nonce': { nonce: 'a-different-nonce' },
+      'no gib dir': { git_dir: canon('/elsewhere/gitdir') },
     };
-    for (const [label, record] of Object.entries(cases)) {
-      writeFileSync(marker, JSON.stringify(record));
-      assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], `${label} is not adoptable`);
+    for (const [label, patch] of Object.entries(cases)) {
+      writeFileSync(marker, JSON.stringify({ ...base, ...patch }));
+      assert.deepEqual(await staleWorktrees({ git: runner(), allowed: [] }), [], `${label} is not adoptable`);
     }
+
+    // The incarnation is the part a reused path cannot inherit: drop the stamp
+    // from git's administrative directory and the surviving record stops counting.
+    writeFileSync(marker, JSON.stringify(base));
+    rmSync(join(gitDir, 'crew-owned'), { force: true });
+    assert.deepEqual(await staleWorktrees({ git: runner(), allowed: [] }), [], 'a lost incarnation is not adoptable');
+
     // Truncated JSON is not evidence either.
-    writeFileSync(marker, '{"schemaVersion":1,"name":"Crew_20');
-    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'a truncated record is not adoptable');
-    // The valid record still is, so the test is not passing because nothing works.
-    writeFileSync(marker, JSON.stringify({ schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/repo/.git') }));
-    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [canon(dir)], 'a matching record is adoptable');
+    writeFileSync(join(gitDir, 'crew-owned'), 'n0nce\n');
+    writeFileSync(marker, '{"schemaVersion":2,"name":"Crew_20');
+    assert.deepEqual(await staleWorktrees({ git: runner(), allowed: [] }), [], 'a truncated record is not adoptable');
+
+    // And the valid pair still is, so nothing above passes for a broken reason.
+    writeFileSync(marker, JSON.stringify(base));
+    assert.deepEqual(await staleWorktrees({ git: runner(), allowed: [] }), [canon(dir)], 'a matching record is adoptable');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -444,25 +473,24 @@ test('a record for another repository or another path is not ownership', async (
 test('pruneWorktrees reports a failed removal instead of counting it', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-prunefail-'));
   const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
   try {
-    mkdirSync(join(dir, '.git'), { recursive: true });
-    mkdirSync(join(root, '.crew-owned'), { recursive: true });
-    writeFileSync(join(root, '.crew-owned', 'Crew_20260912_233000_worker.json'), JSON.stringify({
-      schemaVersion: 1,
-      name: 'Crew_20260912_233000_worker',
-      worktree: canon(dir),
-      repo: canon('/repo/.git'),
-      purpose: 'worker',
-      created_at: 1,
-    }));
-    const { runner } = fakeRunner([
-      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
-      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
-      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
-      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    const { runner } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo
+HEAD ${REV}
+
+worktree ${dir}
+HEAD ${REV}
+detached
+
+` } },
       { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unable to delete: permission denied\n' } },
-    ]);
-    const pruned = await pruneWorktrees({ git: runner, allowed: [], backoffMs: 0 });
+    ]));
+    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [canon(dir)], 'it is a removal candidate');
+
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
     assert.equal(pruned.ok, false, 'a partial failure is not a success');
     assert.equal(pruned.removed, 0, 'nothing was removed');
     assert.deepEqual(pruned.failed, [canon(dir)]);
@@ -472,6 +500,45 @@ test('pruneWorktrees reports a failed removal instead of counting it', async () 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * A valid ownership record together with the incarnation stamp it has to match.
+ *
+ * Both halves are required: the record alone is not evidence, because the
+ * worktree's git administrative directory has to carry the same nonce. That is
+ * what stops a record from being inherited by a different worktree created later
+ * at the same path.
+ */
+function writeOwnership({ root, dir, gitDir, nonce = 'n0nce', head = REV, overrides = {} }) {
+  mkdirSync(gitDir, { recursive: true });
+  writeFileSync(join(gitDir, 'crew-owned'), `${nonce}\n`);
+  mkdirSync(join(root, '.crew-owned'), { recursive: true });
+  const marker = join(root, '.crew-owned', `${basename(dir)}.json`);
+  writeFileSync(marker, JSON.stringify({
+    schemaVersion: 2,
+    name: basename(dir),
+    worktree: canon(dir),
+    repo: canon('/repo/.git'),
+    git_dir: canon(gitDir),
+    nonce,
+    head,
+    purpose: 'worker',
+    created_at: 1,
+    ...overrides,
+  }));
+  return marker;
+}
+
+// The git queries a worktree that a valid record describes has to answer: it
+// exists, its administrative directory carries the nonce, and it sits at the
+// revision the record names.
+const ownedWorktreeRules = (dir, gitDir, extra = []) => [
+  { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+  { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+  { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+  { pat: /^rev-parse --path-format=absolute --git-dir$/, out: { stdout: `${gitDir}\n` } },
+  ...extra,
+];
 
 // The defect this guards: the fallback deleted the directory first and asked git
 // afterwards. For a worktree git still tracks — the realistic case, where

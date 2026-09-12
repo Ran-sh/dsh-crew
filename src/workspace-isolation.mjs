@@ -144,14 +144,53 @@ export function defaultWorktreeRoot() {
 // granting it — the one direction where being wrong is survivable.
 
 const OWNED_DIRNAME = '.crew-owned';
-const OWNED_SCHEMA = 1;
+const OWNED_SCHEMA = 2;
+// Stored inside the worktree's git administrative directory, which git destroys
+// with the worktree.
+const INCARNATION_FILE = 'crew-owned';
 
 function ownedMarkerPath(worktreePath) {
   const abs = resolve(worktreePath);
   return join(dirname(abs), OWNED_DIRNAME, `${basename(abs)}.json`);
 }
 
-function recordOwnership({ worktreePath, repo, purpose, at }) {
+/**
+ * Prove which *incarnation* of a worktree this is.
+ *
+ * A path can be reused. Git removes a worktree and later another one is created
+ * in the same place — same name, same repository — so a record keyed on those
+ * alone can be inherited by a successor that Crew never created, and inherited
+ * again after Crew's own cleanup if releasing the record failed. The worktree's
+ * git administrative directory does not have that problem: git deletes it along
+ * with the worktree, so a value kept there cannot outlive the tree it describes.
+ */
+async function gitDirOf(run, cwd) {
+  const abs = await runGit(run, ['rev-parse', '--path-format=absolute', '--git-dir'], { cwd });
+  if (abs.ok && abs.stdout.trim()) return resolve(abs.stdout.trim());
+  const rel = await runGit(run, ['rev-parse', '--git-dir'], { cwd });
+  if (!rel.ok || !rel.stdout.trim()) return null;
+  return resolve(cwd, rel.stdout.trim());
+}
+
+/** The nonce this worktree incarnation was stamped with, if any. */
+async function incarnationOf(run, worktreePath) {
+  const gitDir = await gitDirOf(run, worktreePath);
+  if (!gitDir) return null;
+  let nonce;
+  try { nonce = readFileSync(join(gitDir, INCARNATION_FILE), 'utf8').trim(); } catch { return null; }
+  return nonce ? { gitDir, nonce } : null;
+}
+
+/** Stamp a freshly created worktree so its record cannot be inherited later. */
+async function claimIncarnation(run, worktreePath) {
+  const gitDir = await gitDirOf(run, worktreePath);
+  if (!gitDir) return null;
+  const nonce = randomBytes(16).toString('hex');
+  try { writeFileSync(join(gitDir, INCARNATION_FILE), `${nonce}\n`); } catch { return null; }
+  return { gitDir, nonce };
+}
+
+function recordOwnership({ worktreePath, repo, incarnation, head, purpose, at }) {
   const marker = ownedMarkerPath(worktreePath);
   const record = {
     schemaVersion: OWNED_SCHEMA,
@@ -163,7 +202,13 @@ function recordOwnership({ worktreePath, repo, purpose, at }) {
     // `--show-toplevel`: that returns the linked worktree's own path when run
     // inside one, so it names different directories for the same repository
     // depending on where it is asked.
-    repo: repo ? pathIdentity(repo) : null,
+    repo: pathIdentity(repo),
+    git_dir: pathIdentity(incarnation.gitDir),
+    nonce: incarnation.nonce,
+    // The revision Crew left the worktree at. An operator who commits or checks
+    // out something else has taken the worktree over, and moving HEAD is how
+    // that shows up: being on a branch is only one way to do it.
+    head,
     purpose: purpose ?? null,
     created_at: at ?? Date.now(),
   };
@@ -184,11 +229,16 @@ function releaseOwnership({ worktreePath }) {
 
 /**
  * The validated ownership record for `worktreePath`, or null when there is no
- * usable evidence that Crew created it in `repo`. Shape, name, path and
- * repository all have to match; anything else reads as "not owned", which
- * withholds deletion rather than granting it.
+ * usable evidence that Crew created *this* worktree in `repo`.
+ *
+ * This answers identity only — was it Crew's worktree? — and deliberately not
+ * state, which is a question for the caller: `head` and `detached` describe what
+ * the worktree looks like now, and a worktree whose operator has moved HEAD is
+ * still Crew's worktree, just no longer a disposable one. All of shape, name,
+ * path, repository and incarnation have to match; every failure reads as "not
+ * owned", which withholds deletion rather than granting it.
  */
-function readOwnership({ worktreePath, repo }) {
+function readOwnership({ worktreePath, repo, incarnation }) {
   let raw;
   try { raw = readFileSync(ownedMarkerPath(worktreePath), 'utf8'); } catch { return null; }
   let record;
@@ -196,9 +246,12 @@ function readOwnership({ worktreePath, repo }) {
   if (!record || typeof record !== 'object' || record.schemaVersion !== OWNED_SCHEMA) return null;
   if (typeof record.name !== 'string' || record.name !== basename(resolve(worktreePath))) return null;
   if (typeof record.worktree !== 'string' || record.worktree !== pathIdentity(worktreePath)) return null;
-  // An unknown repository on either side cannot be matched, so it cannot be
+  // An unknown identity on either side cannot be matched, so it cannot be
   // adopted: an unverifiable record is not evidence.
   if (!repo || typeof record.repo !== 'string' || record.repo !== pathIdentity(repo)) return null;
+  if (!incarnation) return null;
+  if (typeof record.nonce !== 'string' || record.nonce !== incarnation.nonce) return null;
+  if (typeof record.git_dir !== 'string' || record.git_dir !== pathIdentity(incarnation.gitDir)) return null;
   return record;
 }
 
@@ -257,7 +310,15 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
   // Recorded only after git succeeded, so a failed creation never leaves a claim
   // on a tree that does not exist. A record that cannot be written costs the
   // automatic prune of this one worktree; it never costs the worktree itself.
-  const owned = recordOwnership({ worktreePath: dir, repo: await commonDirOf(run, repo.repoRoot), purpose, at });
+  //
+  // `owned` is only true when a record that `readOwnership` would actually
+  // accept was written: a record missing its repository or incarnation identity
+  // can never authorize cleanup, and reporting it as owned would be a leak
+  // dressed up as success.
+  const commonDir = await commonDirOf(run, repo.repoRoot);
+  const incarnation = commonDir ? await claimIncarnation(run, dir) : null;
+  const owned = Boolean(commonDir && incarnation)
+    && recordOwnership({ worktreePath: dir, repo: commonDir, incarnation, head: rev, purpose, at });
   return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name, owned };
 }
 
@@ -445,7 +506,11 @@ function parseWorktrees(stdout) {
     const lines = block.split('\n');
     const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length)?.trim();
     if (!path) continue;
-    out.push({ path: resolve(path), detached: lines.includes('detached') });
+    out.push({
+      path: resolve(path),
+      detached: lines.includes('detached'),
+      head: lines.find((line) => line.startsWith('HEAD '))?.slice('HEAD '.length)?.trim() ?? null,
+    });
   }
   return out;
 }
@@ -633,23 +698,25 @@ async function worktreeCandidates({ git, allowed = [] } = {}) {
         const records = parseWorktrees(res.stdout);
         const repo = await commonDirOf(run, root.repoRoot);
         for (let index = 1; index < records.length; index += 1) {
-          const { path: abs, detached } = records[index];
+          const { path: abs, detached, head } = records[index];
           // A repo whose directory happens to start with a Crew prefix (say, a
           // checkout named dsh-crew-something) is not a disposable worktree, and
           // treating it as stale would have the cleanup path fighting over it.
           if (!isCrewWorktreeName(basename(abs)) || set.has(pathIdentity(abs))) continue;
-          const owned = readOwnership({ worktreePath: abs, repo });
+          const owned = readOwnership({ worktreePath: abs, repo, incarnation: await incarnationOf(run, abs) });
           if (!owned) {
             // The name is not proof: `dsh-crew-backup-deadbeef` is a name a user
-            // could plausibly pick. No record, no deletion.
+            // could plausibly pick. No valid record, no deletion.
             unowned.push(pathIdentity(abs));
-          } else if (!detached) {
-            // A record proves Crew created the worktree. It does not prove the
-            // worktree is still disposable: an operator who checked out a branch
-            // in it has taken it over, and removing it would discard that.
-            retained.push(pathIdentity(abs));
-          } else {
+          } else if (detached && owned.head === head) {
+            // Crew's worktree, untouched since Crew left it there.
             stale.push(pathIdentity(abs));
+          } else {
+            // Crew's worktree, but no longer a disposable one. Being on a branch
+            // is only one way an operator takes a worktree over; committing on a
+            // detached HEAD, or checking out something else, moves it just as
+            // far out of Crew's hands.
+            retained.push(pathIdentity(abs));
           }
         }
       }

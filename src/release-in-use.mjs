@@ -97,14 +97,20 @@ export function clearReleaseClaim({ home = homedir(), pid = process.pid } = {}) 
  * Releases currently held by a live process, plus whether that answer is
  * trustworthy.
  *
- * `reliable: false` means the claim directory could not be read, so an empty
- * `live` list is not evidence that nothing is running. A caller that deletes
- * releases must treat unknown as "do not delete": reading an unreadable claim
- * directory as "no claims" is exactly how a release disappears from under a
- * running Hub, and the damage is to the process, not to the files.
+ * `reliable: false` means liveness could not be determined, so an empty `live`
+ * list is not evidence that nothing is running. A caller that deletes releases
+ * must treat unknown as "do not delete": reading an unreadable claim directory
+ * as "no claims" is exactly how a release disappears from under a running Hub,
+ * and the damage is to the process, not to the files.
  *
- * Dead claims are removed as they are encountered, so the directory cannot
- * accumulate stale files.
+ * Nothing is deleted here. A claim is only ever a protection, so a reaper that
+ * unlinks one has to be certain the object it inspected is still the object it
+ * is removing — and it cannot be, because the pathname outlives the claim and a
+ * process restarting with a reused PID publishes a new file at the same one.
+ * Checking liveness and then unlinking is a check-then-act over a name, and
+ * losing that race deletes a live process's protection. Stale files therefore
+ * stay; a Hub clears its own claim on a clean shutdown, and one file per
+ * hard-killed process is not worth a race over a safety mechanism.
  */
 export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
   const dir = releaseInUseDir({ home });
@@ -121,9 +127,8 @@ export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
     if (!name.endsWith('.json')) continue;
     const file = join(dir, name);
     // The filename carries the PID, and the name is complete before any content
-    // exists — so a torn write still says whose claim it was. That is what keeps
-    // one unreadable file from wedging pruning forever: a claim for a process
-    // that is positively gone protects nothing, whatever its contents say.
+    // exists — so a torn write still says whose claim it was, which is what
+    // keeps one old unusable file from disabling pruning forever.
     const pidFromName = /^(\d+)\.json$/.exec(name) ? Number.parseInt(name, 10) : null;
 
     let parsed = null;
@@ -135,20 +140,20 @@ export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
       && parsed.pid === pidFromName;
 
     if (wellFormed) {
+      // A well-formed claim for a process that is gone simply protects nothing;
+      // it is inert, not a reason to distrust the rest.
       if (alive(parsed.pid)) live.push(resolve(parsed.release));
-      // Parsed, well formed, and the process is positively gone.
-      else { try { rmSync(file, { force: true }); } catch { /* best effort */ } }
       continue;
     }
 
     // Anything else is not evidence of a dead process. Syntax that happens to
-    // parse is not a schema: `{}` and `{"pid":123}` say nothing about liveness,
-    // and reading them as "dead" is how a live release gets pruned.
-    if (pidFromName !== null && !alive(pidFromName)) {
-      try { rmSync(file, { force: true }); } catch { /* best effort */ }
-      continue;
-    }
-    // No usable PID, or the PID may still be running: keep it and say so.
+    // parse is not a schema: `{}` and `{"pid":123}` say nothing about liveness.
+    // The filename is the only identity left, and a claim whose named process is
+    // positively gone is inert for the same reason.
+    if (pidFromName !== null && !alive(pidFromName)) continue;
+    // No usable PID, or the PID may still be running. A reused PID is
+    // indistinguishable from the original here, so this stays unknown rather
+    // than guessing; that is a fail-closed condition, not a resolved one.
     unknown ??= `unusable claim: ${file}`;
   }
   if (unknown) return { live: [...new Set(live)], reliable: false, error: unknown };
