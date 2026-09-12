@@ -34,13 +34,33 @@ test('the maintenance runner is not parented to the process that launched it', a
 
   assert.notEqual(report.pid, launcherPid, 'the runner must be its own process');
   assert.notEqual(report.ppid, process.pid, 'the runner must not be parented to its launcher');
-  assert.equal(report.ppid, launcherPid, 'the runner is parented to the intermediate launcher');
   await exited;
   assert.equal(launcher.exitCode, 0, 'the launcher exits cleanly once the runner exists');
 
-  // The parent being gone is what removes the runner from the supervisor's
-  // process-tree walk; a live parent would put it back in the kill set.
-  let parentAlive = true;
-  try { process.kill(report.ppid, 0); } catch { parentAlive = false; }
-  assert.equal(parentAlive, false, 'the runner parent must have exited');
+  // How "the launcher has already exited" looks differs by platform, and the
+  // assertion has to follow the property rather than one mechanism: Windows
+  // keeps the dead launcher's pid as the parent, while POSIX reparents the
+  // orphan to init immediately. Asserting the Windows shape fails on Linux for
+  // a reason that has nothing to do with the guarantee.
+  if (process.platform === 'win32') {
+    // The parent link still names the launcher, and that process is gone —
+    // which is what stops the supervisor's walk from reaching the runner.
+    assert.equal(report.ppid, launcherPid, 'the runner is parented to the intermediate launcher');
+    let parentAlive = true;
+    try { process.kill(report.ppid, 0); } catch { parentAlive = false; }
+    assert.equal(parentAlive, false, 'the runner parent must have exited');
+  } else {
+    // Reparenting happens when the launcher exits, and the probe may have run
+    // just before or just after that, so accept either: init, or the launcher
+    // pid. Both mean the same thing — the parent is not a live ancestor of the
+    // process that requested the work, so the supervisor's walk cannot reach
+    // the runner. Asserting only `1` would flake on that race.
+    assert.ok(report.ppid === 1 || report.ppid === launcherPid,
+      `unexpected parent ${report.ppid}; expected init (1) or the launcher (${launcherPid})`);
+    if (report.ppid === launcherPid) {
+      let parentAlive = true;
+      try { process.kill(report.ppid, 0); } catch { parentAlive = false; }
+      assert.equal(parentAlive, false, 'the launcher must have exited');
+    }
+  }
 });
