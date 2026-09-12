@@ -9,6 +9,7 @@ import {
   liveReleaseClaims,
   releaseClaimFile,
   releaseClaimInUse,
+  releaseClaimsState,
   releaseInUseDir,
   releaseRootFor,
 } from '../src/release-in-use.mjs';
@@ -99,6 +100,19 @@ test('claiming never throws when the state directory is unusable', (t) => {
   writeFileSync(join(home, '.config', 'dsh-crew', 'app', 'in-use'), 'blocking file');
   assert.equal(claimReleaseInUse({ home, releasePath: release, pid: 1 }), null);
   assert.deepEqual(liveReleaseClaims({ home, alive: () => true }), []);
+  // Starting is the only thing that degrades gracefully. "No claims" is not
+  // evidence that nothing is live, and reporting it as though it were is what
+  // licenses retention to delete a release out from under a running Hub.
+  const state = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, false, 'an unreadable claim directory is unknown, not empty');
+});
+
+test('a claim directory that does not exist yet is a reliable "nothing is live"', (t) => {
+  const home = fixture(t);
+  const state = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, true, 'no directory means no Hub has ever claimed');
 });
 
 // The defect this guards: retention kept the *current pointer* but not the
@@ -143,4 +157,40 @@ test('retention keeps a release that a live process is running', async (t) => {
     true,
     `retention still makes progress on unclaimed releases (survivors: ${survivors.length})`,
   );
+});
+
+// The mirror image of the defect above, and the reason the claim reader reports
+// reliability instead of just a list: when the claim directory cannot be read,
+// "no live releases" is an absence of evidence. Acting on it deletes whatever a
+// running Hub is executing, which is the same outage by a different route.
+// Retention skipping a pass costs disk; guessing costs a broken Hub.
+test('retention deletes nothing when release liveness cannot be determined', async (t) => {
+  const { commitActivatedRelease } = await import('../src/install/npx-lifecycle.mjs');
+  const home = fixture(t);
+  const releasesDir = join(home, '.config', 'dsh-crew', 'app', 'releases');
+
+  const mk = (name) => {
+    const dir = join(releasesDir, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.5.0' }));
+    return dir;
+  };
+  const oldest = mk('20260101T000000Z-oldest');
+  const middle = mk('20260102T000000Z-middle');
+  const newest = mk('20260103T000000Z-newest');
+
+  // A file where the claim directory should be: liveness is unknown, not zero.
+  mkdirSync(join(home, '.config', 'dsh-crew', 'app'), { recursive: true });
+  writeFileSync(join(home, '.config', 'dsh-crew', 'app', 'in-use'), 'blocking file');
+  assert.equal(releaseClaimsState({ home }).reliable, false, 'the fixture really does make liveness unknown');
+
+  commitActivatedRelease({
+    stageDir: newest,
+    manifest: { name: '@ran-sh/dsh-crew', version: '1.5.0' },
+    home,
+  });
+
+  assert.equal(existsSync(oldest), true, 'nothing is deleted on unknown liveness');
+  assert.equal(existsSync(middle), true, 'nothing is deleted on unknown liveness');
+  assert.equal(existsSync(newest), true, 'the activated release is still installed');
 });

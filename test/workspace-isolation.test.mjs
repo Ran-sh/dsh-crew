@@ -21,6 +21,7 @@ import {
   NOT_GIT_REPOSITORY,
   WORKTREE_LOCKED,
   isCrewWorktreeName,
+  reserveWorktreeDir,
 } from '../src/workspace-isolation.mjs';
 
 const REV = 'abc123';
@@ -33,11 +34,29 @@ function fakeRunner(rules) {
     const key = args.join(' ');
     const rule = rules.find((r) => r.pat.test(key));
     if (!rule) return { code: 1, stdout: '', stderr: `unsupported: ${key}` };
-    if (typeof rule.out === 'function') return rule.out(calls);
+    if (typeof rule.out === 'function') return rule.out(calls, cwd);
     return { code: rule.out.code ?? 0, stdout: rule.out.stdout ?? '', stderr: rule.out.stderr ?? '' };
   };
   return { runner, calls };
 }
+
+// The filesystem fallback force-deletes what it adopts, so it asks git which
+// repository a directory belongs to. A fixture that wants the fallback to run
+// has to answer that question, and answer it the same way for both paths.
+const REPO = resolve('/repo');
+const samePath = (a, b) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+
+const SAME_REPO = {
+  pat: /^rev-parse --path-format=absolute --git-common-dir$/,
+  out: { stdout: '/repo/.git\n' },
+};
+// A directory that is a real worktree — but of a different repository. The
+// comparison has to go through the same resolution the source uses: on Windows
+// the repo root is D:\repo, not /repo.
+const OTHER_REPO = {
+  pat: /^rev-parse --path-format=absolute --git-common-dir$/,
+  out: (_calls, cwd) => ({ stdout: samePath(cwd, REPO) ? '/repo/.git\n' : '/elsewhere/.git\n' }),
+};
 
 // ---------- inspectRepository ----------
 
@@ -87,6 +106,73 @@ test('createIsolatedWorkspace propagates a git failure', async () => {
   ]);
   const c = await createIsolatedWorkspace({ cwd: '/repo', root: tmpdir(), git: runner });
   assert.equal(c.ok, false);
+});
+
+// The defect this guards: a nonzero `git worktree add` does not mean git did
+// nothing — a failing post-checkout hook used to leave the worktree registered
+// and populated. Deleting only the directory stranded that registration, and
+// every later attempt on the same name then failed with nothing to explain why.
+test('a failed creation unregisters the worktree before releasing the name', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-failcreate-'));
+  try {
+    const { runner, calls } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      { pat: /^worktree add /, out: { code: 128, stderr: 'fatal: could not resolve HEAD\n' } },
+      // `worktree remove --force` is the path that deletes registration and
+      // directory together, so the fake has to delete too.
+      {
+        pat: /^worktree remove --force /,
+        out: (calls) => {
+          const remove = calls.filter((x) => x.args[0] === 'worktree' && x.args[1] === 'remove').pop();
+          rmSync(remove.args[3], { recursive: true, force: true });
+          return { code: 0 };
+        },
+      },
+      { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
+    ]);
+    const c = await createIsolatedWorkspace({ cwd: '/repo', root, git: runner });
+    assert.equal(c.ok, false);
+    assert.equal(c.cleanupBlocked, undefined, 'a clean release is not reported as blocked');
+    const add = calls.find((x) => x.args[0] === 'worktree' && x.args[1] === 'add');
+    const remove = calls.find((x) => x.args[0] === 'worktree' && x.args[1] === 'remove');
+    assert.ok(remove, 'the registration is removed explicitly');
+    assert.equal(existsSync(add.args[3]), false, 'the reservation directory is released');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed creation reports a stranded registration instead of pretending the name was released', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-stranded-'));
+  try {
+    let reserved = null;
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      {
+        pat: /^worktree add /,
+        // A failing post-checkout hook: git registers the worktree and populates
+        // it before the command exits nonzero.
+        out: (calls) => {
+          reserved = calls.find((x) => x.args[0] === 'worktree' && x.args[1] === 'add').args[3];
+          writeFileSync(join(reserved, 'worker-output.txt'), 'work in progress');
+          return { code: 128, stderr: 'fatal: could not resolve HEAD\n' };
+        },
+      },
+      // The unregister itself fails, as it does under a transient Windows lock.
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unable to delete: permission denied\n' } },
+      // git still considers the name taken, which is what makes a retry fail.
+      { pat: /^worktree list --porcelain$/, out: () => ({ stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${reserved}\nHEAD ${REV}\ndetached\n\n` }) },
+    ]);
+    const c = await createIsolatedWorkspace({ cwd: '/repo', root, git: runner });
+    assert.equal(c.ok, false);
+    assert.equal(c.cleanupBlocked, true, 'a stranded registration is surfaced, not hidden');
+    assert.ok(reserved, 'the reservation was attempted');
+    assert.equal(existsSync(join(reserved, 'worker-output.txt')), true, 'no files are discarded while git still tracks them');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // ---------- captureCandidate ----------
@@ -167,8 +253,9 @@ test('cleanupIsolatedWorkspace retries a transient lock and recovers', async () 
 
 test('cleanupIsolatedWorkspace never claims success while the worktree stays registered', async () => {
   const { runner, calls } = fakeRunner([
+    SAME_REPO,
     { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unknown switch `x`\n' } },
-    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\n\n` } },
+    { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\ndetached\n\n` } },
   ]);
   const r = await cleanupIsolatedWorkspace({ worktreePath: WORKTREE, git: runner, backoffMs: 0 });
   assert.equal(r.ok, false);
@@ -184,6 +271,7 @@ test('cleanupIsolatedWorkspace verified fallback success when registration and d
     mkdirSync(prefix, { recursive: true });
     writeFileSync(join(prefix, 'keep.txt'), 'x');
     const { runner } = fakeRunner([
+      SAME_REPO,
       { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: Unable to delete ... permission denied\n' } },
       { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
     ]);
@@ -193,6 +281,49 @@ test('cleanupIsolatedWorkspace verified fallback success when registration and d
     assert.equal(existsSync(prefix), false, 'directory removed before claiming success');
   } finally {
     rmSync(prefix, { recursive: true, force: true });
+  }
+});
+
+// A name that matches the legacy grammar is exactly what a user might pick by
+// accident, so the fallback must not treat the name as proof of ownership. An
+// earlier revision did, and a directory belonging to an unrelated repository
+// would have been force-deleted for resembling Crew's.
+test('cleanupIsolatedWorkspace refuses an identically named worktree of another repository', async () => {
+  const prefix = join(mkdtempSync(join(tmpdir(), 'dsh-crew-fb2-')), 'dsh-crew-backup-deadbeef');
+  try {
+    mkdirSync(prefix, { recursive: true });
+    writeFileSync(join(prefix, 'precious.txt'), 'not Crew data');
+    const { runner } = fakeRunner([
+      OTHER_REPO,
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: not a working tree\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
+    ]);
+    const r = await cleanupIsolatedWorkspace({ worktreePath: prefix, git: runner, backoffMs: 0 });
+    assert.equal(r.ok, false, 'must not claim success');
+    assert.equal(r.cleanupBlocked, true);
+    assert.match(r.error, /not a worktree of/);
+    assert.equal(existsSync(join(prefix, 'precious.txt')), true, 'the directory survives');
+  } finally {
+    rmSync(prefix, { recursive: true, force: true });
+  }
+});
+
+// The reservation is this call's own empty directory: git never registered it,
+// so there is no repository identity to check and nothing to lose by removing it.
+test('cleanupIsolatedWorkspace releases an empty reservation it just made', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-resv-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  try {
+    mkdirSync(dir);
+    const { runner } = fakeRunner([
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: not a working tree\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: 'worktree /repo\nHEAD abc123\n\n' } },
+    ]);
+    const r = await cleanupIsolatedWorkspace({ worktreePath: dir, repoRoot: '/repo', git: runner, backoffMs: 0, reservation: true });
+    assert.equal(r.ok, true);
+    assert.equal(existsSync(dir), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -228,12 +359,43 @@ test('staleWorktrees/prune identify only dsh-crew worktrees outside the allowed 
     { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
     {
       pat: /^worktree list --porcelain$/,
-      out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\n\nworktree ${join(tmpdir(), 'user-wt')}\nHEAD ${REV}\n\n` },
+      out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${WORKTREE}\nHEAD ${REV}\ndetached\n\nworktree ${join(tmpdir(), 'user-wt')}\nHEAD ${REV}\ndetached\n\n` },
     },
   ]);
   const stale = await staleWorktrees({ git: runner, allowed: [WORKTREE] });
   assert.ok(!stale.includes(WORKTREE), 'allowed worktree must not be stale');
   assert.equal(stale.length, 0, 'only dsh-crew-* worktrees outside allowed are stale');
+});
+
+// The defect this guards: `dsh-crew-backup-deadbeef` satisfies the legacy name
+// grammar, so a basename check adopts it. Crew always creates its worktrees
+// detached; a linked worktree that is on a branch is somebody else's, whatever
+// it is called, and pruning it would destroy work that was never Crew's.
+test('staleWorktrees does not adopt a branch worktree that merely matches the legacy name', async () => {
+  const impostor = join(tmpdir(), 'dsh-crew-backup-deadbeef');
+  const { runner } = fakeRunner([
+    { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+    { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+    {
+      pat: /^worktree list --porcelain$/,
+      out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${impostor}\nHEAD ${REV}\nbranch refs/heads/backup\n\n` },
+    },
+  ]);
+  assert.equal(isCrewWorktreeName('dsh-crew-backup-deadbeef'), true, 'the name alone does match');
+  assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'but a branch worktree is not adopted');
+});
+
+test('staleWorktrees still adopts a detached legacy worktree outside the allowed set', async () => {
+  const legacy = join(tmpdir(), 'dsh-crew-wf-abc123-1a2b3c4d');
+  const { runner } = fakeRunner([
+    { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+    { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+    {
+      pat: /^worktree list --porcelain$/,
+      out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${legacy}\nHEAD ${REV}\ndetached\n\n` },
+    },
+  ]);
+  assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [legacy]);
 });
 
 test('concurrency gate clamps to max parallel and blocks beyond it', () => {
@@ -353,6 +515,46 @@ test('adopts both the current and the legacy worktree name', () => {
   assert.equal(isCrewWorktreeName('someone-elses-dir'), false);
   assert.equal(isCrewWorktreeName(''), false);
   assert.equal(isCrewWorktreeName(null), false);
+});
+
+// The property that matters: Crew must recognise every name Crew hands out.
+// Asserting a handful of literals does not establish it — an earlier revision
+// trimmed the sanitised purpose before truncating it, so a 31-character purpose
+// ending in a separator produced a name that its own ownership check rejected,
+// and the worktree it created could never be adopted again.
+test('every name the reservation can produce is recognised as Crew-owned', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-nameprop-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const at = new Date(2026, 8, 12, 23, 30, 0);
+  const purposes = [
+    'worker',
+    'reviewer',
+    '',
+    '   ',
+    '!!!',
+    null,
+    undefined,
+    'a'.repeat(31) + '-b',
+    'x-'.repeat(20),
+    'a'.repeat(64),
+    'role/with/slashes',
+    'ümlaut',
+    '123',
+    'UPPER',
+  ];
+  for (const purpose of purposes) {
+    // Same purpose and same second, so the later ones must take the collision
+    // suffix — the form most likely to fall outside the grammar unnoticed.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const reserved = reserveWorktreeDir({ root, purpose, at });
+      assert.equal(reserved.ok, true, `reservation refused for ${JSON.stringify(purpose)}`);
+      assert.equal(
+        isCrewWorktreeName(reserved.name),
+        true,
+        `Crew cannot recognise a name it generated: ${reserved.name}`,
+      );
+    }
+  }
 });
 
 // A purpose is free-form, so it must not be able to escape the directory name.

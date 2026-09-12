@@ -55,8 +55,13 @@ function isAlive(pid) {
 
 /**
  * Record that this process is running `releasePath`. Best effort: failing to
- * claim must never stop the Hub from starting, because the cost of a missed
- * claim is a possible retention of one extra release.
+ * claim must never stop the Hub from starting.
+ *
+ * A null return is a real degradation, not a footnote. Retention cannot see a
+ * release that was never claimed, so an unclaimable release is one that a later
+ * update may delete from under this process — the 500-answering routes this
+ * module exists to prevent. Callers should surface it; `releaseClaimsState`
+ * gives retention the matching fail-closed signal.
  */
 export function claimReleaseInUse({ moduleUrl = import.meta.url, releasePath, home = homedir(), pid = process.pid, now = Date.now() } = {}) {
   try {
@@ -84,16 +89,27 @@ export function clearReleaseClaim({ home = homedir(), pid = process.pid } = {}) 
 }
 
 /**
- * Releases currently held by a live process. Dead claims are removed as they are
- * encountered, so the directory cannot accumulate stale files.
+ * Releases currently held by a live process, plus whether that answer is
+ * trustworthy.
+ *
+ * `reliable: false` means the claim directory could not be read, so an empty
+ * `live` list is not evidence that nothing is running. A caller that deletes
+ * releases must treat unknown as "do not delete": reading an unreadable claim
+ * directory as "no claims" is exactly how a release disappears from under a
+ * running Hub, and the damage is to the process, not to the files.
+ *
+ * Dead claims are removed as they are encountered, so the directory cannot
+ * accumulate stale files.
  */
-export function liveReleaseClaims({ home = homedir(), alive = isAlive } = {}) {
+export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
   const dir = releaseInUseDir({ home });
   let names;
-  // A state directory that is unreadable — or replaced by a file — must read as
-  // "no claims" rather than throwing: this runs inside install, and failing it
-  // would block an update over a problem that only affects pruning.
-  try { names = readdirSync(dir); } catch { return []; }
+  try { names = readdirSync(dir); } catch (error) {
+    // A directory that does not exist yet reliably holds no claims; any other
+    // failure — permissions, a file where the directory should be — does not.
+    if (error?.code === 'ENOENT') return { live: [], reliable: true };
+    return { live: [], reliable: false, error: String(error?.message ?? error) };
+  }
   const live = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
@@ -106,5 +122,10 @@ export function liveReleaseClaims({ home = homedir(), alive = isAlive } = {}) {
     }
     try { rmSync(file, { force: true }); } catch { /* best effort */ }
   }
-  return [...new Set(live)];
+  return { live: [...new Set(live)], reliable: true };
+}
+
+/** Releases currently held by a live process. See `releaseClaimsState`. */
+export function liveReleaseClaims(opts = {}) {
+  return releaseClaimsState(opts).live;
 }

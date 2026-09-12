@@ -97,7 +97,13 @@ export async function apply(ctx) {
   // modules lazily with a cache-busting query, so deleting the release under a
   // running process would break those routes with no way to recover but a
   // restart. Retention reads these claims and leaves a live release alone.
-  claimReleaseInUse();
+  //
+  // A claim that could not be written is worth saying out loud: retention cannot
+  // see an unclaimed release, so this process is then the one that a later update
+  // may delete from under itself.
+  if (!claimReleaseInUse()) {
+    ctx.logger?.warn?.('dsh-crew: could not record this release as in use; a later update may prune it while this Hub is running');
+  }
   registerRuntimeEndpoint(ctx);
   installAdaptiveHealthObserver();
   return applyHub(ctx);

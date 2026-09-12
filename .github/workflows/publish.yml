@@ -40,7 +40,10 @@ jobs:
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
-          version: 10
+          # Exact, not `10`: this action's `version` input selects what gets
+          # installed, so a major-version range would let the release toolchain
+          # change under us between runs.
+          version: 10.34.5
           run_install: false
 
       # No dependency cache in a release build: a poisoned cache would run in the
@@ -64,9 +67,7 @@ jobs:
         run: pnpm run build:client
 
       # Only tracked files: an untracked scratch file is not a changed artifact,
-      # and failing on one would block a release for nothing. What untracked
-      # files would actually ship is caught by packing below — npm packs by the
-      # files allowlist, not by git status.
+      # and failing on one would block a release for nothing.
       - name: Fail if the build changed a committed artifact
         shell: bash
         run: |
@@ -89,10 +90,35 @@ jobs:
           fi
 
       - name: Pack the release tarball
+        shell: bash
         run: |
-          mkdir dist
-          npm pack --pack-destination dist
+          mkdir -p dist
+          npm pack --json --pack-destination dist > pack-manifest.json
           echo "TARBALL=$(find dist -name '*.tgz' -printf '%f')" >> "$GITHUB_ENV"
+
+      # What actually ships is decided by npm's `files` allowlist, which does not
+      # care whether a file is committed. Checking git status cannot catch an
+      # untracked file under `src/`, so compare the real manifest against the
+      # tracked tree instead — that is the question the guard is asking.
+      - name: Fail if the tarball would ship anything not committed
+        shell: bash
+        run: |
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const { readFileSync } = require("node:fs");
+            const [packed] = JSON.parse(readFileSync("pack-manifest.json", "utf8"));
+            const paths = packed.files.map((f) => f.path);
+            const tracked = new Set(
+              execFileSync("git", ["ls-files"], { encoding: "utf8" }).split("\n").filter(Boolean),
+            );
+            const untracked = paths.filter((p) => !tracked.has(p));
+            if (untracked.length) {
+              console.error("::error::the tarball would ship files that are not committed:");
+              for (const p of untracked) console.error("  " + p);
+              process.exit(1);
+            }
+            console.log(`tarball contents are all committed (${paths.length} files)`);
+          '
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

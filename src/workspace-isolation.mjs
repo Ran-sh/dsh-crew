@@ -11,7 +11,7 @@
 // lock blocks cleanup.
 
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { readFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
@@ -86,26 +86,26 @@ function stamp(at) {
 }
 
 /**
- * `Crew_<date>_<time>_<purpose>`, with a numeric suffix only when that name is
- * already taken. Parallel jobs can start inside the same second, so the suffix is
- * what keeps the name unique without putting random noise in every name.
- */
-/**
  * `Crew_<date>_<time>_<purpose>`, reserved by creating the directory.
  *
  * The reservation is a mkdir, not a lookup: two jobs starting in the same second
  * both probe before either has created anything, so a check-then-act name would
  * hand them the same path and one `git worktree add` would fail. mkdir
- * fails on EEXIST, which makes the suffix loop race-free.
+ * fails on EEXIST, which makes the suffix loop race-free, and a numeric suffix
+ * is added only when the name is already taken.
  */
-function reserveWorktreeDir({ root, purpose, at }) {
+export function reserveWorktreeDir({ root, purpose, at }) {
   try {
     mkdirSync(root, { recursive: true });
   } catch (error) {
     return { ok: false, error: `cannot create worktree root: ${error?.message ?? error}` };
   }
+  // Truncate before trimming. Trimming first lets a 32-character slice end on
+  // the separator it just created, and the resulting name fails
+  // `isCrewWorktreeName` — so Crew would create a worktree it no longer
+  // recognises as its own, and stale pruning would never adopt it again.
   const safe = String(purpose ?? 'job').replace(/[^A-Za-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '').slice(0, PURPOSE_MAX) || 'job';
+    .slice(0, PURPOSE_MAX).replace(/^-+|-+$/g, '') || 'job';
   const base = `${WORKTREE_PREFIX}${stamp(at)}_${safe}`;
   for (let n = 1; n <= 100; n += 1) {
     const name = n === 1 ? base : `${base}-${n}`;
@@ -162,12 +162,18 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
   const res = await runGit(run, ['worktree', 'add', '--detach', dir, rev], { cwd: repo.repoRoot });
   if (!res.ok) {
     // A nonzero exit does not mean git did nothing: a failing post-checkout hook
-    // leaves the worktree registered and populated. Removing only the directory
-    // would strand that registration, and the next attempt on this name would
-    // fail because git still considers it taken. Unregister first, transactionally.
-    await runGit(run, ['worktree', 'remove', '--force', dir], { cwd: repo.repoRoot });
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
-    return { ok: false, reason: res.reason, error: res.error };
+    // leaves the worktree registered and populated, and a transient Windows lock
+    // can defeat the unregister. Go through the same verified, retrying cleanup
+    // the normal path uses, and report a blocked reservation rather than
+    // pretending the name was released — a stranded registration makes every
+    // later attempt on this name fail with no way for the caller to tell why.
+    const released = await cleanupIsolatedWorkspace({ worktreePath: dir, repoRoot: repo.repoRoot, git: run, reservation: true });
+    return {
+      ok: false,
+      reason: res.reason,
+      error: res.error,
+      ...(released.ok ? {} : { cleanupBlocked: true, cleanupError: released.error }),
+    };
   }
   return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name };
 }
@@ -345,6 +351,22 @@ function trackedIn(nameStatus, untracked) {
   return out;
 }
 
+/**
+ * Parse `git worktree list --porcelain` into records. Git documents that the
+ * main working tree is the first record; `detached` marks the ones Crew creates,
+ * since every Crew worktree is added with `--detach`.
+ */
+function parseWorktrees(stdout) {
+  const out = [];
+  for (const block of String(stdout ?? '').split('\n\n')) {
+    const lines = block.split('\n');
+    const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length)?.trim();
+    if (!path) continue;
+    out.push({ path: resolve(path), detached: lines.includes('detached') });
+  }
+  return out;
+}
+
 async function mainRepoRoot(run, worktreePath) {
   // The main working tree is the first record of `git worktree list`; deriving
   // it from `--git-common-dir` breaks for a bare main repository, where that
@@ -353,9 +375,7 @@ async function mainRepoRoot(run, worktreePath) {
   // already relies on.
   const list = await runGit(run, ['worktree', 'list', '--porcelain'], { cwd: worktreePath });
   if (!list.ok) return null;
-  const first = String(list.stdout ?? '').split('\n\n').find(Boolean) ?? '';
-  const main = first.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
-  return main ? resolve(main) : null;
+  return parseWorktrees(list.stdout)[0]?.path ?? null;
 }
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -369,11 +389,38 @@ async function worktreeRegistered({ worktreePath, git, cwd }) {
   const res = await runGit(git, ['worktree', 'list', '--porcelain'], { cwd });
   if (!res.ok) return null;
   const target = pathIdentity(worktreePath);
-  for (const block of String(res.stdout).split('\n\n')) {
-    const path = block.split('\n').find((line) => line.startsWith('worktree '))?.slice('worktree '.length)?.trim();
-    if (path && pathIdentity(path) === target) return true;
-  }
-  return false;
+  return parseWorktrees(res.stdout).some((record) => pathIdentity(record.path) === target);
+}
+
+/**
+ * The repository's common git directory as seen from `cwd`, or null when git
+ * cannot say. `--path-format=absolute` needs git 2.31+, so the relative form is
+ * resolved against `cwd` for older installations.
+ */
+async function commonDirOf(run, cwd) {
+  const abs = await runGit(run, ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd });
+  if (abs.ok && abs.stdout.trim()) return resolve(abs.stdout.trim());
+  const rel = await runGit(run, ['rev-parse', '--git-common-dir'], { cwd });
+  if (!rel.ok || !rel.stdout.trim()) return null;
+  return resolve(cwd, rel.stdout.trim());
+}
+
+/**
+ * Whether `worktreePath` carries git metadata for the same repository as `root`.
+ *
+ * A directory name is not proof of ownership, and the filesystem fallback below
+ * force-deletes what it adopts — so the last resort asks git which repository the
+ * directory belongs to and refuses when the answer is unavailable or different.
+ * An unrelated directory that merely happens to be named like a Crew worktree
+ * therefore survives.
+ */
+async function sameRepository(run, worktreePath, root) {
+  const [a, b] = await Promise.all([commonDirOf(run, worktreePath), commonDirOf(run, root)]);
+  return Boolean(a && b && pathIdentity(a) === pathIdentity(b));
+}
+
+function emptyDirectory(path) {
+  try { return readdirSync(path).length === 0; } catch { return false; }
 }
 
 /**
@@ -394,6 +441,7 @@ export async function cleanupIsolatedWorkspace({
   git,
   retries = WORKTREE_CLEANUP_RETRIES,
   backoffMs = WORKTREE_CLEANUP_BACKOFF_MS,
+  reservation = false,
 } = {}) {
   const run = git ?? defaultRunner;
   if (!worktreePath) return { ok: false, reason: NOT_GIT_REPOSITORY, error: 'worktree path required' };
@@ -412,7 +460,23 @@ export async function cleanupIsolatedWorkspace({
 
   // Last resort, only for Crew-owned disposable paths: remove the directory and
   // verify the git registration actually went away before claiming success.
+  //
+  // Ownership here is not the name alone. An earlier revision adopted anything
+  // whose basename matched, so a directory the user had named (or a worktree they
+  // had made) could be force-deleted for resembling Crew's. Two things now have
+  // to hold: the path is a worktree of *this* repository, and either git still
+  // carries its registration (proving Crew registered it) or it is the empty
+  // reservation this call itself just created.
   if (owned && root && pathIdentity(worktreePath) !== pathIdentity(root)) {
+    const adopted = (await sameRepository(run, worktreePath, root)) || (reservation && emptyDirectory(worktreePath));
+    if (!adopted) {
+      return {
+        ok: false,
+        reason: WORKTREE_LOCKED,
+        error: `refusing to delete ${worktreePath}: not a worktree of ${root} (remove it manually if it is disposable)`,
+        cleanupBlocked: true,
+      };
+    }
     try {
       rmSync(worktreePath, { recursive: true, force: true });
     } catch (err) {
@@ -433,7 +497,7 @@ export async function cleanupIsolatedWorkspace({
 
 export async function staleWorktrees({ git, allowed = [] } = {}) {
   const run = git ?? defaultRunner;
-  const set = new Set(allowed.map((p) => resolve(p)));
+  const set = new Set(allowed.map((p) => pathIdentity(p)));
   const stale = [];
   try {
     const root = await inspectRepository({ cwd: allowed[0] ?? process.cwd(), git: run });
@@ -444,15 +508,20 @@ export async function staleWorktrees({ git, allowed = [] } = {}) {
         // inside a linked worktree reports that worktree as the top level, so the
         // repo root cannot be matched by path — the position in the list is what
         // identifies the main tree.
-        const blocks = String(res.stdout).split('\n\n');
-        for (let index = 1; index < blocks.length; index += 1) {
-          const path = blocks[index].split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
-          if (!path) continue;
-          const abs = resolve(path);
+        const records = parseWorktrees(res.stdout);
+        for (let index = 1; index < records.length; index += 1) {
+          const { path: abs, detached } = records[index];
           // A repo whose directory happens to start with a Crew prefix (say, a
           // checkout named dsh-crew-something) is not a disposable worktree, and
           // treating it as stale would have the cleanup path fighting over it.
-          if (isCrewWorktreeName(basename(abs)) && !set.has(abs)) stale.push(abs);
+          //
+          // The name is still not proof: `dsh-crew-backup-deadbeef` is a name a
+          // user could plausibly pick, and guessing wrong here force-deletes
+          // their worktree. Crew always creates its worktrees detached, so a
+          // linked worktree that is on a branch is not Crew's, whatever it is
+          // called.
+          if (!detached) continue;
+          if (isCrewWorktreeName(basename(abs)) && !set.has(pathIdentity(abs))) stale.push(abs);
         }
       }
     }

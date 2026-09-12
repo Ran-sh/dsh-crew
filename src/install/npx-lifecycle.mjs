@@ -42,7 +42,7 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
-import { liveReleaseClaims } from '../release-in-use.mjs';
+import { releaseClaimsState } from '../release-in-use.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -1084,14 +1084,22 @@ const STALE_INCOMPLETE_MS = 24 * 60 * 60 * 1000;
 function gcOldReleases({ home, keep = KEEP_RELEASES, protect = null }) {
   const pointer = readCurrentPointer({ home });
   const releasesDir = crewReleasesDir({ home });
-  if (!existsSync(releasesDir)) return;
+  if (!existsSync(releasesDir)) return [];
   const removed = [];
   // A running Hub keeps executing the release it started from and re-reads
   // several modules from disk on every request, so removing that release breaks
   // those routes with no recovery but a restart. Protect what live processes
   // claim, not just what the pointer names.
-  const claimed = liveReleaseClaims({ home }).map((dir) => resolve(dir));
-  const live = new Set([...(protect ? [resolve(protect)] : []), ...claimed]);
+  //
+  // Liveness has to be known, not merely unrefuted: if the claim directory
+  // cannot be read, "no live claims" is an absence of evidence, and deleting on
+  // it reproduces the outage this protection exists to prevent. Pruning is
+  // optional and a skipped pass costs disk; guessing wrong costs a broken Hub.
+  const claims = releaseClaimsState({ home });
+  if (!claims.reliable) {
+    return removed;
+  }
+  const live = new Set([...(protect ? [resolve(protect)] : []), ...claims.live.map((dir) => resolve(dir))]);
   const dirs = readdirSync(releasesDir)
     .map((name) => join(releasesDir, name))
     .filter((dir) => (!pointer || dir !== pointer.path) && !live.has(resolve(dir)));
