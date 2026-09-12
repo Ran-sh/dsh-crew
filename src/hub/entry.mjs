@@ -101,7 +101,8 @@ export async function apply(ctx) {
   // A claim that could not be written is worth saying out loud: retention cannot
   // see an unclaimed release, so this process is then the one that a later update
   // may delete from under itself.
-  if (!claimReleaseInUse()) {
+  const claimFile = claimReleaseInUse();
+  if (!claimFile) {
     ctx.logger?.warn?.('dsh-crew: could not record this release as in use; a later update may prune it while this Hub is running');
   }
   try {
@@ -113,16 +114,17 @@ export async function apply(ctx) {
     // Hub is still running. Nothing else may remove a claim file — the reader
     // deliberately never unlinks one, because it cannot tell its object from a
     // successor published at the same name — but the process that owns a claim
-    // may remove its own.
+    // may remove its own, and it removes *this* claim rather than any other this
+    // process happens to hold.
     return async () => {
       try { if (typeof disposeHub === 'function') await disposeHub(); }
-      finally { try { clearReleaseClaim(); } catch { /* best effort */ } }
+      finally { try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ } }
     };
   } catch (error) {
     // No disposer will ever be returned for a failed mount, so the claim has to
     // be released here or the release stays pinned by a process that never
     // provided anything.
-    try { clearReleaseClaim(); } catch { /* best effort */ }
+    try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ }
     throw error;
   }
 }

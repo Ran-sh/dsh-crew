@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import {
   claimReleaseInUse,
   clearReleaseClaim,
@@ -36,7 +36,10 @@ test('a claim identifies the release that owns a module', (t) => {
   assert.equal(releaseRootFor(new URL(`file:///${join(release, 'src', 'hub.mjs').replace(/\\/g, '/')}`)), release);
 
   const file = claimReleaseInUse({ home, releasePath: release, pid: 4242 });
-  assert.equal(file, join(releaseInUseDir({ home }), '4242.json'));
+  // Named for the mount, not just the process: two mounts in one process would
+  // otherwise publish to the same pathname and one could clear the other's.
+  assert.match(basename(file), /^4242-[0-9a-f]+.json$/);
+  assert.equal(dirname(file), releaseInUseDir({ home }));
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).release, release);
 });
 
@@ -65,13 +68,13 @@ test('live claims are those whose process is still running', (t) => {
 test('a dead claim is inert, and pins nothing', (t) => {
   const home = fixture(t);
   const a = fakeRelease(t, home, 'rel-a');
-  claimReleaseInUse({ home, releasePath: a, pid: 999 });
+  const file = claimReleaseInUse({ home, releasePath: a, pid: 999 });
   assert.deepEqual(liveReleaseClaims({ home, alive: () => false }), []);
   assert.deepEqual(liveReleaseClaims({ home, alive: () => false }), []);
   // The file stays. A reader that unlinks after checking liveness is doing
   // check-then-act over a pathname, and a process that restarts with a reused
   // PID publishes a new claim at that same name.
-  assert.equal(existsSync(releaseClaimFile({ home, pid: 999 })), true, 'nothing is unlinked');
+  assert.equal(existsSync(file), true, 'nothing is unlinked');
 });
 
 test('a valid claim for a dead process still reads as reliable', (t) => {
@@ -189,6 +192,37 @@ test('a claim published during the liveness check is not unlinked', (t) => {
   assert.equal(state.reliable, true);
 });
 
+// The defect this guards: claims were named by PID alone, so two mounts inside
+// one process published to the same pathname and whichever disposed first
+// removed the other's only protection — leaving a release a live mount was still
+// using open to pruning.
+test('two mounts in one process own their claims independently', (t) => {
+  const home = fixture(t);
+  const a = fakeRelease(t, home, 'rel-a');
+  const b = fakeRelease(t, home, 'rel-b');
+  const fileA = claimReleaseInUse({ home, releasePath: a, pid: process.pid });
+  const fileB = claimReleaseInUse({ home, releasePath: b, pid: process.pid });
+  assert.notEqual(fileA, fileB, 'each mount gets its own claim');
+
+  assert.deepEqual(releaseClaimsState({ home, alive: () => true }).live.sort(), [a, b].sort(), 'both are seen');
+
+  // A's disposer must not take B's protection with it.
+  clearReleaseClaim({ file: fileA });
+  assert.deepEqual(liveReleaseClaims({ home, alive: () => true }), [b], 'the sibling claim survives');
+  clearReleaseClaim({ file: fileB });
+  assert.deepEqual(liveReleaseClaims({ home, alive: () => true }), []);
+});
+
+// Clearing by PID would have to guess which of a process's claims was meant, so
+// it only reaches the unbranded name — and leaves a per-mount claim alone.
+test('clearing by PID does not remove a per-mount claim', (t) => {
+  const home = fixture(t);
+  const a = fakeRelease(t, home, 'rel-a');
+  const file = claimReleaseInUse({ home, releasePath: a, pid: 4242 });
+  clearReleaseClaim({ home, pid: 4242 });
+  assert.equal(existsSync(file), true, 'the per-mount claim is left alone');
+});
+
 // A claim is written to a temporary name and renamed into place, so a reader can
 // never observe a listed claim whose contents are still being written.
 test('a claim is published atomically', (t) => {
@@ -203,9 +237,10 @@ test('a claim is published atomically', (t) => {
 test('a claim can be cleared on clean shutdown', (t) => {
   const home = fixture(t);
   const a = fakeRelease(t, home, 'rel-a');
-  claimReleaseInUse({ home, releasePath: a, pid: 4242 });
+  const file = claimReleaseInUse({ home, releasePath: a, pid: 4242 });
   assert.equal(releaseClaimInUse({ home, pid: 4242 }), true);
-  clearReleaseClaim({ home, pid: 4242 });
+  // Cleared by handle, so a sibling mount's claim is not the one that goes.
+  clearReleaseClaim({ file });
   assert.equal(releaseClaimInUse({ home, pid: 4242 }), false);
   assert.deepEqual(liveReleaseClaims({ home, alive: () => true }), []);
 });

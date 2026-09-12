@@ -671,6 +671,24 @@ export async function cleanupIsolatedWorkspace({
         cleanupBlocked: true,
       };
     }
+    // And the index flags, which are the same class of hole one level down: a
+    // tracked file with `assume-unchanged` or `skip-worktree` set is invisible to
+    // `status`, to the untracked query and to the ignored query alike, and git
+    // removes the worktree without complaint — taking the operator's edit with
+    // it. Measured on git 2.47.3. In `ls-files -v` a lowercase letter means
+    // assume-unchanged and `S` means skip-worktree; the ordinary state is `H`.
+    const flags = await runGit(run, ['ls-files', '-v'], { cwd: worktreePath });
+    const hidden = flags.ok
+      ? flags.stdout.split('\n').find((line) => /^([a-z]|S)/.test(line)) ?? null
+      : 'unknown';
+    if (!flags.ok || hidden) {
+      return {
+        ok: false,
+        reason: WORKTREE_LOCKED,
+        error: `refusing to remove ${worktreePath} without --force: its index carries assume-unchanged or skip-worktree entries, which hide a modification from every status query`,
+        cleanupBlocked: true,
+      };
+    }
   }
 
   if (root) {
@@ -836,10 +854,45 @@ export async function retainedWorktrees({ git, allowed = [] } = {}) {
   return (await worktreeCandidates({ git, allowed })).retained;
 }
 
-export async function pruneWorktrees({ git, allowed = [] } = {}) {
+/**
+ * Report what Crew could clean up, and only delete when explicitly asked.
+ *
+ * `remove` defaults to false, and the default is the point. Deleting from a
+ * background scan has been shown insufficient three separate ways: git removes a
+ * worktree whose only content is ignored; it removes one whose tracked file
+ * carries `assume-unchanged` or `skip-worktree`; and between validating a
+ * worktree and deleting it, the worktree can change. Each was measured against
+ * real git rather than reasoned about, and each ends with an operator's work
+ * gone. Nothing in Crew calls this path, so the automatic capability buys nothing
+ * and risks the one thing Crew must not lose.
+ *
+ * A caller that has decided to remove a specific worktree should pass
+ * `remove: true`, or better, use `cleanupIsolatedWorkspace` for a worktree it
+ * directly owns. Unattended deletion would need a lease on the worktree, not
+ * another pre-delete observation.
+ */
+export async function pruneWorktrees({ git, allowed = [], remove = false } = {}) {
   const run = git ?? defaultRunner;
   const { stale, retained, unowned } = await worktreeCandidates({ git: run, allowed });
   const actions = [];
+
+  if (!remove) {
+    for (const entry of stale) actions.push(`stale Crew worktree, remove explicitly if it is finished with: ${entry.path}`);
+    for (const w of unowned) actions.push(`not Crew-owned, left in place: ${w}`);
+    for (const w of retained) actions.push(`taken over by an operator, left in place: ${w}`);
+    return {
+      ok: true,
+      reportOnly: true,
+      removed: 0,
+      candidates: stale.map((entry) => entry.path),
+      failed: [],
+      unowned,
+      retained,
+      staleRecords: [],
+      actions,
+    };
+  }
+
   const failed = [];
   const staleRecords = [];
   let removed = 0;

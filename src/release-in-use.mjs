@@ -16,12 +16,20 @@
 // release with a live claim. Liveness is decided by the pid, not by the file, so
 // a process that dies without cleaning up cannot pin a release forever.
 
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const IN_USE_DIRNAME = 'in-use';
+
+// A claim file is `<pid>.json` or `<pid>-<nonce>.json`. The PID alone is not
+// enough to identify a claim: two mounts inside one process would publish to the
+// same pathname, and whichever disposed first would remove the other's
+// protection. A claim is owned by the mount that wrote it, so it needs a name
+// that says which one that was.
+const CLAIM_NAME_RE = /^(\d+)(?:-[0-9a-f]+)?\.json$/;
 
 export function releaseInUseDir({ home = homedir() } = {}) {
   return join(home, '.config', 'dsh-crew', 'app', IN_USE_DIRNAME);
@@ -69,28 +77,44 @@ export function claimReleaseInUse({ moduleUrl = import.meta.url, releasePath, ho
     if (!target) return null;
     const dir = releaseInUseDir({ home });
     mkdirSync(dir, { recursive: true });
-    const file = join(dir, `${pid}.json`);
+    // The nonce makes this claim the property of this call. Clearing by PID would
+    // let one mount remove a sibling mount's only protection.
+    const nonce = randomBytes(8).toString('hex');
+    const file = join(dir, `${pid}-${nonce}.json`);
     // Write then rename: a reader that lists the directory can otherwise see this
     // filename while its JSON is still empty or half-written, and an unparseable
     // claim is indistinguishable from a dead one.
-    const pending = `${file}.${pid}.tmp`;
-    writeFileSync(pending, JSON.stringify({ pid, release: resolve(target), claimed_at: now }) + '\n');
+    const pending = `${file}.tmp`;
+    writeFileSync(pending, JSON.stringify({ pid, nonce, release: resolve(target), claimed_at: now }) + '\n');
     renameSync(pending, file);
     return file;
   } catch { return null; }
 }
 
+/** The unbranded per-PID claim path, as written by releases before claims were per-mount. */
 export function releaseClaimFile({ home = homedir(), pid = process.pid } = {}) {
   return join(releaseInUseDir({ home }), `${pid}.json`);
 }
 
 export function releaseClaimInUse({ home = homedir(), pid = process.pid } = {}) {
-  const file = releaseClaimFile({ home, pid });
-  return existsSync(file) || false;
+  let names;
+  try { names = readdirSync(releaseInUseDir({ home })); } catch { return false; }
+  return names.some((name) => CLAIM_NAME_RE.exec(name)?.[1] === String(pid));
 }
 
-export function clearReleaseClaim({ home = homedir(), pid = process.pid } = {}) {
-  try { rmSync(releaseClaimFile({ home, pid }), { force: true }); return true; } catch { return false; }
+/**
+ * Remove the claim this caller wrote. Pass the file `claimReleaseInUse`
+ * returned: clearing by PID would remove a sibling mount's claim instead of this
+ * one's, which is the opposite of the intent.
+ */
+export function clearReleaseClaim({ home = homedir(), pid = process.pid, file = null } = {}) {
+  try {
+    if (file) { rmSync(file, { force: true }); return true; }
+    // No handle given, so only the unbranded name can be attributed to this
+    // process without guessing between siblings.
+    rmSync(releaseClaimFile({ home, pid }), { force: true });
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -129,7 +153,7 @@ export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
     // The filename carries the PID, and the name is complete before any content
     // exists — so a torn write still says whose claim it was, which is what
     // keeps one old unusable file from disabling pruning forever.
-    const pidFromName = /^(\d+)\.json$/.exec(name) ? Number.parseInt(name, 10) : null;
+    const pidFromName = CLAIM_NAME_RE.exec(name) ? Number.parseInt(name, 10) : null;
 
     let parsed = null;
     try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { parsed = null; }
