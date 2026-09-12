@@ -318,14 +318,17 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
   // The revision Git actually left the worktree at, not the string we asked for:
   // a caller may pass a branch or tag, and recording that name would never match
   // the commit OID `worktree list` reports, so the worktree could never be
-  // recognized as untouched. The same applies to a post-checkout hook that moves
-  // HEAD during creation.
+  // recognized as untouched.
   const headRes = await runGit(run, ['rev-parse', 'HEAD'], { cwd: dir });
-  const created = headRes.ok && headRes.stdout.trim() ? headRes.stdout.trim() : rev;
+  const created = headRes.ok ? headRes.stdout.trim() : '';
 
   const commonDir = await commonDirOf(run, repo.repoRoot);
   const incarnation = commonDir ? await claimIncarnation(run, dir) : null;
-  const owned = Boolean(commonDir && incarnation)
+  // All four identities are required, and an unresolvable HEAD is not a fallback
+  // to the requested string: recording a symbolic name would produce a record
+  // that can never match, which is a worktree that can never be cleaned up
+  // reported as owned.
+  const owned = Boolean(commonDir && incarnation && created)
     && recordOwnership({ worktreePath: dir, repo: commonDir, incarnation, head: created, purpose, at });
   return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name, owned };
 }
@@ -653,11 +656,33 @@ export async function cleanupIsolatedWorkspace({
     }
   }
 
+  if (!force) {
+    // Measured, not assumed: git refuses modified, staged and untracked files
+    // without `--force`, but it removes a worktree whose only remaining content
+    // is *ignored* — build output, a log, local config — and takes that content
+    // with it. Ask about ignored files directly, and treat an unanswerable
+    // question as a reason not to delete.
+    const ignored = await runGit(run, ['ls-files', '--others', '--ignored', '--exclude-standard'], { cwd: worktreePath });
+    if (!ignored.ok || ignored.stdout.trim() !== '') {
+      return {
+        ok: false,
+        reason: WORKTREE_LOCKED,
+        error: `refusing to remove ${worktreePath} without --force: it holds files that are not Crew's, or its contents could not be read`,
+        cleanupBlocked: true,
+      };
+    }
+  }
+
   if (root) {
     // Preferred path: `git worktree remove` (removes registration and directory
-    // atomically). Retry bounded times to recover transient locks. Without
-    // `--force`, git itself refuses a worktree that holds uncommitted or
-    // untracked changes, which is the check that catches an operator's work.
+    // atomically). Retry bounded times to recover transient locks.
+    //
+    // The ownership re-check above narrows the window between deciding and
+    // deleting, but it does not close it: git has no "remove only if HEAD and
+    // incarnation still equal X" primitive, so a worktree that changes in the
+    // moments between the two is removed anyway. That residual is accepted and
+    // stated rather than papered over; closing it needs a lease on the worktree,
+    // not another read.
     const args = force
       ? ['worktree', 'remove', '--force', worktreePath]
       : ['worktree', 'remove', worktreePath];

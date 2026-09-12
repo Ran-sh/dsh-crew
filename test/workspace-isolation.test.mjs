@@ -590,6 +590,8 @@ test('pruneWorktrees does not force away a worktree that holds changes', async (
     writeOwnership({ root, dir, gitDir });
     const { runner, calls } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
       { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+      // Nothing ignored, so the removal is attempted and git itself refuses.
+      { pat: /^ls-files --others --ignored --exclude-standard$/, out: { stdout: '' } },
       // What git says when the worktree holds modified or untracked files.
       { pat: /^worktree remove /, out: { code: 128, stderr: "fatal: 'x' contains modified or untracked files, use --force to delete it\n" } },
     ]));
@@ -601,6 +603,55 @@ test('pruneWorktrees does not force away a worktree that holds changes', async (
     // Compared canonically: the source passes the resolved path, which on Windows
     // differs from a temp path spelled with its 8.3 alias.
     assert.deepEqual(remove.args, ['worktree', 'remove', canon(dir)], 'removal is attempted without --force');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Measured with real git: non-forced removal refuses modified, staged and
+// untracked files, but it happily removes a worktree whose only content is
+// *ignored* — build output, a log, local config — and takes that with it. So the
+// ignored set is asked about directly, and an unanswerable question counts as a
+// reason not to delete.
+test('pruneWorktrees refuses a worktree whose only remaining content is ignored', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-ignored-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    const { runner, calls } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+      { pat: /^ls-files --others --ignored --exclude-standard$/, out: { stdout: 'build/output.js\n' } },
+      { pat: /^worktree remove /, out: { code: 0 } },
+    ]));
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+    assert.equal(pruned.removed, 0);
+    assert.deepEqual(pruned.failed, [canon(dir)]);
+    assert.match(pruned.actions.join(' '), /not Crew's/);
+    assert.equal(calls.some((c) => c.args[1] === 'remove'), false, 'the removal is never attempted');
+    assert.equal(existsSync(dir), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// And when git cannot answer the question, that is not permission either.
+test('pruneWorktrees refuses when it cannot tell what a worktree holds', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-unknown-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    const { runner, calls } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+      // No rule for the ignored query: git cannot say.
+      { pat: /^worktree remove /, out: { code: 0 } },
+    ]));
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+    assert.equal(pruned.removed, 0);
+    assert.equal(calls.some((c) => c.args[1] === 'remove'), false, 'nothing is deleted on an unanswerable check');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -964,6 +1015,98 @@ maybe('concurrent jobs in the same second each get their own worktree', async ()
 // Retention has to recognise worktrees from before the rename as Crew's, or they
 // would be adopted by nothing: not pruned, not cleaned, just accumulating in the
 // temp directory forever. A user-created worktree must stay untouched.
+// The whole path against real git, for the case a fake cannot settle: git's own
+// refusal covers modified, staged and untracked files, but it happily removes a
+// worktree whose operator committed on the detached HEAD. That is caught one step
+// earlier, by HEAD no longer matching the revision Crew recorded.
+maybe('prune leaves a Crew worktree alone once an operator commits in it', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-opcommit-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-opcommit-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const created = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    assert.equal(created.ok, true, created.error ?? '');
+    assert.equal(created.owned, true, 'creation records the worktree');
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
+    assert.equal(JSON.parse(readFileSync(join(root, '.crew-owned', `${created.name}.json`), 'utf8')).head, base,
+      'the record names the revision git actually checked out, not the string that was requested');
+
+    // The operator commits on the detached HEAD. git itself would remove this
+    // without complaint, because the tree is clean relative to its new HEAD.
+    writeFileSync(join(created.worktreePath, 'operator.mjs'), 'export const op = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: created.worktreePath });
+    execFileSync('git', ['commit', '-qm', 'operator work'], { cwd: created.worktreePath });
+
+    const pruned = await pruneWorktrees({ allowed: [repo] });
+    assert.equal(pruned.removed, 0, `nothing may be removed: ${pruned.actions.join(' | ')}`);
+    assert.deepEqual(pruned.retained, [canon(created.worktreePath)], 'it is reported as taken over');
+    assert.equal(existsSync(created.worktreePath), true);
+    assert.equal(existsSync(join(created.worktreePath, 'operator.mjs')), true, 'the commit is still there');
+    await cleanupIsolatedWorkspace({ worktreePath: created.worktreePath });
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// And the uncommitted case, where git is the thing that refuses.
+maybe('prune leaves a Crew worktree alone while it holds uncommitted work', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-opdirty-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-opdirty-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const created = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    assert.equal(created.ok, true, created.error ?? '');
+    // Untouched by an operator, but holding work: still HEAD-equal, so the
+    // decision comes down to git refusing the removal.
+    writeFileSync(join(created.worktreePath, 'scratch.mjs'), 'export const s = 1;\n');
+
+    const pruned = await pruneWorktrees({ allowed: [repo] });
+    assert.equal(pruned.removed, 0, `nothing may be removed: ${pruned.actions.join(' | ')}`);
+    assert.deepEqual(pruned.failed, [canon(created.worktreePath)]);
+    assert.equal(existsSync(join(created.worktreePath, 'scratch.mjs')), true, 'the file survives');
+    await cleanupIsolatedWorkspace({ worktreePath: created.worktreePath });
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// The default: an untouched Crew worktree outside the allowed set is pruned.
+maybe('prune removes a Crew worktree that is still untouched', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-opclean-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-opclean-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const created = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    const pruned = await pruneWorktrees({ allowed: [repo] });
+    assert.equal(pruned.removed, 1, `the untouched worktree goes: ${pruned.actions.join(' | ')}`);
+    assert.deepEqual(pruned.failed, []);
+    assert.equal(existsSync(created.worktreePath), false);
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 maybe('prune removes only what Crew recorded creating', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-repo-'));
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-root-'));

@@ -104,15 +104,25 @@ export async function apply(ctx) {
   if (!claimReleaseInUse()) {
     ctx.logger?.warn?.('dsh-crew: could not record this release as in use; a later update may prune it while this Hub is running');
   }
-  registerRuntimeEndpoint(ctx);
-  installAdaptiveHealthObserver();
-  // Release the claim on disposal. Nothing else may remove a claim file — the
-  // reader deliberately never unlinks one, because it cannot tell its object from
-  // a successor published at the same name — but the process that owns a claim
-  // may remove its own.
-  const disposeHub = await applyHub(ctx);
-  return async () => {
+  try {
+    registerRuntimeEndpoint(ctx);
+    installAdaptiveHealthObserver();
+    const disposeHub = await applyHub(ctx);
+    // Release the claim on disposal, and only once teardown has actually
+    // finished: clearing it first would say "this release is unused" while the
+    // Hub is still running. Nothing else may remove a claim file — the reader
+    // deliberately never unlinks one, because it cannot tell its object from a
+    // successor published at the same name — but the process that owns a claim
+    // may remove its own.
+    return async () => {
+      try { if (typeof disposeHub === 'function') await disposeHub(); }
+      finally { try { clearReleaseClaim(); } catch { /* best effort */ } }
+    };
+  } catch (error) {
+    // No disposer will ever be returned for a failed mount, so the claim has to
+    // be released here or the release stays pinned by a process that never
+    // provided anything.
     try { clearReleaseClaim(); } catch { /* best effort */ }
-    if (typeof disposeHub === 'function') await disposeHub();
-  };
+    throw error;
+  }
 }
