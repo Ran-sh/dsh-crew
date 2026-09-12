@@ -111,7 +111,7 @@ test('ZCode shared-to-native update removes stale shared Crew MCP and uninstall 
     assert.ok(shared.mcpServers['shared'], 'unrelated shared server must be preserved');
     assert.ok(native.mcp.servers['native'], 'unrelated native server must be preserved');
 
-    assert.equal(uninstallZCode({ home }).ok, true);
+    assert.equal(uninstallZCode({ home, env: {} }).ok, true);
     native = readJson(nativeFile);
     shared = readJson(sharedFile);
     assert.equal(native.mcp.servers['dsh-crew'], undefined);
@@ -151,7 +151,7 @@ test('ZCode native-to-shared update tracks prior native source so uninstall remo
         'dsh-crew': { command: 'node', args: [join(ROOT, 'src', 'server.mjs')] },
       } },
     }));
-    assert.equal(uninstallZCode({ home }).ok, true);
+    assert.equal(uninstallZCode({ home, env: {} }).ok, true);
 
     const native = readJson(nativeFile);
     const shared = readJson(sharedFile);
@@ -205,7 +205,7 @@ test('ZCode uninstall restores a pre-existing same-name agent instead of deletin
     writeFileSync(file, '# personal worker\n');
     assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
     assert.notEqual(readFileSync(file, 'utf8'), '# personal worker\n');
-    assert.equal(uninstallZCode({ home }).ok, true);
+    assert.equal(uninstallZCode({ home, env: {} }).ok, true);
     assert.equal(readFileSync(file, 'utf8'), '# personal worker\n');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -101,4 +101,27 @@ test('a missing template fails closed rather than writing nothing quietly', (t) 
   const result = installCrewSkill({ home, root: join(home, 'no-such-payload'), env: {} });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'CREW_SKILL_TEMPLATE_MISSING');
+});
+
+// Test isolation has failed four times in this area, always the same way: a test
+// injects a temporary `home` but omits `env`, so the installer follows the
+// developer's real `CODEX_HOME` and writes — or deletes — the live skill. The
+// installers take `env` for exactly this reason; this guard fails when a call
+// site forgets it, which is cheaper than noticing a missing skill by hand.
+test('every test call site that can touch a host skill directory passes env', () => {
+  const dir = new URL('.', import.meta.url);
+  const offenders = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.test.mjs')) continue;
+    const text = readFileSync(new URL(name, dir), 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/\b(install|uninstall)(Codex|ZCode)\(\{([^}]*)\}\)/) ?? line.match(/\b(install|remove)CrewSkill\(\{([^}]*)\}\)/);
+      if (!m) continue;
+      const args = m[3] ?? m[2] ?? '';
+      // `env` (shorthand or property) must be present, or the call inherits the
+      // developer's real environment.
+      if (!/(^|[,\s])env\b/.test(args)) offenders.push(`${name}: ${line.trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `these calls would use the real CODEX_HOME:\n${offenders.join('\n')}`);
 });

@@ -70,17 +70,10 @@ function renderedCodexRole(root, file) {
   return source.replace(/args = \[.*server\.mjs"\]/, `args = ["${renderedPath}"]`);
 }
 
-function managedPolicyBlock(root) {
-  const policy = readText(join(root, 'codex', 'AGENTS.md'))?.trim();
-  if (!policy) return null;
-  return `${POLICY_START}\n${policy}\n${POLICY_END}`;
-}
-
 export function codexLegacyPolicyDigest(text) {
   const canonical = typeof text === 'string' ? text.replace(/\r\n/g, '\n').trim() : '';
   return canonical ? createHash('sha256').update(canonical, 'utf8').digest('hex') : null;
 }
-
 export function stripKnownLegacyCodexPolicy(text, { knownHashes = CODEX_LEGACY_POLICY_HASHES } = {}) {
   if (typeof text !== 'string') return text;
   const start = POLICY_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

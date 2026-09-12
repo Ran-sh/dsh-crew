@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 1.7.2 — 2026-09-12
+
+- Drops what the policy removal left behind. `codex/AGENTS.md` and
+  `zcode/AGENTS.md` were the source of the injected blocks and had no reader
+  left, and `managedPolicyBlock`, which read the Codex one, had no caller — dead
+  weight in the shipped payload that implied a policy still gets installed. The
+  markers and legacy-hash helpers stay: they are what removes a block an older
+  release wrote.
+- Guards the test isolation that has failed repeatedly here. A test that injects
+  a temporary `home` but omits `env` makes the installer follow the developer's
+  real `CODEX_HOME`, so the run writes — or deletes — the live skill; three call
+  sites did exactly that and removed the real Codex skill. A test now fails when
+  a call site forgets `env`, so the mistake is caught by the suite instead of by
+  a missing skill later.
+
 ## 1.7.1 — 2026-09-12
 
 - Ships the skill template in the npm package. `skills/` was missing from the

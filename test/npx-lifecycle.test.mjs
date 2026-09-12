@@ -221,11 +221,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 1.7.1', () => {
+test('package, runtime identity, and changelog identify candidate 1.7.2', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '1.7.1');
+  assert.equal(manifest.version, '1.7.2');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '1.7.1');
+  assert.equal(RUNTIME_VERSION, '1.7.2');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -1683,7 +1683,7 @@ test('rollback converges the supervisor against the exact retained release after
     });
     await npxUpdate({
       home: t.dir,
-      candidate: makeCandidate(join(t.dir, 'next'), { version: '1.7.1' }),
+      candidate: makeCandidate(join(t.dir, 'next'), { version: '1.7.2' }),
       installer: rec.installer,
       log: () => {},
       ensureRuntime: okRuntime(),

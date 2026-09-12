@@ -23,15 +23,18 @@ function read(path) { return readFileSync(path, 'utf8'); }
 function makeIntegrationRoot(home, name, marker = '') {
   const root = join(home, name);
   cpSync(join(ROOT, 'codex'), join(root, 'codex'), { recursive: true });
+  // The skill template ships in the payload too, so the fixture must carry it
+  // or an install from this root fails with CREW_SKILL_TEMPLATE_MISSING.
+  cpSync(join(ROOT, 'skills'), join(root, 'skills'), { recursive: true });
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'server.mjs'), `export const payload = ${JSON.stringify(name)};\n`);
   if (marker) {
     for (const relative of [
-      ['codex', 'AGENTS.md'],
       ['codex', 'agents', 'ds-worker.toml'],
       ['codex', 'agents', 'ds-reviewer.toml'],
       ['codex', 'prompts', 'dsh-config.md'],
       ['codex', 'prompts', 'dsh-status.md'],
+      ['skills', 'dsh-crew', 'SKILL.md'],
     ]) {
       const file = join(root, ...relative);
       writeFileSync(file, `${read(file).trimEnd()}\n${marker}\n`);
