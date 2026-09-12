@@ -6,6 +6,19 @@ Future changes go here.
 
 ## 1.5.0 — 2026-09-11
 
+- Stops release retention from deleting a release a running process is executing.
+  The Hub loads several modules lazily with a cache-busting query so a config
+  edit is visible without a restart; those reads go to disk every time, so
+  removing the release under a live process breaks exactly the routes behind
+  them. Retention protected the *current pointer* but not the release a running
+  process was actually on, so an update could leave a machine whose settings
+  panel answered `500 Cannot find module` on `/config`, `/install/status`,
+  `/quick-status` and `/runtime/restart-status` — and updating again did not
+  repair it, because the damage is to the process, not the files. A process now
+  records the release it is running and retention skips any release with a live
+  claim; liveness is decided by the pid, so a process that dies without cleaning
+  up cannot pin a release forever, and a claim that cannot be written is ignored
+  rather than failing the start.
 - Writes the Codex integration where Codex actually reads it. Codex honours
   `CODEX_HOME` and falls back to `~/.codex`, but the installer only ever wrote the
   latter — so for anyone who set `CODEX_HOME`, every install reported success

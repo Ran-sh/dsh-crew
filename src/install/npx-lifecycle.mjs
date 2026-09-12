@@ -42,6 +42,7 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
+import { liveReleaseClaims } from '../release-in-use.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -1085,9 +1086,15 @@ function gcOldReleases({ home, keep = KEEP_RELEASES, protect = null }) {
   const releasesDir = crewReleasesDir({ home });
   if (!existsSync(releasesDir)) return;
   const removed = [];
+  // A running Hub keeps executing the release it started from and re-reads
+  // several modules from disk on every request, so removing that release breaks
+  // those routes with no recovery but a restart. Protect what live processes
+  // claim, not just what the pointer names.
+  const claimed = liveReleaseClaims({ home }).map((dir) => resolve(dir));
+  const live = new Set([...(protect ? [resolve(protect)] : []), ...claimed]);
   const dirs = readdirSync(releasesDir)
     .map((name) => join(releasesDir, name))
-    .filter((dir) => (!pointer || dir !== pointer.path) && (!protect || dir !== protect));
+    .filter((dir) => (!pointer || dir !== pointer.path) && !live.has(resolve(dir)));
   const incomplete = [];
   const complete = [];
   for (const dir of dirs) {

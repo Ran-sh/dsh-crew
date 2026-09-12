@@ -10,6 +10,7 @@
 import { apply as applyHub, inject, name, WorkerRegistry } from './index.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { getProcessAdaptiveHealthStore } from '../adaptive-routing.mjs';
+import { claimReleaseInUse } from '../release-in-use.mjs';
 
 const RUNTIME_PATH = '/_dsh/dsh-crew/runtime';
 const ADAPTIVE_OBSERVER_INSTALLED = Symbol.for('@ran-sh/dsh-crew/adaptive-observer-installed');
@@ -92,6 +93,11 @@ export function installAdaptiveHealthObserver() {
 }
 
 export async function apply(ctx) {
+  // Declare this release in use before anything else. The Hub loads several
+  // modules lazily with a cache-busting query, so deleting the release under a
+  // running process would break those routes with no way to recover but a
+  // restart. Retention reads these claims and leaves a live release alone.
+  claimReleaseInUse();
   registerRuntimeEndpoint(ctx);
   installAdaptiveHealthObserver();
   return applyHub(ctx);
