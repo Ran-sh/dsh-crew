@@ -418,10 +418,18 @@ export async function staleWorktrees({ git, allowed = [] } = {}) {
     if (root.ok) {
       const res = await runGit(run, ['worktree', 'list', '--porcelain'], { cwd: root.repoRoot });
       if (res.ok) {
-        for (const block of String(res.stdout).split('\n\n')) {
-          const path = block.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
+        // `git worktree list` puts the main working tree first. Inspecting from
+        // inside a linked worktree reports that worktree as the top level, so the
+        // repo root cannot be matched by path — the position in the list is what
+        // identifies the main tree.
+        const blocks = String(res.stdout).split('\n\n');
+        for (let index = 1; index < blocks.length; index += 1) {
+          const path = blocks[index].split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
           if (!path) continue;
           const abs = resolve(path);
+          // A repo whose directory happens to start with a Crew prefix (say, a
+          // checkout named dsh-crew-something) is not a disposable worktree, and
+          // treating it as stale would have the cleanup path fighting over it.
           if (isCrewWorktreeName(basename(abs)) && !set.has(abs)) stale.push(abs);
         }
       }

@@ -413,3 +413,49 @@ maybe('concurrent jobs in the same second each get their own worktree', async ()
     try { rmSync(root, { recursive: true, force: true }); } catch {}
   }
 });
+
+// Retention has to recognise worktrees from before the rename as Crew's, or they
+// would be adopted by nothing: not pruned, not cleaned, just accumulating in the
+// temp directory forever. A user-created worktree must stay untouched.
+maybe('prune adopts the legacy prefix alongside the new one and spares user worktrees', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    // One from the new namer, one shaped like an older release left behind.
+    const ours = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    assert.equal(ours.ok, true, ours.error ?? '');
+    const legacyPath = join(root, 'dsh-crew-wf-legacy-release');
+    execFileSync('git', ['worktree', 'add', '--detach', legacyPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
+    // And one the user made themselves, which is never Crew's to remove.
+    const userPath = join(root, 'user-kept');
+    execFileSync('git', ['worktree', 'add', '--detach', userPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
+
+    const stale = await staleWorktrees({ allowed: [ours.worktreePath] });
+    assert.deepEqual(stale.sort(), [legacyPath].sort(), 'only the unclaimed Crew worktree is stale');
+    assert.equal(stale.includes(userPath), false, 'a user worktree is not stale');
+    // The repo's own directory starts with `dsh-crew-` here, which would match
+    // the legacy prefix — but the main working tree is never a disposable
+    // worktree, and treating it as one would put the cleanup path in a fight
+    // with the repo itself.
+    assert.equal(stale.includes(resolve(repo)), false, 'the main working tree is never stale');
+
+    // Prune removes what it finds stale and leaves everything else alone.
+    const pruned = await pruneWorktrees({ allowed: [ours.worktreePath] });
+    assert.equal(pruned.removed, 1, `exactly the legacy worktree goes: ${pruned.actions.join(' | ')}`);
+    assert.equal(existsSync(legacyPath), false, 'the unclaimed Crew worktree is pruned');
+    assert.equal(existsSync(userPath), true, 'the user worktree survives');
+    assert.equal(existsSync(ours.worktreePath), true, 'the active worktree survives');
+    await cleanupIsolatedWorkspace({ worktreePath: ours.worktreePath });
+    await cleanupIsolatedWorkspace({ worktreePath: userPath });
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
