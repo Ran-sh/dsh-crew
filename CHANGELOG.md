@@ -4,6 +4,23 @@
 
 Future changes go here.
 
+## 1.9.0 — 2026-09-12
+
+- Names a worktree for what it is: `Crew_<date>_<time>_<purpose>`, for example
+  `Crew_20260912_183045_worker`. The old name was a job id and random hex, so an
+  operator looking at the worktree list — or at a cleanup prompt — could not tell
+  when a job ran or whether a tree belonged to a worker or a reviewer without
+  opening something. The purpose is the job's role, which is what the job
+  actually is. Worktrees from an earlier release keep being recognised as Crew's
+  under their old prefix, so they are still adopted and cleaned up.
+- Reserves the worktree directory instead of probing for a free name. The name is
+  chosen before anything is created, so two jobs starting inside the same second
+  both saw it free, took it, and one lost the race on `git worktree add`. The
+  suffix that disambiguates them is now allocated by `mkdir`, which fails on
+  collision and therefore cannot race. This was reproducible: two concurrent
+  coding jobs failed intermittently, and eight concurrent reservations now
+  succeed with unique names on every run.
+
 ## 1.8.0 — 2026-09-12
 
 - Teaches the skill what a host actually trips on: how to dispatch, and how to

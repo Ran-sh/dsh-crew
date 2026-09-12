@@ -20,6 +20,7 @@ import {
   inspectRepository,
   NOT_GIT_REPOSITORY,
   WORKTREE_LOCKED,
+  isCrewWorktreeName,
 } from '../src/workspace-isolation.mjs';
 
 const REV = 'abc123';
@@ -71,7 +72,9 @@ test('createIsolatedWorkspace allocates a unique detached worktree at the base r
   const c = await createIsolatedWorkspace({ cwd: '/repo', jobId: 'j1', root: tmpdir(), git: runner });
   assert.equal(c.ok, true);
   assert.equal(c.baseRevision, REV);
-  assert.ok(c.worktreePath.startsWith(join(tmpdir(), 'dsh-crew-j1-')));
+  // The name is Crew_<date>_<time>_<purpose>; an unset purpose reads as `job`.
+  assert.match(c.name, /^Crew_[0-9]{8}_[0-9]{6}_job$/);
+  assert.equal(c.worktreePath, join(tmpdir(), c.name));
   const add = calls.find((x) => x.args[0] === 'worktree');
   assert.deepEqual(add.args, ['worktree', 'add', '--detach', c.worktreePath, REV]);
 });
@@ -283,6 +286,128 @@ maybe('real temp repo: create worktree, edit, capture candidate, cleanup', async
 
     const cleaned = await cleanupIsolatedWorkspace({ worktreePath: created.worktreePath, git: undefined });
     assert.equal(cleaned.ok, true, `cleanup failed: ${cleaned.error ?? ''}`);
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// ---------- worktree naming ----------
+
+// The name is what an operator sees in the directory list and picks out of a
+// cleanup prompt, so it has to say when the job ran and what it was for.
+maybe('names a worktree Crew_<date>_<time>_<purpose>', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-name-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-name-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const at = new Date(2026, 8, 12, 18, 30, 45);
+    for (const purpose of ['worker', 'reviewer']) {
+      const created = await createIsolatedWorkspace({ cwd: repo, purpose, at, root });
+      assert.equal(created.ok, true, created.error ?? '');
+      const expected = `Crew_20260912_183045_${purpose}`;
+      assert.equal(created.name, expected);
+      assert.equal(existsSync(join(root, expected)), true);
+      await cleanupIsolatedWorkspace({ worktreePath: created.worktreePath });
+    }
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// Parallel jobs can start inside the same second, so the name cannot be the
+// timestamp alone or two jobs would collide on one directory.
+maybe('disambiguates two jobs that start in the same second', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-collide-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-collide-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const at = new Date(2026, 8, 12, 18, 30, 45);
+    const first = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', at, root });
+    const second = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', at, root });
+    assert.equal(first.name, 'Crew_20260912_183045_worker');
+    assert.equal(second.name, 'Crew_20260912_183045_worker-2');
+    assert.notEqual(first.worktreePath, second.worktreePath);
+    await cleanupIsolatedWorkspace({ worktreePath: first.worktreePath });
+    await cleanupIsolatedWorkspace({ worktreePath: second.worktreePath });
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// Worktrees from an earlier release are still Crew's; if the new prefix were the
+// only one recognised, they would be adopted by nothing and cleaned up never.
+test('adopts both the current and the legacy worktree name', () => {
+  assert.equal(isCrewWorktreeName('Crew_20260912_183045_worker'), true);
+  assert.equal(isCrewWorktreeName('dsh-crew-wf-mtx2rtvq-mhkh4i-e21eb640'), true, 'a pre-rename worktree is still ours');
+  assert.equal(isCrewWorktreeName('someone-elses-dir'), false);
+  assert.equal(isCrewWorktreeName(''), false);
+  assert.equal(isCrewWorktreeName(null), false);
+});
+
+// A purpose is free-form, so it must not be able to escape the directory name.
+maybe('sanitizes a purpose that is not a plain word', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-purge-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-purge-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const created = await createIsolatedWorkspace({ cwd: repo, purpose: '../../escape/me now', at: new Date(2026, 8, 12, 1, 2, 3), root });
+    assert.equal(created.ok, true, created.error ?? '');
+    assert.equal(created.name, 'Crew_20260912_010203_escape-me-now');
+    assert.equal(resolve(created.worktreePath).startsWith(resolve(root)), true, 'the worktree stays under its root');
+    await cleanupIsolatedWorkspace({ worktreePath: created.worktreePath });
+  } finally {
+    try { rmSync(repo, { recursive: true, force: true }); } catch {}
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+// The name is chosen before anything is created, so two jobs starting in the
+// same second would both see it free and one would lose the race on
+// `git worktree add`. Reserving the directory makes the choice atomic.
+maybe('concurrent jobs in the same second each get their own worktree', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-race-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-race-root-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'export const a = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
+
+    const at = new Date(2026, 8, 12, 18, 30, 45);
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => createIsolatedWorkspace({ cwd: repo, purpose: 'worker', at, root })),
+    );
+    assert.equal(results.filter((r) => r.ok).length, 6, results.map((r) => r.error ?? 'ok').join(' | '));
+    const names = results.map((r) => r.name);
+    assert.equal(new Set(names).size, names.length, `names must be unique: ${names.join(', ')}`);
+    // The winner of the race is whichever mkdir landed first, so the bare name is
+    // somewhere in the set rather than necessarily first.
+    assert.ok(names.includes('Crew_20260912_183045_worker'), `expected the bare name among: ${names.join(', ')}`);
+    assert.ok(names.every((n) => /^Crew_20260912_183045_worker(-\d+)?$/.test(n)), `every name keeps the shape: ${names.join(', ')}`);
+    for (const r of results) await cleanupIsolatedWorkspace({ worktreePath: r.worktreePath });
   } finally {
     try { rmSync(repo, { recursive: true, force: true }); } catch {}
     try { rmSync(root, { recursive: true, force: true }); } catch {}

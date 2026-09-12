@@ -285,7 +285,15 @@ export function buildMcpWorkflowRuntime(deps) {
     if (!repo.ok) {
       return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `${job.role ?? 'worker'} needs an isolated git worktree: ${repo.error ?? repo.reason}` };
     }
-    const created = await createIsolatedWorkspace({ cwd: job.requested_cwd, jobId: job.id, baseRevision: job.workspace_branch ?? repo.baseRevision });
+    // The worktree name carries what the job was for, so an operator reading the
+    // directory list can tell a worker tree from a reviewer tree without opening
+    // anything. Role is the honest answer; it is what the job actually is.
+    const created = await createIsolatedWorkspace({
+      cwd: job.requested_cwd,
+      jobId: job.id,
+      purpose: job.role ?? 'job',
+      baseRevision: job.workspace_branch ?? repo.baseRevision,
+    });
     if (!created.ok) {
       return { ok: false, reason: created.reason ?? 'WORKTREE_CREATE_FAILED', error: `worktree create failed: ${created.error ?? ''}` };
     }

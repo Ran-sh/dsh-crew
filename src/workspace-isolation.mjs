@@ -11,7 +11,7 @@
 // lock blocks cleanup.
 
 import { execFile } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { readFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
@@ -26,10 +26,23 @@ export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
 export const GIT_TIMEOUT = 'GIT_TIMEOUT';
 export const GIT_ERROR = 'GIT_ERROR';
 export const WORKTREE_LOCKED = 'WORKTREE_LOCKED';
+export const WORKTREE_RESERVE_FAILED = 'WORKTREE_RESERVE_FAILED';
 export const CANDIDATE_CAPTURE_FAILED = 'CANDIDATE_CAPTURE_FAILED';
 export const MAX_PARALLEL_CAP = 16;
 export const DEFAULT_MAX_PARALLEL = 3;
-const WORKTREE_PREFIX = 'dsh-crew-';
+// Worktree names read `Crew_YYYYMMDD_HHMMSS_<purpose>` so an operator can tell
+// from the directory alone when a job ran and what it was for. The legacy
+// prefix stays recognised as ours, so worktrees created by an earlier release
+// are still adopted and cleaned up rather than orphaned.
+const WORKTREE_PREFIX = 'Crew_';
+const LEGACY_WORKTREE_PREFIXES = Object.freeze(['dsh-crew-']);
+
+/** Whether a directory name is a worktree Crew created. */
+export function isCrewWorktreeName(name) {
+  const value = String(name ?? '');
+  return value.startsWith(WORKTREE_PREFIX)
+    || LEGACY_WORKTREE_PREFIXES.some((prefix) => value.startsWith(prefix));
+}
 
 async function defaultRunner(args, { cwd }) {
   try {
@@ -57,11 +70,46 @@ async function runGit(runner, args, opts) {
   }
 }
 
-function worktreeName(jobId) {
-  const safe = String(jobId ?? '').replace(/[^A-Za-z0-9._-]/g, '-') || 'job';
-  return `${WORKTREE_PREFIX}${safe}-${randomBytes(4).toString('hex')}`;
+const PURPOSE_MAX = 32;
+
+/** Local wall-clock stamp: readable, and what an operator expects to see. */
+function stamp(at) {
+  const d = at instanceof Date ? at : new Date(at ?? Date.now());
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+    + `_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/**
+ * `Crew_<date>_<time>_<purpose>`, with a numeric suffix only when that name is
+ * already taken. Parallel jobs can start inside the same second, so the suffix is
+ * what keeps the name unique without putting random noise in every name.
+ */
+/**
+ * `Crew_<date>_<time>_<purpose>`, reserved by creating the directory.
+ *
+ * The reservation is a mkdir, not a lookup: two jobs starting in the same second
+ * both probe before either has created anything, so a check-then-act name would
+ * hand them the same path and one `git worktree add` would fail. mkdir
+ * fails on EEXIST, which makes the suffix loop race-free.
+ */
+function reserveWorktreeDir({ root, purpose, at }) {
+  mkdirSync(root, { recursive: true });
+  const safe = String(purpose ?? 'job').replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '').slice(0, PURPOSE_MAX) || 'job';
+  const base = `${WORKTREE_PREFIX}${stamp(at)}_${safe}`;
+  for (let n = 1; n <= 100; n += 1) {
+    const name = n === 1 ? base : `${base}-${n}`;
+    const dir = join(root, name);
+    try {
+      mkdirSync(dir);
+      return { ok: true, dir, name };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+  return { ok: false, error: 'no free worktree name' };
+}
 export function defaultWorktreeRoot() {
   return join(tmpdir(), 'dsh-crew-worktrees');
 }
@@ -90,15 +138,21 @@ export async function inspectRepository({ cwd, git, runner } = {}) {
   };
 }
 
-export async function createIsolatedWorkspace({ cwd, jobId, baseRevision, root = defaultWorktreeRoot(), git } = {}) {
+export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevision, at, root = defaultWorktreeRoot(), git } = {}) {
   const run = git ?? defaultRunner;
   const repo = await inspectRepository({ cwd, git: run });
   if (!repo.ok) return { ok: false, reason: repo.reason, error: repo.error };
   const rev = baseRevision ?? repo.baseRevision;
-  const dir = join(root, worktreeName(jobId ?? repo.baseRevision));
+  const reserved = reserveWorktreeDir({ root, purpose, at });
+  if (!reserved.ok) return { ok: false, reason: WORKTREE_RESERVE_FAILED, error: reserved.error };
+  const { dir, name } = reserved;
   const res = await runGit(run, ['worktree', 'add', '--detach', dir, rev], { cwd: repo.repoRoot });
-  if (!res.ok) return { ok: false, reason: res.reason, error: res.error };
-  return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name: basename(dir) };
+  if (!res.ok) {
+    // Release the name so a retry is not blocked by an empty directory.
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    return { ok: false, reason: res.reason, error: res.error };
+  }
+  return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name };
 }
 
 function splitFirstTab(line) {
@@ -322,7 +376,7 @@ export async function cleanupIsolatedWorkspace({
   const run = git ?? defaultRunner;
   if (!worktreePath) return { ok: false, reason: NOT_GIT_REPOSITORY, error: 'worktree path required' };
   const root = repoRoot ?? (await mainRepoRoot(run, worktreePath));
-  const owned = basename(resolve(worktreePath)).startsWith(WORKTREE_PREFIX);
+  const owned = isCrewWorktreeName(basename(resolve(worktreePath)));
 
   if (root) {
     // Preferred path: `git worktree remove --force` (removes registration and
@@ -368,7 +422,7 @@ export async function staleWorktrees({ git, allowed = [] } = {}) {
           const path = block.split('\n').find((l) => l.startsWith('worktree '))?.slice('worktree '.length)?.trim();
           if (!path) continue;
           const abs = resolve(path);
-          if (basename(abs).startsWith(WORKTREE_PREFIX) && !set.has(abs)) stale.push(abs);
+          if (isCrewWorktreeName(basename(abs)) && !set.has(abs)) stale.push(abs);
         }
       }
     }
