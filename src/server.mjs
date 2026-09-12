@@ -421,7 +421,12 @@ async function buildConfigReport() {
             reason_code: workspaceReadiness.reason_code ?? workspaceReadiness.code ?? 'WORKSPACE_NOT_CHECKED',
           },
         };
-        const modelCallability = reprojectRuntimeModelCallability(snapshot, { enabled_roles });
+        // `reprojectRuntimeModelCallability` takes `enabled_roles`; the local
+        // binding is camelCase. Naming the property matters: a bare
+        // `{ enabled_roles }` shorthand is a ReferenceError, and it fires on
+        // every report whenever the Hub returns a readiness snapshot, which is
+        // the normal case.
+        const modelCallability = reprojectRuntimeModelCallability(snapshot, { enabled_roles: enabledRoles });
         return modelCallability ? { ...snapshot, model_callability: modelCallability } : snapshot;
       })()
     : buildRuntimeReadinessSnapshot({

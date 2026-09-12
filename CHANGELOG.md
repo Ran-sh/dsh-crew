@@ -6,6 +6,12 @@ Future changes go here.
 
 ## 1.5.0 — 2026-09-11
 
+- Fixes a `ReferenceError` that broke the `dsh_worker_config` tool outright. The
+  config report passed `{ enabled_roles }` as a shorthand to a function whose
+  parameter carries that name, but the local binding is camelCase — so the call
+  raised `enabled_roles is not defined` instead of returning configuration. It
+  only fired when the Hub supplied a readiness snapshot, which is the normal
+  case, so the tool was unusable in practice while looking correct in isolation.
 - Adds per-model peak/off-peak scheduling. Some providers price by wall clock —
   DeepSeek doubles its rate during peak hours — and until now Crew had no way to
   express that, so an operator could not steer expensive work away from the
