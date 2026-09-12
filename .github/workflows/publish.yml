@@ -108,8 +108,11 @@ jobs:
             const { readFileSync } = require("node:fs");
             const [packed] = JSON.parse(readFileSync("pack-manifest.json", "utf8"));
             const paths = packed.files.map((f) => f.path);
+            // -z: git quotes "unusual" paths (non-ASCII, quotes, newlines) unless
+            // asked for NUL-terminated output, and a quoted path would not match
+            // the real one npm reports — a tracked file would look untracked.
             const tracked = new Set(
-              execFileSync("git", ["ls-files"], { encoding: "utf8" }).split("\n").filter(Boolean),
+              execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean),
             );
             const untracked = paths.filter((p) => !tracked.has(p));
             if (untracked.length) {

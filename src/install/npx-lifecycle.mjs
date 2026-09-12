@@ -1097,6 +1097,10 @@ function gcOldReleases({ home, keep = KEEP_RELEASES, protect = null }) {
   // optional and a skipped pass costs disk; guessing wrong costs a broken Hub.
   const claims = releaseClaimsState({ home });
   if (!claims.reliable) {
+    // Say so rather than passing over it in silence: nothing is pruned until the
+    // claim directory can be read again, and an operator who never hears about
+    // that finds out when the disk fills.
+    process.emitWarning(`dsh-crew: release liveness could not be read (${claims.error ?? 'unknown cause'}); skipping release pruning this pass`);
     return removed;
   }
   const live = new Set([...(protect ? [resolve(protect)] : []), ...claims.live.map((dir) => resolve(dir))]);

@@ -22,6 +22,7 @@ import {
   WORKTREE_LOCKED,
   isCrewWorktreeName,
   reserveWorktreeDir,
+  unownedWorktrees,
 } from '../src/workspace-isolation.mjs';
 
 const REV = 'abc123';
@@ -288,6 +289,34 @@ test('cleanupIsolatedWorkspace verified fallback success when registration and d
 // accident, so the fallback must not treat the name as proof of ownership. An
 // earlier revision did, and a directory belonging to an unrelated repository
 // would have been force-deleted for resembling Crew's.
+// The defect this guards: the fallback deleted the directory first and asked git
+// afterwards. For a worktree git still tracks — the realistic case, where
+// `worktree remove` failed on a transient lock — that destroyed the files and
+// then reported the registration stranded, which is the opposite of the request.
+// The provenance check has to pass here, or the test proves nothing: an earlier
+// version of this fixture omitted the common-dir rule, so `sameRepository`
+// returned false and the file survived for an unrelated reason.
+test('a still-registered worktree keeps its files when git refuses to remove it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-reg-'));
+  const dir = join(root, 'dsh-crew-wf-locked-11111111');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'work.txt'), 'still needed');
+    const { runner } = fakeRunner([
+      SAME_REPO,
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unable to delete: permission denied\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+    ]);
+    const r = await cleanupIsolatedWorkspace({ worktreePath: dir, repoRoot: '/repo', git: runner, backoffMs: 0, reservation: true });
+    assert.equal(r.ok, false);
+    assert.equal(r.cleanupBlocked, true);
+    assert.match(r.error, /still registered/);
+    assert.equal(existsSync(join(dir, 'work.txt')), true, 'files of a still-registered worktree are never discarded');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cleanupIsolatedWorkspace refuses an identically named worktree of another repository', async () => {
   const prefix = join(mkdtempSync(join(tmpdir(), 'dsh-crew-fb2-')), 'dsh-crew-backup-deadbeef');
   try {
@@ -385,7 +414,7 @@ test('staleWorktrees does not adopt a branch worktree that merely matches the le
   assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'but a branch worktree is not adopted');
 });
 
-test('staleWorktrees still adopts a detached legacy worktree outside the allowed set', async () => {
+test('staleWorktrees reports a legacy-named worktree instead of adopting it', async () => {
   const legacy = join(tmpdir(), 'dsh-crew-wf-abc123-1a2b3c4d');
   const { runner } = fakeRunner([
     { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
@@ -395,7 +424,10 @@ test('staleWorktrees still adopts a detached legacy worktree outside the allowed
       out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${legacy}\nHEAD ${REV}\ndetached\n\n` },
     },
   ]);
-  assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [legacy]);
+  // `detached` describes HEAD, not who created the tree, so it cannot on its own
+  // license a delete. Without a record of Crew creating it, it is reported.
+  assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), []);
+  assert.deepEqual(await unownedWorktrees({ git: runner, allowed: [] }), [legacy]);
 });
 
 test('concurrency gate clamps to max parallel and blocks beyond it', () => {
@@ -615,7 +647,7 @@ maybe('concurrent jobs in the same second each get their own worktree', async ()
 // Retention has to recognise worktrees from before the rename as Crew's, or they
 // would be adopted by nothing: not pruned, not cleaned, just accumulating in the
 // temp directory forever. A user-created worktree must stay untouched.
-maybe('prune adopts the legacy prefix alongside the new one and spares user worktrees', async () => {
+maybe('prune removes only what Crew recorded creating', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-repo-'));
   const root = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-root-'));
   try {
@@ -626,32 +658,40 @@ maybe('prune adopts the legacy prefix alongside the new one and spares user work
     execFileSync('git', ['add', '-A'], { cwd: repo });
     execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo });
 
-    // One from the new namer, one shaped like an older release left behind.
-    const ours = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
-    assert.equal(ours.ok, true, ours.error ?? '');
+    // Two Crew worktrees; the first stays active, the second is a leftover.
+    const active = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    const leftover = await createIsolatedWorkspace({ cwd: repo, purpose: 'worker', root });
+    assert.equal(active.ok, true, active.error ?? '');
+    assert.equal(leftover.ok, true, leftover.error ?? '');
+    assert.equal(active.owned, true, 'creation records its own worktree');
+
+    // A worktree shaped like an older release, made by hand: Crew never recorded
+    // creating it, so it is not Crew's to delete however it is named.
     const legacyPath = join(root, 'dsh-crew-wf-legacy-00000000');
     execFileSync('git', ['worktree', 'add', '--detach', legacyPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
     // And one the user made themselves, which is never Crew's to remove.
     const userPath = join(root, 'user-kept');
     execFileSync('git', ['worktree', 'add', '--detach', userPath, 'HEAD'], { cwd: repo, stdio: 'ignore' });
 
-    const stale = await staleWorktrees({ allowed: [ours.worktreePath] });
-    assert.deepEqual(stale.sort(), [legacyPath].sort(), 'only the unclaimed Crew worktree is stale');
-    assert.equal(stale.includes(userPath), false, 'a user worktree is not stale');
+    const allowed = [active.worktreePath];
+    assert.deepEqual(await staleWorktrees({ allowed }), [leftover.worktreePath], 'only the recorded leftover is adoptable');
+    assert.deepEqual(await unownedWorktrees({ allowed }), [legacyPath], 'the hand-made one is reported, not adopted');
     // The repo's own directory starts with `dsh-crew-` here, which would match
     // the legacy prefix — but the main working tree is never a disposable
     // worktree, and treating it as one would put the cleanup path in a fight
     // with the repo itself.
-    assert.equal(stale.includes(resolve(repo)), false, 'the main working tree is never stale');
+    assert.equal((await staleWorktrees({ allowed })).includes(resolve(repo)), false, 'the main working tree is never stale');
 
-    // Prune removes what it finds stale and leaves everything else alone.
-    const pruned = await pruneWorktrees({ allowed: [ours.worktreePath] });
-    assert.equal(pruned.removed, 1, `exactly the legacy worktree goes: ${pruned.actions.join(' | ')}`);
-    assert.equal(existsSync(legacyPath), false, 'the unclaimed Crew worktree is pruned');
+    const pruned = await pruneWorktrees({ allowed });
+    assert.equal(pruned.removed, 1, `exactly the recorded leftover goes: ${pruned.actions.join(' | ')}`);
+    assert.equal(existsSync(leftover.worktreePath), false, 'the recorded leftover is pruned');
+    assert.equal(existsSync(legacyPath), true, 'the unrecorded legacy worktree survives');
     assert.equal(existsSync(userPath), true, 'the user worktree survives');
-    assert.equal(existsSync(ours.worktreePath), true, 'the active worktree survives');
-    await cleanupIsolatedWorkspace({ worktreePath: ours.worktreePath });
+    assert.equal(existsSync(active.worktreePath), true, 'the active worktree survives');
+    assert.deepEqual(pruned.unowned, [legacyPath]);
+    await cleanupIsolatedWorkspace({ worktreePath: active.worktreePath });
     await cleanupIsolatedWorkspace({ worktreePath: userPath });
+    await cleanupIsolatedWorkspace({ worktreePath: legacyPath, repoRoot: repo });
   } finally {
     try { rmSync(repo, { recursive: true, force: true }); } catch {}
     try { rmSync(root, { recursive: true, force: true }); } catch {}

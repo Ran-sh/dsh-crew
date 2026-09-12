@@ -16,7 +16,7 @@
 // release with a live claim. Liveness is decided by the pid, not by the file, so
 // a process that dies without cleaning up cannot pin a release forever.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,7 +70,12 @@ export function claimReleaseInUse({ moduleUrl = import.meta.url, releasePath, ho
     const dir = releaseInUseDir({ home });
     mkdirSync(dir, { recursive: true });
     const file = join(dir, `${pid}.json`);
-    writeFileSync(file, JSON.stringify({ pid, release: resolve(target), claimed_at: now }) + '\n');
+    // Write then rename: a reader that lists the directory can otherwise see this
+    // filename while its JSON is still empty or half-written, and an unparseable
+    // claim is indistinguishable from a dead one.
+    const pending = `${file}.${pid}.tmp`;
+    writeFileSync(pending, JSON.stringify({ pid, release: resolve(target), claimed_at: now }) + '\n');
+    renameSync(pending, file);
     return file;
   } catch { return null; }
 }
@@ -114,12 +119,24 @@ export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const file = join(dir, name);
+    let raw;
+    try { raw = readFileSync(file, 'utf8'); } catch {
+      // A claim this process cannot read is a claim it cannot rule out. Deleting
+      // it would turn an I/O problem into an authoritative "nothing is live".
+      return { live: [...new Set(live)], reliable: false, error: `unreadable claim: ${file}` };
+    }
     let record;
-    try { record = JSON.parse(readFileSync(file, 'utf8')); } catch { record = null; }
+    try { record = JSON.parse(raw); } catch {
+      // Malformed or half-written. The writer now publishes atomically, so this
+      // is not a claim in flight; it is a claim whose contents are unknown, and
+      // unknown is not the same as dead.
+      return { live: [...new Set(live)], reliable: false, error: `unparseable claim: ${file}` };
+    }
     if (record && Number.isInteger(record.pid) && typeof record.release === 'string' && alive(record.pid)) {
       live.push(resolve(record.release));
       continue;
     }
+    // Parsed and positively determined to be dead, so removing it is safe.
     try { rmSync(file, { force: true }); } catch { /* best effort */ }
   }
   return { live: [...new Set(live)], reliable: true };

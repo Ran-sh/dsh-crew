@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -71,15 +71,57 @@ test('a dead claim is discarded, not honoured', (t) => {
   assert.deepEqual(liveReleaseClaims({ home, alive: () => false }), []);
 });
 
-test('torn or malformed claims are reaped rather than failing the read', (t) => {
+test('a valid claim for a dead process is reaped', (t) => {
+  const home = fixture(t);
+  const dir = releaseInUseDir({ home });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '999.json'), JSON.stringify({ pid: 999, release: 'C:/x' }));
+  writeFileSync(join(dir, 'ignored.txt'), 'not a claim');
+  const state = releaseClaimsState({ home, alive: () => false });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, true, 'a parsed claim that is positively dead is safe to drop');
+  assert.equal(existsSync(join(dir, '999.json')), false, 'the dead claim is reaped');
+  assert.equal(existsSync(join(dir, 'ignored.txt')), true, 'unrelated files are left alone');
+});
+
+// The same reasoning as an unreadable directory, one level down. A claim whose
+// contents cannot be read is a claim whose liveness cannot be ruled out, and
+// treating it as dead is how retention deletes a release a running Hub is
+// executing. A truncated file is the realistic case: the writer publishes
+// atomically now, so a torn claim is evidence of an I/O problem, not of a
+// process mid-write.
+test('a malformed claim is unknown, not dead, and is never reaped', (t) => {
   const home = fixture(t);
   const dir = releaseInUseDir({ home });
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'broken.json'), '{ not json');
-  writeFileSync(join(dir, 'nopid.json'), JSON.stringify({ release: 'C:/x' }));
-  writeFileSync(join(dir, 'ignored.txt'), 'not a claim');
-  assert.deepEqual(liveReleaseClaims({ home, alive: () => true }), []);
-  assert.equal(existsSync(join(dir, 'ignored.txt')), true, 'unrelated files are left alone');
+  const state = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, false, 'unparseable content is unknown liveness');
+  assert.match(state.error ?? '', /unparseable claim/);
+  assert.equal(existsSync(join(dir, 'broken.json')), true, 'the file is left for a human to look at');
+});
+
+test('a claim that cannot be read is unknown and is never reaped', (t) => {
+  const home = fixture(t);
+  const dir = releaseInUseDir({ home });
+  mkdirSync(join(dir, '4242.json'), { recursive: true }); // a directory where a file belongs
+  const state = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, false, 'an unreadable claim is unknown liveness');
+  assert.match(state.error ?? '', /unreadable claim/);
+  assert.equal(existsSync(join(dir, '4242.json')), true);
+});
+
+// A claim is written to a temporary name and renamed into place, so a reader can
+// never observe a listed claim whose contents are still being written.
+test('a claim is published atomically', (t) => {
+  const home = fixture(t);
+  const a = fakeRelease(t, home, 'rel-a');
+  const file = claimReleaseInUse({ home, releasePath: a, pid: 4242 });
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).release, a);
+  const leftovers = readdirSync(releaseInUseDir({ home })).filter((n) => n.endsWith('.tmp'));
+  assert.deepEqual(leftovers, [], 'no partial file is left behind');
 });
 
 test('a claim can be cleared on clean shutdown', (t) => {

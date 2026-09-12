@@ -11,10 +11,10 @@
 // lock blocks cleanup.
 
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, dirname } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { isSensitivePath, parseChanges, DIFF_LIMIT, GIT_TIMEOUT_MS } from './workspace-audit.mjs';
@@ -123,6 +123,51 @@ export function defaultWorktreeRoot() {
   return join(tmpdir(), 'dsh-crew-worktrees');
 }
 
+// ---------- ownership record ----------
+//
+// A name is not proof that Crew made a worktree. `dsh-crew-backup-deadbeef`
+// satisfies the legacy grammar, and `detached` describes HEAD rather than who
+// created the tree, so both can be true of a worktree a user made — and cleanup
+// `--force` deletes what it adopts. Crew therefore records what it creates,
+// beside the worktrees it creates it in, and only ever adopts what it finds
+// recorded. Anything else that looks like a leftover is reported for a human
+// instead of removed.
+//
+// The record lives under the worktree root rather than in the Crew home so it
+// travels with the trees it describes: if the root is wiped, the trees are gone
+// with it and there is nothing left to adopt. An unreadable record directory
+// reads as "nothing is owned", which withholds deletion rather than granting it.
+
+const OWNED_DIRNAME = '.crew-owned';
+
+function ownedMarkerPath(worktreePath) {
+  const abs = resolve(worktreePath);
+  return join(dirname(abs), OWNED_DIRNAME, `${basename(abs)}.json`);
+}
+
+function recordOwnership({ worktreePath, purpose, at }) {
+  const marker = ownedMarkerPath(worktreePath);
+  try {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, JSON.stringify({
+      name: basename(resolve(worktreePath)),
+      purpose: purpose ?? null,
+      created_at: at ?? Date.now(),
+    }) + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseOwnership({ worktreePath }) {
+  try { rmSync(ownedMarkerPath(worktreePath), { force: true }); return true; } catch { return false; }
+}
+
+function isRecordedOwned({ worktreePath }) {
+  try { return existsSync(ownedMarkerPath(worktreePath)); } catch { return false; }
+}
+
 /**
  * Resolve repository root + HEAD. Dirty detection is advisory: inability to
  * read `git status` must not turn an otherwise valid repository into a hard
@@ -175,7 +220,11 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
       ...(released.ok ? {} : { cleanupBlocked: true, cleanupError: released.error }),
     };
   }
-  return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name };
+  // Recorded only after git succeeded, so a failed creation never leaves a claim
+  // on a tree that does not exist. A record that cannot be written costs the
+  // automatic prune of this one worktree; it never costs the worktree itself.
+  const owned = recordOwnership({ worktreePath: dir, purpose, at });
+  return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name, owned };
 }
 
 function splitFirstTab(line) {
@@ -380,9 +429,20 @@ async function mainRepoRoot(run, worktreePath) {
 
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
+/**
+ * A path identity safe to compare for equality.
+ *
+ * `realpathSync` returns the on-disk spelling, so two aliases of one directory —
+ * a symlinked repo root, a mapped drive, a differently cased path — collapse to
+ * the same string without guessing. Lower-casing on Windows used to stand in for
+ * this, but Windows supports per-directory case sensitivity, where `Foo` and
+ * `foo` really are two directories and folding them together would license a
+ * delete against the wrong repository.
+ */
 const pathIdentity = (value) => {
   const resolved = resolve(String(value));
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  try { return realpathSync.native ? realpathSync.native(resolved) : realpathSync(resolved); }
+  catch { return resolved; }
 };
 
 async function worktreeRegistered({ worktreePath, git, cwd }) {
@@ -453,7 +513,10 @@ export async function cleanupIsolatedWorkspace({
     // directory atomically). Retry bounded times to recover transient locks.
     for (let attempt = 0; attempt < retries; attempt += 1) {
       const res = await runGit(run, ['worktree', 'remove', '--force', worktreePath], { cwd: root });
-      if (res.ok) return { ok: true, removed: true, actions: [`removed worktree ${worktreePath}`] };
+      if (res.ok) {
+        releaseOwnership({ worktreePath });
+        return { ok: true, removed: true, actions: [`removed worktree ${worktreePath}`] };
+      }
       if (attempt < retries - 1) await sleep(backoffMs);
     }
   }
@@ -463,13 +526,20 @@ export async function cleanupIsolatedWorkspace({
   //
   // Ownership here is not the name alone. An earlier revision adopted anything
   // whose basename matched, so a directory the user had named (or a worktree they
-  // had made) could be force-deleted for resembling Crew's. Two things now have
-  // to hold: the path is a worktree of *this* repository, and either git still
-  // carries its registration (proving Crew registered it) or it is the empty
-  // reservation this call itself just created.
+  // had made) could be force-deleted for resembling Crew's.
   if (owned && root && pathIdentity(worktreePath) !== pathIdentity(root)) {
-    const adopted = (await sameRepository(run, worktreePath, root)) || (reservation && emptyDirectory(worktreePath));
-    if (!adopted) {
+    // Ask git BEFORE deleting anything. The reverse order — delete, then check —
+    // destroys the files of a worktree git still tracks and then reports the
+    // registration stranded, which is the outcome the caller was avoiding.
+    const registered = await worktreeRegistered({ worktreePath, git: run, cwd: root });
+    if (registered === true) {
+      return { ok: false, reason: WORKTREE_LOCKED, error: `worktree still registered after git refused to remove it: ${worktreePath}`, cleanupBlocked: true };
+    }
+    // The empty directory this call itself reserved is the one path that needs no
+    // repository provenance; anything else must belong to this repository.
+    const ownEmptyReservation = reservation && emptyDirectory(worktreePath);
+    const adoptable = ownEmptyReservation || (registered === false && await sameRepository(run, worktreePath, root));
+    if (!adoptable) {
       return {
         ok: false,
         reason: WORKTREE_LOCKED,
@@ -478,16 +548,16 @@ export async function cleanupIsolatedWorkspace({
       };
     }
     try {
-      rmSync(worktreePath, { recursive: true, force: true });
+      // A reservation is empty by construction, so remove it non-recursively: if
+      // something appeared in it, failing is better than deleting that too.
+      if (ownEmptyReservation) rmdirSync(worktreePath);
+      else rmSync(worktreePath, { recursive: true, force: true });
     } catch (err) {
       return { ok: false, reason: WORKTREE_LOCKED, error: `worktree cleanup failed: ${err?.message ?? String(err)}`, cleanupBlocked: true };
     }
-    const registered = root ? await worktreeRegistered({ worktreePath, git: run, cwd: root }) : null;
-    if (registered === false && !existsSync(worktreePath)) {
+    if (!existsSync(worktreePath)) {
+      releaseOwnership({ worktreePath });
       return { ok: true, removed: true, actions: [`cleaned worktree files ${worktreePath}`] };
-    }
-    if (registered === true) {
-      return { ok: false, reason: WORKTREE_LOCKED, error: `worktree still registered after cleanup: ${worktreePath}`, cleanupBlocked: true };
     }
     return { ok: false, reason: WORKTREE_LOCKED, error: `could not verify worktree removal for ${worktreePath}`, cleanupBlocked: true };
   }
@@ -495,10 +565,16 @@ export async function cleanupIsolatedWorkspace({
   return { ok: false, reason: WORKTREE_LOCKED, error: `worktree cleanup failed while ${worktreePath} remains (${root ? 'not a Crew-owned disposable path' : 'main repository root unresolvable'})`, cleanupBlocked: true };
 }
 
-export async function staleWorktrees({ git, allowed = [] } = {}) {
+/**
+ * Split the linked worktrees of this repository into the ones Crew recorded
+ * creating and the ones it merely recognises. Only the first may be deleted;
+ * the second are reported so a human can decide.
+ */
+async function worktreeCandidates({ git, allowed = [] } = {}) {
   const run = git ?? defaultRunner;
   const set = new Set(allowed.map((p) => pathIdentity(p)));
   const stale = [];
+  const unowned = [];
   try {
     const root = await inspectRepository({ cwd: allowed[0] ?? process.cwd(), git: run });
     if (root.ok) {
@@ -514,30 +590,46 @@ export async function staleWorktrees({ git, allowed = [] } = {}) {
           // A repo whose directory happens to start with a Crew prefix (say, a
           // checkout named dsh-crew-something) is not a disposable worktree, and
           // treating it as stale would have the cleanup path fighting over it.
-          //
-          // The name is still not proof: `dsh-crew-backup-deadbeef` is a name a
-          // user could plausibly pick, and guessing wrong here force-deletes
-          // their worktree. Crew always creates its worktrees detached, so a
-          // linked worktree that is on a branch is not Crew's, whatever it is
-          // called.
-          if (!detached) continue;
-          if (isCrewWorktreeName(basename(abs)) && !set.has(pathIdentity(abs))) stale.push(abs);
+          if (!isCrewWorktreeName(basename(abs)) || set.has(pathIdentity(abs))) continue;
+          // The name is not proof: `dsh-crew-backup-deadbeef` is a name a user
+          // could plausibly pick, and `detached` describes HEAD, not who created
+          // the tree. Only a recorded worktree is Crew's to remove.
+          if (isRecordedOwned({ worktreePath: abs })) stale.push(abs);
+          // Crew creates every worktree detached, so the unrecorded ones worth
+          // telling an operator about are the detached leftovers from a release
+          // that predates the record.
+          else if (detached) unowned.push(abs);
         }
       }
     }
   } catch {}
-  return stale;
+  return { stale, unowned };
+}
+
+/** Crew-created worktrees that no longer belong to any active job. */
+export async function staleWorktrees({ git, allowed = [] } = {}) {
+  return (await worktreeCandidates({ git, allowed })).stale;
+}
+
+/**
+ * Leftovers that look like Crew worktrees but carry no record of Crew creating
+ * them. They are never removed automatically — the name and the detached HEAD
+ * are both things a user's own worktree can have.
+ */
+export async function unownedWorktrees({ git, allowed = [] } = {}) {
+  return (await worktreeCandidates({ git, allowed })).unowned;
 }
 
 export async function pruneWorktrees({ git, allowed = [] } = {}) {
   const run = git ?? defaultRunner;
-  const stale = await staleWorktrees({ git: run, allowed });
+  const { stale, unowned } = await worktreeCandidates({ git: run, allowed });
   const actions = [];
   for (const w of stale) {
     const r = await cleanupIsolatedWorkspace({ worktreePath: w, git: run });
     actions.push(...(r.actions ?? [r.error ?? `stale worktree ${w}`]));
   }
-  return { ok: true, removed: stale.length, actions };
+  for (const w of unowned) actions.push(`not Crew-owned, left in place: ${w}`);
+  return { ok: true, removed: stale.length, actions, unowned };
 }
 
 export function clampMaxParallel(raw) {
