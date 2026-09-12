@@ -41,9 +41,6 @@ export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   pro_model_fallback: Object.freeze({ global: N, session: null }),
   adaptive_routing: Object.freeze({ global: N, session: null, note: 'Opt-in provider health ordering is read for the next Hub model selection; existing explicit priorities remain authoritative.' }),
   isolation: Object.freeze({ global: N, session: null }),
-  vision_provider: Object.freeze({ global: N, session: null }),
-  vision_model: Object.freeze({ global: N, session: null }),
-  imagegen_provider: Object.freeze({ global: N, session: null }),
 
   // These values are copied into the MCP session defaults at process startup.
   // dsh_worker_config can override them for subsequent workflows in that same
@@ -56,11 +53,8 @@ export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   preset_flash: Object.freeze({ global: S, session: N }),
   preset_pro: Object.freeze({ global: S, session: N }),
 
-  // hub-client freezes its base URL at module initialization. Crew Vision and
-  // Image Generation tool registration is also decided at Hub plugin boot.
+  // hub-client freezes its base URL at module initialization.
   hub_url: Object.freeze({ global: R, session: null }),
-  vision_enabled: Object.freeze({ global: R, session: null }),
-  imagegen_enabled: Object.freeze({ global: R, session: null }),
 });
 
 export function activationForSetting(key) {

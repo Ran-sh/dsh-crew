@@ -12,7 +12,6 @@ import {
   normalizeGlobalConfig,
   chooseDefaultTier,
   normalizeWorkerProviderMode,
-  getMultimodalRegistrationPlan,
   canDispatchRole,
   resolveModelPolicy,
   resolveRoleTierHint,
@@ -112,10 +111,6 @@ export const QUICK_CONFIG_KEYS = Object.freeze([
   'subagents_enabled',
   'flash_model_priority',
   'pro_model_priority',
-  'vision_enabled',
-  'imagegen_enabled',
-  'vision_provider',
-  'imagegen_provider',
 ]);
 const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 // Local copy (the hub must not import jobs.mjs, which pulls the DSH SDK into
@@ -1365,39 +1360,6 @@ export async function apply(ctx) {
     credentialPurgePlans.set(plan.plan_id, { plan, created_at: Date.now() });
     while (credentialPurgePlans.size > 32) credentialPurgePlans.delete(credentialPurgePlans.keys().next().value);
   };
-
-  // Multimodal bridge: register describe_image / generate_image for the DS
-  // model. Config is read per call so settings-page edits apply live; the
-  // capability switches (vision_enabled / imagegen_enabled) decide which tools
-  // are registered at plugin boot, so toggling them takes effect on restart.
-  try {
-    const { createMultimodalTools } = await import('../multimodal.mjs');
-    const { readGlobalConfig } = await import('../install/install.mjs');
-    const plan = getMultimodalRegistrationPlan(normalizeGlobalConfig(readGlobalConfig()));
-    for (const tool of createMultimodalTools(() => readGlobalConfig())) {
-      if (!plan.tools[tool.name]) {
-        ctx.logger?.info?.(`dsh-crew: ${tool.name} not registered (disabled by capability switch)`);
-        continue;
-      }
-      disposers.push(ctx.effect(() => ctx.tools.register(tool), `dsh-crew: ${tool.name} tool`));
-    }
-  } catch (err) {
-    ctx.logger?.warn?.(`dsh-crew: multimodal tools unavailable: ${err?.message ?? err}`);
-  }
-
-  // Vision route: image paste on the text-only DS models (admission adapter +
-  // pre-step transcription). Installed only while Crew Vision is enabled.
-  try {
-    const { installVisionRoute } = await import('../vision-route.mjs');
-    const { readGlobalConfig } = await import('../install/install.mjs');
-    if (getMultimodalRegistrationPlan(normalizeGlobalConfig(readGlobalConfig())).visionRoute) {
-      disposers.push(installVisionRoute(ctx, () => readGlobalConfig()));
-    } else {
-      ctx.logger?.info?.('dsh-crew: vision route not installed (Crew Vision disabled by capability switch)');
-    }
-  } catch (err) {
-    ctx.logger?.warn?.(`dsh-crew: vision route unavailable: ${err?.message ?? err}`);
-  }
 
   ctx.inject(['webServer'], (webCtx) => {
     const webServer = webCtx.webServer;
@@ -2677,43 +2639,6 @@ export async function apply(ctx) {
     }));
 
     disposers.push(webServer.register({
-      kind: 'exact', path: `${ROUTE_BASE}/vision-models`,
-      handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
-        try {
-          const url = new URL(req.url, 'http://localhost');
-          const provider = url.searchParams.get('provider');
-          const force = url.searchParams.get('refresh') === '1';
-          const lang = url.searchParams.get('lang');
-          adoptLang(lang);
-          const { listVisionModels } = await import('../multimodal.mjs');
-          const { readGlobalConfig } = await import('../install/install.mjs');
-          return sendJson(res, 200, { ok: true, models: await listVisionModels(provider, force, () => readGlobalConfig(), lang) });
-        } catch (err) {
-          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
-        }
-      },
-    }));
-
-    disposers.push(webServer.register({
-      kind: 'exact', path: `${ROUTE_BASE}/provider-test`,
-      handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
-        try {
-          // The entry comes from the panel form so unsaved edits can be probed.
-          const entry = await readBody(req);
-          adoptLang(entry?.lang);
-          const { testProvider } = await import('../multimodal.mjs');
-          const result = await testProvider(entry, entry?.lang);
-          return sendJson(res, 200, { ok: true, result });
-        } catch (err) {
-          return sendJson(res, 500, { ok: false, error: err?.message ?? String(err) });
-        }
-      },
-    }));
-
-    disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/install/status`,
       handler: async (req, res) => {
         if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
@@ -2761,7 +2686,7 @@ export async function apply(ctx) {
     return () => { for (const d of disposers.reverse()) d(); };
   });
 
-  ctx.logger?.info?.('dsh-crew hub mounted (jobs API + installer endpoints + multimodal tools)');
+  ctx.logger?.info?.('dsh-crew hub mounted (jobs API + installer endpoints)');
   return async () => {
     for (const d of disposers.reverse()) { try { d(); } catch {} }
     await hub.dispose();

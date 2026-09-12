@@ -63,7 +63,7 @@ const COPY = {
     expandAll: '全部展开', collapseAll: '全部折叠',
     modelCount: (count: number) => `${count} 个模型`, providerCount: (count: number) => `${count} 个 Provider`,
     jobCount: (count: number) => `${count} 个任务`, runningCount: (count: number) => `${count} 个运行中`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', schedule: '波峰波谷调度', adaptive: '自适应路由', runtime: '运行 / 生效边界', multimodal: '视觉与生图', harnessProviders: 'Harness Providers', providers: '多模态适配器', jobs: '任务状态' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode 集成状态', workflow: 'Crew 工作流设置', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: '模型优先级与派发', schedule: '波峰波谷调度', adaptive: '自适应路由', runtime: '运行 / 生效边界', harnessProviders: 'Harness Providers', jobs: '任务状态' },
     harnessHint: 'DeepSeek 官方 Harness 的 dsh-crew profile：Provider、Harness Models 与运行时配置',
     hostReadiness: '宿主集成就绪度', hostReadinessHint: '只使用结构化安装与运行时证据；缺少证据不会显示 READY。',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -100,19 +100,11 @@ const COPY = {
     proReviewsFlash: 'Pro 复审 Flash 改动',
     proReviewsFlashHint: 'Flash 成功后自动追加一次 Pro 复审（仅 blocking 派发）',
     proReviewsLocked: 'Review Pipeline 模式固定开启',
-    enableCrewVision: '启用 Crew 视觉',
-    enableCrewVisionHint: '关闭后不注册 Crew 的 describe_image 与视觉 route（可与你的 dsh-vision 等共存）。',
-    enableImagegen: '启用生图',
-    enableImagegenHint: '关闭后不注册 Crew 的 generate_image。',
-    capRestartHint: '该开关改变工具注册，需重启 DSH 生效',
-    capDisabledNote: 'Crew 工具/route 已禁用（重启 DSH 后生效）',
     tier: '默认档位', effort: '默认推理', mode: '执行模式', timeout: '默认超时(秒)', hubUrl: 'Hub 地址',
     tierPolicy: '档位策略', escalate: '失败升档',
     tierPolicyDesc: { auto: 'auto · orchestrator 自选', 'flash-only': '只用 flash', 'pro-only': '只用 pro' },
     escalateHint: 'flash 失败自动用 pro 重试一次',
     presetFlash: 'flash 模式', presetPro: 'pro 模式',
-    multimodal: '多模态',
-    visionProvider: '视觉 provider', visionModel: '视觉模型', imagegenProvider: '生图 provider',
     harnessProviders: 'Harness Providers', harnessProviderHint: 'DeepSeek 官方 Harness 的 3210 dsh-crew profile 中的真实 Provider 注册与生命周期；不是视觉 / 生图适配器。',
     providerState: (state: string) => `状态：${state}`, providerModels: (count: number) => `${count} 个模型`, providerJobs: (count: number) => `${count} 个运行任务`,
     providerOfficialBuiltin: '· 官方内置（不可删除）', providerSourceUnresolved: '· 来源未解析（安全锁定）',
@@ -123,30 +115,11 @@ const COPY = {
     providerNoInventory: '暂时无法读取 3210 Provider inventory。',
     credentialReferences: 'Credential 引用', credentialReferenceHint: '仅显示引用名、归属和孤儿状态；不会读取或删除密钥。',
     credentialOrphan: '孤儿 · 可单独申请清理', credentialInUse: (count: number) => `使用中 · ${count} 个 Provider`, credentialPurgePlan: '申请清理', credentialPurgeConfirm: '这是不可恢复的 Crew-owned 凭据清理，确认继续？', credentialPurging: '清理中…', credentialPurgeUnavailable: '凭据清理不可用', credentialPurgeUnverified: '已执行清理，但验证失败；引用仍保留用于恢复检查',
-    customProviders: '多模态适配器', addProvider: '＋ 添加多模态适配器',
-    noCustomProviders: '暂无。添加后会出现在上方的视觉 / 生图 provider 选择里。',
-    providerName: '名称', modelsField: '模型列表（逗号分隔）',
-    providerType: '接入方式', typeApi: 'API · 兼容 OpenAI 接口', typeCli: 'CLI · 本地命令',
-    baseUrl: 'Base URL', apiKey: 'API Key', imagegenModel: '生图模型（留空=不提供生图）',
-    visionCmd: '视觉命令（可选）', imagegenCmd: '生图命令（可选）',
-    apiFormHint: '走 OpenAI 兼容接口：视觉调 {base}/chat/completions（图片以 base64 内联），生图调 {base}/images/generations。Key 保存在本机 ~/.config/dsh-crew/config.json，不会外发到第三方。',
-    cliFormHint: '命令经 bash 执行，占位符会被安全引用后代入。视觉: {image} {question} {model}，stdout 即答案；生图: {prompt} {output} {size}，命令须把图片写到 {output}。两条命令至少填一条。',
-    saveProvider: '保存', cancel: '取消', edit: '编辑', del: '删除',
-    testProvider: '连通测试', testing: '测试中…',
-    testTip: '按当前填写的内容实测：API 会检查可达性与鉴权并真发一次视觉请求；CLI 会检查可执行文件并真跑一次视觉命令。生图只校验配置，不实际出图。',
-    testPass: '连通正常', testFail: '连通失败',
     staleHub: '本 DSH 实例还在跑旧版插件，缺少该接口 —— 重启 DSH 后再试',
     emptyResponse: (path: string, status: number) => `${path} → HTTP ${status}，响应为空`,
     badJson: (path: string, body: string) => `${path} → 非 JSON 响应: ${body}`,
-    refreshModels: '重新从 CLI 获取模型列表',
     presetDefault: (id?: string) => `default · 跟随 DSH${id ? ` (${id})` : ''}`,
     progressTip: (t: string, turn: number, step: number, calls: number | string) => `耗时 ${t} · 第${turn}轮第${step}步 · ${calls} 次工具调用`,
-    confirmDeleteProvider: (n: string) => `删除自定义 provider「${n}」？`,
-    needName: '⚠ 名称必填', needCmd: '⚠ 视觉/生图命令至少填一条',
-    needBaseUrl: '⚠ Base URL 必填', needModels: '⚠ 模型列表至少填一个',
-    keySet: '已配置', keyPlaceholder: 'sk-…（留空则不发送 Authorization）',
-    addModelTip: '添加模型到列表', removeModelTip: '从列表移除当前模型', modelPlaceholder: '模型 id，回车确认',
-    capVision: '视觉', capImagegen: '生图',
     groupDispatch: '派发', groupRuntime: '运行', groupMultimodal: '多模态',
     groupWorkflow: '工作流 / 执行（v0.2）',
     roleWorker: 'Worker 角色（执行）', roleReviewer: 'Reviewer 角色（独立审查）',
@@ -163,8 +136,6 @@ const COPY = {
     legacyCompatibility: '↓ 以下为兼容配置（legacy，Flash/Pro 仍可编辑）',
     cardDispatch: { t: '派发策略', d: 'orchestrator 未指定时的档位与推理强度，以及档位约束、失败升档与两档各自挂载的 Agent 预设。' },
     cardRuntime: { t: '执行与连接', d: 'worker 会话跑在本实例内还是独立进程，单个任务的超时上限，以及 CC / Codex 探测本实例的地址。' },
-    cardMM: { t: '视觉与生图', d: '给纯文本的 DSH 模型借来眼睛和画笔：describe_image、会话贴图转写与 generate_image 都用这里的设置。' },
-    cardCustomProv: { t: '自定义 Provider', d: '接入自己的 API 或本地命令；保存后会出现在上面的视觉 / 生图 provider 选择里。' },
     modeDesc: { auto: 'auto · 优先 3210', hub: 'hub · 必须 3210' },
     save: '保存', saved: '已保存', jobs: 'Worker 任务', empty: '当前没有 Worker / Reviewer 任务。',
     adaptiveTitle: '自适应模型路由（实验）', adaptiveHint: '默认关闭；只重排系统自动候选，手动模型优先级始终保持原序。健康信号仅来自本进程已观察到的成功、失败、超时与粗粒度延迟，重启后清空。',
@@ -211,7 +182,7 @@ const COPY = {
     expandAll: 'Expand all', collapseAll: 'Collapse all',
     modelCount: (count: number) => `${count} models`, providerCount: (count: number) => `${count} providers`,
     jobCount: (count: number) => `${count} jobs`, runningCount: (count: number) => `${count} running`,
-    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', schedule: 'Peak / off-peak scheduling', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', multimodal: 'Vision & image generation', harnessProviders: 'Harness Providers', providers: 'Multimodal adapters', jobs: 'Task status' },
+    sectionNames: { integrations: 'Codex / Claude / ZCode integration status', workflow: 'Crew workflow settings', flash: 'Worker / Flash', pro: 'Reviewer / Pro', dispatch: 'Model priority & dispatch', schedule: 'Peak / off-peak scheduling', adaptive: 'Adaptive routing', runtime: 'Runtime / activation boundaries', harnessProviders: 'Harness Providers', jobs: 'Task status' },
     harnessHint: 'The official DeepSeek Harness dsh-crew profile: providers, Harness Models, and runtime configuration',
     hostReadiness: 'Host integration readiness', hostReadinessHint: 'Uses structured installer and runtime evidence only; missing evidence is never READY.',
     readinessLabels: { codex_mcp: 'Codex MCP', ds_worker: 'ds-worker', ds_reviewer: 'ds-reviewer', claude_plugin: 'Claude plugin', zcode_mcp: 'ZCode MCP', crew_harness: 'Crew plugin profile', official_bridge: 'Official bridge' },
@@ -248,20 +219,12 @@ const COPY = {
     proReviewsFlash: 'Pro reviews Flash changes',
     proReviewsFlashHint: 'Automatically follow a successful Flash run with one Pro review (blocking dispatch only)',
     proReviewsLocked: 'always on in Review Pipeline mode',
-    enableCrewVision: 'Enable Crew Vision',
-    enableCrewVisionHint: 'When off, the Crew describe_image tool and vision route are not registered (coexist with your own dsh-vision or other plugins).',
-    enableImagegen: 'Enable Image Generation',
-    enableImagegenHint: 'When off, the Crew generate_image tool is not registered.',
-    capRestartHint: 'This switch changes tool registration and takes effect after a DSH restart',
-    capDisabledNote: 'Crew tool/route disabled (effective after DSH restart)',
     tier: 'Default tier', effort: 'Default effort', mode: 'Mode', timeout: 'Timeout (s)', hubUrl: 'Hub URL',
     tierPolicy: 'Tier policy', escalate: 'Escalate on failure',
     tierPolicyDesc: { auto: 'auto · orchestrator picks', 'flash-only': 'flash only', 'pro-only': 'pro only' },
     escalateHint: 'retry a failed flash run once on pro',
     presetFlash: 'flash preset', presetPro: 'pro preset',
-    multimodal: 'Multimodal',
-    visionProvider: 'Vision provider', visionModel: 'Vision model', imagegenProvider: 'Image-gen provider',
-    harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the official DeepSeek Harness dsh-crew profile on 3210; separate from vision / image-gen adapters.',
+    harnessProviders: 'Harness Providers', harnessProviderHint: 'Live Provider registration and lifecycle in the official DeepSeek Harness dsh-crew profile on 3210.',
     providerState: (state: string) => `State: ${state}`, providerModels: (count: number) => `${count} models`, providerJobs: (count: number) => `${count} running jobs`,
     providerOfficialBuiltin: '· official built-in (immutable)', providerSourceUnresolved: '· source unresolved (locked)',
     providerLayerMigration: 'Legacy profile Providers detected', providerLayerMigrationHint: 'These Providers still exist in the Crew profile/base layer, so the native 3210 page cannot show Delete. Promote them to Harness user settings with an explicit plan; keys are never copied.', providerLayerMigrationPlan: 'Migration plan', providerLayerMigrate: 'Migrate to user layer', providerLayerMigrating: 'Migrating…', providerLayerMigrationConfirm: 'Move this Provider into Harness user settings? A rollback snapshot is saved first; credential values are never copied.', providerLayerRollback: 'Rollback migration',
@@ -271,30 +234,11 @@ const COPY = {
     providerNoInventory: '3210 Provider inventory is temporarily unavailable.',
     credentialReferences: 'Credential references', credentialReferenceHint: 'Names, ownership, and orphan status only; values are never read or deleted.',
     credentialOrphan: 'orphan · separate purge approval required', credentialInUse: (count: number) => `in use · ${count} provider(s)`, credentialPurgePlan: 'Purge…', credentialPurgeConfirm: 'This irreversibly removes a Crew-owned credential. Continue?', credentialPurging: 'Purging…', credentialPurgeUnavailable: 'Credential purge unavailable', credentialPurgeUnverified: 'Purge ran but verification failed; the reference remains visible for recovery',
-    customProviders: 'Multimodal adapters', addProvider: '＋ Add multimodal adapter',
-    noCustomProviders: 'None yet. Added providers appear in the vision / image-gen selects above.',
-    providerName: 'Name', modelsField: 'Models (comma-separated)',
-    providerType: 'Connection', typeApi: 'API · OpenAI-compatible', typeCli: 'CLI · local command',
-    baseUrl: 'Base URL', apiKey: 'API key', imagegenModel: 'Image-gen model (empty = no image generation)',
-    visionCmd: 'Vision command (optional)', imagegenCmd: 'Image-gen command (optional)',
-    apiFormHint: 'OpenAI-compatible: vision calls {base}/chat/completions (image inlined as base64), image-gen calls {base}/images/generations. The key is stored locally in ~/.config/dsh-crew/config.json and never sent to third parties.',
-    cliFormHint: 'Commands run via bash with shell-quoted placeholders. Vision: {image} {question} {model}, stdout is the answer; image-gen: {prompt} {output} {size}, the command must write the image to {output}. Fill in at least one command.',
-    saveProvider: 'Save', cancel: 'Cancel', edit: 'Edit', del: 'Delete',
-    testProvider: 'Test', testing: 'Testing…',
-    testTip: 'Probes what is currently filled in: API checks reachability and auth then makes one real vision call; CLI checks the executable then runs the vision command once. Image generation is only validated, never actually run.',
-    testPass: 'Connection OK', testFail: 'Connection failed',
     staleHub: 'This DSH instance is still running an older build of the plugin and lacks this route — restart DSH and retry',
     emptyResponse: (path: string, status: number) => `${path} → HTTP ${status}, empty response`,
     badJson: (path: string, body: string) => `${path} → non-JSON response: ${body}`,
-    refreshModels: 'Re-fetch the model list from the CLI',
     presetDefault: (id?: string) => `default · follow DSH${id ? ` (${id})` : ''}`,
     progressTip: (t: string, turn: number, step: number, calls: number | string) => `${t} elapsed · turn ${turn}, step ${step} · ${calls} tool calls`,
-    confirmDeleteProvider: (n: string) => `Delete custom provider "${n}"?`,
-    needName: '⚠ Name is required', needCmd: '⚠ Fill in at least one command',
-    needBaseUrl: '⚠ Base URL is required', needModels: '⚠ Add at least one model',
-    keySet: 'set', keyPlaceholder: 'sk-… (leave empty to send no Authorization header)',
-    addModelTip: 'Add a model to the list', removeModelTip: 'Remove the current model from the list', modelPlaceholder: 'model id, Enter to confirm',
-    capVision: 'vision', capImagegen: 'image-gen',
     groupDispatch: 'Dispatch', groupRuntime: 'Runtime', groupMultimodal: 'Multimodal',
     groupWorkflow: 'Workflow / Execution (v0.2)',
     roleWorker: 'Worker role (execution)', roleReviewer: 'Reviewer role (independent review)',
@@ -311,8 +255,6 @@ const COPY = {
     legacyCompatibility: '↓ Legacy compatibility controls below (Flash/Pro still editable)',
     cardDispatch: { t: 'Dispatch policy', d: 'Tier and effort used when the orchestrator names none, plus tier clamping, failure escalation and the Agent preset mounted per tier.' },
     cardRuntime: { t: 'Execution & connection', d: 'Whether worker sessions run inside this instance or a separate process, the per-job timeout, and the address CC / Codex probes.' },
-    cardMM: { t: 'Vision & image generation', d: "Lends the harness's text-only models eyes and a brush: describe_image, pasted-image transcription and generate_image all use these settings." },
-    cardCustomProv: { t: 'Custom providers', d: 'Bring your own API or local command; saved providers appear in the vision / image-gen selects above.' },
     modeDesc: { auto: 'auto · prefer 3210', hub: 'hub · require 3210' },
     save: 'Save', saved: 'Saved', jobs: 'Worker jobs', empty: 'No Worker / Reviewer jobs yet.',
     adaptiveTitle: 'Adaptive model routing (experimental)', adaptiveHint: 'Off by default. Only system-derived candidates may be reordered; explicit model priorities always keep their order. Health uses only process-local success, failure, timeout, and coarse latency observations and resets on restart.',
@@ -549,11 +491,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [presetOptions, setPresetOptions] = useState<Array<{ value: string; label?: string }>>([{ value: 'default' }]);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
-  const [provForm, setProvForm] = useState<{
-    originalId?: string; name: string; type: 'api' | 'cli'; models: string;
-    base_url: string; api_key: string; imagegen_model: string;
-    vision_command: string; imagegen_command: string;
-  } | null>(null);
   const [modelAdd, setModelAdd] = useState<string | null>(null);
   const [modelCatalog, setModelCatalog] = useState<any>(null);
   const [modelCatalogError, setModelCatalogError] = useState('');
@@ -567,7 +504,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   const [providerLifecycleBusy, setProviderLifecycleBusy] = useState<string | null>(null);
   const [modelPickerTier, setModelPickerTier] = useState<'flash' | 'pro' | null>(null);
   const [modelQuery, setModelQuery] = useState('');
-  const [testResult, setTestResult] = useState<{ key: string; ok?: boolean; steps?: any[]; error?: string; busy: boolean } | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => readSectionState(sectionStorage()));
   const [surface, setSurface] = useState<string>('detecting');
   const [readinessEnvelope, setReadinessEnvelope] = useState<{ runtime?: any; snapshot?: any; expiresAt?: number | null }>({});
@@ -599,13 +535,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   useEffect(() => {
     if (providerInventoryError) setExpandedSections((current) => openSections(current, ['harnessProviders']));
   }, [providerInventoryError]);
-
-  useEffect(() => {
-    if (testResult && !testResult.busy && testResult.ok === false) {
-      setExpandedSections((current) => openSections(current, ['providers']));
-    }
-  }, [testResult]);
-
   useEffect(() => {
     if (jobs.some((job) => job.status === 'running')) {
       setExpandedSections((current) => openSections(current, ['jobs']));
@@ -838,119 +767,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
   };
 
   // --- custom providers & user-added models -------------------------------
-  const customProviders: any[] = config?.custom_providers ?? [];
-  const extraModels: Record<string, string[]> = config?.extra_models ?? {};
-  const RESERVED_IDS = ['claude-code', 'codex', 'grok', 'agy', 'off', 'custom', 'default'];
-  const provType = (p: any): 'api' | 'cli' => p.type ?? ((p.vision_command || p.imagegen_command) ? 'cli' : 'api');
-  const canSee = (p: any) => (provType(p) === 'cli' ? !!p.vision_command : !!p.base_url && (p.models?.length ?? 0) > 0);
-  const canDraw = (p: any) => (provType(p) === 'cli' ? !!p.imagegen_command : !!p.base_url && !!String(p.imagegen_model ?? '').trim());
-  const visionProviderOptions = [
-    { value: 'claude-code' }, { value: 'codex' }, { value: 'grok' }, { value: 'agy' },
-    ...customProviders.filter(canSee).map((p) => ({ value: p.id, label: p.name || p.id })),
-    { value: 'off' },
-  ];
-  const imagegenProviderOptions = [
-    { value: 'codex' }, { value: 'agy', label: 'agy (nano banana)' }, { value: 'grok', label: 'grok (imagine)' },
-    ...customProviders.filter(canDraw).map((p) => ({ value: p.id, label: p.name || p.id })),
-    { value: 'off' },
-  ];
-  const visionModelOptions = (() => {
-    if (!config) return [];
-    const p = config.vision_provider;
-    const custom = customProviders.find((c) => c.id === p);
-    const base: Array<{ value: string; label?: string }> = custom
-      ? [{ value: 'default' }, ...(custom.models ?? []).map((m: string) => ({ value: m }))]
-      : dynModels[p] ?? (VISION_MODELS[p] ?? ['default']).map((m) => ({ value: m }));
-    const extras = (extraModels[p] ?? []).filter((m) => !base.some((o) => o.value === m)).map((m) => ({ value: m }));
-    return [...base, ...extras];
-  })();
-  const commitModelAdd = () => {
-    const m = (modelAdd ?? '').trim();
-    setModelAdd(null);
-    if (m === '' || !config) return;
-    const p = config.vision_provider;
-    const cur = extraModels[p] ?? [];
-    const nextExtra = { ...extraModels, [p]: cur.includes(m) ? cur : [...cur, m] };
-    setConfig((c: any) => ({ ...c, extra_models: nextExtra, vision_model: m }));
-    void applyPatch({ extra_models: nextExtra, vision_model: m });
-  };
-  const removeCurrentModel = () => {
-    if (!config) return;
-    const p = config.vision_provider;
-    const m = config.vision_model;
-    const nextExtra = { ...extraModels, [p]: (extraModels[p] ?? []).filter((x) => x !== m) };
-    const fallback = visionModelOptions.find((o) => o.value !== m)?.value ?? 'default';
-    setConfig((c: any) => ({ ...c, extra_models: nextExtra, vision_model: fallback }));
-    void applyPatch({ extra_models: nextExtra, vision_model: fallback });
-  };
-  const saveProviderForm = () => {
-    if (!provForm || !config) return;
-    const name = provForm.name.trim();
-    if (name === '') { setNotice(copy.needName); return; }
-    const models = provForm.models.split(/[,，\n]+/).map((s) => s.trim()).filter(Boolean);
-    const vision_command = provForm.vision_command.trim();
-    const imagegen_command = provForm.imagegen_command.trim();
-    if (provForm.type === 'cli') {
-      if (vision_command === '' && imagegen_command === '') { setNotice(copy.needCmd); return; }
-    } else {
-      if (provForm.base_url.trim() === '') { setNotice(copy.needBaseUrl); return; }
-      if (models.length === 0) { setNotice(copy.needModels); return; }
-    }
-    let id = provForm.originalId;
-    if (!id) {
-      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'provider';
-      id = base;
-      let n = 2;
-      while (RESERVED_IDS.includes(id) || customProviders.some((p) => p.id === id)) id = `${base}-${n++}`;
-    }
-    const entry = provForm.type === 'api'
-      ? {
-        id, name, type: 'api', models,
-        base_url: provForm.base_url.trim(),
-        api_key: provForm.api_key,
-        imagegen_model: provForm.imagegen_model.trim(),
-      }
-      : { id, name, type: 'cli', models, vision_command, imagegen_command };
-    const next = provForm.originalId
-      ? customProviders.map((p) => (p.id === provForm.originalId ? entry : p))
-      : [...customProviders, entry];
-    field('custom_providers', next);
-    setProvForm(null);
-  };
-  const runProviderTest = (key: string, entry: any) => {
-    setTestResult({ key, busy: true });
-    void post('/provider-test', entry)
-      .then((r) => setTestResult(r.ok
-        ? { key, busy: false, ok: r.result.ok, steps: r.result.steps }
-        : { key, busy: false, ok: false, error: r.error }))
-      .catch((e) => setTestResult({ key, busy: false, ok: false, error: String(e?.message ?? e) }));
-  };
-  /** Shared renderer for a test outcome under the button that triggered it. */
-  const testReport = (key: string) => {
-    if (!testResult || testResult.key !== key) return null;
-    if (testResult.busy) return <div style={{ fontSize: 11.5, opacity: 0.6 }}>{copy.testing}</div>;
-    return (
-      <div style={{ fontSize: 11.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ color: testResult.ok ? '#3fb950' : '#f85149' }}>
-          {testResult.ok ? `✓ ${copy.testPass}` : `✗ ${copy.testFail}`}
-        </span>
-        {testResult.error && <span style={{ opacity: 0.7, wordBreak: 'break-all' as const }}>{testResult.error}</span>}
-        {(testResult.steps ?? []).map((st: any, i: number) => (
-          <span key={i} style={{ opacity: 0.7, wordBreak: 'break-all' as const }}>
-            <span style={{ color: st.ok ? '#3fb950' : '#f85149' }}>{st.ok ? '✓' : '✗'}</span> {st.name}: {st.detail}
-          </span>
-        ))}
-      </div>
-    );
-  };
-  const deleteProvider = (id: string) => {
-    if (!config) return;
-    const patch: any = { custom_providers: customProviders.filter((p) => p.id !== id) };
-    if (config.vision_provider === id) { patch.vision_provider = 'claude-code'; patch.vision_model = 'haiku'; }
-    if (config.imagegen_provider === id) patch.imagegen_provider = 'codex';
-    setConfig((c: any) => ({ ...c, ...patch }));
-    void applyPatch(patch);
-  };
 
   const deleteHarnessProvider = async (record: any) => {
     if (!record || record.delete_capability !== 'supported' || record.desired_state === 'absent' || Number(record.references?.active_jobs ?? 0) > 0) {
@@ -1638,77 +1454,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           <ActivationSummary activation={config.config_activation} locale={locale} />
         </CollapsibleSection>
 
-        <CollapsibleSection sectionId="multimodal" title={copy.sectionNames.multimodal}
-          summary={sectionSummary(config.vision_enabled ? `${copy.capVision}: ${config.vision_provider}` : `${copy.capVision}: off`, config.imagegen_enabled ? `${copy.capImagegen}: ${config.imagegen_provider}` : `${copy.capImagegen}: off`)}
-          expanded={!!expandedSections.multimodal} onToggle={() => toggleSection('multimodal')}>
-          {block(copy.cardMM, (<>
-          <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, gridColumn: '1 / -1' }} title={copy.capRestartHint}>
-            <input type="checkbox" checked={!!config.vision_enabled} onChange={(e) => field('vision_enabled', e.target.checked)} />
-            <span style={{ fontSize: 12.5 }}>{copy.enableCrewVision}</span>
-            {config.vision_enabled === false && <span style={{ fontSize: 11, opacity: 0.55 }}>{copy.capDisabledNote}</span>}
-          </label>
-          <label style={S.field}><span style={S.fieldLabel}>{copy.visionProvider}</span>
-            <CustomSelect value={config.vision_provider}
-              onChange={(p) => {
-                const custom = customProviders.find((c) => c.id === p);
-                const m = custom ? (custom.models?.[0] ?? 'default') : (VISION_MODELS[p] ?? ['default'])[0];
-                setModelAdd(null);
-                setConfig((c: any) => ({ ...c, vision_provider: p, vision_model: m }));
-                    void applyPatch({ vision_provider: p, vision_model: m });
-                if ((p === 'grok' || p === 'agy') && !dynModels[p]) {
-                  void get(`/vision-models?provider=${p}`).then((r) => {
-                    if (r.ok) setDynModels((d) => ({ ...d, [p]: r.models }));
-                  }).catch(() => {});
-                }
-              }}
-              options={visionProviderOptions} /></label>
-          <label style={S.field}><span style={S.fieldLabel}>{copy.visionModel}</span>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              {modelAdd === null ? (
-                <CustomSelect value={config.vision_model} onChange={(v) => field('vision_model', v)}
-                  options={visionModelOptions} />
-              ) : (
-                <input autoFocus style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                  value={modelAdd} placeholder={copy.modelPlaceholder}
-                  onChange={(e) => setModelAdd(e.target.value)}
-                  onBlur={commitModelAdd}
-                  onKeyDown={(e: any) => {
-                    if (e.key === 'Enter') e.currentTarget.blur();
-                    if (e.key === 'Escape') setModelAdd(null);
-                  }} />
-              )}
-              {modelAdd === null && (config.vision_provider === 'grok' || config.vision_provider === 'agy') && (
-                <button type="button" title={copy.refreshModels} disabled={busy}
-                  style={{ ...S.btn, padding: '3px 8px', flexShrink: 0 }}
-                  onClick={() => {
-                    const p = config.vision_provider;
-                    setBusy(true);
-                    void get(`/vision-models?provider=${p}&refresh=1`)
-                      .then((r) => { if (r.ok) setDynModels((d) => ({ ...d, [p]: r.models })); })
-                      .catch(() => {})
-                      .finally(() => setBusy(false));
-                  }}>↻</button>
-              )}
-              {modelAdd === null && config.vision_provider !== 'off' && (
-                <button type="button" title={copy.addModelTip} style={{ ...S.btn, padding: '3px 8px', flexShrink: 0 }}
-                  onClick={() => setModelAdd('')}>＋</button>
-              )}
-              {modelAdd === null && (extraModels[config.vision_provider] ?? []).includes(config.vision_model) && (
-                <button type="button" title={copy.removeModelTip} style={{ ...S.btn, padding: '3px 8px', flexShrink: 0 }}
-                  onClick={removeCurrentModel}>−</button>
-              )}
-            </div></label>
-          <label style={{ ...S.field, flexDirection: 'row' as const, alignItems: 'center', gap: 6, gridColumn: '1 / -1' }} title={copy.capRestartHint}>
-            <input type="checkbox" checked={!!config.imagegen_enabled} onChange={(e) => field('imagegen_enabled', e.target.checked)} />
-            <span style={{ fontSize: 12.5 }}>{copy.enableImagegen}</span>
-            {config.imagegen_enabled === false && <span style={{ fontSize: 11, opacity: 0.55 }}>{copy.capDisabledNote}</span>}
-          </label>
-          <label style={S.field}><span style={S.fieldLabel}>{copy.imagegenProvider}</span>
-            <CustomSelect value={config.imagegen_provider} onChange={(v) => field('imagegen_provider', v)}
-              options={imagegenProviderOptions} /></label>
-          </>))}
-        </CollapsibleSection>
-
         <CollapsibleSection sectionId="harnessProviders" title={copy.sectionNames.harnessProviders}
           summary={sectionSummary(copy.providerCount(providerInventory?.records?.length ?? 0), providerInventoryError ? copy.providerLifecycleError : '')}
           expanded={!!expandedSections.harnessProviders} onToggle={() => toggleSection('harnessProviders')}>
@@ -1818,105 +1563,6 @@ function WorkersPanel({ ctx }: { ctx: any }) {
           )}
         </CollapsibleSection>
 
-        <CollapsibleSection sectionId="providers" title={copy.sectionNames.providers}
-          summary={sectionSummary(copy.providerCount(customProviders.length), testResult?.ok === false && copy.testFail)}
-          expanded={!!expandedSections.providers} onToggle={() => toggleSection('providers')}>
-          {block(copy.cardCustomProv, (<>
-          {customProviders.length === 0 && provForm === null && (
-            <div style={{ fontSize: 12, opacity: 0.5 }}>{copy.noCustomProviders}</div>
-          )}
-          {customProviders.map((p) => (
-            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-              <span style={{ fontWeight: 500 }}>{p.name || p.id}</span>
-              <span style={{ ...S.chip(false), opacity: 0.7 }}>{provType(p) === 'api' ? 'API' : 'CLI'}</span>
-              {canSee(p) && <span style={S.chip(true)}>{copy.capVision}</span>}
-              {canDraw(p) && <span style={S.chip(true)}>{copy.capImagegen}</span>}
-              {provType(p) === 'api' && !!p.api_key && <span style={{ fontSize: 11.5, opacity: 0.5 }}>key {copy.keySet}</span>}
-              <span style={{ flex: 1 }} />
-              <button style={{ ...S.btn, padding: '2px 8px' }} title={copy.testTip}
-                disabled={!!testResult?.busy}
-                onClick={() => runProviderTest(`row:${p.id}`, p)}>
-                {testResult?.key === `row:${p.id}` && testResult.busy ? copy.testing : copy.testProvider}</button>
-              <button style={{ ...S.btn, padding: '2px 8px' }}
-                onClick={() => setProvForm({
-                  originalId: p.id, name: p.name ?? p.id, type: provType(p),
-                  models: (p.models ?? []).join(', '),
-                  base_url: p.base_url ?? '', api_key: p.api_key ?? '', imagegen_model: p.imagegen_model ?? '',
-                  vision_command: p.vision_command ?? '', imagegen_command: p.imagegen_command ?? '',
-                })}>{copy.edit}</button>
-              <button style={{ ...S.btn, padding: '2px 8px', opacity: 0.75 }}
-                onClick={() => { if (confirm(copy.confirmDeleteProvider(p.name || p.id))) deleteProvider(p.id); }}>{copy.del}</button>
-            </div>
-          ))}
-          {customProviders.some((p) => testResult?.key === `row:${p.id}`) && testReport(testResult!.key)}
-          {provForm === null ? (
-            <div><button style={S.btn} onClick={() => setProvForm({
-              name: '', type: 'api', models: '', base_url: '', api_key: '', imagegen_model: '',
-              vision_command: '', imagegen_command: '',
-            })}>{copy.addProvider}</button></div>
-          ) : (
-            <div style={{ borderTop: '1px solid rgba(128,128,128,0.16)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={S.blockGrid}>
-                <label style={S.field}><span style={S.fieldLabel}>{copy.providerName}</span>
-                  <input autoFocus style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const }}
-                    value={provForm.name} onChange={(e) => setProvForm({ ...provForm, name: e.target.value })} /></label>
-                <label style={S.field}><span style={S.fieldLabel}>{copy.providerType}</span>
-                  <CustomSelect value={provForm.type} onChange={(v) => setProvForm({ ...provForm, type: v as 'api' | 'cli' })}
-                    options={[{ value: 'api', label: copy.typeApi }, { value: 'cli', label: copy.typeCli }]} /></label>
-              </div>
-              {provForm.type === 'api' ? (<>
-                <div style={S.blockGrid}>
-                  <label style={S.field}><span style={S.fieldLabel}>{copy.baseUrl}</span>
-                    <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                      value={provForm.base_url} placeholder="https://api.example.com/v1"
-                      onChange={(e) => setProvForm({ ...provForm, base_url: e.target.value })} /></label>
-                  <label style={S.field}><span style={S.fieldLabel}>{copy.apiKey}</span>
-                    <input type="password" autoComplete="off" style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                      value={provForm.api_key} placeholder={copy.keyPlaceholder}
-                      onChange={(e) => setProvForm({ ...provForm, api_key: e.target.value })} /></label>
-                  <label style={S.field}><span style={S.fieldLabel}>{copy.modelsField}</span>
-                    <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                      value={provForm.models} placeholder="gpt-4o-mini, qwen-vl-max"
-                      onChange={(e) => setProvForm({ ...provForm, models: e.target.value })} /></label>
-                  <label style={S.field}><span style={S.fieldLabel}>{copy.imagegenModel}</span>
-                    <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                      value={provForm.imagegen_model} placeholder="dall-e-3"
-                      onChange={(e) => setProvForm({ ...provForm, imagegen_model: e.target.value })} /></label>
-                </div>
-                <div style={{ fontSize: 11.5, opacity: 0.55 }}>{copy.apiFormHint}</div>
-              </>) : (<>
-                <label style={S.field}><span style={S.fieldLabel}>{copy.visionCmd}</span>
-                  <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                    value={provForm.vision_command} placeholder="mycli see {image} --ask {question} --model {model}"
-                    onChange={(e) => setProvForm({ ...provForm, vision_command: e.target.value })} /></label>
-                <label style={S.field}><span style={S.fieldLabel}>{copy.imagegenCmd}</span>
-                  <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                    value={provForm.imagegen_command} placeholder="mycli gen {prompt} -o {output}"
-                    onChange={(e) => setProvForm({ ...provForm, imagegen_command: e.target.value })} /></label>
-                <label style={S.field}><span style={S.fieldLabel}>{copy.modelsField}</span>
-                  <input style={{ ...S.input, width: '100%', boxSizing: 'border-box' as const, ...S.mono }}
-                    value={provForm.models} placeholder="model-a, model-b"
-                    onChange={(e) => setProvForm({ ...provForm, models: e.target.value })} /></label>
-                <div style={{ fontSize: 11.5, opacity: 0.55 }}>{copy.cliFormHint}</div>
-              </>)}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button style={S.btn} onClick={saveProviderForm}>{copy.saveProvider}</button>
-                <button style={S.btn} title={copy.testTip} disabled={!!testResult?.busy}
-                  onClick={() => runProviderTest('form', {
-                    id: provForm.originalId ?? 'draft', name: provForm.name || 'draft', type: provForm.type,
-                    models: provForm.models.split(/[,，\n]+/).map((x) => x.trim()).filter(Boolean),
-                    base_url: provForm.base_url.trim(), api_key: provForm.api_key,
-                    imagegen_model: provForm.imagegen_model.trim(),
-                    vision_command: provForm.vision_command.trim(), imagegen_command: provForm.imagegen_command.trim(),
-                  })}>
-                  {testResult?.key === 'form' && testResult.busy ? copy.testing : copy.testProvider}</button>
-                <button style={{ ...S.btn, opacity: 0.75 }} onClick={() => setProvForm(null)}>{copy.cancel}</button>
-              </div>
-              {testReport('form')}
-            </div>
-          )}
-          </>), false)}
-        </CollapsibleSection>
       </>)}
       <div style={{ fontSize: 11.5, opacity: 0.55, marginTop: 2 }}>{copy.globalHint}</div>
 

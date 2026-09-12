@@ -39,7 +39,7 @@ function loadPanel(config) {
 const config = {
   subagents_enabled: true,
   flash_model_priority: [{ provider: 'my-provider', model: 'my-long-model' }],
-  pro_model_priority: [], vision_enabled: false, imagegen_enabled: false,
+  pro_model_priority: [],
 };
 const render = (locale = 'zh', value = config) => renderToStaticMarkup(
   React.createElement(loadPanel(value), { ctx: { locale: { getLocale: () => ({ active: locale }) } } }),

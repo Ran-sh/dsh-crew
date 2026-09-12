@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.0 — 2026-09-12
+
+- Removes the vision and image-generation bridge entirely. It existed only to
+  lend the text-only model eyes (`describe_image`, pasted-image transcription)
+  and a brush (`generate_image`) through a locally installed subscription CLI,
+  and it could not do that here: the `codex` provider had the CLI off PATH with
+  a model its account does not serve, and the fallback CLI returned nothing. A
+  feature that is switched on but cannot work is worse than no feature, so the
+  tools, the vision route, the custom-adapter panel and their config keys are
+  gone rather than left dormant.
+
+  Removed: `src/multimodal.mjs`, `src/vision-route.mjs`, `src/image-output.mjs`,
+  the `describe_image` / `generate_image` registration and the vision route at
+  plugin boot, the `/vision-models` and `/provider-test` routes, the panel's
+  "Vision & image generation" and custom-adapter sections, and the
+  `vision_enabled` / `imagegen_enabled` / `vision_provider` / `vision_model` /
+  `imagegen_provider` / `custom_providers` config keys with their 3080 quick
+  controls. The provider record's `multimodal_refs` field went with them.
+
+  Settings that no longer exist are simply dropped on the next config write;
+  nothing else in the panel or the workflow reads them.
+
 ## Unreleased
 
 Future changes go here.

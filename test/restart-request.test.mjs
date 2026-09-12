@@ -29,7 +29,7 @@ test('createRestartRequest writes a durable, identity-bound request', () => {
     const created = createRestartRequest({
       appRoot: t.dir,
       runtimeIdentity: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'rid-1' },
-      reason: 'vision toggle',
+      reason: 'configuration change',
     });
     assert.equal(created.ok, true);
     assert.equal(created.request.runtime_id, 'rid-1');

@@ -92,7 +92,7 @@ function modelIds(provider) {
  * Build a secret-free provider inventory from live Harness and Crew-owned
  * observations. No credential value is accepted or copied into the result.
  */
-export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], multimodalRefs = {}, additionalProviderIds = [] } = {}) {
+export function buildProviderInventory({ catalog = {}, declarations = [], policy = {}, tombstones = {}, activeJobs = [], additionalProviderIds = [] } = {}) {
   const catalogProviders = Array.isArray(catalog?.providers) ? catalog.providers : [];
   const safeDeclarations = Array.isArray(declarations) ? declarations : [];
   const ids = [];
@@ -121,7 +121,6 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
       ? activeJobs.filter((job) => normalizeProviderId(job?.provider) === id
         && !['done', 'failed', 'cancelled'].includes(job?.status)).length
       : Number.isInteger(activeJobs?.[id]) ? Math.max(0, activeJobs[id]) : 0;
-    const multimodal = Array.isArray(multimodalRefs?.[id]) ? multimodalRefs[id].length : Number.isInteger(multimodalRefs?.[id]) ? Math.max(0, multimodalRefs[id]) : 0;
     const declarationFile = text(declaration?.file);
     const locator = text(declaration?.locator);
 
@@ -173,7 +172,6 @@ export function buildProviderInventory({ catalog = {}, declarations = [], policy
         reviewer_priority: findPriorityIndex(policy?.reviewer ?? policy?.review, 'priority', id),
         reviewer_escalation: findPriorityIndex(policy?.reviewer ?? policy?.review, 'escalation_priority', id),
         active_jobs: active,
-        multimodal_refs: multimodal,
       },
       desired_state: tombstoned ? 'absent' : 'present',
       activation: declared ? 'restart-required' : 'live',

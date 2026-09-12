@@ -26,7 +26,7 @@ test('settings open only the core workflow by default', () => {
   const state = createDefaultSectionState();
   assert.deepEqual(SETTINGS_SECTION_IDS, [
     'integrations', 'workflow', 'flash', 'pro', 'dispatch', 'adaptive',
-    'runtime', 'multimodal', 'harnessProviders', 'providers', 'jobs',
+    'runtime', 'harnessProviders', 'jobs',
   ]);
   assert.equal(state.workflow, true);
   assert.deepEqual(
@@ -60,11 +60,11 @@ test('bulk controls and attention events produce complete immutable state', () =
   assert.equal(Object.values(expanded).every(Boolean), true);
   assert.equal(Object.values(setEverySection(false)).some(Boolean), false);
 
-  const alerted = openSections(initial, ['providers', 'jobs', 'missing']);
-  assert.equal(alerted.providers, true);
+  const alerted = openSections(initial, ['harnessProviders', 'jobs', 'missing']);
+  assert.equal(alerted.harnessProviders, true);
   assert.equal(alerted.jobs, true);
   assert.equal(alerted.workflow, true);
-  assert.equal(initial.providers, false);
+  assert.equal(initial.harnessProviders, false);
 });
 
 test('section state is persisted under the versioned key', () => {

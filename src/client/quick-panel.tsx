@@ -4,7 +4,7 @@ import { PanelHeader, PanelStyles } from './panel-chrome';
 // DSH Crew QUICK CONTROLS panel for the official 3080 surface.
 //
 // Narrow by design: only the user-facing master switch, flash/pro model
-// priority lists and vision/imagegen toggles — all other operations belong
+// priority lists — all other operations belong
 // to the native 3210 full control plane. Talks only to the quick endpoints
 // (/_dsh/dsh-crew/quick-config, /quick-status). Runtime maintenance stays on 3210.
 
@@ -17,17 +17,9 @@ type QuickConfig = {
   subagents_enabled?: boolean;
   flash_model_priority?: ModelEntry[];
   pro_model_priority?: ModelEntry[];
-  vision_enabled?: boolean;
-  imagegen_enabled?: boolean;
-  vision_provider?: string;
-  imagegen_provider?: string;
 };
 
 const RESTART_KEYS = new Set([
-  'vision_enabled',
-  'imagegen_enabled',
-  'vision_provider',
-  'imagegen_provider',
 ]);
 
 const T = {
@@ -48,10 +40,7 @@ const T = {
     flash: 'Worker / Flash',
     pro: 'Reviewer / Pro',
     addModel: '+ 添加模型',
-    multimodal: '多模态',
-    vision: '视觉',
-    imagegen: '生图',
-    provider: 'Provider',
+      provider: 'Provider',
     applyRestart: '应用并重启 Crew',
     savedNeedsRestart: '配置已保存 · 需要重启 Crew 才会生效',
     saved: '已保存',
@@ -76,9 +65,6 @@ const T = {
     flash: 'Worker / Flash',
     pro: 'Reviewer / Pro',
     addModel: '+ Add model',
-    multimodal: 'Multimodal',
-    vision: 'Vision',
-    imagegen: 'Imagegen',
     provider: 'Provider',
     applyRestart: 'Apply & restart Crew',
     savedNeedsRestart: 'Saved · restart Crew to take effect',
@@ -167,15 +153,11 @@ export function QuickPanel({ ctx }: { ctx: any }) {
     } finally { setBusy(false); }
   }, [t]);
 
-  const toggle = (key: 'subagents_enabled' | 'vision_enabled' | 'imagegen_enabled', value: boolean) => {
+  const toggle = (key: 'subagents_enabled', value: boolean) => {
     setConfig((c) => ({ ...(c ?? {}), [key]: value }));
     void patch({ [key]: value } as QuickConfig);
   };
 
-  const setProvider = (key: 'vision_provider' | 'imagegen_provider', value: string) => {
-    setConfig((c) => ({ ...(c ?? {}), [key]: value }));
-    void patch({ [key]: value } as QuickConfig);
-  };
 
   const moveModel = (listKey: 'flash_model_priority' | 'pro_model_priority', index: number, dir: -1 | 1) => {
     const list = [...((config?.[listKey] as ModelEntry[] | undefined) ?? [])];
@@ -268,23 +250,6 @@ export function QuickPanel({ ctx }: { ctx: any }) {
       </div>
       {modelList('flash_model_priority', t.flash)}
       {modelList('pro_model_priority', t.pro)}
-      <details className="crew-quick-group">
-        <summary><strong>{t.multimodal}</strong><span className="crew-quick-count">{t.vision} / {t.imagegen}</span></summary>
-        <div className="crew-quick-content">
-        <div className="crew-quick-media">
-          <label><input type="checkbox" disabled={busy} checked={config.vision_enabled === true}
-            onChange={(e) => toggle('vision_enabled', e.target.checked)} /> {t.vision}</label>
-          <input className="crew-quick-input" aria-label={`${t.vision} Provider`} placeholder={t.provider} disabled={busy} defaultValue={config.vision_provider ?? ''} key={`vision-${config.vision_provider ?? ''}`}
-            onBlur={(e) => setProvider('vision_provider', e.target.value)} />
-        </div>
-        <div className="crew-quick-media">
-          <label><input type="checkbox" disabled={busy} checked={config.imagegen_enabled === true}
-            onChange={(e) => toggle('imagegen_enabled', e.target.checked)} /> {t.imagegen}</label>
-          <input className="crew-quick-input" aria-label={`${t.imagegen} Provider`} placeholder={t.provider} disabled={busy} defaultValue={config.imagegen_provider ?? ''}
-            onBlur={(e) => setProvider('imagegen_provider', e.target.value)} />
-        </div>
-        </div>
-      </details>
       {restartPending && (
         <div className="crew-quick-row">
           <a className="crew-quick-btn primary" href={FULL} target="_blank" rel="noopener noreferrer">{t.openFull}</a>

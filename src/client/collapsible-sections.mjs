@@ -8,9 +8,7 @@ export const SETTINGS_SECTION_IDS = Object.freeze([
   'dispatch',
   'adaptive',
   'runtime',
-  'multimodal',
   'harnessProviders',
-  'providers',
   'jobs',
 ]);
 

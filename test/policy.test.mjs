@@ -1,5 +1,5 @@
 // Pure policy tests: normalization, migration, tier resolution, escalation,
-// review, roles and multimodal capability — no DSH, hub or worker runtime
+// review and roles — no DSH, hub or worker runtime
 // involved. Run with: node --test test/policy.test.mjs
 
 import { test } from 'node:test';
@@ -17,8 +17,6 @@ import {
   getRoutingGuidance,
   validateConfig,
   validateRoles,
-  getCapabilities,
-  getMultimodalRegistrationPlan,
   POLICY_ERROR_CODES,
   DEFAULT_FLASH_ROLES,
   DEFAULT_PRO_ROLES,
@@ -53,16 +51,6 @@ test('3. old pro-only → pro only', () => {
   assert.equal(c.collaboration_mode, 'pro-only');
   assert.equal(c.flash_state, 'disabled');
   assert.equal(c.pro_state, 'auto');
-});
-
-test('4. old vision_provider=off → vision disabled', () => {
-  const c = normalizeGlobalConfig({ vision_provider: 'off' });
-  assert.equal(c.vision_enabled, false);
-});
-
-test('5. old imagegen_provider=off → imagegen disabled', () => {
-  const c = normalizeGlobalConfig({ imagegen_provider: 'off' });
-  assert.equal(c.imagegen_enabled, false);
 });
 
 test('legacy config keeps working through deriveLegacyConfig', () => {
@@ -262,43 +250,6 @@ test('validateRoles reports dropped entries', () => {
   const v = validateRoles(['implementation', 'implementation', 'wat']);
   assert.deepEqual(v.roles, ['implementation']);
   assert.deepEqual(v.dropped, ['wat']);
-});
-
-// ---------- multimodal capability ----------
-
-test('24. vision_enabled=false → describe_image excluded, vision route excluded', () => {
-  const plan = getMultimodalRegistrationPlan(normalizeGlobalConfig({ vision_enabled: false }));
-  assert.equal(plan.tools.describe_image, false);
-  assert.equal(plan.tools.generate_image, true);
-  assert.equal(plan.visionRoute, false);
-});
-
-test('25. imagegen_enabled=false → generate_image excluded', () => {
-  const plan = getMultimodalRegistrationPlan(normalizeGlobalConfig({ imagegen_enabled: false }));
-  assert.equal(plan.tools.generate_image, false);
-  assert.equal(plan.tools.describe_image, true);
-  assert.equal(plan.visionRoute, true);
-});
-
-test('26. provider=off excludes the capability even when enabled=true', () => {
-  const plan = getMultimodalRegistrationPlan(normalizeGlobalConfig({ vision_enabled: true, vision_provider: 'off', imagegen_enabled: true, imagegen_provider: 'off' }));
-  assert.equal(plan.tools.describe_image, false);
-  assert.equal(plan.tools.generate_image, false);
-  assert.equal(plan.visionRoute, false);
-});
-
-test('27. turning a capability off does not erase stored provider/model', () => {
-  const c = normalizeGlobalConfig({ vision_enabled: false, vision_provider: 'grok', vision_model: 'default', imagegen_enabled: false, imagegen_provider: 'agy' });
-  assert.equal(c.vision_provider, 'grok');
-  assert.equal(c.vision_model, 'default');
-  assert.equal(c.imagegen_provider, 'agy');
-});
-
-test('capabilities report provider=off separately from switch', () => {
-  const cap = getCapabilities(normalizeGlobalConfig({ vision_enabled: true, vision_provider: 'off' }));
-  assert.equal(cap.vision.enabled, true);
-  assert.equal(cap.vision.providerOff, true);
-  assert.equal(cap.vision.usable, false);
 });
 
 // ---------- guidance & validation ----------

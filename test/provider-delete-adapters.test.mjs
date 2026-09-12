@@ -16,6 +16,7 @@ const CONFIG = {
   flash_model_priority_configured: true,
   worker: { model_policy: { priority: [{ provider: 'opencode-go', model: 'mimo-v2.5' }], priorityConfigured: true } },
   harness_default: { provider: 'openrouter', model: 'free' },
+  extra_models: { openrouter: ['unrelated-entry'] },
 };
 
 const SETTINGS = `llm-pi-ai:\n  providers:\n    opencode-go:\n      models:\n        - id: mimo-v2.5\n      apiKeyEnv: OPENCODE_GO_API_KEY\n    openrouter:\n      models:\n        - id: minimax/minimax-m3:free\n      apiKeyEnv: OPENROUTER_API_KEY\nagent-default-model:\n  provider: opencode-go\n  model: mimo-v2.5\n`;
@@ -82,7 +83,7 @@ function planFor(profileFile) {
 
 test('file adapters apply a deletion and verify absence without touching credentials', async () => {
   const paths = fixture();
-  let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')), custom_providers: [{ id: 'vision', api_key: 'SECRET_VALUE' }] };
+  let config = { ...JSON.parse(readFileSync(paths.configFile, 'utf8')) };
   writeFileSync(paths.configFile, JSON.stringify(config, null, 2) + '\n');
   const plan = planFor(paths.profileFile);
   const hooks = createProviderDeleteFileHooks({
@@ -97,7 +98,9 @@ test('file adapters apply a deletion and verify absence without touching credent
   assert.equal(result.error_code, null);
   assert.equal(readFileSync(paths.profileFile, 'utf8').includes('opencode-go:'), false);
   assert.deepEqual(config.worker.model_policy.priority, []);
-  assert.equal(JSON.stringify(config).includes('SECRET_VALUE'), true, 'live config remains intact');
+  assert.deepEqual(config.extra_models, { openrouter: ['unrelated-entry'] }, 'unrelated config content survives');
+  assert.equal(readFileSync(paths.profileFile, 'utf8').includes('OPENROUTER_API_KEY'), true,
+    'the other provider keeps its credential declaration');
   const backupRoot = readdirSync(join(paths.dir, 'backups'), { withFileTypes: true })
     .find((entry) => entry.isDirectory());
   const backupText = readdirSync(join(paths.dir, 'backups', backupRoot.name))

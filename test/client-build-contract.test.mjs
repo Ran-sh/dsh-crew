@@ -88,7 +88,7 @@ test('task status uses the compact table layout instead of stacked list cards', 
   assert.doesNotMatch(panelSource, /role=["']listitem["']/);
 });
 
-test('provider lifecycle UI distinguishes Harness providers from multimodal adapters', () => {
+test('provider lifecycle UI covers the Harness provider panel', () => {
   assert.match(panelSource, /get\('\/providers'\)/);
   assert.match(panelSource, /credential-references/);
   assert.match(panelSource, /credentialRefs/);
@@ -116,7 +116,6 @@ test('provider lifecycle UI distinguishes Harness providers from multimodal adap
   assert.match(panelSource, /ROLLBACK_RESTART_PENDING/);
   assert.match(panelSource, /ROLLBACK_APPLYING/);
   assert.match(panelSource, /Harness Providers|Harness Provider/);
-  assert.match(panelSource, /Multimodal adapters|多模态适配器/);
 });
 
 test('provider lifecycle UI exposes rollback from backend transaction state', () => {

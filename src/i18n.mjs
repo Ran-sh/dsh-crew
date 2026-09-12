@@ -1,5 +1,5 @@
 // Server-side locale for strings that reach the user: connectivity-test
-// reports, model-list labels, error messages and the vision transcription.
+// reports, model-list labels and error messages.
 //
 // The panel owns the authoritative locale (DSH's setting may be absent, in
 // which case the browser decides), so it passes `lang` with every request and

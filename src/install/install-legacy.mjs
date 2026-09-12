@@ -296,26 +296,6 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   pro_model_priority: [],
   pro_model_priority_configured: false,
   pro_model_fallback: 'harness-default',
-  // ---- configurable-crew multimodal switches ----
-  // False = the Crew describe_image tool and vision route are not registered
-  // at DSH boot (takes effect after a DSH restart). Provider/model values are
-  // kept untouched so re-enabling restores the previous setup.
-  vision_enabled: false,
-  imagegen_enabled: false,
-  // Multimodal bridge: which subscription CLI lends the text-only DS model
-  // eyes (describe_image) and a brush (generate_image).
-  vision_provider: 'off', // claude-code | codex | grok | agy | <custom id> | off
-  vision_model: 'haiku', // model passed to the vision CLI; free-form
-  imagegen_provider: 'off', // codex | agy | grok | <custom id> | off
-  // User-defined providers, each either an OpenAI-compatible HTTP endpoint or a
-  // local command. Entry shape:
-  //   { id, name, type: 'api' | 'cli', models: [],
-  //     api: base_url, api_key, imagegen_model
-  //     cli: vision_command, imagegen_command }
-  // CLI commands run via bash with shell-quoted placeholders: vision
-  // {image} {question} {model} (stdout is the answer), imagegen
-  // {prompt} {output} {size} (must write the file to {output}).
-  custom_providers: [],
   // User-added model ids per provider, merged into the panel's model list.
   extra_models: {},
   // Hub-mode agent preset per tier: 'default' follows the DSH roster default.
@@ -370,8 +350,6 @@ export function mergeStoredGlobalConfig(stored) {
   // workspace-targeted jobs on Windows; an explicit user-set `minimal` value
   // is still preserved by the normal object merge above.
   if (!has('preset_flash')) merged.preset_flash = 'default';
-  if (!has('vision_enabled')) merged.vision_enabled = stored.vision_provider !== 'off';
-  if (!has('imagegen_enabled')) merged.imagegen_enabled = stored.imagegen_provider !== 'off';
   return merged;
 }
 

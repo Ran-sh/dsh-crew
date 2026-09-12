@@ -6,12 +6,8 @@ import { QUICK_CONFIG_KEYS } from '../src/hub/index.mjs';
 test('quick-config allowlist contains exactly the user-facing toggles and priorities', () => {
   assert.deepEqual([...QUICK_CONFIG_KEYS].sort(), [
     'flash_model_priority',
-    'imagegen_enabled',
-    'imagegen_provider',
     'pro_model_priority',
     'subagents_enabled',
-    'vision_enabled',
-    'vision_provider',
   ].sort());
 });
 

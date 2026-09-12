@@ -506,15 +506,6 @@ export function normalizeGlobalConfig(raw = {}) {
     else { flashState = flashState ?? 'auto'; proState = proState ?? 'auto'; }
   }
 
-  // Capability switches: an old config with provider=off must not flip the
-  // capability back on; anything else keeps the capability enabled.
-  const visionEnabled = has('vision_enabled')
-    ? normalizeEnabled(raw.vision_enabled)
-    : raw.vision_provider !== 'off';
-  const imagegenEnabled = has('imagegen_enabled')
-    ? normalizeEnabled(raw.imagegen_enabled)
-    : raw.imagegen_provider !== 'off';
-
   const normalized = {
     ...raw,
     subagents_enabled: normalizeEnabled(raw.subagents_enabled),
@@ -534,8 +525,6 @@ export function normalizeGlobalConfig(raw = {}) {
     pro_model_priority: normalizeModelPriority(raw.pro_model_priority),
     pro_model_priority_configured: raw.pro_model_priority_configured === true || normalizeModelPriority(raw.pro_model_priority).length > 0,
     pro_model_fallback: raw.pro_model_fallback === 'harness-default' ? raw.pro_model_fallback : 'harness-default',
-    vision_enabled: visionEnabled,
-    imagegen_enabled: imagegenEnabled,
   };
   // This normalized legacy view is the single input to the v0.2 canonical
   // migration, so every consumer sees the same worker/reviewer model policy
@@ -788,43 +777,4 @@ export function validateRoles(raw) {
     if (!seen.has(r)) { seen.add(r); out.push(r); }
   }
   return { roles: out, dropped };
-}
-
-// ---------- multimodal capability ----------
-
-/** Capability availability after both the switch and the provider are checked. */
-export function getCapabilities(config) {
-  const c = config;
-  const vision = {
-    enabled: normalizeBool(c.vision_enabled, true),
-    provider: c.vision_provider ?? 'off',
-    providerOff: c.vision_provider === 'off',
-    usable: normalizeBool(c.vision_enabled, true) && c.vision_provider !== 'off',
-  };
-  const imagegen = {
-    enabled: normalizeBool(c.imagegen_enabled, true),
-    provider: c.imagegen_provider ?? 'off',
-    providerOff: c.imagegen_provider === 'off',
-    usable: normalizeBool(c.imagegen_enabled, true) && c.imagegen_provider !== 'off',
-  };
-  return { vision, imagegen };
-}
-
-/**
- * Registration plan for the hub's multimodal bridge: which tools to register
- * and whether the vision route (deepseek-vision adapter + transcription
- * waterfall) should be installed. Tool names are the decision points; the
- * hub applies the plan at plugin boot, so capability switches take effect
- * after a DSH restart.
- */
-export function getMultimodalRegistrationPlan(config) {
-  const { vision, imagegen } = getCapabilities(config);
-  return {
-    tools: {
-      describe_image: vision.usable,
-      generate_image: imagegen.usable,
-    },
-    visionRoute: vision.usable,
-    requiresRestart: true,
-  };
 }

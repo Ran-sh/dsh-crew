@@ -16,7 +16,6 @@ import { homedir } from 'node:os';
 import { WorkerRegistry } from '../src/hub/index.mjs';
 import { createWorkflowRuntime } from '../src/workflow-runtime.mjs';
 import { createShardWriter, readMergedStatus } from '../src/status-shard.mjs';
-import { CUSTOM_CLI_UNSUPPORTED, customCliInvocation } from '../src/multimodal.mjs';
 import { isLoopbackRequest } from '../src/hub/index.mjs';
 import { isTrustedLocalRequest } from '../src/official-web-bridge.mjs';
 import { normalizeGlobalConfig } from '../src/policy.mjs';
@@ -77,17 +76,6 @@ test('shard publish is atomic: valid JSON, no temp residue, disposable', () => {
     w.dispose();
   }
   assert.equal(existsSync(file), false, 'dispose must remove the shard');
-});
-
-// ---------- custom CLI platform gate ----------
-
-test('custom CLI providers fail closed on Windows with a precise error', () => {
-  const win = customCliInvocation('tool --run {image}', { platform: 'win32' });
-  assert.equal(win.ok, false);
-  assert.equal(win.error.code, CUSTOM_CLI_UNSUPPORTED);
-  assert.ok(win.error.message.length > 10);
-  const posix = customCliInvocation('tool --run {image}', { platform: 'linux' });
-  assert.deepEqual(posix, { ok: true, file: '/bin/bash', args: ['-lc', 'tool --run {image}'] });
 });
 
 // ---------- shared local-request guard: hub vs bridge Origin policies ----------

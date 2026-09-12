@@ -305,10 +305,9 @@ const SAFE_GLOBAL_KEYS = [
   'default_tier', 'default_effort', 'mode', 'default_timeout_seconds', 'hub_url',
   'tier_policy', 'escalate_on_failure', 'subagents_enabled', 'collaboration_mode',
   'main_agent_mode', 'flash_state', 'pro_state', 'flash_roles', 'pro_roles',
-  'pro_reviews_flash', 'worker_provider_mode', 'vision_enabled', 'imagegen_enabled',
+  'pro_reviews_flash', 'worker_provider_mode',
   'flash_model_priority', 'flash_model_priority_configured', 'flash_model_fallback',
   'pro_model_priority', 'pro_model_priority_configured', 'pro_model_fallback',
-  'vision_provider', 'vision_model', 'imagegen_provider',
   'preset_flash', 'preset_pro',
 ];
 

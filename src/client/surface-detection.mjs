@@ -26,7 +26,7 @@ export function classifyCrewSurface({ bridgeStatus, runtime } = {}) {
 /**
  * Surface capability model. The NATIVE 3210 Crew harness is the single full
  * control plane; the OFFICIAL 3080 surface is a narrow quick-controls panel
- * (total switch, flash/pro model priority, vision/imagegen toggles) plus a
+ * (total switch and the flash/pro model priority lists) plus a
  * deep link back to 3210. Unknown surfaces get diagnostics only — never write
  * authority. This replaces the old binary full-vs-minimal assumption.
  */
