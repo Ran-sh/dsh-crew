@@ -84,33 +84,74 @@ test('a valid claim for a dead process is reaped', (t) => {
   assert.equal(existsSync(join(dir, 'ignored.txt')), true, 'unrelated files are left alone');
 });
 
-// The same reasoning as an unreadable directory, one level down. A claim whose
-// contents cannot be read is a claim whose liveness cannot be ruled out, and
-// treating it as dead is how retention deletes a release a running Hub is
-// executing. A truncated file is the realistic case: the writer publishes
-// atomically now, so a torn claim is evidence of an I/O problem, not of a
-// process mid-write.
-test('a malformed claim is unknown, not dead, and is never reaped', (t) => {
+// Syntactically valid is not the same as meaningful. `{}` and `{"pid":123}` parse
+// cleanly and say nothing about whether a process is alive, so treating them as
+// dead is how a live release loses its protection.
+test('a claim that parses but has no usable content is unknown, not dead', (t) => {
+  const home = fixture(t);
+  const dir = releaseInUseDir({ home });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '4242.json'), '{}');
+  writeFileSync(join(dir, '4243.json'), JSON.stringify({ pid: 4243 }));
+  writeFileSync(join(dir, '4244.json'), JSON.stringify({ pid: 4244, release: null }));
+  const state = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, false, 'unusable content is unknown liveness');
+  assert.match(state.error ?? '', /unusable claim/);
+  for (const pid of [4242, 4243, 4244]) {
+    assert.equal(existsSync(join(dir, `${pid}.json`)), true, `${pid} is kept for a human to look at`);
+  }
+});
+
+// The other direction: an unreadable claim for a process that is positively gone
+// protects nothing, and keeping it would suppress pruning forever. The filename
+// carries the PID and is written before the content, so it survives a torn write.
+test('an unreadable claim for a dead process is reaped rather than wedging pruning', (t) => {
+  const home = fixture(t);
+  const dir = releaseInUseDir({ home });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '999.json'), '{ torn half-written claim');
+  const state = releaseClaimsState({ home, alive: () => false });
+  assert.deepEqual(state.live, []);
+  assert.equal(state.reliable, true, 'a dead PID is a determination, not a guess');
+  assert.equal(existsSync(join(dir, '999.json')), false, 'the unusable claim is reaped');
+});
+
+test('an unusable claim with no usable PID is unknown and is kept', (t) => {
   const home = fixture(t);
   const dir = releaseInUseDir({ home });
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'broken.json'), '{ not json');
-  const state = releaseClaimsState({ home, alive: () => true });
+  writeFileSync(join(dir, 'no-pid.json'), '{}');
+  const state = releaseClaimsState({ home, alive: () => false });
   assert.deepEqual(state.live, []);
-  assert.equal(state.reliable, false, 'unparseable content is unknown liveness');
-  assert.match(state.error ?? '', /unparseable claim/);
-  assert.equal(existsSync(join(dir, 'broken.json')), true, 'the file is left for a human to look at');
+  assert.equal(state.reliable, false, 'with no PID there is nothing to determine');
+  assert.match(state.error ?? '', /unusable claim/);
+  assert.equal(existsSync(join(dir, 'broken.json')), true);
+  assert.equal(existsSync(join(dir, 'no-pid.json')), true);
 });
 
-test('a claim that cannot be read is unknown and is never reaped', (t) => {
+// A claim whose filename PID disagrees with its content is not one this code
+// wrote, so its content is not trusted either way. The filename still says whose
+// claim it was, and that is what decides whether it can be dropped.
+test('a claim whose name and content disagree is judged by its name alone', (t) => {
   const home = fixture(t);
   const dir = releaseInUseDir({ home });
-  mkdirSync(join(dir, '4242.json'), { recursive: true }); // a directory where a file belongs
-  const state = releaseClaimsState({ home, alive: () => true });
-  assert.deepEqual(state.live, []);
-  assert.equal(state.reliable, false, 'an unreadable claim is unknown liveness');
-  assert.match(state.error ?? '', /unreadable claim/);
-  assert.equal(existsSync(join(dir, '4242.json')), true);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '555.json'), JSON.stringify({ pid: 777, release: 'C:/x' }));
+  // The named PID is gone, so the claim protects nothing and is reaped.
+  const dead = releaseClaimsState({ home, alive: () => false });
+  assert.deepEqual(dead.live, []);
+  assert.equal(dead.reliable, true);
+  assert.equal(existsSync(join(dir, '555.json')), false);
+
+  // While the named PID may still be running, the same file is unknown instead.
+  writeFileSync(join(dir, '555.json'), JSON.stringify({ pid: 777, release: 'C:/x' }));
+  const alive = releaseClaimsState({ home, alive: () => true });
+  assert.deepEqual(alive.live, [], 'the mismatched content is not reported as a live claim');
+  assert.equal(alive.reliable, false, 'nor is it reported as dead');
+  assert.match(alive.error ?? '', /unusable claim/);
+  assert.equal(existsSync(join(dir, '555.json')), true);
 });
 
 // A claim is written to a temporary name and renamed into place, so a reader can

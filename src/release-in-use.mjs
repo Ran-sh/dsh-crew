@@ -116,29 +116,42 @@ export function releaseClaimsState({ home = homedir(), alive = isAlive } = {}) {
     return { live: [], reliable: false, error: String(error?.message ?? error) };
   }
   const live = [];
+  let unknown = null;
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const file = join(dir, name);
-    let raw;
-    try { raw = readFileSync(file, 'utf8'); } catch {
-      // A claim this process cannot read is a claim it cannot rule out. Deleting
-      // it would turn an I/O problem into an authoritative "nothing is live".
-      return { live: [...new Set(live)], reliable: false, error: `unreadable claim: ${file}` };
-    }
-    let record;
-    try { record = JSON.parse(raw); } catch {
-      // Malformed or half-written. The writer now publishes atomically, so this
-      // is not a claim in flight; it is a claim whose contents are unknown, and
-      // unknown is not the same as dead.
-      return { live: [...new Set(live)], reliable: false, error: `unparseable claim: ${file}` };
-    }
-    if (record && Number.isInteger(record.pid) && typeof record.release === 'string' && alive(record.pid)) {
-      live.push(resolve(record.release));
+    // The filename carries the PID, and the name is complete before any content
+    // exists — so a torn write still says whose claim it was. That is what keeps
+    // one unreadable file from wedging pruning forever: a claim for a process
+    // that is positively gone protects nothing, whatever its contents say.
+    const pidFromName = /^(\d+)\.json$/.exec(name) ? Number.parseInt(name, 10) : null;
+
+    let parsed = null;
+    try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { parsed = null; }
+
+    const wellFormed = parsed && typeof parsed === 'object'
+      && Number.isInteger(parsed.pid) && parsed.pid > 0
+      && typeof parsed.release === 'string' && parsed.release !== ''
+      && parsed.pid === pidFromName;
+
+    if (wellFormed) {
+      if (alive(parsed.pid)) live.push(resolve(parsed.release));
+      // Parsed, well formed, and the process is positively gone.
+      else { try { rmSync(file, { force: true }); } catch { /* best effort */ } }
       continue;
     }
-    // Parsed and positively determined to be dead, so removing it is safe.
-    try { rmSync(file, { force: true }); } catch { /* best effort */ }
+
+    // Anything else is not evidence of a dead process. Syntax that happens to
+    // parse is not a schema: `{}` and `{"pid":123}` say nothing about liveness,
+    // and reading them as "dead" is how a live release gets pruned.
+    if (pidFromName !== null && !alive(pidFromName)) {
+      try { rmSync(file, { force: true }); } catch { /* best effort */ }
+      continue;
+    }
+    // No usable PID, or the PID may still be running: keep it and say so.
+    unknown ??= `unusable claim: ${file}`;
   }
+  if (unknown) return { live: [...new Set(live)], reliable: false, error: unknown };
   return { live: [...new Set(live)], reliable: true };
 }
 

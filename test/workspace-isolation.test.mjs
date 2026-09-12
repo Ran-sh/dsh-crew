@@ -22,6 +22,7 @@ import {
   WORKTREE_LOCKED,
   isCrewWorktreeName,
   reserveWorktreeDir,
+  retainedWorktrees,
   unownedWorktrees,
 } from '../src/workspace-isolation.mjs';
 
@@ -359,6 +360,116 @@ test('an 8.3 alias and its long form are the same worktree', async (t) => {
     );
   } finally {
     rmSync(created, { recursive: true, force: true });
+  }
+});
+
+// A record proves Crew created the worktree. It does not prove the worktree is
+// still disposable: an operator who checks out a branch in it has taken it over,
+// and `worktree remove --force` would discard whatever they were doing. The
+// record supplements the disposable-state check; it does not replace it.
+test('a recorded worktree an operator has taken over is retained, not removed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-retained-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  try {
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    mkdirSync(join(root, '.crew-owned'), { recursive: true });
+    writeFileSync(join(root, '.crew-owned', 'Crew_20260912_233000_worker.json'), JSON.stringify({
+      schemaVersion: 1,
+      name: 'Crew_20260912_233000_worker',
+      worktree: canon(dir),
+      repo: canon('/repo/.git'),
+      purpose: 'worker',
+      created_at: 1,
+    }));
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+      // Recorded, and on a branch: the operator's.
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\nbranch refs/heads/operator-work\n\n` } },
+      { pat: /^worktree remove --force /, out: { code: 0 } },
+    ]);
+    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'not adoptable');
+    assert.deepEqual(await unownedWorktrees({ git: runner, allowed: [] }), [], 'and not unowned either');
+    assert.deepEqual(await retainedWorktrees({ git: runner, allowed: [] }), [canon(dir)]);
+
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+    assert.equal(pruned.removed, 0);
+    assert.deepEqual(pruned.retained, [canon(dir)]);
+    assert.equal(existsSync(dir), true, 'the operator worktree is left alone');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A record that cannot be shown to belong to this repository, or that does not
+// describe this path, is not evidence. Reading it as ownership is how a stale
+// file would license deleting someone else's worktree.
+test('a record for another repository or another path is not ownership', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-stalemarker-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  try {
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    mkdirSync(join(root, '.crew-owned'), { recursive: true });
+    const marker = join(root, '.crew-owned', 'Crew_20260912_233000_worker.json');
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+    ]);
+    const cases = {
+      'another repository': { schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/somewhere-else') },
+      'another path': { schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon('/elsewhere/Crew_20260912_233000_worker'), repo: canon('/repo/.git') },
+      'another name': { schemaVersion: 1, name: 'Crew_20260912_233000_reviewer', worktree: canon(dir), repo: canon('/repo/.git') },
+      'an older schema': { schemaVersion: 0, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/repo/.git') },
+    };
+    for (const [label, record] of Object.entries(cases)) {
+      writeFileSync(marker, JSON.stringify(record));
+      assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], `${label} is not adoptable`);
+    }
+    // Truncated JSON is not evidence either.
+    writeFileSync(marker, '{"schemaVersion":1,"name":"Crew_20');
+    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [], 'a truncated record is not adoptable');
+    // The valid record still is, so the test is not passing because nothing works.
+    writeFileSync(marker, JSON.stringify({ schemaVersion: 1, name: 'Crew_20260912_233000_worker', worktree: canon(dir), repo: canon('/repo/.git') }));
+    assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [canon(dir)], 'a matching record is adoptable');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A locked worktree is left on disk, so counting it as removed tells an operator
+// the machine is clean when it is not.
+test('pruneWorktrees reports a failed removal instead of counting it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-prunefail-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  try {
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    mkdirSync(join(root, '.crew-owned'), { recursive: true });
+    writeFileSync(join(root, '.crew-owned', 'Crew_20260912_233000_worker.json'), JSON.stringify({
+      schemaVersion: 1,
+      name: 'Crew_20260912_233000_worker',
+      worktree: canon(dir),
+      repo: canon('/repo/.git'),
+      purpose: 'worker',
+      created_at: 1,
+    }));
+    const { runner } = fakeRunner([
+      { pat: /^rev-parse --show-toplevel$/, out: { stdout: '/repo\n' } },
+      { pat: /^rev-parse HEAD$/, out: { stdout: `${REV}\n` } },
+      { pat: /^rev-parse --path-format=absolute --git-common-dir$/, out: { stdout: '/repo/.git\n' } },
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unable to delete: permission denied\n' } },
+    ]);
+    const pruned = await pruneWorktrees({ git: runner, allowed: [], backoffMs: 0 });
+    assert.equal(pruned.ok, false, 'a partial failure is not a success');
+    assert.equal(pruned.removed, 0, 'nothing was removed');
+    assert.deepEqual(pruned.failed, [canon(dir)]);
+    assert.equal(pruned.cleanupBlocked, true);
+    assert.equal(existsSync(dir), true, 'the worktree is still on disk, and the result says so');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
