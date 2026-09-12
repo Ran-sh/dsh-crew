@@ -8,7 +8,12 @@ import { readHistoryState, writeHistoryState, historyPending, publicHistoryState
 import { readSessionOrigins } from '../session-origins.mjs';
 import { defaultWorktreeRoot } from '../workspace-isolation.mjs';
 
-export function createHistoryService({ crewRoot, agents, persistence, runtimeId, launch, now = Date.now }) {
+// `readOrigins` is injectable because the provenance ledger it reads by default
+// is machine-global, and the plan revision hashes the whole set: anything that
+// appends to that file between a preview and its execute invalidates the plan.
+// That is correct in production, where the ledger is this machine's own record,
+// but a caller that cannot control the ledger cannot control its own revisions.
+export function createHistoryService({ crewRoot, agents, persistence, runtimeId, launch, now = Date.now, readOrigins = readSessionOrigins }) {
   const gate = installHistoryAdmissionGate(agents, () => historyPending(crewRoot));
   const plans = new Map();
   let entering = false;
@@ -67,7 +72,7 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
     });
     // A retained child keeps its ancestor chain; do not leave a newer fork orphaned.
     const workspaces = Object.entries(store.tables.workspaces).map(([id, row]) => ({ id, ...row }));
-    const crewSessionIds = [...readSessionOrigins()];
+    const crewSessionIds = [...readOrigins()];
     const crewSet = new Set(crewSessionIds);
     for (const row of sessions) if (crewSet.has(row.id)) row.crew = true;
     // The isolated-workspace marker: the hub stamps every worktree session with a

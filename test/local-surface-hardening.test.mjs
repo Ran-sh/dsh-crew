@@ -8,6 +8,9 @@
 //
 // Run with: node --test test/local-surface-hardening.test.mjs
 
+// Must come first: the Hub appends session provenance to the home directory at
+// dispatch time, and this points that at a disposable one.
+import './helpers/isolated-home.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';

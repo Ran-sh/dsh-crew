@@ -17,7 +17,13 @@ async function fixture(t) {
   const { createHistoryService } = await import('../src/history/service.mjs');
   const launched = [];
   let now = 1000;
-  const service = createHistoryService({ crewRoot: root, agents, persistence, runtimeId: 'test-runtime', launch: async id => launched.push(id), now: () => now });
+  // The default provenance source is the machine-global ledger, and the plan
+  // revision hashes its whole contents — so a test that reads the operator's real
+  // ledger gets a revision any other process can change underneath it. That was
+  // an intermittent HISTORY_PREVIEW_CHANGED under parallel CI load, in two
+  // different tests of this file. The fixture owns this input like it already
+  // owns the store and the clock.
+  const service = createHistoryService({ crewRoot: root, agents, persistence, runtimeId: 'test-runtime', launch: async id => launched.push(id), now: () => now, readOrigins: () => new Set() });
   t.after(() => service.dispose());
   return { root, file, agents, persistence, service, launched, advance: () => { now += 700000; } };
 }

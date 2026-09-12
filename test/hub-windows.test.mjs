@@ -11,6 +11,9 @@
 //
 // Run with: node --test test/hub-windows.test.mjs
 
+// Must come first: the Hub appends session provenance to the home directory at
+// dispatch time, and this points that at a disposable one.
+import './helpers/isolated-home.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WorkerRegistry } from '../src/hub/index.mjs';
