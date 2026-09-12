@@ -486,7 +486,9 @@ HEAD ${REV}
 detached
 
 ` } },
-      { pat: /^worktree remove --force /, out: { code: 128, stderr: 'fatal: unable to delete: permission denied\n' } },
+      // Pruning removes without --force, so a locked tree comes back as git's own
+      // refusal rather than being forced away.
+      { pat: /^worktree remove /, out: { code: 128, stderr: 'fatal: cannot remove: permission denied\n' } },
     ]));
     assert.deepEqual(await staleWorktrees({ git: runner, allowed: [] }), [canon(dir)], 'it is a removal candidate');
 
@@ -539,6 +541,68 @@ const ownedWorktreeRules = (dir, gitDir, extra = []) => [
   { pat: /^rev-parse --path-format=absolute --git-dir$/, out: { stdout: `${gitDir}\n` } },
   ...extra,
 ];
+
+// Recognising a worktree and then deleting it by pathname is check-then-act:
+// whatever occupies the path when the delete runs is what gets deleted. The
+// removal re-reads the incarnation and HEAD, so a worktree that changed between
+// the scan and the delete is left alone.
+test('pruneWorktrees re-checks the worktree before removing it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-drift-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    let listed = 0;
+    const { runner, calls } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      {
+        pat: /^worktree list --porcelain$/,
+        out: () => {
+          listed += 1;
+          // The scan sees Crew's untouched worktree; by the time the removal
+          // re-reads it, HEAD has moved.
+          const head = listed === 1 ? REV : 'deadbee';
+          return { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${head}\ndetached\n\n` };
+        },
+      },
+      { pat: /^worktree remove /, out: { code: 0 } },
+    ]));
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+    assert.equal(listed >= 2, true, 'the worktree is read more than once');
+    assert.equal(pruned.removed, 0, 'the removal refuses once HEAD has moved');
+    assert.deepEqual(pruned.failed, [canon(dir)]);
+    assert.match(pruned.actions.join(' '), /HEAD moved/);
+    assert.equal(existsSync(dir), true);
+    assert.equal(calls.some((c) => c.args[1] === 'remove'), false, 'git remove is never reached');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The other half: an operator's uncommitted work is not Crew's to discard, and
+// `--force` is what would discard it. Pruning does not pass it.
+test('pruneWorktrees does not force away a worktree that holds changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-crew-dirty-'));
+  const dir = join(root, 'Crew_20260912_233000_worker');
+  const gitDir = join(root, 'gitdir-worker');
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeOwnership({ root, dir, gitDir });
+    const { runner, calls } = fakeRunner(ownedWorktreeRules(dir, gitDir, [
+      { pat: /^worktree list --porcelain$/, out: { stdout: `worktree /repo\nHEAD ${REV}\n\nworktree ${dir}\nHEAD ${REV}\ndetached\n\n` } },
+      // What git says when the worktree holds modified or untracked files.
+      { pat: /^worktree remove /, out: { code: 128, stderr: "fatal: 'x' contains modified or untracked files, use --force to delete it\n" } },
+    ]));
+    const pruned = await pruneWorktrees({ git: runner, allowed: [] });
+    assert.equal(pruned.removed, 0);
+    assert.deepEqual(pruned.failed, [canon(dir)]);
+    assert.equal(existsSync(dir), true, 'the changes stay where they are');
+    const remove = calls.find((c) => c.args[1] === 'remove');
+    assert.deepEqual(remove.args, ['worktree', 'remove', dir], 'removal is attempted without --force');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // The defect this guards: the fallback deleted the directory first and asked git
 // afterwards. For a worktree git still tracks — the realistic case, where

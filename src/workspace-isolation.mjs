@@ -315,10 +315,18 @@ export async function createIsolatedWorkspace({ cwd, jobId, purpose, baseRevisio
   // accept was written: a record missing its repository or incarnation identity
   // can never authorize cleanup, and reporting it as owned would be a leak
   // dressed up as success.
+  // The revision Git actually left the worktree at, not the string we asked for:
+  // a caller may pass a branch or tag, and recording that name would never match
+  // the commit OID `worktree list` reports, so the worktree could never be
+  // recognized as untouched. The same applies to a post-checkout hook that moves
+  // HEAD during creation.
+  const headRes = await runGit(run, ['rev-parse', 'HEAD'], { cwd: dir });
+  const created = headRes.ok && headRes.stdout.trim() ? headRes.stdout.trim() : rev;
+
   const commonDir = await commonDirOf(run, repo.repoRoot);
   const incarnation = commonDir ? await claimIncarnation(run, dir) : null;
   const owned = Boolean(commonDir && incarnation)
-    && recordOwnership({ worktreePath: dir, repo: commonDir, incarnation, head: rev, purpose, at });
+    && recordOwnership({ worktreePath: dir, repo: commonDir, incarnation, head: created, purpose, at });
   return { ok: true, worktreePath: dir, baseRevision: rev, repoRoot: repo.repoRoot, name, owned };
 }
 
@@ -583,6 +591,29 @@ function emptyDirectory(path) {
 }
 
 /**
+ * Why `worktreePath` is no longer the worktree the caller validated, or null when
+ * it still is.
+ *
+ * Checking ownership and then deleting by pathname is check-then-act: whatever
+ * occupies the path when the delete runs is what gets deleted. Re-reading the
+ * incarnation, registration, HEAD and detached state immediately before the
+ * removal narrows that window to the removal itself.
+ */
+async function ownershipDrift(run, worktreePath, expect) {
+  const incarnation = await incarnationOf(run, worktreePath);
+  if (!incarnation) return 'its incarnation stamp is gone';
+  if (incarnation.nonce !== expect.incarnation?.nonce) return 'its incarnation nonce changed';
+  if (pathIdentity(incarnation.gitDir) !== pathIdentity(expect.incarnation?.gitDir)) return 'its git directory changed';
+  const listed = await runGit(run, ['worktree', 'list', '--porcelain'], { cwd: worktreePath });
+  if (!listed.ok) return 'it is no longer registered';
+  const record = parseWorktrees(listed.stdout).find((r) => pathIdentity(r.path) === pathIdentity(worktreePath));
+  if (!record) return 'it is no longer registered';
+  if (!record.detached) return 'it is no longer detached';
+  if (expect.head && record.head !== expect.head) return `its HEAD moved from ${expect.head} to ${record.head}`;
+  return null;
+}
+
+/**
  * Bounded, truthful cleanup of a Crew-owned disposable worktree. Transient
  * Windows locks (index lock, AV scan, lingering handle) are retried with a
  * small backoff; a persistent failure surfaces `cleanupBlocked: true` with the
@@ -601,22 +632,54 @@ export async function cleanupIsolatedWorkspace({
   retries = WORKTREE_CLEANUP_RETRIES,
   backoffMs = WORKTREE_CLEANUP_BACKOFF_MS,
   reservation = false,
+  // Callers that own the worktree (the Hub allocated it, this process holds the
+  // job) may force it away. Callers that merely recognised it — background
+  // pruning — must not: forcing discards any changes the tree now holds, which is
+  // precisely what a takeover looks like.
+  force = true,
+  // What the caller validated before deciding to delete. Re-checked here, because
+  // deciding on one observation and acting on a pathname is a different object.
+  expect = null,
 } = {}) {
   const run = git ?? defaultRunner;
   if (!worktreePath) return { ok: false, reason: NOT_GIT_REPOSITORY, error: 'worktree path required' };
   const root = repoRoot ?? (await mainRepoRoot(run, worktreePath));
   const owned = isCrewWorktreeName(basename(resolve(worktreePath)));
 
+  if (expect) {
+    const drift = await ownershipDrift(run, worktreePath, expect);
+    if (drift) {
+      return { ok: false, reason: WORKTREE_LOCKED, error: `refusing to remove ${worktreePath}: ${drift}`, cleanupBlocked: true };
+    }
+  }
+
   if (root) {
-    // Preferred path: `git worktree remove --force` (removes registration and
-    // directory atomically). Retry bounded times to recover transient locks.
+    // Preferred path: `git worktree remove` (removes registration and directory
+    // atomically). Retry bounded times to recover transient locks. Without
+    // `--force`, git itself refuses a worktree that holds uncommitted or
+    // untracked changes, which is the check that catches an operator's work.
+    const args = force
+      ? ['worktree', 'remove', '--force', worktreePath]
+      : ['worktree', 'remove', worktreePath];
     for (let attempt = 0; attempt < retries; attempt += 1) {
-      const res = await runGit(run, ['worktree', 'remove', '--force', worktreePath], { cwd: root });
+      const res = await runGit(run, args, { cwd: root });
       if (res.ok) {
-        releaseOwnership({ worktreePath });
-        return { ok: true, removed: true, actions: [`removed worktree ${worktreePath}`] };
+        const released = releaseOwnership({ worktreePath });
+        return {
+          ok: true,
+          removed: true,
+          actions: [`removed worktree ${worktreePath}`],
+          // The worktree is gone but its record is not: worth saying, because the
+          // record is what would have authorized a later cleanup.
+          ...(released ? {} : { ownershipRecordStale: true }),
+        };
       }
       if (attempt < retries - 1) await sleep(backoffMs);
+    }
+    if (!force) {
+      // Non-forced removal failed: git is refusing, or the tree is locked. The
+      // filesystem fallback deletes unconditionally, so it must not run here.
+      return { ok: false, reason: WORKTREE_LOCKED, error: `git declined to remove ${worktreePath} without --force`, cleanupBlocked: true };
     }
   }
 
@@ -655,8 +718,13 @@ export async function cleanupIsolatedWorkspace({
       return { ok: false, reason: WORKTREE_LOCKED, error: `worktree cleanup failed: ${err?.message ?? String(err)}`, cleanupBlocked: true };
     }
     if (!existsSync(worktreePath)) {
-      releaseOwnership({ worktreePath });
-      return { ok: true, removed: true, actions: [`cleaned worktree files ${worktreePath}`] };
+      const released = releaseOwnership({ worktreePath });
+      return {
+        ok: true,
+        removed: true,
+        actions: [`cleaned worktree files ${worktreePath}`],
+        ...(released ? {} : { ownershipRecordStale: true }),
+      };
     }
     return { ok: false, reason: WORKTREE_LOCKED, error: `could not verify worktree removal for ${worktreePath}`, cleanupBlocked: true };
   }
@@ -703,14 +771,17 @@ async function worktreeCandidates({ git, allowed = [] } = {}) {
           // checkout named dsh-crew-something) is not a disposable worktree, and
           // treating it as stale would have the cleanup path fighting over it.
           if (!isCrewWorktreeName(basename(abs)) || set.has(pathIdentity(abs))) continue;
-          const owned = readOwnership({ worktreePath: abs, repo, incarnation: await incarnationOf(run, abs) });
+          const incarnation = await incarnationOf(run, abs);
+          const owned = readOwnership({ worktreePath: abs, repo, incarnation });
           if (!owned) {
             // The name is not proof: `dsh-crew-backup-deadbeef` is a name a user
             // could plausibly pick. No valid record, no deletion.
             unowned.push(pathIdentity(abs));
           } else if (detached && owned.head === head) {
-            // Crew's worktree, untouched since Crew left it there.
-            stale.push(pathIdentity(abs));
+            // Crew's worktree, untouched since Crew left it there. The incarnation
+            // and HEAD travel with it so the removal can re-check them rather
+            // than trusting that nothing changed since this scan.
+            stale.push({ path: pathIdentity(abs), incarnation, head });
           } else {
             // Crew's worktree, but no longer a disposable one. Being on a branch
             // is only one way an operator takes a worktree over; committing on a
@@ -727,7 +798,7 @@ async function worktreeCandidates({ git, allowed = [] } = {}) {
 
 /** Crew-created worktrees that are still disposable and belong to no active job. */
 export async function staleWorktrees({ git, allowed = [] } = {}) {
-  return (await worktreeCandidates({ git, allowed })).stale;
+  return (await worktreeCandidates({ git, allowed })).stale.map((entry) => entry.path);
 }
 
 /** Linked worktrees that resemble Crew's but carry no usable record of it. */
@@ -745,13 +816,29 @@ export async function pruneWorktrees({ git, allowed = [] } = {}) {
   const { stale, retained, unowned } = await worktreeCandidates({ git: run, allowed });
   const actions = [];
   const failed = [];
+  const staleRecords = [];
   let removed = 0;
-  for (const w of stale) {
-    const r = await cleanupIsolatedWorkspace({ worktreePath: w, git: run });
+  for (const entry of stale) {
+    // Not forced, and re-checked against what was scanned: background pruning
+    // recognised this worktree from a name and a record, and neither survives the
+    // tree itself being taken over. `--force` would discard whatever an operator
+    // had put there; ownershipDrift would not notice if they had already.
+    const r = await cleanupIsolatedWorkspace({
+      worktreePath: entry.path,
+      git: run,
+      force: false,
+      expect: { incarnation: entry.incarnation, head: entry.head },
+    });
     // A locked worktree is left on disk, so counting it as removed would tell an
     // operator the machine is clean when it is not.
-    if (r.ok && r.removed) { removed += 1; actions.push(...(r.actions ?? [])); }
-    else { failed.push(w); actions.push(`failed to remove ${w}: ${r.error ?? 'unknown reason'}`); }
+    if (r.ok && r.removed) {
+      removed += 1;
+      actions.push(...(r.actions ?? []));
+      if (r.ownershipRecordStale) staleRecords.push(entry.path);
+    } else {
+      failed.push(entry.path);
+      actions.push(`failed to remove ${entry.path}: ${r.error ?? 'unknown reason'}`);
+    }
   }
   for (const w of unowned) actions.push(`not Crew-owned, left in place: ${w}`);
   for (const w of retained) actions.push(`taken over by an operator, left in place: ${w}`);
@@ -761,6 +848,7 @@ export async function pruneWorktrees({ git, allowed = [] } = {}) {
     failed,
     unowned,
     retained,
+    staleRecords,
     actions,
     ...(failed.length ? { cleanupBlocked: true } : {}),
   };

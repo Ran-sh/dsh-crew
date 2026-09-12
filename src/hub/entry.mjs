@@ -10,7 +10,7 @@
 import { apply as applyHub, inject, name, WorkerRegistry } from './index.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { getProcessAdaptiveHealthStore } from '../adaptive-routing.mjs';
-import { claimReleaseInUse } from '../release-in-use.mjs';
+import { claimReleaseInUse, clearReleaseClaim } from '../release-in-use.mjs';
 
 const RUNTIME_PATH = '/_dsh/dsh-crew/runtime';
 const ADAPTIVE_OBSERVER_INSTALLED = Symbol.for('@ran-sh/dsh-crew/adaptive-observer-installed');
@@ -106,5 +106,13 @@ export async function apply(ctx) {
   }
   registerRuntimeEndpoint(ctx);
   installAdaptiveHealthObserver();
-  return applyHub(ctx);
+  // Release the claim on disposal. Nothing else may remove a claim file — the
+  // reader deliberately never unlinks one, because it cannot tell its object from
+  // a successor published at the same name — but the process that owns a claim
+  // may remove its own.
+  const disposeHub = await applyHub(ctx);
+  return async () => {
+    try { clearReleaseClaim(); } catch { /* best effort */ }
+    if (typeof disposeHub === 'function') await disposeHub();
+  };
 }
