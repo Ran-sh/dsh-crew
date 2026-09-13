@@ -1,6 +1,6 @@
 {
   "name": "@ran-sh/dsh-crew",
-  "version": "1.10.8",
+  "version": "1.10.9",
   "type": "module",
   "main": "./src/hub/entry.mjs",
   "bin": {

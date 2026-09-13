@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { renameTree } from './tree-move.mjs';
 
 function plan(home, root) {
   const bridge = join(root, 'official-web-bridge');
@@ -61,13 +62,17 @@ export function installOfficialFrontendAssets({ home = homedir(), root } = {}) {
         mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, bytes);
       }
-      try { renameSync(stage, p.snapshotRoot); stage = null; }
+      // Windows can refuse this rename for a moment when something else holds a
+      // handle under the destination, and the refusal is not about the rename:
+      // the same call succeeds shortly after. Producing the snapshot first in a
+      // concurrent installer is the other outcome this tolerates.
+      try { renameTree(stage, p.snapshotRoot); stage = null; }
       catch (error) { if (!matches(p)) throw error; }
     }
     if (!matches(p)) throw new Error('frontend snapshot conflicts with its revision');
     temp = `${p.overlayFile}.${randomUUID()}.tmp`;
     writeFileSync(temp, p.overlay, { flag: 'wx', mode: 0o600 });
-    renameSync(temp, p.overlayFile); temp = null;
+    renameTree(temp, p.overlayFile); temp = null;
     return { ok: true, changed: true, revision: p.revision, snapshotRoot: p.snapshotRoot, overlayFile: p.overlayFile };
   } catch (error) {
     return { ok: false, code: 'OFFICIAL_FRONTEND_ASSETS_FAILED', error: error.message };

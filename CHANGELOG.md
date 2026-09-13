@@ -4,6 +4,31 @@
 
 Future changes go here.
 
+## 1.10.9 — 2026-09-14
+
+Found by turning on the two features the operator's configuration has off —
+the automatic reviewer and attempt escalation — and running real work through
+them. Both were verified live, and one of them was broken.
+
+- **A reviewer's verdict is read the way reviewers write it.** The verdict line
+  is prose, and reviewers decorate prose: `**Approved** — correct.`, `- Approved`
+  and `Verdict: approved` all read as `inconclusive`, which *blocks* acceptance.
+  An operator who enabled the automatic reviewer could therefore have correct
+  work rejected because the reviewer bolded its answer. Recognized verdicts now
+  survive emphasis, list bullets, quotes, heading marks and a `Verdict:` label,
+  and anything not stated — including a negated verdict — is still inconclusive.
+- **A transient Windows refusal during frontend asset install no longer fails the
+  install.** It is the same refusal the runtime-tree moves already retry, in the
+  third place it could bite: a rename refused for a moment because something else
+  holds a handle under the destination. The snapshot rename keeps its tolerance
+  for a concurrent installer that got there first.
+
+Verified live while making this release: the automatic reviewer runs and
+approves a verified worker (it failed before this fix), escalation runs a second
+attempt with `escalation_reason: tests_failed` and a `model.fallback` event, and
+a short `timeout_seconds` ends the attempt with `ATTEMPT_TIMEOUT` before the
+escalated attempt runs and the workflow stops at `max_attempts_reached`.
+
 ## 1.10.8 — 2026-09-13
 
 The 1.10.7 verification found two more reasons the same task could still fail

@@ -38,8 +38,23 @@ function lines(value) {
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
+// A reviewer writes its verdict as one line, and it decorates that line the way
+// prose is decorated: bolded, bulleted, quoted, or introduced by a label. The
+// contract asks for "approved / needs changes / rejected", and every one of
+// those decorations used to fall through to `inconclusive` — which blocks
+// acceptance, so turning on the automatic reviewer could reject correct work
+// because the reviewer wrote **Approved** instead of Approved.
+function stripVerdictDecoration(value) {
+  return String(value ?? '')
+    .replace(/^[\s>*_`#-]+/, '')
+    .replace(/^\**\s*(?:final\s+)?verdict\s*[:\-—]\s*/i, '')
+    .replace(/^[\s>*_`#-]+/, '')
+    .replace(/[\s*_`]+$/, '')
+    .trim();
+}
+
 export function normalizeReviewVerdict(value) {
-  const s = String(value ?? '').trim().toLowerCase();
+  const s = stripVerdictDecoration(value).toLowerCase();
   if (/^(approve|approved|pass)\b/.test(s) || s === 'pass' || s === 'approve') return 'approve';
   if (/request.*chang|chang.*request|reject|needs changes/i.test(s)) return 'request_changes';
   return 'inconclusive';

@@ -93,6 +93,36 @@ const cfg = (patch = {}) => normalizeGlobalConfig({ ...patch });
 
 // ---------- transition guard ----------
 
+// A reviewer decorates its verdict line the way any prose is decorated. Every
+// one of these used to fall through to `inconclusive`, which BLOCKS acceptance,
+// so enabling the automatic reviewer could reject correct work because the
+// reviewer wrote **Approved** instead of Approved.
+test('a decorated verdict line still reads as its verdict', () => {
+  for (const [line, expected] of [
+    ['approved — the fix is correct', 'approve'],
+    ['Approved. The check passes.', 'approve'],
+    ['**Approved** — correct.', 'approve'],
+    ['- Approved', 'approve'],
+    ['Verdict: approved', 'approve'],
+    ['**Verdict:** Approved', 'approve'],
+    ['> approved', 'approve'],
+    ['#### Approved', 'approve'],
+    ['needs changes — the guard is missing', 'request_changes'],
+    ['**Needs Changes**: the test does not assert the edge case', 'request_changes'],
+    ['Final verdict: Request changes', 'request_changes'],
+    ['Rejected — it mutates the primary tree', 'request_changes'],
+  ]) {
+    assert.equal(normalizeReviewVerdict(line), expected, `${JSON.stringify(line)} should read as ${expected}`);
+  }
+});
+
+// Still fail closed: a verdict that is not stated is not an approval.
+test('an unstated or negated verdict is inconclusive', () => {
+  for (const line of ['', 'Inconclusive: could not inspect the diff', 'The change is sound; approved', 'not approved', 'I did not approve it']) {
+    assert.equal(normalizeReviewVerdict(line), 'inconclusive', `${JSON.stringify(line)} must not approve`);
+  }
+});
+
 test('canTransition guards legal and illegal phase moves', () => {
   assert.equal(canTransition(JOB_PHASES.RUNNING, JOB_PHASES.VERIFYING), true);
   assert.equal(canTransition(JOB_PHASES.VERIFYING, JOB_PHASES.ESCALATING), true);
