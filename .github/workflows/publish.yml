@@ -157,4 +157,16 @@ jobs:
       - name: Publish the verified tarball
         # `--ignore-scripts`: the tarball is already verified, and lifecycle
         # scripts would run fresh code in the job that can publish.
-        run: npm publish dist/*.tgz --access public --ignore-scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The `./` is load-bearing: npm parses a bare `dist/foo.tgz` as an
+          # `owner/repo` shorthand and tries to resolve it over ssh, so the
+          # publish fails with a git error instead of reading the file.
+          tarballs=(./dist/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one tarball to publish, found ${#tarballs[@]}"
+            printf '  %s\n' "${tarballs[@]}"
+            exit 1
+          fi
+          npm publish "${tarballs[0]}" --access public --ignore-scripts
