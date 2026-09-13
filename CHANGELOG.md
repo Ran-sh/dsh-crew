@@ -4,6 +4,39 @@
 
 Future changes go here.
 
+## 1.10.6 — 2026-09-13
+
+Found by installing 1.10.5 and using it for real, one feature at a time. Each
+defect was reproduced on the machine before it was fixed.
+
+- **A correct install no longer reports "needs repair".** `status` judged the
+  host integrations against the release directory while the installer writes the
+  profile's loader link, so all three read as broken the instant the installer
+  said they were installed. Readiness looks through the same link.
+- **The authorized zero-change task succeeds.** The delivery gate compares the
+  worker's report against git, and a report that declares the workspace unchanged
+  and then describes the work it undid was read as a claim that the work was
+  still there — which is why a task that created, verified and deleted a file
+  failed with `WORKSPACE_MISMATCH` while every check passed. The declaration is
+  now read as the net claim it is. This can only turn a mismatch into a match
+  when git already proves the workspace is clean; a report that declares no
+  changes while git reports real ones still fails.
+- **The first job snapshot no longer claims an isolation the job does not run
+  in.** The record is created before the workspace is allocated and defaulted to
+  `shared`, so a caller was told the work would land in their own tree while it
+  was about to land in a worktree.
+- **A plain `jobs submit` payload honours the role profile's isolation.** Only
+  the advanced Job Request shape resolved it, so the same task ran shared through
+  the simpler shape while the profile said `worktree`.
+- **A transient Windows rename refusal no longer fails an upgrade, a rollback or
+  a recovery.** Every runtime-tree move happens immediately after the process
+  using it stopped, where `EPERM` is a timing artifact that passes on the next
+  attempt. All of them now retry briefly; a permanent failure is still reported.
+- **Codex no longer logs "Ignoring malformed agent role definition" about a Crew
+  file.** Role stubs written before the roles were renamed to `ds-worker` and
+  `ds-reviewer` were never cleaned up. Install and uninstall now remove them, and
+  only when the file cannot be a real role — an operator's own role is untouched.
+
 ## 1.10.5 — 2026-09-13
 
 Three reports from real use, each traced to its root cause before it was fixed.
