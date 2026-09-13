@@ -4,6 +4,66 @@
 
 Future changes go here.
 
+## 1.10.1 — 2026-09-13
+
+Nine rounds of adversarial review (Oracle, GPT-5.6 Sol) over the worktree and
+release-retention code from 1.10.0. Every finding was reproduced before it was
+fixed, and the release ships with the reviewer's explicit ship decision and no
+outstanding findings.
+
+Worktree cleanup:
+
+- **Background pruning no longer deletes.** `pruneWorktrees` reports by default
+  and removes only when a caller passes `remove: true`. Three separate
+  measurements said a "clean" worktree is not proof that removing it is safe:
+  git removes a worktree whose only remaining content is *ignored* (build output,
+  logs, local config); it removes one whose tracked file carries
+  `assume-unchanged` or `skip-worktree`, which hides the modification from
+  `status` and from every other query; and between validating a worktree and
+  deleting it, the worktree can change. Nothing in Crew called this path, so the
+  automatic capability bought nothing while risking the one thing Crew must not
+  lose. Cleanup for a worktree whose job directly owns it is unchanged.
+- **A worktree is removed only when ownership can be shown.** Crew records what
+  it creates under `<worktree root>/.crew-owned/`, bound to the worktree's git
+  administrative directory and to the revision Crew left it at. A name is not
+  proof — `dsh-crew-backup-deadbeef` is a name a user could plausibly pick — so a
+  worktree with no valid record is reported for a human to look at rather than
+  deleted. A recorded worktree an operator has since committed in, or checked
+  something else out in, is reported as taken over and left alone. Worktrees
+  created by earlier releases have no record and are therefore reported, not
+  removed; delete those by hand if they are finished with.
+- Failed creation verifies deregistration instead of assuming it, and never
+  deletes a directory git still tracks. Paths are compared through the
+  filesystem, so a Windows temp directory spelled with an 8.3 alias is the same
+  worktree as its long form rather than a stranger's.
+
+Release retention:
+
+- **A claim belongs to the mount that wrote it.** Claims were named by process
+  id, so two mounts in one process published to the same pathname and whichever
+  disposed first removed the other's protection — leaving a release a live mount
+  was still executing open to pruning. Claims are now per mount, the Hub clears
+  exactly the claim it holds, and a missing handle is not permission to remove
+  anything.
+- The Hub releases its claim when it is disposed, including when mounting fails,
+  so a restart no longer leaves a claim behind.
+- Liveness that cannot be determined suppresses pruning rather than being read as
+  "nothing is running". This is deliberate: a release that keeps its files costs
+  disk; a release deleted under a running Hub costs the Hub.
+- Claims are written to a temporary name and renamed, so a reader never sees one
+  mid-write, and a reader never unlinks one — checking liveness and then
+  unlinking by pathname is a race that can delete a live process's protection.
+
+The test suite no longer writes to the operator's real Crew state. Six files
+reach the Hub's dispatch path, which appends session provenance to
+`~/.config/dsh-crew/`; a full run added 30 entries to it and, because the history
+service hashes that ledger into its plan revision, also caused an intermittent
+`HISTORY_PREVIEW_CHANGED` failure under parallel load. Measured after the fix: a
+full run adds none.
+
+Publishing verifies the tarball against the tracked tree before release and pins
+its toolchain exactly.
+
 ## 1.10.0 — 2026-09-12
 
 - Names a worktree for what it is: `Crew_<date>_<time>_<purpose>`, for example
