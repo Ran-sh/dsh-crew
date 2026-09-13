@@ -25,6 +25,8 @@ export const NOT_GIT_REPOSITORY = 'NOT_GIT_REPOSITORY';
 export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
 export const GIT_TIMEOUT = 'GIT_TIMEOUT';
 export const GIT_ERROR = 'GIT_ERROR';
+/** A valid repository whose HEAD does not resolve because nothing is committed. */
+export const REPOSITORY_HAS_NO_COMMITS = 'REPOSITORY_HAS_NO_COMMITS';
 export const WORKTREE_LOCKED = 'WORKTREE_LOCKED';
 export const WORKTREE_RESERVE_FAILED = 'WORKTREE_RESERVE_FAILED';
 export const CANDIDATE_CAPTURE_FAILED = 'CANDIDATE_CAPTURE_FAILED';
@@ -269,7 +271,22 @@ export async function inspectRepository({ cwd, git, runner } = {}) {
     runGit(run, ['status', '--porcelain', '-uall'], { cwd }),
   ]);
   if (!root.ok) return { ok: false, reason: root.reason, error: root.error };
-  if (!head.ok) return { ok: false, reason: head.reason, error: head.error };
+  if (!head.ok) {
+    // A repository with no commits yet is a valid repository whose HEAD simply
+    // does not resolve, and it cannot be told apart from a broken one by that
+    // command alone. It is worth telling apart: `git init && <ask Crew to do
+    // something>` is how a new project starts, and reporting it as a generic git
+    // error leaves the operator with nothing to act on.
+    const verified = await runGit(run, ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd });
+    if (verified.ok === false && (verified.code === 1 || verified.code === 128) && !verified.stdout?.trim()) {
+      return {
+        ok: false,
+        reason: REPOSITORY_HAS_NO_COMMITS,
+        error: 'this repository has no commits yet, so there is no revision for an isolated job to start from; make an initial commit, or set execution.isolation to "shared" to run in the working tree',
+      };
+    }
+    return { ok: false, reason: head.reason, error: head.error };
+  }
   return {
     ok: true,
     repoRoot: resolve(root.stdout.trim()),

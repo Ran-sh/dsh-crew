@@ -21,6 +21,7 @@ import {
   NOT_GIT_REPOSITORY,
   WORKTREE_LOCKED,
   isCrewWorktreeName,
+  REPOSITORY_HAS_NO_COMMITS,
   reserveWorktreeDir,
   retainedWorktrees,
   unownedWorktrees,
@@ -878,6 +879,29 @@ function haveGit() {
 }
 
 const maybe = haveGit() ? test : test.skip;
+
+// A repository with no commits is valid but has no revision to start from, and
+// `git init` followed by asking Crew to do something is how a new project begins.
+// Reporting that as a generic git error leaves the operator with nothing to act
+// on, so it is told apart and says what to do.
+maybe('a repository with no commits is reported as such, not as a git error', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-unborn-repo-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    const empty = await inspectRepository({ cwd: repo });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.reason, REPOSITORY_HAS_NO_COMMITS);
+    assert.match(empty.error, /no commits yet/);
+    assert.match(empty.error, /shared/, 'and it names the way to run anyway');
+
+    execFileSync('git', ['-c', 'user.email=e@t', '-c', 'user.name=e', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: repo });
+    const committed = await inspectRepository({ cwd: repo });
+    assert.equal(committed.ok, true, 'and the same repository works once it has a commit');
+    assert.match(committed.baseRevision, /^[0-9a-f]{40}$/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
 
 maybe('real temp repo: create worktree, edit, capture candidate, cleanup', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'dsh-crew-isolation-repo-'));
