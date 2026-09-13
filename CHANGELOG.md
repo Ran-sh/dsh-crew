@@ -4,6 +4,64 @@
 
 Future changes go here.
 
+## 1.10.2 — 2026-09-13
+
+A first adversarial review of the install and lifecycle layer — the largest area
+never previously reviewed — found a data-destruction defect that 1.10.1 shipped,
+along with four other issues. This release fixes the defect and three of the
+others. **Two lifecycle issues are known and still open**, listed at the end
+rather than omitted.
+
+Upgrade and recovery:
+
+- **Recovery could recursively delete any absolute path.** The update journal and
+  the current-release pointer were validated only as *absolute* paths, and
+  recovery then deletes the journal's candidate directory. A corrupt or tampered
+  journal naming any directory — including the official `~/.dsh` tree this plugin
+  must never touch — would have deleted it and reported the recovery as
+  successful. Journal candidate and prior paths, and the pointer's release path,
+  are now required to resolve inside the Crew-owned releases directory, recovery
+  acts on the path that was checked rather than the string that was written, and a
+  path that fails is treated exactly like a malformed journal: nothing is touched
+  and the state is retained for inspection.
+- **A rollback could ask the supervisor to start a tree it had not restored.**
+  The removal error was swallowed, the restore was attempted over whatever
+  remained, and the runtime was started regardless — so on Windows, where live
+  handles are precisely what blocks a removal, the tree that had just failed
+  verification could be started again. A failed removal now stops the recovery,
+  and the restart is skipped unless the previous runtime is positively in place.
+- **Rolling back consumed the cohort it displaced, so rolling back twice did not
+  work.** After B→A the B runtime tree existed nowhere, and a later A→B failed
+  with `RETAINED_MISSING`; a failed B→A could not compensate offline at all. The
+  displaced cohort is now parked and retained under its own version, so retention
+  rotates the way the forward path already did. An unreadable parked cohort is
+  kept rather than deleted — it is the only copy of that cohort — and one parked
+  by a failed retain is still found, so the failure costs a rename rather than the
+  cohort.
+
+Payload identity:
+
+- The payload digest ignored permission bits, so a payload whose file mode
+  changed from `0644` to `0755` with identical bytes compared equal and the
+  repair that was the point of the update was skipped. The installer copies each
+  file with the captured mode, so the mode is part of the payload and is now part
+  of the digest.
+
+Known and still open in this release:
+
+- A crash between stopping 3210 and parking its runtime tree is not recoverable:
+  the coordinated update journal does not record the maintenance lease and
+  runtime id needed to resume that window, so recovery can leave the runtime
+  stopped and a later ordinary stop is refused by the surviving session.
+- Crash recovery repairs only the Crew profile registration, not the Codex,
+  ZCode, Windows-startup and Claude Code integrations, so a crash before the
+  release pointer commits can leave those pointing at a candidate directory that
+  recovery then removes.
+
+Both are failure-path issues in the upgrade transaction. Neither is reachable
+without an interrupted upgrade. They are recorded here because a release note
+that omits them would be describing a different release.
+
 ## 1.10.1 — 2026-09-13
 
 Nine rounds of adversarial review (Oracle, GPT-5.6 Sol) over the worktree and

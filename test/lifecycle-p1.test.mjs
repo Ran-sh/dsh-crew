@@ -28,6 +28,22 @@ function tempHome() {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+// A directory rename inside the temp directory can be refused transiently while
+// the whole suite runs in parallel — on Windows a scanner or another process can
+// hold a handle for a moment. The code's response to that is correct and is
+// covered on its own by 'a refused park leaves the live tree in place'; here it
+// only means the filesystem, not the rotation, said no, so the attempt repeats.
+const TRANSIENT_RENAME = /EPERM|EBUSY|EACCES|operation not permitted|resource busy|being used by another process/i;
+async function swapWithRetries(run, tries = 5) {
+  let last = null;
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    last = await run();
+    if (last?.ok === true || !TRANSIENT_RENAME.test(String(last?.error ?? last?.code ?? ''))) return last;
+    await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+  }
+  return last;
+}
+
 test('update lock is exclusive: second acquirer gets UPDATE_IN_PROGRESS', () => {
   const t = tempHome();
   try {
@@ -1231,13 +1247,13 @@ test('a displaced cohort with an unreadable version is kept, not deleted', async
     writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET }));
     writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${TARGET}\n`);
 
-    const r = await restoreRetainedRuntime({
+    const r = await swapWithRetries(() => restoreRetainedRuntime({
       home: t.dir, version: TARGET,
       stopOwned: async () => ({ ok: true }),
       startOwned: async () => ({ ok: true }),
       verifyOwned: async () => ({ ok: true }),
       log: () => {},
-    });
+    }));
     assert.equal(r.ok, true, JSON.stringify(r));
     const parked = readdirSync(harnessHome).filter((name) => name.startsWith('runtime-displaced-'));
     assert.equal(parked.length, 1, `the displaced tree is kept: ${JSON.stringify(readdirSync(harnessHome))}`);
@@ -1267,7 +1283,7 @@ test('a cohort parked by a failed retain is still found for a later rollback', a
     materializeLiveRuntime({ home: t.dir, version: B });
     materialize(join(harnessHome, 'retained-runtimes', A), A);
 
-    const r = await restoreRetainedRuntime({
+    const r = await swapWithRetries(() => restoreRetainedRuntime({
       home: t.dir, version: A,
       stopOwned: async () => ({ ok: true }),
       startOwned: async () => ({ ok: true }),
@@ -1279,7 +1295,7 @@ test('a cohort parked by a failed retain is still found for a later rollback', a
         renameSync(from, to);
       },
       log: () => {},
-    });
+    }));
     assert.equal(r.ok, true, 'the restore itself succeeded');
     assert.equal(liveRuntimeVersion({ home: t.dir }), A, 'the target cohort is live');
     const parked = readdirSync(harnessHome).find((n) => n.startsWith('runtime-displaced-'));
@@ -1288,6 +1304,37 @@ test('a cohort parked by a failed retain is still found for a later rollback', a
       join(harnessHome, parked),
       'the parked cohort is discoverable, so B can still be rolled back to',
     );
+  } finally { t.cleanup(); }
+});
+
+// The branch the retry above tolerates, covered on its own so the tolerance is
+// not hiding an untested path: if the parked tree cannot be created, the live
+// tree is left exactly where it was and the failure is reported rather than
+// half-completed.
+test('a refused park leaves the live tree in place', async () => {
+  const { restoreRetainedRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const TARGET = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const harnessHome = crewDshHome({ home: t.dir });
+    materializeLiveRuntime({ home: t.dir, version: '0.1.2-rc.1' });
+    const retained = join(harnessHome, 'retained-runtimes', TARGET);
+    mkdirSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET }));
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${TARGET}\n`);
+
+    const r = await restoreRetainedRuntime({
+      home: t.dir, version: TARGET,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => { throw new Error('must not start after a refused park'); },
+      verifyOwned: async () => { throw new Error('must not verify after a refused park'); },
+      rename: () => { throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); },
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'DSH_RUNTIME_PARK_FAILED');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-rc.1', 'the live tree is untouched');
+    assert.equal(existsSync(retained), true, 'and the retained target is still there for a retry');
   } finally { t.cleanup(); }
 });
 
@@ -1306,13 +1353,13 @@ test('rolling back and forward again does not consume the cohorts', async () => 
       writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
       writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${version}\n`);
     };
-    const swap = (version) => restoreRetainedRuntime({
+    const swap = (version) => swapWithRetries(() => restoreRetainedRuntime({
       home: t.dir, version,
       stopOwned: async () => ({ ok: true }),
       startOwned: async () => ({ ok: true }),
       verifyOwned: async () => ({ ok: true }),
       log: () => {},
-    });
+    }));
 
     materializeLiveRuntime({ home: t.dir, version: A });
     materialize(B);
