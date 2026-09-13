@@ -588,6 +588,30 @@ function validateJournalRuntimeSegment({ home, rt }) {
 }
 
 /**
+ * The runtime window a coordinated update left open, or null.
+ *
+ * The durable maintenance session is the source of truth, not the journal. The
+ * supervisor persists the session as part of stopping 3210, so it exists from the
+ * instant the stop lands — whereas the journal is written a few instructions
+ * later. Reading the session closes that gap: whatever stop happened, recovery
+ * finds it. The journal's copy is kept as a fallback for a session that has since
+ * been cleared.
+ */
+async function openMaintenanceWindow({ home, journal }) {
+  const appRoot = join(home, '.config', 'dsh-crew');
+  try {
+    const { readMaintenanceSession } = await import('../supervisor/restart-request.mjs');
+    const durable = readMaintenanceSession(appRoot);
+    if (durable.ok && durable.state === 'present') {
+      return { lease: durable.session.lease, runtime_id: durable.session.runtime_id, source: 'session' };
+    }
+  } catch { /* fall through to the journal's copy */ }
+  const recorded = journal?.runtime?.maintenance ?? null;
+  if (recorded?.lease && recorded?.runtime_id) return { lease: recorded.lease, runtime_id: recorded.runtime_id, source: 'journal' };
+  return null;
+}
+
+/**
  * Restart a runtime that a coordinated update left deliberately stopped.
  *
  * The window is the lease and runtime id the supervisor issued when it stopped
@@ -606,6 +630,25 @@ async function closeMaintenanceWindow({ home, window, supervisorFactory = crewSu
     return { ok: true };
   } catch (error) {
     return { ok: false, code: 'MAINTENANCE_START_FAILED', error: String(error?.message ?? error) };
+  }
+}
+
+/**
+ * Remove the host integration records a failed first install wrote.
+ *
+ * These take only `home` — they are the same functions the uninstall path uses —
+ * so this needs no release root, which matters because the release is about to be
+ * deleted. A removal that fails fails the recovery rather than deleting a
+ * candidate something still names.
+ */
+async function undoHostIntegrations({ home, installer = realInstaller, log = () => {} }) {
+  try {
+    installer.uninstallCodex?.({ home });
+    installer.uninstallZCode?.({ home });
+    if (installer.uninstallClaudeCode) await installer.uninstallClaudeCode({ home });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, code: 'INTEGRATION_UNDO_FAILED', error: String(error?.message ?? error) };
   }
 }
 
@@ -680,6 +723,26 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
         return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_MISMATCH', stage: journal.stage, error: `live runtime is ${liveVersion ?? 'unknown'} but coordinated journal expects ${rt.candidateVersion}; refusing finalize` };
       }
     }
+  }
+  // A coordinated journal is marked verified only after the candidate runtime was
+  // started and its identity checked, and the pointer write happens after that.
+  // So a verified journal whose pointer has not moved means the candidate IS the
+  // running runtime and only the bookkeeping is missing: completing the commit is
+  // the recovery. Rolling back instead would swap the tree and the payload out
+  // from under a process that is still running the candidate.
+  if (journal.stage === 'coordinated-update' && journal.verified === true && !pointerMatchesCandidate) {
+    if (!candidateManifest?.name || !candidateManifest?.version) {
+      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
+    }
+    const rt = journal.runtime ?? null;
+    if (rt?.candidateVersion && rt?.liveRoot && readRuntimeTreeVersionSync(rt.liveRoot) !== rt.candidateVersion) {
+      return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_MISMATCH', stage: journal.stage, error: 'a verified coordinated journal expects the candidate runtime to be live; refusing to commit' };
+    }
+    writeCurrentPointer({ home, name: candidateIdent.name, version: candidateIdent.version, path: candidateDir });
+    clearUpdateJournal({ home });
+    gcOldReleases({ home, protect: journal.prior?.path ?? null });
+    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} was verified and started, so the commit was completed`);
+    return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
   if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
@@ -774,8 +837,10 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     // leaves 3210 down. The journal is kept until the window is closed, so a
     // crash between the two retries with the same recorded window instead of
     // losing track of a stopped runtime.
-    const openWindow = journal.stage === 'coordinated-update' ? journal.runtime?.maintenance ?? null : null;
-    if (openWindow?.lease && openWindow?.runtime_id) {
+    const openWindow = journal.stage === 'coordinated-update'
+      ? await openMaintenanceWindow({ home, journal })
+      : null;
+    if (openWindow) {
       const closed = await closeMaintenanceWindow({ home, window: openWindow, supervisorFactory, log });
       if (!closed.ok) {
         return { ok: false, code: 'JOURNAL_MAINTENANCE_WINDOW_OPEN', stage: journal.stage, error: `the runtime was left stopped and could not be restarted (${closed.code ?? 'unknown'}); journal retained` };
@@ -794,6 +859,16 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
   const undone = undoCandidateActivationSync({ home, candidateDir, candidateName: journal.candidate?.name ?? null });
   if (!undone.ok) {
     return { ok: false, code: 'JOURNAL_UNDO_FAILED', stage: journal.stage, error: undone.error ?? undone.code };
+  }
+  // There is no prior release to re-point at, and the integrations name the
+  // loader link that the undo above is about to remove — so their records have to
+  // go too. Leaving them would mean recovery deletes both the candidate and the
+  // link while Codex, ZCode and Claude Code still name it: the same dangling
+  // state this whole change exists to prevent, in the branch with nothing to fall
+  // back on.
+  const integrationsUndone = await undoHostIntegrations({ home, installer, log });
+  if (!integrationsUndone.ok) {
+    return { ok: false, code: 'JOURNAL_INTEGRATION_UNDO_FAILED', stage: journal.stage, error: `${integrationsUndone.error ?? integrationsUndone.code}; the candidate is kept and the journal is retained` };
   }
   if (candidateDir && existsSync(candidateDir)) {
     try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
@@ -1884,7 +1959,7 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
   // Journal-aware entry: refuse to overwrite a journal left by a crashed
   // transaction. Reconcile it first (or fail closed) instead of silently
   // replacing it with the rollback intent.
-  const pending = await reconcileUpdateJournal({ home, log });
+  const pending = await reconcileUpdateJournal({ home, log, supervisorFactory });
   if (!pending.ok) return { ok: false, error: `refusing rollback with unreconciled journal (${pending.code ?? 'unknown'})` };
   const current = readCurrentPointer({ home });
   if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };

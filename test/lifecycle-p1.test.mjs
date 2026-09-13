@@ -950,6 +950,149 @@ test('a window that cannot be closed keeps the journal and says so', async () =>
   } finally { t.cleanup(); }
 });
 
+// Oracle's follow-up findings, each with a test that fails without its fix.
+
+// 1. The durable maintenance session is written by the supervisor as part of
+// stopping 3210, so it exists before the journal records anything. Reading it is
+// what closes the window between the stop landing and the journal being updated.
+test('recovery resumes a window the journal never recorded', async () => {
+  const { currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const { maintenanceSessionFile } = await import('../src/supervisor/restart-request.mjs');
+  const t = tempHome();
+  try {
+    const PRIOR = '0.1.2-alpha.5';
+    const CANDIDATE = '0.1.2-rc.1';
+    const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: PRIOR });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.3', path: priorDir }));
+    materializeLiveRuntime({ home: t.dir, version: PRIOR });
+    const harnessHome = crewDshHome({ home: t.dir });
+    // The supervisor stopped the runtime and wrote its session; the process died
+    // before the journal learned about it. This is the state Oracle described.
+    const appRoot = join(t.dir, '.config', 'dsh-crew');
+    mkdirSync(join(appRoot, 'supervisor'), { recursive: true });
+    writeFileSync(maintenanceSessionFile(appRoot), JSON.stringify({
+      schema_version: 1, state: 'STOPPED', lease: 'txn-from-session', runtime_id: 'runtime-from-session', request_id: 'req-1',
+    }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'coordinated-update',
+      prior: { name: PKG_NAME, version: '1.0.3', path: priorDir, dshVersion: PRIOR },
+      candidate: {
+        name: PKG_NAME, version: '1.0.4', dshVersion: CANDIDATE,
+        stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
+      },
+      runtime: {
+        state: 'staged',
+        liveRoot: join(harnessHome, 'runtime'),
+        priorRoot: join(harnessHome, 'runtime-prev-abc123'),
+        priorVersion: PRIOR,
+        candidateVersion: CANDIDATE,
+        retainedRoot: join(harnessHome, 'retained-runtimes'),
+        // deliberately no `maintenance`
+      },
+    }));
+    const starts = [];
+    const r = await reconcileUpdateJournal({
+      home: t.dir, log: () => {},
+      supervisorFactory: () => ({ startOwnedBackend: async (args) => { starts.push(args); return { ok: true }; } }),
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(starts[0], { lease: 'txn-from-session', runtimeId: 'runtime-from-session' },
+      'the session on disk is the source of truth, not the journal');
+  } finally { t.cleanup(); }
+});
+
+// 2. A verified coordinated journal means the candidate runtime was started and
+// checked, and the pointer write comes after. Completing the commit is the
+// recovery; rolling back would swap the tree and payload out from under a
+// process still running the candidate.
+test('a verified coordinated journal whose pointer never moved is committed, not rolled back', async () => {
+  const { currentPointerFile, readCurrentPointer } = await import('../src/install/npx-lifecycle.mjs');
+  const t = tempHome();
+  try {
+    const PRIOR = '0.1.2-alpha.5';
+    const CANDIDATE = '0.1.2-rc.1';
+    const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: PRIOR });
+    const candidateDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.3', path: priorDir }));
+    // The live runtime IS the candidate: it was started and verified.
+    materializeLiveRuntime({ home: t.dir, version: CANDIDATE });
+    const harnessHome = crewDshHome({ home: t.dir });
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'coordinated-update', verified: true,
+      prior: { name: PKG_NAME, version: '1.0.3', path: priorDir, dshVersion: PRIOR },
+      candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir, dshVersion: CANDIDATE },
+      runtime: {
+        state: 'staged',
+        liveRoot: join(harnessHome, 'runtime'),
+        priorRoot: join(harnessHome, 'runtime-prev-abc123'),
+        priorVersion: PRIOR,
+        candidateVersion: CANDIDATE,
+        retainedRoot: join(harnessHome, 'retained-runtimes'),
+      },
+    }));
+    const starts = [];
+    const r = await reconcileUpdateJournal({
+      home: t.dir, log: () => {},
+      supervisorFactory: () => ({ startOwnedBackend: async (args) => { starts.push(args); return { ok: true }; } }),
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.committed, true, 'the commit is completed');
+    assert.equal(readCurrentPointer({ home: t.dir }).version, '1.0.4', 'the pointer now names the running candidate');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), CANDIDATE, 'and the runtime was left alone');
+  } finally { t.cleanup(); }
+});
+
+// 3. A failed first install has no prior to re-point at, so its integration
+// records have to be removed — otherwise recovery deletes the candidate and the
+// loader link while Codex/ZCode/Claude still name that link.
+test('first-install recovery removes the host integrations it wrote', async () => {
+  const t = tempHome();
+  try {
+    const candidateDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: '0.1.2-rc.1' });
+    const reg = ensureCrewPluginRegistration({ home: t.dir, root: candidateDir, name: PKG_NAME });
+    assert.equal(reg.ok, true, JSON.stringify(reg));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating',
+      prior: null,
+      candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir },
+    }));
+    const uninstalled = [];
+    const installer = {
+      uninstallCodex: ({ home }) => { uninstalled.push(home); return { ok: true }; },
+      uninstallZCode: ({ home }) => { uninstalled.push(home); return { ok: true }; },
+      uninstallClaudeCode: async ({ home }) => { uninstalled.push(home); return { ok: true }; },
+    };
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, installer });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(uninstalled.length, 3, 'all three host integrations are undone');
+    assert.equal(uninstalled.every((h) => h === t.dir), true, 'and each is scoped to this home');
+    assert.equal(existsSync(candidateDir), false, 'only then is the candidate removed');
+  } finally { t.cleanup(); }
+});
+
+test('first-install recovery keeps the candidate when an integration cannot be undone', async () => {
+  const t = tempHome();
+  try {
+    const candidateDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: '0.1.2-rc.1' });
+    const reg = ensureCrewPluginRegistration({ home: t.dir, root: candidateDir, name: PKG_NAME });
+    assert.equal(reg.ok, true, JSON.stringify(reg));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating', prior: null,
+      candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir },
+    }));
+    const installer = {
+      uninstallCodex: () => { throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); },
+      uninstallZCode: () => ({}),
+      uninstallClaudeCode: async () => ({}),
+    };
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, installer });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_INTEGRATION_UNDO_FAILED');
+    assert.equal(existsSync(candidateDir), true, 'the candidate survives rather than being deleted under a live reference');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'and the journal is retained');
+  } finally { t.cleanup(); }
+});
+
 test('coordinated update migrates payload + runtime together and retains the prior cohort', async () => {
   const { performCoordinatedCohortUpdate, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
   const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
