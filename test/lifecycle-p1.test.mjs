@@ -1155,14 +1155,39 @@ test('a runtime left in `starting` is stopped and then rolled back', async () =>
   } finally { t.cleanup(); }
 });
 
-test('a `starting` state resolves when nothing was running after all', async () => {
+// The boundary that must not be read as proof: the supervisor could not obtain the
+// live runtime's identity, which is what a *live* runtime whose HTTP request timed
+// out looks like just as much as an absent one. Treating it as "nothing is
+// running" would swap the tree out from under the live candidate — the hazard this
+// whole branch exists to prevent — so it fails closed instead.
+test('an unavailable runtime identity is not proof that nothing is running', async () => {
   const t = tempHome();
   try {
-    // The supervisor reports there is no runtime to stop: the crash landed after
-    // the `starting` write but before the start, so rollback is safe.
     const f = await startingFixture(t, { stopResult: { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE' } });
     const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_RUNTIME_STOP_UNPROVEN');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-rc.1', 'a possibly-live candidate keeps its tree');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'and the journal is retained');
+  } finally { t.cleanup(); }
+});
+
+// The other half of the same boundary: when the supervisor positively stops it —
+// or a durable STOPPED session already proves it — the rollback proceeds.
+test('a proven stop is what licenses the rollback', async () => {
+  const t = tempHome();
+  try {
+    const { maintenanceSessionFile } = await import('../src/supervisor/restart-request.mjs');
+    const f = await startingFixture(t);
+    // A durable STOPPED session is proof on its own and needs no second stop.
+    const appRoot = join(t.dir, '.config', 'dsh-crew');
+    mkdirSync(join(appRoot, 'supervisor'), { recursive: true });
+    writeFileSync(maintenanceSessionFile(appRoot), JSON.stringify({
+      schema_version: 1, state: 'STOPPED', lease: 'txn-1', runtime_id: 'rt-1', request_id: 'req-1',
+    }));
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
     assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(f.calls.includes('stop'), false, 'no second stop is issued while the session is in force');
     assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-alpha.5');
   } finally { t.cleanup(); }
 });

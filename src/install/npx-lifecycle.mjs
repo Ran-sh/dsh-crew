@@ -640,24 +640,25 @@ async function closeMaintenanceWindow({ home, window, supervisorFactory = crewSu
 }
 
 /**
- * Establish that nothing is executing from the runtime tree, so that replacing it
- * cannot pull the ground out from under a live process.
+ * Attempt to stop the owned runtime, and report whether the stop actually
+ * happened.
  *
- * `MAINTENANCE_IDENTITY_UNAVAILABLE` is the supervisor reporting that there is no
- * running runtime to stop, which is the safe case rather than a failure; anything
- * else that is not a successful stop leaves the question open and the caller
- * fails closed.
+ * Only a successful stop counts. `MAINTENANCE_IDENTITY_UNAVAILABLE` means the
+ * supervisor could not obtain the live runtime's identity over its HTTP endpoint,
+ * which is equally consistent with a live runtime whose request timed out — so it
+ * is not evidence that nothing is running and must never be read as any. An
+ * earlier revision of this helper did read it that way and would have replaced a
+ * live runtime's tree, which is the exact hazard it exists to prevent.
  */
 async function ensureRuntimeStopped({ home, supervisorFactory = crewSupervisor, log = () => {} }) {
   try {
     const supervisor = supervisorFactory({ home });
-    if (typeof supervisor?.stopOwnedBackend !== 'function') return { ok: true, unchecked: true };
+    if (typeof supervisor?.stopOwnedBackend !== 'function') return { ok: false, code: 'MAINTENANCE_UNAVAILABLE' };
     const stopped = await supervisor.stopOwnedBackend();
     if (stopped?.ok === true) {
       log('- recovery stopped the runtime before replacing its tree');
       return { ok: true, stopped: true };
     }
-    if (stopped?.code === 'MAINTENANCE_IDENTITY_UNAVAILABLE') return { ok: true, notRunning: true };
     return { ok: false, code: stopped?.code ?? 'MAINTENANCE_STOP_FAILED', error: stopped?.error ?? null };
   } catch (error) {
     return { ok: false, code: 'MAINTENANCE_STOP_FAILED', error: String(error?.message ?? error) };
@@ -817,11 +818,10 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
         // from the candidate cohort and the swap is safe.
         //
         // `starting` cannot be resolved from the journal alone — the candidate may
-        // be live and unverified. It must not be a dead end either, because
-        // "stop it and re-run" cannot change the journal: so recovery establishes
-        // that nothing is running and then rolls back. A durable STOPPED session
-        // already proves it; otherwise the runtime is stopped here, and a stop
-        // that cannot be proven fails closed with an instruction that does work.
+        // be live and unverified. It must not be a dead end either, so recovery
+        // stops the runtime and rolls back on a stop that actually happened, or on
+        // a durable STOPPED session that already proves one did. Anything less is
+        // not proof: a runtime that cannot be shown to be stopped keeps its tree.
         if (rt.state === 'starting') {
           const window = await openMaintenanceWindow({ home, journal });
           if (window?.malformed) {
@@ -830,7 +830,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
           if (!window) {
             const stopped = await ensureRuntimeStopped({ home, supervisorFactory, log });
             if (!stopped.ok) {
-              return { ok: false, code: 'JOURNAL_RUNTIME_STOP_UNPROVEN', stage: journal.stage, error: `an interrupted update may have started the candidate runtime; could not establish that it is stopped (${stopped.code ?? 'unknown'}), so its tree was left alone` };
+              return { ok: false, code: 'JOURNAL_RUNTIME_STOP_UNPROVEN', stage: journal.stage, error: `an interrupted update may have started the candidate runtime and could not be shown to be stopped (${stopped.code ?? 'unknown'}), so its tree was left alone; stop the owned runtime through the Crew supervisor, then re-run` };
             }
           }
         }
