@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, realpathSync, symlinkSync, renameSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   acquireUpdateLock,
@@ -173,24 +173,28 @@ test('malformed journal fails closed and is retained', async () => {
   } finally { t.cleanup(); }
 });
 
-test('first-install crash removes orphan candidate pointer', async () => {
+test('first-install crash reports instead of guessing what to unwind', async () => {
   const t = tempHome();
   try {
     const orphanDir = releaseDir(t.dir, 'orphan-9.9.9');
     mkdirSync(orphanDir, { recursive: true });
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
-    // Pre-commit crash: no pointer exists yet; the candidate was never
-    // committed. Reconcile drops the orphan dir + journal.
+    // Pre-commit crash on a first install: no pointer exists, so the candidate was
+    // never committed. Recovery leaves it and reports, because the host
+    // integrations name the loader link that points at this candidate — undoing
+    // the link would break them, and undoing their records cannot be attributed.
     writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
       stage: 'activating',
       prior: null,
       candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: orphanDir },
     }));
     const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
-    assert.equal(r.ok, true);
-    assert.equal(r.committed, false);
-    assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json')), false);
-    assert.equal(existsSync(orphanDir), false);
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_FIRST_INSTALL_NEEDS_OPERATOR');
+    assert.equal(r.candidate, orphanDir, 'and it names what to look at');
+    assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json')), false, 'no pointer is invented');
+    assert.equal(existsSync(orphanDir), true, 'nothing is deleted');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'the journal is retained');
   } finally { t.cleanup(); }
 });
 
@@ -588,12 +592,14 @@ test('undo refuses to remove bundle re-pointed at later release', async () => {
       prior: null,
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.0', stageDir: candidateDir },
     }));
+    const before = readFileSync(profileFile, 'utf8');
     const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'JOURNAL_UNDO_FAILED');
+    assert.equal(r.code, 'JOURNAL_FIRST_INSTALL_NEEDS_OPERATOR');
+    assert.equal(readFileSync(profileFile, 'utf8'), before, 'a first-install recovery changes nothing it cannot attribute');
     const after = JSON.parse(readFileSync(profileFile, 'utf8'));
     assert.ok(after.dsh.profile.bundles.includes('@ran-sh/dsh-crew'), 'later bundle must be preserved');
-    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained for the operator');
   } finally { t.cleanup(); }
 });
 
@@ -834,6 +840,18 @@ function fakePayloadRelease({ home, name, version, dshVersion }) {
   }));
   writeFileSync(join(dir, 'index.js'), 'module.exports = {};\n');
   writeFileSync(join(dir, 'cordis.patch.yml'), '[]\n');
+  // Recovery validates the payload before completing a commit, so the fixture has
+  // to be one that validation accepts — a release that could never have been
+  // installed cannot stand in for one that was.
+  for (const artifact of [
+    ['src', 'hub', 'entry.mjs'], ['lib', 'client.js'], ['bin', 'dsh-crew.mjs'],
+    ['official-web-bridge', 'package.json'], ['official-web-bridge', 'cordis.patch.yml'],
+    ['official-web-bridge', 'entry.mjs'], ['official-web-bridge', 'lib', 'client.js'],
+  ]) {
+    const file = join(dir, ...artifact);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, artifact.at(-1) === 'package.json' ? JSON.stringify({ name: 'x', version: '1.0.0' }) : '// artifact\n');
+  }
   mkdirSync(join(dir, 'node_modules'), { recursive: true });
   writeFileSync(join(dir, 'node_modules', '.keep'), '');
   mkdirSync(join(dir, 'src'), { recursive: true });
@@ -1045,32 +1063,14 @@ test('a verified coordinated journal whose pointer never moved is committed, not
 // 3. A failed first install has no prior to re-point at, so its integration
 // records have to be removed — otherwise recovery deletes the candidate and the
 // loader link while Codex/ZCode/Claude still name that link.
-test('first-install recovery removes the host integrations it wrote', async () => {
-  const t = tempHome();
-  try {
-    const candidateDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: '0.1.2-rc.1' });
-    const reg = ensureCrewPluginRegistration({ home: t.dir, root: candidateDir, name: PKG_NAME });
-    assert.equal(reg.ok, true, JSON.stringify(reg));
-    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
-      stage: 'activating',
-      prior: null,
-      candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir },
-    }));
-    const uninstalled = [];
-    const installer = {
-      uninstallCodex: ({ home }) => { uninstalled.push(home); return { ok: true }; },
-      uninstallZCode: ({ home }) => { uninstalled.push(home); return { ok: true }; },
-      uninstallClaudeCode: async ({ home }) => { uninstalled.push(home); return { ok: true }; },
-    };
-    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, installer });
-    assert.equal(r.ok, true, JSON.stringify(r));
-    assert.equal(uninstalled.length, 3, 'all three host integrations are undone');
-    assert.equal(uninstalled.every((h) => h === t.dir), true, 'and each is scoped to this home');
-    assert.equal(existsSync(candidateDir), false, 'only then is the candidate removed');
-  } finally { t.cleanup(); }
-});
-
-test('first-install recovery keeps the candidate when an integration cannot be undone', async () => {
+// The first-install branch has no prior to re-point at, and the integrations name
+// the loader link. Removing their records would mean deleting files in the
+// operator's home on the strength of a filename: these uninstallers take only
+// `home` and cannot tell this failed transaction's records from ones the operator
+// wrote themselves. So nothing is removed and nothing is deleted — the link still
+// resolves to the candidate, whatever names the link still resolves, and the
+// operator decides what to unwind.
+test('first-install recovery unwinds nothing it cannot attribute', async () => {
   const t = tempHome();
   try {
     const candidateDir = fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: '0.1.2-rc.1' });
@@ -1080,16 +1080,20 @@ test('first-install recovery keeps the candidate when an integration cannot be u
       stage: 'activating', prior: null,
       candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir },
     }));
+    const touched = [];
     const installer = {
-      uninstallCodex: () => { throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); },
-      uninstallZCode: () => ({}),
-      uninstallClaudeCode: async () => ({}),
+      uninstallCodex: () => { touched.push('codex'); return { ok: true }; },
+      uninstallZCode: () => { touched.push('zcode'); return { ok: true }; },
+      uninstallClaudeCode: async () => { touched.push('claude'); return { ok: true }; },
     };
     const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, installer });
     assert.equal(r.ok, false);
-    assert.equal(r.code, 'JOURNAL_INTEGRATION_UNDO_FAILED');
-    assert.equal(existsSync(candidateDir), true, 'the candidate survives rather than being deleted under a live reference');
-    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'and the journal is retained');
+    assert.equal(r.code, 'JOURNAL_FIRST_INSTALL_NEEDS_OPERATOR');
+    assert.deepEqual(touched, [], 'no uninstaller runs, because none can prove the records are this transaction\'s');
+    assert.equal(existsSync(candidateDir), true, 'the candidate is kept, so the link and everything naming it still resolve');
+    assert.equal(existsSync(crewPluginLinkPath({ home: t.dir })), true);
+    assert.equal(realpathSync(crewPluginLinkPath({ home: t.dir })), realpathSync(candidateDir));
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'and the journal is retained for the operator');
   } finally { t.cleanup(); }
 });
 

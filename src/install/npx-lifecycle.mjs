@@ -605,6 +605,12 @@ async function openMaintenanceWindow({ home, journal }) {
     if (durable.ok && durable.state === 'present') {
       return { lease: durable.session.lease, runtime_id: durable.session.runtime_id, source: 'session' };
     }
+    // A session that exists but cannot be read is not "no session": recovery
+    // must not clear the journal and report success while a stopped runtime it
+    // cannot account for is sitting there.
+    if (!durable.ok && durable.state === 'malformed') {
+      return { malformed: true, error: durable.code ?? 'MAINTENANCE_SESSION_MALFORMED' };
+    }
   } catch { /* fall through to the journal's copy */ }
   const recorded = journal?.runtime?.maintenance ?? null;
   if (recorded?.lease && recorded?.runtime_id) return { lease: recorded.lease, runtime_id: recorded.runtime_id, source: 'journal' };
@@ -630,25 +636,6 @@ async function closeMaintenanceWindow({ home, window, supervisorFactory = crewSu
     return { ok: true };
   } catch (error) {
     return { ok: false, code: 'MAINTENANCE_START_FAILED', error: String(error?.message ?? error) };
-  }
-}
-
-/**
- * Remove the host integration records a failed first install wrote.
- *
- * These take only `home` — they are the same functions the uninstall path uses —
- * so this needs no release root, which matters because the release is about to be
- * deleted. A removal that fails fails the recovery rather than deleting a
- * candidate something still names.
- */
-async function undoHostIntegrations({ home, installer = realInstaller, log = () => {} }) {
-  try {
-    installer.uninstallCodex?.({ home });
-    installer.uninstallZCode?.({ home });
-    if (installer.uninstallClaudeCode) await installer.uninstallClaudeCode({ home });
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, code: 'INTEGRATION_UNDO_FAILED', error: String(error?.message ?? error) };
   }
 }
 
@@ -724,26 +711,6 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
       }
     }
   }
-  // A coordinated journal is marked verified only after the candidate runtime was
-  // started and its identity checked, and the pointer write happens after that.
-  // So a verified journal whose pointer has not moved means the candidate IS the
-  // running runtime and only the bookkeeping is missing: completing the commit is
-  // the recovery. Rolling back instead would swap the tree and the payload out
-  // from under a process that is still running the candidate.
-  if (journal.stage === 'coordinated-update' && journal.verified === true && !pointerMatchesCandidate) {
-    if (!candidateManifest?.name || !candidateManifest?.version) {
-      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
-    }
-    const rt = journal.runtime ?? null;
-    if (rt?.candidateVersion && rt?.liveRoot && readRuntimeTreeVersionSync(rt.liveRoot) !== rt.candidateVersion) {
-      return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_MISMATCH', stage: journal.stage, error: 'a verified coordinated journal expects the candidate runtime to be live; refusing to commit' };
-    }
-    writeCurrentPointer({ home, name: candidateIdent.name, version: candidateIdent.version, path: candidateDir });
-    clearUpdateJournal({ home });
-    gcOldReleases({ home, protect: journal.prior?.path ?? null });
-    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} was verified and started, so the commit was completed`);
-    return { ok: true, reconciled: true, stage: journal.stage, committed: true };
-  }
   if (pointerMatchesCandidate) {
     if (!candidateManifest?.name || !candidateManifest?.version) {
       return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
@@ -771,6 +738,36 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     return { ok: false, code: 'JOURNAL_POINTER_DIVERGED', stage: journal.stage, error: `pointer references unexpected release ${pointer?.path ?? 'unknown'}; refusing recovery` };
   }
 
+  // A verified coordinated journal means the candidate runtime was started and
+  // its identity checked, and the pointer write happens after that — so this
+  // state means the pointer write was lost and the candidate is what is running.
+  // Completing the commit is the recovery; rolling back would swap the tree and
+  // the payload out from under a live process. This runs only after the
+  // divergence check above, so "the pointer has not moved" means it still names
+  // the prior release or nothing at all — a third release has already failed
+  // closed, and its release identity can never be overwritten by a stale journal.
+  if (journal.stage === 'coordinated-update' && journal.verified === true && !pointerMatchesCandidate) {
+    if (!candidateIdent?.name || !candidateIdent?.version || !candidateDir) {
+      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage };
+    }
+    const rt = journal.runtime ?? null;
+    if (rt?.candidateVersion && rt?.liveRoot && readRuntimeTreeVersionSync(rt.liveRoot) !== rt.candidateVersion) {
+      return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_MISMATCH', stage: journal.stage, error: 'a verified coordinated journal expects the candidate runtime to be live; refusing to commit' };
+    }
+    // The same check the committed path applies, so a roll-forward cannot install
+    // a pointer to a payload that would have been rejected had it arrived the
+    // ordinary way.
+    const validated = validateInstalledPayload(candidateDir, { expectedName: candidateIdent.name, expectedVersion: candidateIdent.version });
+    if (!validated.ok) {
+      return { ok: false, code: 'JOURNAL_CANDIDATE_INVALID', stage: journal.stage, error: (validated.errors ?? []).join('; ') };
+    }
+    writeCurrentPointer({ home, name: candidateIdent.name, version: candidateIdent.version, path: candidateDir });
+    clearUpdateJournal({ home });
+    gcOldReleases({ home, protect: journal.prior?.path ?? null });
+    log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} was verified and started, so the commit was completed`);
+    return { ok: true, reconciled: true, stage: journal.stage, committed: true };
+  }
+
   // Pre-commit side: prior stays authoritative. Re-point live activation
   // surfaces back at prior (a crash between activation and pointer write
   // leaves them on the candidate), then drop the candidate. A rollback
@@ -788,6 +785,16 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     if (rt?.priorVersion && rt?.liveRoot) {
       const liveVersion = readRuntimeTreeVersionSync(rt.liveRoot);
       if (liveVersion !== rt.priorVersion) {
+        // The tree has to be replaced, and replacing it under a running process is
+        // the damage. The journal says whether a start can have happened: it is
+        // set to `starting` before the candidate is started and to `verified`
+        // after it checks out, so anything else means no runtime was ever started
+        // from the candidate cohort and the swap is safe. `starting` is the state
+        // that cannot be resolved here — the candidate may be live and unverified
+        // — and guessing either way is worse than saying so.
+        if (rt.state === 'starting') {
+          return { ok: false, code: 'JOURNAL_RUNTIME_MAY_BE_RUNNING', stage: journal.stage, error: 'the interrupted update may have started the candidate runtime and never verified it; refusing to replace its tree — re-run the update once the runtime is stopped' };
+        }
         // Move the parked prior tree back onto liveRoot. This is a pure
         // directory swap: no network, no registry, safe under a stale lock.
         const parked = rt.priorRoot && existsSync(rt.priorRoot) ? rt.priorRoot : null;
@@ -840,6 +847,9 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     const openWindow = journal.stage === 'coordinated-update'
       ? await openMaintenanceWindow({ home, journal })
       : null;
+    if (openWindow?.malformed) {
+      return { ok: false, code: 'JOURNAL_MAINTENANCE_SESSION_MALFORMED', stage: journal.stage, error: `${openWindow.error}; refusing to report recovery while a stopped runtime cannot be accounted for` };
+    }
     if (openWindow) {
       const closed = await closeMaintenanceWindow({ home, window: openWindow, supervisorFactory, log });
       if (!closed.ok) {
@@ -851,34 +861,24 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     return { ok: true, reconciled: true, stage: journal.stage, committed: false };
   }
 
-  // First-install pre-commit: no prior exists. Undo the candidate's
-  // activation surfaces FIRST (a crash between activation and pointer
-  // write leaves the profile link on the candidate), then remove the
-  // orphan candidate pointer + dir. Journal clears only after successful
-  // compensation.
-  const undone = undoCandidateActivationSync({ home, candidateDir, candidateName: journal.candidate?.name ?? null });
-  if (!undone.ok) {
-    return { ok: false, code: 'JOURNAL_UNDO_FAILED', stage: journal.stage, error: undone.error ?? undone.code };
-  }
-  // There is no prior release to re-point at, and the integrations name the
-  // loader link that the undo above is about to remove — so their records have to
-  // go too. Leaving them would mean recovery deletes both the candidate and the
-  // link while Codex, ZCode and Claude Code still name it: the same dangling
-  // state this whole change exists to prevent, in the branch with nothing to fall
-  // back on.
-  const integrationsUndone = await undoHostIntegrations({ home, installer, log });
-  if (!integrationsUndone.ok) {
-    return { ok: false, code: 'JOURNAL_INTEGRATION_UNDO_FAILED', stage: journal.stage, error: `${integrationsUndone.error ?? integrationsUndone.code}; the candidate is kept and the journal is retained` };
-  }
-  if (candidateDir && existsSync(candidateDir)) {
-    try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
-  }
-  if (pointer && candidateDir && pointer.path === candidateDir) {
-    try { rmSync(currentPointerFile({ home }), { force: true }); } catch {}
-  }
-  clearUpdateJournal({ home });
-  log(`- recovered first-install journal at stage ${journal.stage}: removed orphan candidate`);
-  return { ok: true, reconciled: true, stage: journal.stage, committed: false };
+  // First-install pre-commit: no prior release exists, and there is nothing this
+  // branch can undo that it can prove is its own. Removing the loader link would
+  // break every host integration that names it; removing the integration records
+  // would mean deleting files in the operator's home on the strength of a
+  // filename, because those uninstallers take only `home` and cannot tell this
+  // failed install's records from ones the operator wrote, or from a manual
+  // installation that predates Crew. So nothing is changed: the candidate stays,
+  // the link still resolves to it, whatever names the link still resolves, and
+  // the journal is retained so an operator decides. A recovery that cannot
+  // attribute what it would delete does not delete it.
+  return {
+    ok: false,
+    code: 'JOURNAL_FIRST_INSTALL_NEEDS_OPERATOR',
+    stage: journal.stage,
+    candidate: candidateDir,
+    journal: updateJournalFile({ home }),
+    error: `a first install did not complete; nothing was changed, because Crew cannot prove which host records are its own. To finish by hand: fix or remove the host integrations, then delete ${updateJournalFile({ home })} and ${candidateDir ?? 'the staged candidate'}`,
+  };
 }
 
 // ---- dependency tree materialization ----------------------------------------
@@ -2402,6 +2402,12 @@ export async function performCoordinatedCohortUpdate({
       const comp = await compensate();
       return finalizeCompensationFailure({ home, code: null, error: 'candidate activation failed', comp });
     }
+    // Record that a start may be about to happen BEFORE it happens. Recovery
+    // decides whether the runtime tree can be replaced by reading this, and a
+    // crash between the start and the verification would otherwise look exactly
+    // like "the candidate was never started" — which is how a rollback ends up
+    // swapping the tree out from under a running process.
+    writeUpdateJournal({ ...journalBase, runtime: { ...journalBase.runtime, state: 'starting' } });
     const started = await startFn();
     if (started?.ok !== true) {
       const comp = await compensate();
@@ -2427,9 +2433,12 @@ export async function performCoordinatedCohortUpdate({
       }
     }
 
-    // Mark the journal verified BEFORE the pointer write. Crash recovery
-    // then has a clean WAL relation: pointer==prior means not committed,
-    // pointer==candidate with verified journal means committed.
+    // Mark the journal verified BEFORE the pointer write, which makes a crash
+    // between the two distinguishable — but note what "verified" means here: the
+    // candidate runtime has already been started and its identity checked, so the
+    // candidate is what is running. A pointer still naming prior with a verified
+    // journal therefore means the pointer write was lost, and recovery completes
+    // the commit rather than rolling the tree out from under the live process.
     const marked = markJournalVerified({
       home,
       stage: 'coordinated-update',
