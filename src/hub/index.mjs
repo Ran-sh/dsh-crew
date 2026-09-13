@@ -499,6 +499,7 @@ export function hubCanonicalEvents(job = {}) {
 // ---------- job registry ----------
 
 export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges = false, isolation = 'shared', role = 'worker' } = {}) {
+  void isolation;
   const changes = workspaceDiff?.changes ?? {};
   const hasChanges = ['modified', 'deleted', 'renamed', 'untracked']
     .some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
@@ -506,7 +507,14 @@ export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChang
   return applyWorkspaceEvidence(outcome, {
     evidenceAvailable,
     hasChanges,
-    allowNoChanges: allowNoChanges === true && isolation === 'worktree',
+    // `allow_no_changes` is the caller's explicit authorization, and `shared` is an
+    // ordinary way to run: requiring a worktree here meant an authorized
+    // zero-change task in a shared workspace could never be verified as one, and
+    // was downgraded to partial. Reliability is guarded by `evidenceAvailable`,
+    // which `applyWorkspaceEvidence` already requires — a dirty or unreadable
+    // baseline grants no authorization and the task stays unverified. The
+    // standalone path never had this condition, so the two disagreed.
+    allowNoChanges: allowNoChanges === true,
     requireNoChangeAuthorization: role === 'worker',
   });
 }

@@ -92,16 +92,55 @@ export function appendDeliveryInstructions(task, { tier, isReview } = {}) {
   return `${task}\n\n${buildDeliveryInstructions({ tier, isReview })}`;
 }
 
-function parseTestsSection(value) {
-  if (typeof value !== 'string' || value.trim() === '') return { valid: false, status: undefined };
-  const statuses = [];
-  for (const line of value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-    const match = line.match(/^(?:[-*+]\s+)?(PASS|FAIL|NOT RUN)\s+—\s+\S.*?\s+—\s+\S.*$/);
-    if (!match) return { valid: false, status: undefined };
-    statuses.push(match[1]);
+/**
+ * Parse one Tests entry, or null when the line is not one.
+ *
+ * The canonical form is `STATUS — <check> — <result>`; a model often writes it as
+ * a Markdown table row instead, and both are read here. This is deliberately
+ * forgiving about *noise* — a heading, a note, a wrapped continuation line — and
+ * strict about *evidence*: a line with no auditable state, or a bare `PASS` with
+ * nothing after it, is not an entry.
+ *
+ * The earlier revision marked the whole section invalid as soon as one line
+ * failed to match, so a single trailing note made a report with several PASS rows
+ * count as having no Tests section at all — delivery incomplete, task blocked —
+ * while a second, looser parser in `workflow.mjs` had already populated the
+ * visible evidence. Two parsers gave two answers about one section; there is now
+ * one, and it lives here.
+ */
+export function parseTestRow(line) {
+  const normalized = String(line ?? '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\|/, '')
+    .replace(/\|\s*$/, '')
+    .trim();
+  const match = /^(PASS|FAIL|NOT RUN)\b(.*)$/i.exec(normalized);
+  if (!match) return null;
+  const parts = match[2]
+    .split(/\s*(?:—|\||\t)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  // A state on its own is not evidence, and neither is a bare check: the contract
+  // asks for what was checked *and* what happened.
+  if (parts.length < 2) return null;
+  return { status: match[1].toUpperCase(), command: parts[0], summary: parts.slice(1).join(' — ') };
+}
+
+/**
+ * The auditable state of a Tests section plus the entries it contains. `valid`
+ * means at least one entry was readable; it does not mean every line was.
+ */
+export function parseTestsSection(value) {
+  if (typeof value !== 'string' || value.trim() === '') return { valid: false, status: undefined, tests: [] };
+  const tests = [];
+  for (const line of value.split(/\r?\n/)) {
+    const row = parseTestRow(line);
+    if (row) tests.push(row);
   }
-  const status = statuses.includes('FAIL') ? 'FAIL' : statuses.includes('NOT RUN') ? 'NOT RUN' : statuses.includes('PASS') ? 'PASS' : undefined;
-  return { valid: status !== undefined, status };
+  if (tests.length === 0) return { valid: false, status: undefined, tests: [] };
+  const statuses = tests.map((test) => test.status);
+  const status = statuses.includes('FAIL') ? 'FAIL' : statuses.includes('NOT RUN') ? 'NOT RUN' : 'PASS';
+  return { valid: true, status, tests };
 }
 
 /**

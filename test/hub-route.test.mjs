@@ -114,7 +114,7 @@ test('versioned HTTP request rejects malformed workspace and constraints', () =>
   }
 });
 
-test('direct Hub jobs enforce verified no-change evidence only in an isolated clean worktree', () => {
+test('direct Hub jobs enforce verified no-change evidence against a clean, readable baseline', () => {
   const partial = {
     execution_status: 'completed', task_status: 'partial', changes: [],
     tests: [{ status: 'PASS' }, { status: 'NOT RUN' }],
@@ -141,12 +141,74 @@ test('direct Hub jobs enforce verified no-change evidence only in an isolated cl
   assert.equal(unauthorizedSuccess.task_status, 'partial');
   assert.equal(unauthorizedSuccess.no_change_verified, undefined);
 
-  for (const options of [
-    { isolation: 'shared', workspaceDiff: cleanDiff },
-    { isolation: 'worktree', workspaceDiff: { ...cleanDiff, dirtyBaseline: true } },
-  ]) {
-    const result = applyHubWorkspaceEvidence({ outcome: partial, allowNoChanges: true, role: 'worker', ...options });
-    assert.equal(result.task_status, 'partial');
-    assert.equal(result.no_change_verified, undefined);
+  // A dirty baseline proves nothing, so it stays unverified whatever the
+  // isolation mode. The shared-with-clean-baseline case used to be asserted here
+  // as partial, and that was the defect: `shared` is an ordinary way to run, and
+  // what makes zero-change evidence trustworthy is the baseline, not the mode.
+  // The shared case has its own test below.
+  const dirtyBaseline = applyHubWorkspaceEvidence({
+    outcome: partial,
+    allowNoChanges: true,
+    role: 'worker',
+    isolation: 'worktree',
+    workspaceDiff: { ...cleanDiff, dirtyBaseline: true },
+  });
+  assert.equal(dirtyBaseline.task_status, 'partial');
+  assert.equal(dirtyBaseline.no_change_verified, undefined);
+});
+
+// The Hub is where a shared workspace reaches this gate, and it used to require a
+// worktree before honouring `allow_no_changes` — so an explicitly authorised
+// zero-change task in a shared workspace could never be verified as one. The
+// standalone path never had that condition, so the two disagreed about the same
+// job. Reliability is guarded by `evidenceAvailable`, not by the isolation mode.
+test('an authorised zero-change task is verified in a shared workspace too', () => {
+  const outcome = {
+    task_status: 'success',
+    execution_status: 'completed',
+    tests: [{ status: 'PASS', command: 'check', summary: 'ok' }],
+    changes: [],
+    delivery: { complete: true, missing: [] },
+  };
+  const cleanDiff = { kind: 'git', dirtyBaseline: false, changes: { modified: [], deleted: [], renamed: [], untracked: [] } };
+
+  for (const isolation of ['shared', 'worktree']) {
+    const verified = applyHubWorkspaceEvidence({ outcome, workspaceDiff: cleanDiff, allowNoChanges: true, isolation, role: 'worker' });
+    assert.equal(verified.no_change_verified, true, `${isolation} must be able to certify a zero-change task`);
+    assert.equal(verified.task_status, 'success', isolation);
+  }
+});
+
+test('a shared workspace still cannot certify zero changes it cannot prove', () => {
+  const outcome = {
+    task_status: 'success',
+    execution_status: 'completed',
+    tests: [{ status: 'PASS', command: 'check', summary: 'ok' }],
+    changes: [],
+    delivery: { complete: true, missing: [] },
+  };
+  const dirty = { kind: 'git', dirtyBaseline: true, changes: {} };
+  const unreadable = { kind: 'no-git', reason: 'NOT_A_GIT_REPOSITORY' };
+  const changed = { kind: 'git', dirtyBaseline: false, changes: { modified: ['a.txt'] } };
+
+  for (const workspaceDiff of [dirty, unreadable, changed]) {
+    const gated = applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges: true, isolation: 'shared', role: 'worker' });
+    assert.notEqual(gated.no_change_verified, true, JSON.stringify(workspaceDiff));
+    assert.notEqual(gated.task_status, 'success', JSON.stringify(workspaceDiff));
+  }
+});
+
+test('a shared workspace with no authorisation is never certified', () => {
+  const outcome = {
+    task_status: 'success',
+    execution_status: 'completed',
+    tests: [{ status: 'PASS', command: 'check', summary: 'ok' }],
+    changes: [],
+    delivery: { complete: true, missing: [] },
+  };
+  const cleanDiff = { kind: 'git', dirtyBaseline: false, changes: {} };
+  for (const role of ['worker', 'reviewer']) {
+    const gated = applyHubWorkspaceEvidence({ outcome, workspaceDiff: cleanDiff, allowNoChanges: false, isolation: 'shared', role });
+    assert.notEqual(gated.no_change_verified, true, role);
   }
 });

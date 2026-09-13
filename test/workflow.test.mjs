@@ -217,3 +217,92 @@ test('terminal phases are recognized', () => {
   assert.equal(isTerminalPhase(JOB_PHASES.RUNNING), false);
   assert.equal(isTerminalPhase(JOB_PHASES.REVIEWING), false);
 });
+
+// ---------- the reported verdict: a temporary, verified, cleaned-up task ----------
+//
+// The case this guards: a worker creates a script, runs it, verifies the output,
+// deletes it, and reports the checks. The report carried several PASS rows, yet
+// the aggregate was null, the delivery counted as incomplete and the task was
+// blocked — because the delivery parser rejected the whole Tests section over one
+// line it could not read, while a second parser had already filled the visible
+// evidence. One report must not get two answers.
+
+const TEMP_TASK_RESULT = [
+  'Ran the checks and cleaned up.',
+  '',
+  '## Diff',
+  'no files changed',
+  '',
+  '## Tests',
+  'PASS — script content check — ok',
+  'PASS — stdout exact match (CP936) — ok',
+  'PASS — stdout exact match (UTF-8) — ok',
+  'PASS — cleanup check — path no longer exists',
+  '',
+  '## Risks',
+  'None.',
+].join('\n');
+
+test('a verified zero-change task aggregates its evidence instead of nulling it', () => {
+  const outcome = buildOutcome({ result: TEMP_TASK_RESULT, stopReason: 'completed' });
+  assert.equal(outcome.tests_status, 'PASS');
+  assert.equal(outcome.tests.filter((t) => t.status === 'PASS').length, 4);
+  assert.equal(outcome.delivery.complete, true);
+  assert.deepEqual(outcome.delivery.missing, []);
+  assert.deepEqual(outcome.changes, [], 'the contract sentinel is not a claimed change');
+});
+
+test('a verified zero-change task reaches success when the caller authorised it', () => {
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: TEMP_TASK_RESULT, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.task_status, 'success');
+  assert.equal(outcome.no_change_verified, true);
+  assert.equal(outcome.workspace_evidence_ok, true);
+});
+
+test('a temporary task with a cleanup failure still fails', () => {
+  const failedCleanup = TEMP_TASK_RESULT.replace('PASS — cleanup check — path no longer exists', 'FAIL — cleanup check — the temporary script is still present');
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: failedCleanup, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.tests_status, 'FAIL');
+  assert.notEqual(outcome.task_status, 'success');
+  assert.equal(outcome.no_change_verified, undefined);
+});
+
+test('a temporary task with no verification evidence still fails', () => {
+  const noEvidence = TEMP_TASK_RESULT.replace(/^PASS — .*$/gm, 'the script seemed fine');
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: noEvidence, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.delivery.complete, false, 'prose is not evidence');
+  assert.deepEqual(outcome.delivery.missing, ['Tests']);
+  assert.notEqual(outcome.task_status, 'success');
+});
+
+test('zero changes are still refused when the caller did not authorise them', () => {
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: TEMP_TASK_RESULT, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: false,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.no_change_verified, undefined);
+  assert.notEqual(outcome.task_status, 'success');
+});
+
+test('a task that authorised nothing but changed nothing cannot claim success on prose alone', () => {
+  const prose = buildOutcome({ result: '## Diff\nnothing\n## Tests\nall good\n## Risks\nnone', stopReason: 'completed' });
+  const gated = applyWorkspaceEvidence(prose, { evidenceAvailable: true, hasChanges: false, allowNoChanges: true, requireNoChangeAuthorization: true });
+  assert.equal(gated.task_status, 'blocked', 'a complete-looking report with no auditable test state is not delivery');
+});

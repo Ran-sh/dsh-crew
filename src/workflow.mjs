@@ -11,7 +11,7 @@
 // transport adapter.
 
 import { evaluateAttempt } from './policy.mjs';
-import { parseDeliveryReport } from './delivery.mjs';
+import { parseDeliveryReport, parseTestsSection } from './delivery.mjs';
 
 export const JOB_PHASES = Object.freeze({
   CREATED: 'created',
@@ -121,14 +121,9 @@ function parseChanges(section) {
   });
 }
 
-function parseTests(section) {
-  return splitSection(section).map((line) => {
-    const m = line.match(/^(?:[-*+]\s+)?(PASS|FAIL|NOT RUN)\s+—\s+(.+?)\s+—\s+(.+)$/);
-    if (!m) return { line };
-    const [, status, command, summary] = m;
-    return { status, command: command.trim(), summary: summary.trim() };
-  });
-}
+// The Tests section is parsed by the delivery contract's own parser. This module
+// used to carry a second, looser one, so one report could show PASS entries to the
+// caller while the delivery gate saw no Tests section at all.
 
 /**
  * Classify a worker run into a canonical task status. Completion of the
@@ -151,8 +146,11 @@ export function classifyTaskStatus({ executionStatus = 'completed', testsStatus,
  */
 export function buildOutcome({ result = '', deliveryMeta, executionStatus, stopReason, deliveryMissing } = {}) {
   const parsed = parseDeliveryReport(result);
-  const testsStatus = parsed.tests_status ?? deliveryMeta?.tests_status;
-  const tests = parseTests(parsed.sections.Tests);
+  // The aggregate status and the visible entries come from one parse, so they can
+  // no longer disagree about whether the Tests section is evidence.
+  const parsedTests = parseTestsSection(parsed.sections.Tests);
+  const testsStatus = parsedTests.status ?? parsed.tests_status ?? deliveryMeta?.tests_status;
+  const tests = parsedTests.tests;
   const execStatus = executionStatus ?? (stopReason === 'completed' ? 'completed' : 'failed');
   return {
     execution_status: execStatus,

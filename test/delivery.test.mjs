@@ -10,6 +10,7 @@ import {
   buildDeliveryInstructions,
   appendDeliveryInstructions,
   parseDeliveryReport,
+  parseTestsSection,
   validateDeliveryReport,
   formatDeliveryMetadata,
   DELIVERY_SECTIONS,
@@ -135,9 +136,16 @@ test('Tests requires PASS, FAIL, or NOT RUN and rejects none', () => {
   const mixed = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nFAIL — integration — broke\n## Risks\nknown');
   assert.equal(mixed.complete, true);
   assert.equal(mixed.tests_status, 'FAIL');
-  const malformed = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nintegration not checked\n## Risks\nknown');
-  assert.equal(malformed.complete, false);
-  assert.deepEqual(malformed.missing, ['Tests']);
+  // An informational line beside real entries is noise, not a missing section: a
+  // report that states its checks and their results has delivered its evidence,
+  // and rejecting it wholesale is what made a verified zero-change task look
+  // incomplete. A section with no entry at all still fails — see the next case.
+  const noisy = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit — ok\nintegration not checked\n## Risks\nknown');
+  assert.equal(noisy.complete, true);
+  assert.equal(noisy.tests_status, 'PASS');
+  const prose = parseDeliveryReport('## Diff\na.mjs\n## Tests\nintegration not checked\n## Risks\nknown');
+  assert.equal(prose.complete, false);
+  assert.deepEqual(prose.missing, ['Tests']);
   const missingResult = parseDeliveryReport('## Diff\na.mjs\n## Tests\nPASS — unit\n## Risks\nnone');
   assert.equal(missingResult.complete, false);
   assert.deepEqual(missingResult.missing, ['Tests']);
@@ -325,4 +333,77 @@ test('failed tests remain delivery metadata and do not rewrite execution status'
   assert.equal(full.status, 'done');
   assert.equal(full.delivery.complete, true);
   assert.equal(full.delivery.tests_status, 'FAIL');
+});
+
+// ---------- Tests-section parsing: noise is tolerated, evidence is required ----------
+//
+// The defect this guards: the section was marked invalid as soon as one line
+// failed to match a strict regex, so a single trailing note made a report with
+// several PASS rows count as having no Tests section — delivery incomplete, task
+// blocked — while a second, looser parser had already filled the visible
+// evidence. One report, two answers.
+
+test('a trailing note does not erase a section of PASS entries', () => {
+  const parsed = parseDeliveryReport([
+    '## Tests',
+    'PASS — script content check — ok',
+    'PASS — cleanup check — path gone',
+    'Note: ran under PowerShell 5.1',
+    '',
+    '## Diff',
+    'no files changed',
+    '## Risks',
+    'none',
+  ].join('\n'));
+  const tested = parseTestsSection(parsed.sections.Tests);
+  assert.equal(tested.valid, true);
+  assert.equal(tested.status, 'PASS');
+  assert.equal(tested.tests.length, 2);
+});
+
+test('a Markdown table of results is read as test entries', () => {
+  const parsed = parseDeliveryReport([
+    '## Tests',
+    '| Status | Check | Result |',
+    '| --- | --- | --- |',
+    '| PASS | script content | ok |',
+    '| PASS | cleanup | path gone |',
+    '## Diff',
+    'no files changed',
+    '## Risks',
+    'none',
+  ].join('\n'));
+  const tested = parseTestsSection(parsed.sections.Tests);
+  assert.equal(tested.valid, true, 'a table is how a model often writes this');
+  assert.equal(tested.status, 'PASS');
+  assert.equal(tested.tests.length, 2);
+  assert.equal(tested.tests[0].command, 'script content');
+});
+
+test('a dash without surrounding spaces still separates the fields', () => {
+  const tested = parseTestsSection('PASS — stdout 精确匹配（CP936）— 通过');
+  assert.equal(tested.valid, true);
+  assert.equal(tested.tests[0].command, 'stdout 精确匹配（CP936）');
+});
+
+test('the section is invalid when nothing in it is an entry', () => {
+  assert.equal(parseTestsSection('').valid, false);
+  assert.equal(parseTestsSection('everything worked fine').valid, false);
+  assert.equal(parseTestsSection('note: I ran the tests').valid, false);
+});
+
+test('a bare status with nothing after it is not evidence', () => {
+  assert.equal(parseTestsSection('PASS').valid, false);
+  assert.equal(parseTestsSection('PASS\nFAIL').valid, false);
+});
+
+test('any FAIL outranks PASS in the aggregate', () => {
+  const tested = parseTestsSection('PASS — a — ok\nFAIL — b — crashed\nPASS — c — ok');
+  assert.equal(tested.status, 'FAIL');
+  assert.equal(tested.tests.length, 3);
+});
+
+test('NOT RUN outranks PASS but not FAIL', () => {
+  assert.equal(parseTestsSection('PASS — a — ok\nNOT RUN — b — skipped').status, 'NOT RUN');
+  assert.equal(parseTestsSection('NOT RUN — b — skipped\nFAIL — a — crashed').status, 'FAIL');
 });
