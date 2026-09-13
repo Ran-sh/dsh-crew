@@ -118,13 +118,16 @@ export async function apply(ctx) {
     // process happens to hold.
     return async () => {
       try { if (typeof disposeHub === 'function') await disposeHub(); }
-      finally { try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ } }
+      // Only a claim this mount actually holds. A null handle means the claim was
+      // never acquired, and clearing something anyway could remove a sibling
+      // mount's protection.
+      finally { if (claimFile) { try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ } } }
     };
   } catch (error) {
     // No disposer will ever be returned for a failed mount, so the claim has to
     // be released here or the release stays pinned by a process that never
     // provided anything.
-    try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ }
+    if (claimFile) { try { clearReleaseClaim({ file: claimFile }); } catch { /* best effort */ } }
     throw error;
   }
 }

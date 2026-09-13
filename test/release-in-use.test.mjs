@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import {
   claimReleaseInUse,
+  clearLegacyReleaseClaim,
   clearReleaseClaim,
   liveReleaseClaims,
   releaseClaimFile,
@@ -219,8 +220,28 @@ test('clearing by PID does not remove a per-mount claim', (t) => {
   const home = fixture(t);
   const a = fakeRelease(t, home, 'rel-a');
   const file = claimReleaseInUse({ home, releasePath: a, pid: 4242 });
-  clearReleaseClaim({ home, pid: 4242 });
+  clearLegacyReleaseClaim({ home, pid: 4242 });
   assert.equal(existsSync(file), true, 'the per-mount claim is left alone');
+});
+
+// Impossible by construction now: a missing handle is not permission to remove
+// anything. The bug this guards is a mount whose claim acquisition failed
+// falling through to the compatibility path and deleting a legacy sibling's
+// claim — the one thing the per-mount change exists to prevent.
+test('clearing without a handle removes nothing, not even a legacy claim', (t) => {
+  const home = fixture(t);
+  const dir = releaseInUseDir({ home });
+  mkdirSync(dir, { recursive: true });
+  const legacy = join(dir, `${process.pid}.json`);
+  writeFileSync(legacy, JSON.stringify({ pid: process.pid, release: 'C:/legacy' }));
+
+  assert.equal(clearReleaseClaim({}), false, 'no handle, no removal');
+  assert.equal(clearReleaseClaim({ file: null }), false);
+  assert.equal(existsSync(legacy), true, 'a claim this caller does not own survives');
+
+  // And the explicit legacy remover still does its job.
+  assert.equal(clearLegacyReleaseClaim({ home, pid: process.pid }), true);
+  assert.equal(existsSync(legacy), false);
 });
 
 // A claim is written to a temporary name and renamed into place, so a reader can

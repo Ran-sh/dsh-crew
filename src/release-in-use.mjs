@@ -103,18 +103,26 @@ export function releaseClaimInUse({ home = homedir(), pid = process.pid } = {}) 
 }
 
 /**
- * Remove the claim this caller wrote. Pass the file `claimReleaseInUse`
- * returned: clearing by PID would remove a sibling mount's claim instead of this
- * one's, which is the opposite of the intent.
+ * Remove the claim whose handle `claimReleaseInUse` returned.
+ *
+ * A missing handle is not permission to remove something: without one there is
+ * no way to know which claim this caller owns, and guessing by PID can remove a
+ * sibling mount's protection. Legacy unbranded claims are removed by
+ * `clearLegacyReleaseClaim`, which says so in its name.
  */
-export function clearReleaseClaim({ home = homedir(), pid = process.pid, file = null } = {}) {
-  try {
-    if (file) { rmSync(file, { force: true }); return true; }
-    // No handle given, so only the unbranded name can be attributed to this
-    // process without guessing between siblings.
-    rmSync(releaseClaimFile({ home, pid }), { force: true });
-    return true;
-  } catch { return false; }
+export function clearReleaseClaim({ file = null } = {}) {
+  if (!file) return false;
+  try { rmSync(file, { force: true }); return true; } catch { return false; }
+}
+
+/**
+ * Remove the unbranded `<pid>.json` claim written by releases before claims were
+ * per-mount. Separate from `clearReleaseClaim` because it can take a claim this
+ * caller did not write, and that should never happen by falling through a
+ * missing argument.
+ */
+export function clearLegacyReleaseClaim({ home = homedir(), pid = process.pid } = {}) {
+  try { rmSync(releaseClaimFile({ home, pid }), { force: true }); return true; } catch { return false; }
 }
 
 /**
