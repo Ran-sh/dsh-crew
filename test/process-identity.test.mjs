@@ -50,12 +50,17 @@ test('the token is a stable pair for a real process on this platform', (t) => {
 });
 
 test('a decoy pid whose token differs is reported as recycled', () => {
+  // The probe is injected here: this asserts the comparison, and asking the real
+  // platform for a start time spawns a process that can time out under load,
+  // which would make the verdict `unknown` and the test flaky rather than wrong.
   resetProcessStartTokenCache();
-  // The hazard itself: this pid is alive (it is ours), and it is not the owner.
-  const own = processStartToken(process.pid);
-  if (own === null) return;
+  const own = processStartToken(process.pid, { probe: () => 'win-ticks:111' });
+  assert.equal(own, 'win-ticks:111');
   resetProcessStartTokenCache();
-  const other = `win-ticks:2`;
-  assert.equal(compareProcessToken({ pid: process.pid, process_start_token: other }), 'different');
+  assert.equal(
+    compareProcessToken({ pid: process.pid, process_start_token: 'win-ticks:222' }, { probe: () => 'win-ticks:111' }),
+    'different',
+    'the pid is alive and it is not the owner',
+  );
   resetProcessStartTokenCache();
 });
