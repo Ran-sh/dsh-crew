@@ -22,6 +22,7 @@ import { readHarnessModelCatalog } from '../model-catalog.mjs';
 import { appendDeliveryInstructions, prependJobIdentity, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 import { applyWorkspaceEvidence, buildOutcome, JOB_PHASES } from '../workflow.mjs';
+import { normalizeReviewVerdict } from '../workflow-runtime.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
@@ -1096,12 +1097,12 @@ export class WorkerRegistry {  constructor(ctx) {
         job.delivery_missing = parsed.missing;
         job.delivery_metadata = formatDeliveryMetadata(parsed);
         if (job.role === 'reviewer') {
-          const verdictText = String(parsed.sections?.Verdict ?? '').trim().toLowerCase();
-          const verdict = /^(approve|approved|pass)\b/.test(verdictText)
-            ? 'approve'
-            : /request.*chang|chang.*request|reject|needs changes/i.test(verdictText)
-              ? 'request_changes'
-              : 'inconclusive';
+          // The rule for reading a verdict lives in one place. This block used to
+          // carry its own copy, and the two copies drifted: the shared one learned
+          // to see through `**Approved**`, this one did not, so the Hub recorded
+          // `inconclusive` for a reviewer whose report the workflow accepted —
+          // which also kept the readiness matrix from seeing a real review.
+          const verdict = normalizeReviewVerdict(parsed.sections?.Verdict ?? job.result ?? '');
           const lines = (value) => String(value ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 40);
           job.review = {
             verdict, status: job.status, delivery_complete: parsed.complete === true,

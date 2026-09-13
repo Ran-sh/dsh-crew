@@ -4,6 +4,58 @@
 
 Future changes go here.
 
+## 2.0.0 — 2026-09-14
+
+A milestone, not a rewrite: no MCP tool, HTTP route, CLI command or config key
+was removed, and journals written by 1.10.x are still read. What changed is that
+the two rules a delegated job is judged by — what it delivered, and how far the
+runtime transaction got — are now each defined once, as an explicit state
+machine, and are verified through both dispatch paths instead of one.
+
+**The delivery contract**
+
+- An explicitly authorized zero-change task succeeds. Four separate causes were
+  fixed across 1.10.5–1.10.8, each found by running the previous release on a
+  real task rather than by a unit test: two `## Tests` parsers that disagreed
+  about whether the same section was evidence; an authorization the Hub granted
+  only in an isolated worktree; a report that declared the workspace unchanged
+  and then described the work it undid being read as a claim that the work
+  remained; and a client that re-judged the Hub's verdict with no evidence of
+  its own. The authorization stays load-bearing — the identical task and
+  evidence without it still fails.
+- A reviewer's verdict is read the way reviewers write it. `**Approved** —`,
+  `- Approved` and `Verdict: approved` all read as `inconclusive`, which blocks
+  acceptance, so enabling the automatic reviewer could reject correct work
+  because the reviewer bolded its answer. The rule now lives in one place; the
+  Hub used to carry a second copy that had already drifted from it.
+
+**The runtime transaction**
+
+- `before-stop / stopped / restarted / verified / committed`, one legal forward
+  edge at a time, with `restarted` written before the start on purpose so an
+  interrupted update is never mistaken for one that never started.
+- Update and handoff locks identify their owner by process start time as well as
+  PID, so a recycled PID can no longer keep a dead lock alive.
+
+**Dispatch**
+
+- A dispatched job is named `Crew_<date>_<time>_<purpose>` everywhere an
+  operator sees it, and isolation belongs to whoever allocates the workspace —
+  the client no longer leaves the Hub to resolve one and allocate a second.
+
+**Reliability**
+
+- Every runtime-tree move retries the transient Windows refusal it can hit
+  immediately after a process releases the tree, and reports a permanent failure
+  rather than a timing artifact.
+
+Verified on the release machine: the success path and the guards (reply-only,
+failing tests, missing authorization), the automatic reviewer end to end,
+escalation to a second attempt, a timeout, cancellation, worktree and shared
+isolation, the no-commits error, provider probing, the readiness matrix, job
+naming, and both dispatch surfaces — through ZCode's MCP session and through a
+Codex session that called the same tools.
+
 ## 1.10.9 — 2026-09-14
 
 Found by turning on the two features the operator's configuration has off —

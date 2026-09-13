@@ -8,6 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { applyHubWorkspaceEvidence, resolveHubSpawnPayload } from '../src/hub/index.mjs';
 
 const raw = (patch = {}) => ({ ...patch });
@@ -78,6 +79,18 @@ test('other payload fields pass through untouched', () => {
 // profile states how that role runs, and only the advanced Job Request shape
 // resolved it — a plain payload naming `role: worker` ran shared while the
 // profile said worktree, so the profile was ignored for the simpler caller.
+// One rule, one place. The verdict rule was implemented twice — once in the
+// shared workflow layer and once inline in the Hub — and the copies drifted: the
+// shared one learned to see through `**Approved**`, the Hub's did not, so the Hub
+// recorded `inconclusive` for a review the workflow had accepted and the
+// readiness matrix could not see a real review at all.
+test('the hub does not carry its own copy of the verdict rule', () => {
+  const source = readFileSync(new URL('../src/hub/index.mjs', import.meta.url), 'utf8');
+  assert.ok(/\bnormali[sz]eReviewVerdict\b/.test(source), 'the hub must use the shared verdict rule');
+  const inline = source.match(/request\.\*chang|\^\(approve\|approved\|pass\)/);
+  assert.equal(inline, null, `the hub re-implements the verdict rule: ${inline?.[0]}`);
+});
+
 test('a plain role payload takes its isolation from the role profile', () => {
   const registry = { ok: true, profiles: {
     'worker-default': { role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true, timeout_seconds: 1800, review_strictness: 'standard' },
