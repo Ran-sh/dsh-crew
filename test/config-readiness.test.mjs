@@ -130,6 +130,55 @@ test('trusted live Hub jobs promote only verified worker and approved reviewer e
   assert.equal(row(matrix, 'reviewer_pipeline').evidence_source, 'hub-jobs');
 });
 
+// Three target rows had no producer at all: they were listed in the matrix and
+// nothing could ever fill them, so they read NOT_RUN whatever the machine did.
+// A run that was cancelled or that timed out is exactly the evidence the
+// cancellation row asks for, and a DeepSeek execution is what the two provider
+// rows ask for — nothing else stands in for it.
+test('a cancelled or timed-out run is the evidence the cancellation row asks for', () => {
+  const withJobs = (jobs) => buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerCatalogChecked: true,
+    providerCatalogBody: { ok: true, health: { hints: [] } },
+    hubJobsChecked: true,
+    hubJobsBody: { ok: true, jobs },
+  });
+  const worker = { ...HUB_CONTEXT, role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true };
+
+  assert.equal(row(withJobs([worker]), 'cancellation_timeout_escalation').status, 'NOT_RUN');
+  assert.equal(row(withJobs([{ ...worker, status: 'cancelled', phase: 'cancelled' }]), 'cancellation_timeout_escalation').status, 'PASS');
+  assert.equal(row(withJobs([{ ...worker, status: 'failed', failure: { reason_code: 'ATTEMPT_TIMEOUT' } }]), 'cancellation_timeout_escalation').status, 'PASS');
+  assert.equal(row(withJobs([{ ...worker, status: 'failed', failure: { source_code: 'GIT_TIMEOUT' } }]), 'cancellation_timeout_escalation').status, 'PASS');
+  // An unrelated failure is not cancellation evidence.
+  assert.equal(row(withJobs([{ ...worker, status: 'failed', failure: { reason_code: 'TESTS_FAILED' } }]), 'cancellation_timeout_escalation').status, 'NOT_RUN');
+});
+
+test('a DeepSeek run lights its own row and only when it was verified', () => {
+  const withJobs = (jobs) => buildConfigReadinessMatrix({
+    hubCompatibility: compatibleHub,
+    workerProviderMode: 'follow-dsh',
+    providerCatalogChecked: true,
+    providerCatalogBody: { ok: true, health: { hints: [] } },
+    hubJobsChecked: true,
+    hubJobsBody: { ok: true, jobs },
+  });
+  const verified = { ...HUB_CONTEXT, role: 'worker', status: 'done', task_status: 'success', delivery_complete: true, workspace_evidence_ok: true };
+
+  const pro = withJobs([{ ...verified, provider: 'deepseek-official', model: 'deepseek-v4-pro' }]);
+  assert.equal(row(pro, 'deepseek_pro').status, 'PASS');
+  assert.equal(row(pro, 'deepseek_flash').status, 'NOT_RUN');
+
+  const flash = withJobs([{ ...verified, provider: 'deepseek-official', model: 'deepseek-v4-flash' }]);
+  assert.equal(row(flash, 'deepseek_flash').status, 'PASS');
+  assert.equal(row(flash, 'deepseek_pro').status, 'NOT_RUN');
+
+  // Another provider's run is not DeepSeek evidence, and an unverified DeepSeek
+  // run is not evidence either.
+  assert.equal(row(withJobs([{ ...verified, provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' }]), 'deepseek_flash').status, 'NOT_RUN');
+  assert.equal(row(withJobs([{ ...verified, provider: 'deepseek-official', model: 'deepseek-v4-pro', task_status: 'partial' }]), 'deepseek_pro').status, 'NOT_RUN');
+});
+
 test('normal process completion never promotes partial work or requested review changes', () => {
   const matrix = buildConfigReadinessMatrix({
     hubCompatibility: compatibleHub,

@@ -21,6 +21,30 @@ function verifiedHubJob(job) {
     && context.runtime_id.trim().length > 0;
 }
 
+// The row that asks whether a run can be stopped, or stopped by its own clock,
+// needs a run that was — a job that was cancelled or that timed out is the
+// evidence, not a success. Nothing produced this row at all, so it could never
+// become PASS no matter what the machine did.
+const CANCELLATION_CODES = new Set(['CANCELLED', 'WORKFLOW_CANCELLED', 'ATTEMPT_TIMEOUT', 'GIT_TIMEOUT']);
+
+function observedCancellation(job) {
+  if (job?.status === 'cancelled' || job?.phase === 'cancelled') return true;
+  const codes = [job?.failure?.reason_code, job?.failure?.source_code, job?.error_code, job?.error];
+  return codes.some((code) => typeof code === 'string' && CANCELLATION_CODES.has(code));
+}
+
+// The two DeepSeek rows are about that provider specifically, so they are not
+// filtered by the currently selected route: a machine running its workers on
+// another provider has no DeepSeek execution to show, and the row should say so
+// rather than borrow someone else's.
+const DEEPSEEK_PROVIDER = 'deepseek-official';
+
+function deepseekSlotRan(jobs, slot) {
+  return jobs.some((job) => job?.provider === DEEPSEEK_PROVIDER
+    && verifiedHubJob(job)
+    && new RegExp(slot, 'i').test(String(job?.model ?? '')));
+}
+
 function hasBlockingProviderRecovery(body, currentSelections) {
   if (!Object.hasOwn(body, 'recovery_transactions')) return false;
   if (!Array.isArray(body.recovery_transactions)) return true;
@@ -115,6 +139,11 @@ export function buildHubExecutionRows(hubJobs = [], { currentSelections = null }
     && matchesCurrentRoute(job, currentSelections, 'reviewer')
     && verifiedHubJob(job)
     && job?.review_verdict === 'approve');
+  const cancellationObserved = jobs.some((job) => matchesCurrentRoute(
+    job,
+    currentSelections,
+    job?.role === 'reviewer' ? 'reviewer' : 'worker',
+  ) && observedCancellation(job));
   return [
     workerPassed
       ? { id: 'model_execution', status: 'PASS', reason_code: 'REAL_EXECUTION_PASSED', evidence_source: 'hub-jobs' }
@@ -132,6 +161,15 @@ export function buildHubExecutionRows(hubJobs = [], { currentSelections = null }
     reviewerPassed
       ? { id: 'reviewer_pipeline', status: 'PASS', reason_code: 'REAL_REVIEW_PASSED', evidence_source: 'hub-jobs' }
       : { id: 'reviewer_pipeline', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    cancellationObserved
+      ? { id: 'cancellation_timeout_escalation', status: 'PASS', reason_code: 'CANCELLATION_OBSERVED', evidence_source: 'hub-jobs' }
+      : { id: 'cancellation_timeout_escalation', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    deepseekSlotRan(jobs, 'flash')
+      ? { id: 'deepseek_flash', status: 'PASS', reason_code: 'DEEPSEEK_FLASH_EXECUTED', evidence_source: 'hub-jobs' }
+      : { id: 'deepseek_flash', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
+    deepseekSlotRan(jobs, 'pro')
+      ? { id: 'deepseek_pro', status: 'PASS', reason_code: 'DEEPSEEK_PRO_EXECUTED', evidence_source: 'hub-jobs' }
+      : { id: 'deepseek_pro', status: 'NOT_RUN', reason_code: 'NO_EXECUTION_EVIDENCE', evidence_source: 'none' },
   ];
 }
 

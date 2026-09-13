@@ -4,6 +4,24 @@
 
 Future changes go here.
 
+## 2.0.1 — 2026-09-14
+
+Found by trying to make the readiness matrix green on a machine where the work
+had actually been done.
+
+- **Three target rows had no producer at all.** `cancellation_timeout_escalation`
+  and `deepseek_flash` / `deepseek_pro` were listed in the matrix and nothing
+  could ever fill them, so they read `NOT_RUN` no matter what the machine did —
+  a row that cannot pass is not a conservative row, it is a dead one. They now
+  read the job records: a run that was cancelled or that timed out is exactly the
+  evidence the cancellation row asks for, and a DeepSeek execution is what the
+  two provider rows ask for. An unverified run still counts for nothing.
+- **The Hub carried its own copy of the verdict rule.** The copies had drifted —
+  the shared one learned to see through `**Approved**`, the Hub's did not — so
+  the Hub recorded `inconclusive` for a review the workflow had accepted, which
+  kept `reviewer_primary_callable` and `reviewer_pipeline` from ever seeing a
+  real review. A guard test keeps the rule in one place now.
+
 ## 2.0.0 — 2026-09-14
 
 A milestone, not a rewrite: no MCP tool, HTTP route, CLI command or config key
