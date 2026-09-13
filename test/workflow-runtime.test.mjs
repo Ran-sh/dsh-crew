@@ -172,6 +172,66 @@ test('candidate capture failure cannot authorize a zero-change success', async (
   assert.equal(v.outcome.no_change_verified, undefined);
 });
 
+// The Hub sees the primary workspace; a client that captured no candidate — the
+// only way it can, a worktree it owns — has no evidence of its own. Re-running
+// the workspace gate here with nothing to judge the report against downgraded an
+// authorized zero-change task the Hub had already verified to `partial`, so the
+// same task passed through `jobs submit` and failed through the MCP client.
+test('a hub-judged attempt keeps the hub verdict when the client has no evidence', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY_PASS], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  a.allocateWorkspace = async (spec) => ({
+    ok: true, execution_cwd: spec.cwd, base_revision: null, isolation: 'shared', primary_workspace_dirty: false, handle: null,
+  });
+  // The Hub's own gated outcome, as it comes back from a hub-dispatched attempt.
+  const hubOutcome = {
+    execution_status: 'completed',
+    task_status: 'success',
+    confidence: null,
+    needs_escalation: false,
+    changes: [],
+    no_change_declared: true,
+    tests: [{ status: 'PASS', command: 'check', summary: 'ok' }],
+    tests_status: 'PASS',
+    risks: [],
+    unverified: [],
+    delivery: { complete: true, missing: [], format: 'coding', sections: ['Diff', 'Tests', 'Risks'] },
+    workspace_evidence_ok: true,
+    no_change_verified: true,
+  };
+  const base = a.executeAttempt;
+  a.executeAttempt = async (spec) => {
+    const r = await base(spec);
+    return spec.role === 'worker' ? { ...r, outcome: hubOutcome } : r;
+  };
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'create, verify, delete', cwd: '/repo', allow_no_changes: true });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'done', `expected completion, got ${v.status}`);
+  assert.equal(v.outcome.task_status, 'success');
+  assert.equal(v.outcome.no_change_verified, true);
+});
+
+test('a hub-judged mismatch is still a mismatch for the client', async () => {
+  const a = makeAdapter({ workers: [READ_ONLY_PASS], getConfigPatch: { collaboration_mode: 'flash-only', escalate_on_failure: false } });
+  a.allocateWorkspace = async (spec) => ({
+    ok: true, execution_cwd: spec.cwd, base_revision: null, isolation: 'shared', primary_workspace_dirty: false, handle: null,
+  });
+  const base = a.executeAttempt;
+  a.executeAttempt = async (spec) => {
+    const r = await base(spec);
+    return spec.role === 'worker'
+      ? { ...r, outcome: { ...r.outcome, workspace_evidence_ok: false, no_change_verified: undefined, task_status: 'partial' } }
+      : r;
+  };
+  const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory });
+  const job = rt.start({ role: 'worker', task: 'create, verify, delete', cwd: '/repo', allow_no_changes: true });
+  await rt.wait(job.id, 2000);
+  const v = rt.get(job.id, { withResult: true });
+  assert.equal(v.status, 'failed');
+  assert.notEqual(v.outcome.no_change_verified, true);
+});
+
 test('worker lifecycle exposes ordered canonical events without candidate payloads', async () => {
   const a = makeAdapter();
   const rt = createWorkflowRuntime(a, { maxParallel: 2, idFactory, clock: (() => { let now = 100; return () => now++; })() });

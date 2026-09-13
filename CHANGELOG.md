@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 1.10.7 — 2026-09-13
+
+The zero-change fix of 1.10.6 was verified again through both dispatch surfaces
+and only one of them was fixed.
+
+- **An authorized zero-change task succeeds through the MCP client too, not only
+  through `jobs submit`.** The Hub judges the workspace evidence where the
+  evidence is — it can see the primary workspace — and a client only has evidence
+  of its own when it captured a candidate, which it can only do in a worktree it
+  owns. The client re-ran the same gate on the Hub's verdict with nothing to
+  judge it against, which graded the identical report `partial` after the Hub had
+  approved it. Where the client has no evidence, the verdict the Hub reached on
+  evidence stands; where the client does have its own candidate, it still
+  decides.
+
 ## 1.10.6 — 2026-09-13
 
 Found by installing 1.10.5 and using it for real, one feature at a time. Each

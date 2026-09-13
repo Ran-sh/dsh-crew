@@ -441,11 +441,23 @@ export function createWorkflowRuntime(adapters, {
             }
           }
         }
-        outcome = applyWorkspaceEvidence(outcome, {
-          evidenceAvailable: workspaceEvidenceAvailable,
-          hasChanges: workspaceHasChanges,
-          allowNoChanges: job.allow_no_changes,
-        });
+        // A hub-dispatched attempt was already judged by the Hub, which sees the
+        // primary workspace. This client only has evidence of its own when it
+        // captured a candidate, which it can only do in a worktree it owns; for a
+        // shared workspace it has none. Re-running the gate here with no evidence
+        // judged the same report again with nothing to judge it against, and
+        // downgraded an authorized zero-change task the Hub had already verified
+        // to `partial`. Where the client has no evidence, the Hub's verdict is
+        // the one that was reached on evidence, so it stands.
+        const clientJudged = workspaceEvidenceAvailable;
+        const hubJudged = typeof ar.outcome?.workspace_evidence_ok === 'boolean';
+        if (clientJudged || !hubJudged) {
+          outcome = applyWorkspaceEvidence(outcome, {
+            evidenceAvailable: clientJudged,
+            hasChanges: workspaceHasChanges,
+            allowNoChanges: job.allow_no_changes,
+          });
+        }
         job.outcome = outcome;
 
         const reviewRequested = !isReviewJob && shouldAutoReview(config);
