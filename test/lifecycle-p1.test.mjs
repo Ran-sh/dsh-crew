@@ -1097,6 +1097,88 @@ test('first-install recovery unwinds nothing it cannot attribute', async () => {
   } finally { t.cleanup(); }
 });
 
+// The `starting` state: written before the candidate is started, so recovery can
+// tell "may be running" from "never started". It must resolve, not wedge — the
+// operator's remedy of stopping the runtime and re-running has to work, and it
+// only does if recovery itself establishes that nothing is running.
+async function startingFixture(t, { stopResult = { ok: true } } = {}) {
+  const { currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const PRIOR = '0.1.2-alpha.5';
+  const CANDIDATE = '0.1.2-rc.1';
+  const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: PRIOR });
+  writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.3', path: priorDir }));
+  // The candidate was moved onto the live root before the crash; it may be running.
+  materializeLiveRuntime({ home: t.dir, version: CANDIDATE });
+  const harnessHome = crewDshHome({ home: t.dir });
+  // The prior cohort is parked, as the update parks it before installing at the
+  // live root, so the rollback has a tree to restore.
+  const parked = join(harnessHome, 'runtime-prev-abc123');
+  mkdirSync(join(parked, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+  writeFileSync(join(parked, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: PRIOR }));
+  writeFileSync(join(parked, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '// prior');
+  writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+    stage: 'coordinated-update',
+    prior: { name: PKG_NAME, version: '1.0.3', path: priorDir, dshVersion: PRIOR },
+    candidate: {
+      name: PKG_NAME, version: '1.0.4', dshVersion: CANDIDATE,
+      stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
+    },
+    runtime: {
+      state: 'starting',
+      liveRoot: join(harnessHome, 'runtime'),
+      priorRoot: join(harnessHome, 'runtime-prev-abc123'),
+      priorVersion: PRIOR,
+      candidateVersion: CANDIDATE,
+      retainedRoot: join(harnessHome, 'retained-runtimes'),
+    },
+  }));
+  const calls = [];
+  const supervisorFactory = () => ({
+    stopOwnedBackend: async () => { calls.push('stop'); return stopResult; },
+    startOwnedBackend: async () => { calls.push('start'); return { ok: true }; },
+  });
+  return { PRIOR, priorDir, harnessHome, calls, supervisorFactory };
+}
+
+test('a runtime left in `starting` is stopped and then rolled back', async () => {
+  const t = tempHome();
+  try {
+    const f = await startingFixture(t);
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(f.calls.includes('stop'), true, 'it establishes that nothing is running first');
+    // Nothing was left stopped in this fixture — no durable session was present —
+    // so there is nothing to restart, and nothing may be started before the stop.
+    assert.equal(f.calls.at(0), 'stop');
+    assert.equal(f.calls.includes('start'), false);
+    assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-alpha.5', 'the prior cohort is back');
+  } finally { t.cleanup(); }
+});
+
+test('a `starting` state resolves when nothing was running after all', async () => {
+  const t = tempHome();
+  try {
+    // The supervisor reports there is no runtime to stop: the crash landed after
+    // the `starting` write but before the start, so rollback is safe.
+    const f = await startingFixture(t, { stopResult: { ok: false, code: 'MAINTENANCE_IDENTITY_UNAVAILABLE' } });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-alpha.5');
+  } finally { t.cleanup(); }
+});
+
+test('a `starting` state whose runtime cannot be stopped keeps the journal', async () => {
+  const t = tempHome();
+  try {
+    const f = await startingFixture(t, { stopResult: { ok: false, code: 'MAINTENANCE_SESSION_CONFLICT' } });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_RUNTIME_STOP_UNPROVEN');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), '0.1.2-rc.1', 'the tree is left alone');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'and the journal is retained so a later run retries');
+  } finally { t.cleanup(); }
+});
+
 test('coordinated update migrates payload + runtime together and retains the prior cohort', async () => {
   const { performCoordinatedCohortUpdate, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
   const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');

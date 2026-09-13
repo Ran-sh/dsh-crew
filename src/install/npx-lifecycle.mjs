@@ -639,6 +639,31 @@ async function closeMaintenanceWindow({ home, window, supervisorFactory = crewSu
   }
 }
 
+/**
+ * Establish that nothing is executing from the runtime tree, so that replacing it
+ * cannot pull the ground out from under a live process.
+ *
+ * `MAINTENANCE_IDENTITY_UNAVAILABLE` is the supervisor reporting that there is no
+ * running runtime to stop, which is the safe case rather than a failure; anything
+ * else that is not a successful stop leaves the question open and the caller
+ * fails closed.
+ */
+async function ensureRuntimeStopped({ home, supervisorFactory = crewSupervisor, log = () => {} }) {
+  try {
+    const supervisor = supervisorFactory({ home });
+    if (typeof supervisor?.stopOwnedBackend !== 'function') return { ok: true, unchecked: true };
+    const stopped = await supervisor.stopOwnedBackend();
+    if (stopped?.ok === true) {
+      log('- recovery stopped the runtime before replacing its tree');
+      return { ok: true, stopped: true };
+    }
+    if (stopped?.code === 'MAINTENANCE_IDENTITY_UNAVAILABLE') return { ok: true, notRunning: true };
+    return { ok: false, code: stopped?.code ?? 'MAINTENANCE_STOP_FAILED', error: stopped?.error ?? null };
+  } catch (error) {
+    return { ok: false, code: 'MAINTENANCE_STOP_FAILED', error: String(error?.message ?? error) };
+  }
+}
+
 // Reconcile a leftover journal from a crashed update/install. The single
 // commit point is the pointer write: pointer == candidate means committed
 // (finalize, do NOT roll back); pointer == prior/absent means pre-commit
@@ -789,11 +814,25 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
         // the damage. The journal says whether a start can have happened: it is
         // set to `starting` before the candidate is started and to `verified`
         // after it checks out, so anything else means no runtime was ever started
-        // from the candidate cohort and the swap is safe. `starting` is the state
-        // that cannot be resolved here — the candidate may be live and unverified
-        // — and guessing either way is worse than saying so.
+        // from the candidate cohort and the swap is safe.
+        //
+        // `starting` cannot be resolved from the journal alone — the candidate may
+        // be live and unverified. It must not be a dead end either, because
+        // "stop it and re-run" cannot change the journal: so recovery establishes
+        // that nothing is running and then rolls back. A durable STOPPED session
+        // already proves it; otherwise the runtime is stopped here, and a stop
+        // that cannot be proven fails closed with an instruction that does work.
         if (rt.state === 'starting') {
-          return { ok: false, code: 'JOURNAL_RUNTIME_MAY_BE_RUNNING', stage: journal.stage, error: 'the interrupted update may have started the candidate runtime and never verified it; refusing to replace its tree — re-run the update once the runtime is stopped' };
+          const window = await openMaintenanceWindow({ home, journal });
+          if (window?.malformed) {
+            return { ok: false, code: 'JOURNAL_MAINTENANCE_SESSION_MALFORMED', stage: journal.stage, error: `${window.error}; refusing to replace a runtime tree while a stopped runtime cannot be accounted for` };
+          }
+          if (!window) {
+            const stopped = await ensureRuntimeStopped({ home, supervisorFactory, log });
+            if (!stopped.ok) {
+              return { ok: false, code: 'JOURNAL_RUNTIME_STOP_UNPROVEN', stage: journal.stage, error: `an interrupted update may have started the candidate runtime; could not establish that it is stopped (${stopped.code ?? 'unknown'}), so its tree was left alone` };
+            }
+          }
         }
         // Move the parked prior tree back onto liveRoot. This is a pure
         // directory swap: no network, no registry, safe under a stale lock.
@@ -877,7 +916,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     stage: journal.stage,
     candidate: candidateDir,
     journal: updateJournalFile({ home }),
-    error: `a first install did not complete; nothing was changed, because Crew cannot prove which host records are its own. To finish by hand: fix or remove the host integrations, then delete ${updateJournalFile({ home })} and ${candidateDir ?? 'the staged candidate'}`,
+    error: `a first install did not complete; nothing was changed, because Crew cannot prove which host records are its own. To finish by hand: repoint or remove the Crew profile registration first (its loader link is ${join(crewProfileDir({ home }), 'node_modules', ...'@ran-sh/dsh-crew'.split('/'))}), remove the host integrations that name it, then delete ${updateJournalFile({ home })} and ${candidateDir ?? 'the staged candidate'}`,
   };
 }
 
