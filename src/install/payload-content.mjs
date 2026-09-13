@@ -74,12 +74,23 @@ export function capturePayloadContent(root, suppliedManifest) {
   } catch { return null; }
 }
 
-/** This digest covers first-party shipped files, not dependency tamper attestation. */
+/**
+ * This digest covers first-party shipped files, not dependency tamper attestation.
+ *
+ * The permission bits are part of it: the copy below writes each file with the
+ * mode captured from the source, so a payload whose `0644` became `0755` with
+ * identical bytes is not the same payload — it is the case where an intended
+ * permission repair would otherwise be skipped as already done.
+ */
 export function payloadContentDigest(root) {
   const snapshot = capturePayloadContent(root);
   if (!snapshot) return null;
-  const hashes = [...snapshot.files].map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')]);
-  return createHash('sha256').update(JSON.stringify(hashes.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex');
+  const entries = [...snapshot.files].map(([name, bytes]) => [
+    name,
+    snapshot.modes.get(name) ?? null,
+    createHash('sha256').update(bytes).digest('hex'),
+  ]);
+  return createHash('sha256').update(JSON.stringify(entries.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest('hex');
 }
 
 export function samePayloadContent(sourceRoot, installedRoot) {

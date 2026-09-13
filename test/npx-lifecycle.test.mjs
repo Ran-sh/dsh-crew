@@ -52,6 +52,10 @@ import {
   resolveUpdateCandidate,
   npmCliInvocation,
   updateLockFile,
+  updateJournalFile,
+  reconcileUpdateJournal,
+  readCurrentPointerState,
+  managedReleasePath,
 } from '../src/install/npx-lifecycle.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
@@ -1014,6 +1018,94 @@ test('jobs submit and cancel stop at the runtime capability gate', async () => {
       assert.equal(calls.length, 1);
     } finally { home.cleanup(); }
   }
+});
+
+// Recovery recursively deletes the journal's candidate directory and moves the
+// pointer's release, so a path that is merely absolute is delete authority over
+// anything. A corrupt or tampered journal naming a directory outside the managed
+// releases — including the official ~/.dsh tree this plugin must never touch —
+// has to fail closed with nothing removed.
+test('recovery refuses a journal whose candidate points outside the managed releases', () => {
+  const t = tempHome();
+  const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
+  try {
+    writeFileSync(join(victim, 'irreplaceable.txt'), 'must survive\n');
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      schemaVersion: 1, stage: 'staged', prior: null,
+      candidate: { name: PKG_NAME, version: '9.9.9', stageDir: victim },
+    }));
+    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(result.ok, false, 'a journal outside the managed tree must not reconcile');
+    assert.equal(result.code, 'JOURNAL_CANDIDATE_SCHEMA_INVALID');
+    assert.equal(existsSync(join(victim, 'irreplaceable.txt')), true, 'the directory is untouched');
+  } finally { t.cleanup(); rmSync(victim, { recursive: true, force: true }); }
+});
+
+test('recovery refuses a journal whose prior points outside the managed releases', () => {
+  const t = tempHome();
+  const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      schemaVersion: 1, stage: 'staged',
+      prior: { name: PKG_NAME, version: '1.0.0', path: victim },
+      candidate: { name: PKG_NAME, version: '9.9.9', stageDir: join(crewReleasesDir({ home: t.dir }), 'cand') },
+    }));
+    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'JOURNAL_PRIOR_SCHEMA_INVALID');
+    assert.equal(existsSync(victim), true);
+  } finally { t.cleanup(); rmSync(victim, { recursive: true, force: true }); }
+});
+
+// The named red line: the official DeepSeek Harness tree is never touched.
+test('a journal naming the official dsh tree is refused and the tree survives', () => {
+  const t = tempHome();
+  const fakeDsh = mkdtempSync(join(tmpdir(), 'dsh-official-'));
+  try {
+    mkdirSync(join(fakeDsh, 'profiles', 'web'), { recursive: true });
+    writeFileSync(join(fakeDsh, 'profiles', 'web', 'config.json'), '{}\n');
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      schemaVersion: 1, stage: 'staged', prior: null,
+      candidate: { name: PKG_NAME, version: '9.9.9', stageDir: fakeDsh },
+    }));
+    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(join(fakeDsh, 'profiles', 'web', 'config.json')), true);
+  } finally { t.cleanup(); rmSync(fakeDsh, { recursive: true, force: true }); }
+});
+
+// The pointer is what recovery acts on, so a pointer outside the managed tree is
+// a corrupt pointer rather than a release.
+test('a pointer naming a release outside the managed directory is malformed', () => {
+  const t = tempHome();
+  const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
+  try {
+    mkdirSync(crewReleasesDir({ home: t.dir }), { recursive: true });
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.0', path: victim }));
+    const state = readCurrentPointerState({ home: t.dir });
+    assert.equal(state.status, 'malformed');
+    assert.equal(state.code, 'POINTER_PATH_OUTSIDE_RELEASES');
+  } finally { t.cleanup(); rmSync(victim, { recursive: true, force: true }); }
+});
+
+// Containment, not a string prefix: a path that resolves inside is accepted, and
+// one that resolves out is not.
+test('managedReleasePath accepts what resolves inside and refuses what resolves out', () => {
+  const t = tempHome();
+  try {
+    const releases = crewReleasesDir({ home: t.dir });
+    const release = join(releases, 'ok-1.0.0');
+    mkdirSync(release, { recursive: true });
+    assert.notEqual(managedReleasePath({ home: t.dir, value: release }), null);
+    assert.notEqual(managedReleasePath({ home: t.dir, value: join(releases, 'sub', '..', 'ok-1.0.0') }), null);
+    assert.equal(managedReleasePath({ home: t.dir, value: join(releases, '..', 'elsewhere') }), null);
+    assert.equal(managedReleasePath({ home: t.dir, value: 'relative/path' }), null);
+    assert.equal(managedReleasePath({ home: t.dir, value: '' }), null);
+    assert.equal(managedReleasePath({ home: t.dir, value: null }), null);
+  } finally { t.cleanup(); }
 });
 
 test('release rollback switches to a validated retained payload and restarts the owned runtime', async () => {

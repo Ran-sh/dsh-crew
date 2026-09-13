@@ -44,11 +44,13 @@ test('update lock is exclusive: second acquirer gets UPDATE_IN_PROGRESS', () => 
   } finally { t.cleanup(); }
 });
 
+const releaseDir = (home, name) => join(crewReleasesDir({ home }), name);
+
 test('journal reconcile restores prior pointer and drops orphan stage', () => {
   const t = tempHome();
   try {
-    const priorDir = join(t.dir, 'prior-release');
-    const orphanDir = join(t.dir, 'orphan-stage');
+    const priorDir = releaseDir(t.dir, 'prior-1.0.3');
+    const orphanDir = releaseDir(t.dir, 'orphan-9.9.9');
     mkdirSync(priorDir, { recursive: true });
     mkdirSync(orphanDir, { recursive: true });
     writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
@@ -152,7 +154,7 @@ test('malformed journal fails closed and is retained', () => {
 test('first-install crash removes orphan candidate pointer', () => {
   const t = tempHome();
   try {
-    const orphanDir = join(t.dir, 'orphan-stage');
+    const orphanDir = releaseDir(t.dir, 'orphan-9.9.9');
     mkdirSync(orphanDir, { recursive: true });
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
     // Pre-commit crash: no pointer exists yet; the candidate was never
@@ -173,7 +175,7 @@ test('first-install crash removes orphan candidate pointer', () => {
 test('committed candidate finalizes instead of rolling back', () => {
   const t = tempHome();
   try {
-    const candidateDir = join(t.dir, 'candidate');
+    const candidateDir = releaseDir(t.dir, 'candidate-9.9.9');
     mkdirSync(candidateDir, { recursive: true });
     writeFileSync(join(candidateDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9' }));
     writeFileSync(join(candidateDir, 'cordis.patch.yml'), '[]\n');
@@ -194,7 +196,7 @@ test('committed candidate finalizes instead of rolling back', () => {
 test('begin/commit keeps pointer authoritative only after activation', () => {
   const t = tempHome();
   try {
-    const stageDir = join(t.dir, 'candidate');
+    const stageDir = releaseDir(t.dir, 'candidate-9.9.9');
     mkdirSync(stageDir, { recursive: true });
     const manifest = { name: '@ran-sh/dsh-crew', version: '9.9.9' };
     beginReleaseActivation({ stageDir, manifest, home: t.dir, prior: null });
@@ -237,6 +239,59 @@ test('migrateCrewDshRuntime rolls back when verify fails', async () => {
     assert.deepEqual(calls, ['stop', 'start', 'stop', 'start']);
     assert.ok(r.recovery && r.recovery.restore === true && r.recovery.restart === true, JSON.stringify(r.recovery));
     assert.equal(existsSync(join(liveRoot, 'marker.txt')), true);
+  } finally { t.cleanup(); }
+});
+
+// The defect this guards: the swap's removal error was swallowed and
+// `startOwned()` ran whatever happened to be at `prevRoot`. A tree that could
+// not be removed — the Windows case where live handles block the delete — was
+// then asked to start again, and a tree that was never restored started nothing
+// while the recovery still reported a restart.
+test('runtime recovery never starts a tree it could not restore', async () => {
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    mkdirSync(join(liveRoot, 'node_modules'), { recursive: true });
+    writeFileSync(join(liveRoot, 'marker.txt'), 'live');
+    const calls = [];
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      stageOptions: {
+        runner: () => {
+          const entry = join(crewDshRuntimeRoot({ home: t.dir }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// staged\n');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      stopOwned: async () => { calls.push('stop'); return { ok: true }; },
+      startOwned: async () => { calls.push('start'); return { ok: true }; },
+      verifyOwned: async () => ({ ok: false, code: 'IDENTITY_MISMATCH' }),
+      // The park (live -> parked) succeeds; renaming the parked tree back into
+      // the live root fails, which is what a locked tree leaves behind. Only the
+      // restore direction is broken, so the migration reaches the recovery.
+      rename: (from, to) => {
+        calls.push('rename');
+        if (to === liveRoot) throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' });
+        renameSync(from, to);
+      },
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.recovery.restore, false, 'the restore did not happen');
+    assert.equal(r.recovery.restart, false, 'so nothing may be started');
+    assert.equal(r.recovery.restartSkipped, 'the previous runtime was not restored');
+    // stop, park, start the candidate (which fails verification and triggers the
+    // recovery), stop, and the failed restore. The property that matters is what
+    // follows the recovery stop: no start.
+    assert.deepEqual(calls, ['stop', 'rename', 'start', 'stop', 'rename'], JSON.stringify(calls));
+    assert.deepEqual(
+      calls.slice(calls.lastIndexOf('stop') + 1),
+      ['rename'],
+      'no start after the failed restore',
+    );
   } finally { t.cleanup(); }
 });
 
@@ -347,9 +402,9 @@ test('migrateCrewDshRuntime restores the parked tree when the live install fails
 test('diverged pointer fails closed without touching releases', () => {
   const t = tempHome();
   try {
-    const priorDir = join(t.dir, 'prior-release');
-    const candidateDir = join(t.dir, 'candidate');
-    const thirdDir = join(t.dir, 'third-release');
+    const priorDir = releaseDir(t.dir, 'prior-1.0.3');
+    const candidateDir = releaseDir(t.dir, 'candidate-9.9.9');
+    const thirdDir = releaseDir(t.dir, 'third-release');
     for (const d of [priorDir, candidateDir, thirdDir]) mkdirSync(d, { recursive: true });
     writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
     writeFileSync(join(priorDir, 'cordis.patch.yml'), '[]\n');
@@ -372,8 +427,8 @@ test('diverged pointer fails closed without touching releases', () => {
 test('committed candidate finalizes with strong assertions', () => {
   const t = tempHome();
   try {
-    const candidateDir = join(t.dir, 'candidate');
-    const priorDir = join(t.dir, 'prior-release');
+    const candidateDir = releaseDir(t.dir, 'candidate-9.9.9');
+    const priorDir = releaseDir(t.dir, 'prior-1.0.3');
     mkdirSync(candidateDir, { recursive: true });
     mkdirSync(priorDir, { recursive: true });
     writeFileSync(join(candidateDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '9.9.9' }));
@@ -489,8 +544,8 @@ test('production migration path uses supervisor stop/start/verify', async () => 
 test('undo refuses to remove bundle re-pointed at later release', () => {
   const t = tempHome();
   try {
-    const candidateDir = join(t.dir, 'candidate-A');
-    const laterDir = join(t.dir, 'candidate-B');
+    const candidateDir = releaseDir(t.dir, 'candidate-A');
+    const laterDir = releaseDir(t.dir, 'candidate-B');
     mkdirSync(candidateDir, { recursive: true });
     mkdirSync(laterDir, { recursive: true });
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh'), { recursive: true });
@@ -653,14 +708,14 @@ test('rollback journal without verified flag never finalizes', async () => {
   const { reconcileUpdateJournal, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-rbrec-'));
   try {
-    const tgt = join(dir, 'tgt-release');
+    const tgt = releaseDir(dir, 'tgt-release');
     mkdirSync(tgt, { recursive: true });
     writeFileSync(join(tgt, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.6' }));
     mkdirSync(join(dir, '.config', 'dsh-crew', 'app'), { recursive: true });
     writeFileSync(join(dir, '.config', 'dsh-crew', 'app', 'current.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.6', path: tgt }));
     writeFileSync(updateJournalFile({ home: dir }), JSON.stringify({
       stage: 'rollback',
-      prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: join(dir, 'prior-missing') },
+      prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: releaseDir(dir, 'prior-missing') },
       candidate: { name: '@ran-sh/dsh-crew', version: '0.5.6', stageDir: tgt },
     }));
     const r = reconcileUpdateJournal({ home: dir, log: () => {} });
@@ -680,8 +735,8 @@ test('rollback pre-commit crash preserves retained target release', async () => 
   const { reconcileUpdateJournal, updateJournalFile } = await import('../src/install/npx-lifecycle.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-rbret-'));
   try {
-    const priorDir = join(dir, 'prior-release');
-    const targetDir = join(dir, 'target-release');
+    const priorDir = releaseDir(dir, 'prior-release');
+    const targetDir = releaseDir(dir, 'target-release');
     mkdirSync(priorDir, { recursive: true });
     mkdirSync(targetDir, { recursive: true });
     writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '0.5.7', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
@@ -1099,11 +1154,13 @@ test('malformed journal runtime path fails closed without touching anything', as
     writeFileSync(join(priorDir, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3' }));
     writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir }));
     const journal = join(t.dir, '.config', 'dsh-crew', 'app', 'update-journal.json');
-    // An escaping priorRoot (outside the harness home) must fail closed.
+    // An escaping priorRoot (outside the harness home) must fail closed. The
+    // candidate stays a legitimate managed release so the runtime segment is what
+    // this test exercises, not the path containment check.
     writeFileSync(journal, JSON.stringify({
       stage: 'coordinated-update', verified: false,
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir, dshVersion: '0.1.2-alpha.5' },
-      candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: join(t.dir, 'escape-stage'), dshVersion: '0.1.2-rc.1' },
+      candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: releaseDir(t.dir, 'escape-stage'), dshVersion: '0.1.2-rc.1' },
       runtime: { state: 'staged', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: join(t.dir, '..', '..', 'escape'), priorVersion: '0.1.2-alpha.5', candidateVersion: '0.1.2-rc.1' },
     }));
     const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });

@@ -528,14 +528,34 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, 
       return recovery;
     }
   }
-  try { rmSync(liveRoot, { recursive: true, force: true }); } catch {}
   try {
-    if (existsSync(prevRoot)) { rename(prevRoot, liveRoot); recovery.restore = true; }
+    rmSync(liveRoot, { recursive: true, force: true });
+  } catch (error) {
+    // A failed removal must stop the recovery. Swallowing it left the window
+    // open: the restore was attempted over whatever remained, and
+    // `startOwned()` ran regardless — so a tree that could not be removed was
+    // then asked to start again, which on Windows is exactly the case where
+    // live handles blocked the removal.
+    recovery.removeError = String(error?.message ?? error);
+    recovery.ok = false;
+    return recovery;
+  }
+  try {
+    if (!existsSync(prevRoot)) recovery.restoreError = `previous runtime is missing at ${prevRoot}`;
+    else { rename(prevRoot, liveRoot); recovery.restore = true; }
   } catch (error) {
     recovery.restoreError = String(error?.message ?? error);
   }
   if (prepareOnly) {
     recovery.ok = recovery.restore === true;
+    return recovery;
+  }
+  // Restart only on positive proof that the prior runtime is the tree now at the
+  // live root. Starting without it would run the failed candidate again, or
+  // nothing at all, and report it as a recovery.
+  if (recovery.restore !== true || !existsSync(liveRoot)) {
+    recovery.restartSkipped = 'the previous runtime was not restored';
+    recovery.ok = false;
     return recovery;
   }
   try {

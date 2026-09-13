@@ -161,21 +161,59 @@ export function readCurrentPointerState({ home = homedir() } = {}) {
     return { status: 'malformed', file, code: 'POINTER_FIELDS_INVALID' };
   }
   if (!isAbsolute(raw.path)) return { status: 'malformed', file, code: 'POINTER_PATH_NOT_ABSOLUTE' };
+  // The pointer names the release that is live, and recovery acts on it. A path
+  // outside the managed releases directory is a corrupt or tampered pointer, not
+  // a release, so it fails closed exactly like the other malformed cases.
+  if (managedReleasePath({ home, value: raw.path }) === null) {
+    return { status: 'malformed', file, code: 'POINTER_PATH_OUTSIDE_RELEASES' };
+  }
   return { status: 'valid', file, pointer: raw };
 }
 
-function validJournalRelease(value) {
-  return !!value && typeof value === 'object'
-    && typeof value.name === 'string' && value.name.length > 0
-    && typeof value.version === 'string' && value.version.length > 0
-    && typeof value.path === 'string' && isAbsolute(value.path);
+/**
+ * Resolve a path that a journal, the pointer, or recovery is about to act on, and
+ * refuse it unless it is inside the Crew-owned releases directory.
+ *
+ * An absolute path is not enough. Recovery recursively deletes the journal's
+ * candidate stage directory and moves the pointer's release, so a syntactically
+ * valid but corrupt or tampered journal naming any absolute path would grant
+ * delete authority over it — including the official `~/.dsh` tree this plugin is
+ * required never to touch. Containment is therefore checked before any read,
+ * write, delete or activation, and a path that fails it is treated exactly like
+ * a malformed journal: nothing is touched and the state is retained.
+ */
+export function managedReleasePath({ home = homedir(), value } = {}) {
+  if (typeof value !== 'string' || value.length === 0 || !isAbsolute(value)) return null;
+  const releases = realpathOr(resolve(crewReleasesDir({ home })));
+  const candidate = realpathOr(resolve(value));
+  // Resolve both sides before comparing: `..` segments and symlinks must not be
+  // able to leave the managed directory after the check.
+  const relative = relativeTo(releases, candidate);
+  if (relative === null || relative === '' || relative.startsWith('..') || isAbsolute(relative)) return null;
+  return candidate;
 }
 
-function validJournalCandidate(value) {
+function realpathOr(path) {
+  try { return realpathSync(path); } catch { return path; }
+}
+
+/** `path` expressed relative to `from`, or null when they are on different roots. */
+function relativeTo(from, path) {
+  return relative(from, path);
+}
+
+function validJournalRelease({ home, value }) {
   return !!value && typeof value === 'object'
     && typeof value.name === 'string' && value.name.length > 0
     && typeof value.version === 'string' && value.version.length > 0
-    && typeof value.stageDir === 'string' && isAbsolute(value.stageDir);
+    && managedReleasePath({ home, value: value.path }) !== null;
+}
+
+function validJournalCandidate({ home, value }) {
+  return !!value && typeof value === 'object'
+    && typeof value.name === 'string' && value.name.length > 0
+    && typeof value.version === 'string' && value.version.length > 0
+    && managedReleasePath({ home, value: value.stageDir }) !== null;
 }
 
 function writeFileAtomic(file, content) {
@@ -359,11 +397,12 @@ function readUpdateJournal({ home = homedir() } = {}) {
     return { malformed: true, file };
   }
   // Full schema check: a semantically broken journal (null candidate,
-  // incomplete prior) must fail closed, never enter recovery.
-  if (!validJournalCandidate(raw.candidate)) {
+  // incomplete prior) must fail closed, never enter recovery. The paths are
+  // checked for containment too, because recovery deletes and moves them.
+  if (!validJournalCandidate({ home, value: raw.candidate })) {
     return { malformed: true, file, code: 'JOURNAL_CANDIDATE_SCHEMA_INVALID' };
   }
-  if (raw.prior !== null && raw.prior !== undefined && !validJournalRelease(raw.prior)) {
+  if (raw.prior !== null && raw.prior !== undefined && !validJournalRelease({ home, value: raw.prior })) {
     return { malformed: true, file, code: 'JOURNAL_PRIOR_SCHEMA_INVALID' };
   }
   return raw;
@@ -554,7 +593,9 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
     return { ok: false, code: 'POINTER_MALFORMED', file: pointerState.file, error: pointerState.code ?? 'pointer unreadable; refusing recovery' };
   }
   const pointer = pointerState.status === 'valid' ? pointerState.pointer : null;
-  const candidateDir = journal.candidate?.stageDir ?? null;
+  // Act on the canonical path that was validated, not the raw string that was
+  // written: the delete below is only as safe as the path it is handed.
+  const candidateDir = managedReleasePath({ home, value: journal.candidate?.stageDir ?? null });
   const candidateManifest = candidateDir && existsSync(candidateDir) ? readManifest(candidateDir) : null;
 
   // A coordinated-update journal MUST carry a runtime segment; recovery may
