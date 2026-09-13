@@ -1172,6 +1172,84 @@ test('malformed journal runtime path fails closed without touching anything', as
 
 // ---- Oracle round-3 gates: sidecar strictness, missing-runtime journal, comp-fail journal ----
 
+// The defect this guards: restoring a retained cohort deleted the live one, so
+// after B→A the B tree existed nowhere. A later A→B rollback then failed with
+// RETAINED_MISSING, and the existing test masked it by pre-seeding a retained
+// copy of the cohort the rollback was about to displace. Retention has to
+// rotate: the displaced cohort becomes the retained one.
+test('restoring a retained cohort retains the cohort it displaces', async () => {
+  const { restoreRetainedRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const ON_LIVE = '0.1.2-rc.1';
+  const TARGET = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const harnessHome = crewDshHome({ home: t.dir });
+    materializeLiveRuntime({ home: t.dir, version: ON_LIVE });
+    // Only the target is retained. The cohort currently live is NOT pre-seeded,
+    // because the point is that the restore has to retain it itself.
+    const retained = join(harnessHome, 'retained-runtimes', TARGET);
+    mkdirSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET }));
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${TARGET}\n`);
+
+    const r = await restoreRetainedRuntime({
+      home: t.dir,
+      version: TARGET,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(liveRuntimeVersion({ home: t.dir }), TARGET, 'the target cohort is live');
+
+    // The rotation: the cohort that was live is now retained, so rolling back to
+    // it is possible without a registry round trip.
+    const displaced = join(harnessHome, 'retained-runtimes', ON_LIVE);
+    assert.equal(existsSync(displaced), true, 'the displaced cohort is retained');
+    const displacedPkg = JSON.parse(readFileSync(join(displaced, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'));
+    assert.equal(displacedPkg.version, ON_LIVE);
+  } finally { t.cleanup(); }
+});
+
+// And the reverse trip proves it end to end: A → B → A → B, with nothing seeded
+// by hand after the first update.
+test('rolling back and forward again does not consume the cohorts', async () => {
+  const { restoreRetainedRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const A = '0.1.2-alpha.5';
+  const B = '0.1.2-rc.1';
+  const t = tempHome();
+  try {
+    const harnessHome = crewDshHome({ home: t.dir });
+    const materialize = (version) => {
+      const root = join(harnessHome, 'retained-runtimes', version);
+      mkdirSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+      writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
+      writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${version}\n`);
+    };
+    const swap = (version) => restoreRetainedRuntime({
+      home: t.dir, version,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+
+    materializeLiveRuntime({ home: t.dir, version: A });
+    materialize(B);
+    assert.equal((await swap(B)).ok, true, 'A -> B');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), B);
+    assert.equal((await swap(A)).ok, true, 'B -> A');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), A);
+    assert.equal(
+      (await swap(B)).ok, true,
+      'A -> B again, which needs the B cohort the first rollback displaced',
+    );
+    assert.equal(liveRuntimeVersion({ home: t.dir }), B);
+    assert.equal(existsSync(crewDshRuntimeRoot({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
 test('legacy 1.0.3 -> 1.0.4 forward upgrade records sidecar for later offline rollback resolution', async () => {
   const { resolveReleaseCohort, writeReleaseCohort } = await import('../src/install/npx-lifecycle.mjs');
   const ALPHA = '0.1.2-alpha.5';

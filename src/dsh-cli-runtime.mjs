@@ -662,14 +662,29 @@ export async function restoreRetainedRuntime({
   if (!stop.ok) {
     return { ok: false, code: stop.code ?? 'DSH_RUNTIME_STOP_FAILED', error: stop.error ?? 'could not stop owned 3210' };
   }
+  // Park the displaced cohort instead of deleting it. Deleting it was what made a
+  // second rollback impossible: after B→A the B tree was gone, so a later A→B
+  // found no retained B. Retention has to rotate, like the forward path does.
+  const parked = join(crewDshHome({ home }), `runtime-displaced-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
+  let parkedLive = false;
   try {
-    if (existsSync(liveRoot)) rmSync(liveRoot, { recursive: true, force: true });
+    if (existsSync(liveRoot)) { rename(liveRoot, parked); parkedLive = true; }
+  } catch (error) {
+    return { ok: false, code: 'DSH_RUNTIME_PARK_FAILED', error: String(error?.message ?? error) };
+  }
+  try {
     rename(retained, liveRoot);
   } catch (error) {
-    // Restore the pre-existing live tree is impossible (it was replaced only
-    // on success above); report and let the caller reconcile.
+    // Put the displaced tree back: leaving the live root empty because a rename
+    // failed would take a working runtime down for nothing.
+    try { if (parkedLive && !existsSync(liveRoot)) rename(parked, liveRoot); } catch { /* reported below */ }
     return { ok: false, code: 'DSH_RUNTIME_RESTORE_SWAP_FAILED', error: String(error?.message ?? error) };
   }
+  // The cohort just displaced becomes the retained one, so the version this
+  // restore moved away from can still be rolled back to. A failure here leaves
+  // the tree parked rather than deleting it (see retainPriorRuntime).
+  const rotated = parkedLive ? retainPriorRuntime({ home, prevRoot: parked, rename }) : { ok: true, retained: false };
+  if (parkedLive && rotated.ok === false) log(`! could not retain the displaced runtime cohort; it remains at ${parked}: ${rotated.error ?? ''}`);
   if (prepareOnly) {
     log(`- runtime tree prepared offline from retained tree (@${version}); process not started`);
     return { ok: true, version, liveRoot, prepared: true };
