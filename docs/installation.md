@@ -56,6 +56,33 @@ reserves handoff ownership before releasing its update lock, resumes any
 unfinished handoff first, and succeeds only after the isolated 3210 runtime
 reports the expected Crew and DSH versions.
 
+Both the update lock and the handoff lock record the owning process's start
+time alongside its PID, and a lock is reclaimed only when the PID is gone or
+when that PID is provably a different process than the one that took the lock.
+Without it, a recycled PID — the operating system handing a dead owner's PID to
+an unrelated process — made a stale lock look alive for as long as the stranger
+ran, and no contender could ever reclaim it. Where the platform cannot report a
+process start time the check falls back to the PID alone, so a lock is never
+stolen on a guess.
+
+The update transaction itself is an ordered state machine, recorded in the
+journal's `runtime.state` and advanced one checkpoint at a time:
+
+| State | Meaning |
+| --- | --- |
+| `before-stop` | Intent journaled; the owned runtime has not been touched |
+| `stopped` | A stop completed, so the runtime tree may be mutated |
+| `restarted` | A start was **initiated** — written before the start call |
+| `verified` | The candidate is running and its dual identity checked out |
+| `committed` | The release pointer moved; terminal |
+
+`restarted` is written before the start happens, on purpose: a crash between
+the start and the verification is then indistinguishable from a completed
+start, which is the safe direction. Recovery uses this to decide whether the
+runtime tree may be replaced at all — replacing it under a live process is the
+damage the record exists to prevent. Journals written by earlier versions
+(`staged`, `starting`) are still read under their new names.
+
 On Windows, installation registers login startup. To start immediately and
 open the Crew control:
 

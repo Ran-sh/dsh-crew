@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { processStartToken } from '../src/process-identity.mjs';
 
 import {
   acquireWindowsSupervisorHandoffLock,
@@ -258,6 +259,45 @@ test('busy lock returns a stable contract without observing or mutating runtime 
     assert.equal(result.ok, false);
     assert.equal(result.code, 'SUPERVISOR_HANDOFF_BUSY');
     assert.equal(observed, false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('a recycled PID does not keep a dead handoff lock alive', () => {
+  const temp = temporaryAppRoot();
+  try {
+    const first = acquireWindowsSupervisorHandoffLock({ appRoot: temp.dir });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    const ownToken = processStartToken(process.pid);
+    if (ownToken === null) { first.cleanup?.(); return; }
+    // The owner died and the operating system handed its pid to somebody else,
+    // so the pid is alive and still not the owner. A PID-only liveness check
+    // keeps this lock forever; the start token is what identifies the stranger.
+    writeFileSync(join(first.file, 'owner.json'), `${JSON.stringify({
+      schema_version: 1,
+      token: 'recycled-pid',
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+      process_start_token: `${ownToken.split(':')[0]}:1`,
+    })}
+`);
+    const reclaimed = acquireWindowsSupervisorHandoffLock({ appRoot: temp.dir });
+    assert.equal(reclaimed.ok, true, 'a lock whose pid now belongs to another process is stale');
+    // It really is a new owner, not the recycled record left in place.
+    assert.notEqual(JSON.parse(readFileSync(join(reclaimed.file, 'owner.json'), 'utf8')).token, 'recycled-pid');
+    // A matching token still proves the owner is alive and must not be stolen.
+    writeFileSync(join(reclaimed.file, 'owner.json'), `${JSON.stringify({
+      schema_version: 1,
+      token: 'live-owner',
+      pid: process.pid,
+      acquired_at: new Date().toISOString(),
+      process_start_token: ownToken,
+    })}
+`);
+    const kept = acquireWindowsSupervisorHandoffLock({ appRoot: temp.dir });
+    assert.equal(kept.ok, false);
+    assert.equal(kept.code, 'LOCK_HELD');
   } finally {
     temp.cleanup();
   }

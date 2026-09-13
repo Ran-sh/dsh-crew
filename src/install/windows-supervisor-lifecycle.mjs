@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { compareProcessToken, processStartToken } from '../process-identity.mjs';
 
 export const WINDOWS_SUPERVISOR_HANDOFF_SCHEMA = 1;
 export const WINDOWS_SUPERVISOR_HANDOFF_PHASES = Object.freeze([
@@ -193,7 +194,11 @@ export function clearWindowsSupervisorHandoffJournal({ appRoot, journalFile, han
 function defaultAcquireLock({ journalFile, now }) {
   const file = `${journalFile}.lock`;
   const token = randomUUID();
-  const record = { schema_version: 1, token, pid: process.pid, acquired_at: now };
+  // Same PID-reuse hazard as the update lock: the lock is reclaimed by asking
+  // whether its pid exists, so a recycled pid keeps a dead owner's lock alive.
+  // The start token makes the pair an identity; the probe is Windows-only here
+  // because this lock only ever guards the Windows supervisor handoff.
+  const record = { schema_version: 1, token, pid: process.pid, acquired_at: now, process_start_token: processStartToken(process.pid) };
   const tryCreate = () => {
     const pending = `${file}.pending.${process.pid}.${randomUUID()}`;
     try {
@@ -234,10 +239,10 @@ function lockOwnerAlive(record) {
   if (!Number.isInteger(pid) || pid < 1) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return error?.code !== 'ESRCH';
   }
+  return compareProcessToken(record) !== 'different';
 }
 
 function reclaimDefaultLock({ file }) {

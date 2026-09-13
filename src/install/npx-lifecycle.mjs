@@ -43,6 +43,8 @@ import * as realInstaller from './install.mjs';
 import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
+import { compareProcessToken, processStartToken } from '../process-identity.mjs';
+import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted } from './runtime-lifecycle.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
@@ -254,7 +256,13 @@ export function acquireUpdateLock({ home = homedir() } = {}) {
   const file = updateLockFile({ home });
   mkdirSync(dirname(file), { recursive: true });
   const nonce = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const record = { pid: process.pid, started_at: isoNow(), nonce, hostname: process.env.COMPUTERNAME ?? null };
+  const record = {
+    pid: process.pid,
+    started_at: isoNow(),
+    nonce,
+    hostname: process.env.COMPUTERNAME ?? null,
+    process_start_token: processStartToken(process.pid),
+  };
   try {
     writeFileSync(file, JSON.stringify(record) + '\n', { flag: 'wx' });
     return { ok: true, owner: true, nonce };
@@ -271,12 +279,16 @@ function lockOwnerAlive(record) {
   if (!Number.isInteger(pid) || pid < 1) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     // ESRCH = no such process (dead owner, safe to reclaim).
     // EPERM = process exists but we cannot signal it (live owner, keep).
     return error?.code !== 'ESRCH';
   }
+  // The pid exists — but is it still the process that took the lock? A recycled
+  // pid answers "yes" to `kill(pid, 0)` and left a stale lock looking alive
+  // until the unrelated process exited, which is a lock nobody can reclaim.
+  // The recorded start token decides; without one we keep the PID-only verdict.
+  return compareProcessToken(record) !== 'different';
 }
 
 // Stale-lock reclaim with a single atomic claim: each contender writes its
@@ -292,7 +304,7 @@ function lockOwnerAlive(record) {
 function tryReclaimUpdateLock({ home, record }) {
   const file = updateLockFile({ home });
   const arbitrationPath = `${file}.arbitration`;
-  const myClaim = { pid: process.pid, nonce: record.nonce, started_at: isoNow() };
+  const myClaim = { pid: process.pid, nonce: record.nonce, started_at: isoNow(), process_start_token: processStartToken(process.pid) };
   for (let round = 0; round < 3; round += 1) {
     let current = null;
     try { current = JSON.parse(readFileSync(file, 'utf8')); } catch { current = null; }
@@ -812,17 +824,17 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
       const liveVersion = readRuntimeTreeVersionSync(rt.liveRoot);
       if (liveVersion !== rt.priorVersion) {
         // The tree has to be replaced, and replacing it under a running process is
-        // the damage. The journal says whether a start can have happened: it is
-        // set to `starting` before the candidate is started and to `verified`
-        // after it checks out, so anything else means no runtime was ever started
-        // from the candidate cohort and the swap is safe.
+        // the damage. The journal says whether a start can have happened: the
+        // lifecycle records `restarted` before the candidate is started and
+        // `verified` after it checks out, so anything before that means no runtime
+        // was ever started from the candidate cohort and the swap is safe.
         //
-        // `starting` cannot be resolved from the journal alone — the candidate may
+        // `restarted` cannot be resolved from the journal alone — the candidate may
         // be live and unverified. It must not be a dead end either, so recovery
         // stops the runtime and rolls back on a stop that actually happened, or on
         // a durable STOPPED session that already proves one did. Anything less is
         // not proof: a runtime that cannot be shown to be stopped keeps its tree.
-        if (rt.state === 'starting') {
+        if (runtimeStateMayHaveStarted(rt.state)) {
           const window = await openMaintenanceWindow({ home, journal });
           if (window?.malformed) {
             return { ok: false, code: 'JOURNAL_MAINTENANCE_SESSION_MALFORMED', stage: journal.stage, error: `${window.error}; refusing to replace a runtime tree while a stopped runtime cannot be accounted for` };
@@ -2332,7 +2344,7 @@ export async function performCoordinatedCohortUpdate({
     prior: { name: prior.name, version: prior.version, path: prior.path, dshVersion: priorDshVersion },
     candidate: { name: candidateManifest.name, version: candidateManifest.version, stageDir, dshVersion: candidateDshVersion },
     runtime: {
-      state: 'staged',
+      state: 'before-stop',
       liveRoot,
       priorRoot: prevPath,
       priorVersion: priorDshVersion,
@@ -2402,9 +2414,20 @@ export async function performCoordinatedCohortUpdate({
     // session then refused the next ordinary stop, so the machine could not
     // recover on its own. `startOwnedBackend` accepts this exact lease and
     // runtime id, which is what recovery needs to close the window.
-    if (stopped.lease && stopped.runtime_id) {
-      writeUpdateJournal({ ...journalBase, runtime: { ...journalBase.runtime, maintenance: { lease: stopped.lease, runtime_id: stopped.runtime_id } } });
+    // The `stopped` checkpoint is recorded whether or not the supervisor handed
+    // back a maintenance lease: a stop that succeeded is a stopped runtime
+    // either way, and the state machine needs that fact before the tree is
+    // touched. The lease is an additional capability, not the checkpoint.
+    const stopAdvance = checkRuntimeAdvance(journalBase.runtime.state, 'stopped');
+    if (!stopAdvance.ok) {
+      clearUpdateJournal({ home });
+      return { ok: false, code: stopAdvance.code, error: stopAdvance.error };
     }
+    const maintenance = stopped.lease && stopped.runtime_id ? { lease: stopped.lease, runtime_id: stopped.runtime_id } : null;
+    writeUpdateJournal({
+      ...journalBase,
+      runtime: { ...journalBase.runtime, state: 'stopped', ...(maintenance ? { maintenance } : {}) },
+    });
     let liveMoved = false;
     try {
       // Move live runtime aside, retaining its tree for offline rollback.
@@ -2441,12 +2464,18 @@ export async function performCoordinatedCohortUpdate({
       const comp = await compensate();
       return finalizeCompensationFailure({ home, code: null, error: 'candidate activation failed', comp });
     }
-    // Record that a start may be about to happen BEFORE it happens. Recovery
-    // decides whether the runtime tree can be replaced by reading this, and a
-    // crash between the start and the verification would otherwise look exactly
-    // like "the candidate was never started" — which is how a rollback ends up
-    // swapping the tree out from under a running process.
-    writeUpdateJournal({ ...journalBase, runtime: { ...journalBase.runtime, state: 'starting' } });
+    // Record that a start is about to happen BEFORE it happens. This is the
+    // `restarted` checkpoint, and it is written pre-emptively on purpose:
+    // recovery decides whether the runtime tree can be replaced by reading it,
+    // and a crash between the start and the verification would otherwise look
+    // exactly like "the candidate was never started" — which is how a rollback
+    // ends up swapping the tree out from under a running process.
+    const startAdvance = checkRuntimeAdvance('stopped', 'restarted');
+    if (!startAdvance.ok) {
+      const comp = await compensate().catch(() => ({ ok: false }));
+      return finalizeCompensationFailure({ home, code: startAdvance.code, error: startAdvance.error, comp });
+    }
+    writeUpdateJournal({ ...journalBase, runtime: { ...journalBase.runtime, state: 'restarted' } });
     const started = await startFn();
     if (started?.ok !== true) {
       const comp = await compensate();
@@ -2500,12 +2529,35 @@ export async function performCoordinatedCohortUpdate({
     // COMMIT POINT / LAST: pointer write after the verified journal.
     switchPointer(candidateRelease);
 
+    // The pointer write IS the commit, so this only records that it happened.
+    // A failure here must never roll a committed update back — the pointer is
+    // the ground truth and recovery re-derives the outcome from it either way.
+    markJournalCommitted({ home });
     clearUpdateJournal({ home });
     log(`✓ coordinated update committed: Crew ${candidateManifest.version} + DSH ${candidateDshVersion}`);
     return { ok: true, version: candidateManifest.version, path: stageDir, dsh_version: candidateDshVersion, restarted: started };
   } catch (error) {
     const comp = await compensate().catch(() => ({ ok: false }));
     return finalizeCompensationFailure({ home, code: null, error: error?.message ?? 'coordinated update failed', comp });
+  }
+}
+
+// Records the terminal lifecycle state. Deliberately non-fatal and deliberately
+// after the pointer write: by the time this runs the update is committed, so a
+// failure to annotate must not become a failure to update.
+function markJournalCommitted({ home }) {
+  try {
+    const file = updateJournalFile({ home });
+    if (!existsSync(file)) return { ok: false, code: 'JOURNAL_ABSENT' };
+    const journal = JSON.parse(readFileSync(file, 'utf8'));
+    const rt = journal?.runtime;
+    if (!rt || typeof rt !== 'object') return { ok: false, code: 'JOURNAL_RUNTIME_ABSENT' };
+    const advance = checkRuntimeAdvance(rt.state, 'committed');
+    if (!advance.ok) return advance;
+    writeFileAtomic(file, JSON.stringify({ ...journal, runtime: { ...rt, state: 'committed', committed_at: isoNow() } }, null, 2) + '\n');
+    return { ok: true };
+  } catch {
+    return { ok: false, code: 'JOURNAL_COMMIT_MARK_FAILED' };
   }
 }
 

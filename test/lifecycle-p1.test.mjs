@@ -16,6 +16,7 @@ import {
   crewReleasesDir,
 } from '../src/install/npx-lifecycle.mjs';
 import { crewDshHome, crewProfileDir } from '../src/install/install.mjs';
+import { processStartToken } from '../src/process-identity.mjs';
 import {
   crewDshRuntimeVersionDir,
   crewDshRuntimeRoot,
@@ -158,6 +159,57 @@ test('dead lock owner is reclaimed, live owner is kept', async () => {
     const kept = acquireUpdateLock({ home: t.dir });
     assert.equal(kept.ok, false);
     assert.equal(kept.code, 'UPDATE_IN_PROGRESS');
+  } finally { t.cleanup(); }
+});
+
+test('a recycled PID does not keep a dead lock alive', async () => {
+  const t = tempHome();
+  try {
+    mkdirSync(dirname(updateLockFile({ home: t.dir })), { recursive: true });
+    const ownToken = processStartToken(process.pid);
+    if (ownToken === null) { t.skip('this platform cannot report a process start time'); return; }
+    // The exact hazard: the lock names a pid that IS live, because the original
+    // owner died and the operating system handed its pid to somebody else.
+    // `kill(pid, 0)` succeeds, so a PID-only liveness check calls this owner
+    // alive forever and the lock can never be reclaimed. Only the start token
+    // distinguishes "the same process is still running" from "this pid was
+    // recycled", so the record below must be recognized as stale.
+    writeFileSync(updateLockFile({ home: t.dir }), `${JSON.stringify({
+      pid: process.pid,
+      started_at: '2000-01-01T00:00:00+00:00',
+      nonce: 'recycled-pid',
+      process_start_token: `${ownToken.split(':')[0]}:1`,
+    })}\n`);
+    const reclaimed = acquireUpdateLock({ home: t.dir });
+    assert.equal(reclaimed.ok, true, 'a lock whose pid now belongs to another process is stale');
+    assert.equal(reclaimed.reclaimed, true);
+    // The same token still means the same process, and that owner is not stealable.
+    const held = acquireUpdateLock({ home: t.dir });
+    assert.equal(held.ok, false);
+    assert.equal(held.code, 'UPDATE_IN_PROGRESS');
+    writeFileSync(updateLockFile({ home: t.dir }), `${JSON.stringify({
+      pid: process.pid, started_at: '2000-01-01T00:00:00+00:00', nonce: 'same-owner', process_start_token: ownToken,
+    })}\n`);
+    const keptByToken = acquireUpdateLock({ home: t.dir });
+    assert.equal(keptByToken.ok, false, 'a matching start token still proves the owner is alive');
+    assert.equal(keptByToken.code, 'UPDATE_IN_PROGRESS');
+  } finally { t.cleanup(); }
+});
+
+test('a lock with no recorded start token keeps the PID-only verdict', async () => {
+  const t = tempHome();
+  try {
+    mkdirSync(dirname(updateLockFile({ home: t.dir })), { recursive: true });
+    // Locks written by earlier versions carry no token. They must stay
+    // unreclaimable while their pid is alive rather than being guessed stale.
+    writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: process.pid, started_at: '2000-01-01T00:00:00+00:00', nonce: 'legacy' }) + '\n');
+    const kept = acquireUpdateLock({ home: t.dir });
+    assert.equal(kept.ok, false);
+    assert.equal(kept.code, 'UPDATE_IN_PROGRESS');
+    writeFileSync(updateLockFile({ home: t.dir }), JSON.stringify({ pid: 2147483647, started_at: '2000-01-01T00:00:00+00:00', nonce: 'legacy-dead' }) + '\n');
+    const reclaimed = acquireUpdateLock({ home: t.dir });
+    assert.equal(reclaimed.ok, true);
+    assert.equal(reclaimed.reclaimed, true);
   } finally { t.cleanup(); }
 });
 
@@ -926,7 +978,7 @@ async function maintenanceFixture(t, { startFails = false } = {}) {
       stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
     },
     runtime: {
-      state: 'staged',
+      state: 'before-stop',
       liveRoot: join(harnessHome, 'runtime'),
       priorRoot: join(harnessHome, 'runtime-prev-abc123'),
       priorVersion: PRIOR,
@@ -999,7 +1051,7 @@ test('recovery resumes a window the journal never recorded', async () => {
         stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
       },
       runtime: {
-        state: 'staged',
+        state: 'before-stop',
         liveRoot: join(harnessHome, 'runtime'),
         priorRoot: join(harnessHome, 'runtime-prev-abc123'),
         priorVersion: PRIOR,
@@ -1040,7 +1092,7 @@ test('a verified coordinated journal whose pointer never moved is committed, not
       prior: { name: PKG_NAME, version: '1.0.3', path: priorDir, dshVersion: PRIOR },
       candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir, dshVersion: CANDIDATE },
       runtime: {
-        state: 'staged',
+        state: 'before-stop',
         liveRoot: join(harnessHome, 'runtime'),
         priorRoot: join(harnessHome, 'runtime-prev-abc123'),
         priorVersion: PRIOR,
@@ -1124,7 +1176,7 @@ async function startingFixture(t, { stopResult = { ok: true } } = {}) {
       stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
     },
     runtime: {
-      state: 'starting',
+      state: 'restarted',
       liveRoot: join(harnessHome, 'runtime'),
       priorRoot: join(harnessHome, 'runtime-prev-abc123'),
       priorVersion: PRIOR,
@@ -1140,7 +1192,7 @@ async function startingFixture(t, { stopResult = { ok: true } } = {}) {
   return { PRIOR, priorDir, harnessHome, calls, supervisorFactory };
 }
 
-test('a runtime left in `starting` is stopped and then rolled back', async () => {
+test('a runtime left in `restarted` is stopped and then rolled back', async () => {
   const t = tempHome();
   try {
     const f = await startingFixture(t);
@@ -1192,7 +1244,7 @@ test('a proven stop is what licenses the rollback', async () => {
   } finally { t.cleanup(); }
 });
 
-test('a `starting` state whose runtime cannot be stopped keeps the journal', async () => {
+test('a `restarted` state whose runtime cannot be stopped keeps the journal', async () => {
   const t = tempHome();
   try {
     const f = await startingFixture(t, { stopResult: { ok: false, code: 'MAINTENANCE_SESSION_CONFLICT' } });
@@ -1529,7 +1581,7 @@ test('coordinated commit crash before pointer write recovers to prior via reconc
       stage: 'coordinated-update', verified: false,
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir, dshVersion: ALPHA },
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: candDir, dshVersion: TARGET_DSH_VERSION },
-      runtime: { state: 'staged', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: parked, priorVersion: ALPHA, candidateVersion: TARGET_DSH_VERSION, retainedRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'retained-runtimes') },
+      runtime: { state: 'before-stop', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: parked, priorVersion: ALPHA, candidateVersion: TARGET_DSH_VERSION, retainedRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'retained-runtimes') },
     }));
     const rec = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(rec.ok, true, JSON.stringify(rec));
@@ -1557,7 +1609,7 @@ test('malformed journal runtime path fails closed without touching anything', as
       stage: 'coordinated-update', verified: false,
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir, dshVersion: '0.1.2-alpha.5' },
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: releaseDir(t.dir, 'escape-stage'), dshVersion: '0.1.2-rc.1' },
-      runtime: { state: 'staged', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: join(t.dir, '..', '..', 'escape'), priorVersion: '0.1.2-alpha.5', candidateVersion: '0.1.2-rc.1' },
+      runtime: { state: 'before-stop', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: join(t.dir, '..', '..', 'escape'), priorVersion: '0.1.2-alpha.5', candidateVersion: '0.1.2-rc.1' },
     }));
     const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
