@@ -1618,8 +1618,14 @@ test('status guidance is direction-aware and equal versions are quiet', async ()
 test('registry mode never downgrades a newer managed payload', async () => {
   const t = tempHome();
   try {
+    // The installed payload has to outrank the launcher for "not newer" to be
+    // the only thing under test. Pinning the fixture to the package's own
+    // version made the test pass only while the two agreed: bumping the package
+    // turned the launcher into the newer one, which sends the update down the
+    // converge-first path and the idempotent assertion quietly stopped
+    // describing anything.
     const rec = recordingInstaller();
-    await npxInstall({ home: t.dir, sourceRoot: makeCandidateDir(t.dir, '2.0.0'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
+    await npxInstall({ home: t.dir, sourceRoot: makeCandidateDir(t.dir, '9.9.9'), installer: rec.installer, log: () => {}, ensureRuntime: okRuntime() });
     const before = readCurrentPointer({ home: t.dir });
     const callsBefore = rec.calls.length;
 
@@ -1641,7 +1647,7 @@ test('registry mode never downgrades a newer managed payload', async () => {
     assert.equal(r.idempotent, true);
     assert.equal(readCurrentPointer({ home: t.dir }).path, before.path, 'pointer must not move on a non-downgrade');
     assert.equal(releaseCount(t.dir), 1, 'no new release staged for an older registry candidate');
-    assert.match(logs.join('\n'), /not newer than the installed payload \(2\.0\.0\)/);
+    assert.match(logs.join('\n'), /not newer than the installed payload \(9\.9\.9\)/);
     assert.equal(rec.calls.length > callsBefore, true, 'idempotent path still re-verifies integrations');
   } finally { t.cleanup(); }
 });
