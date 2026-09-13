@@ -11,6 +11,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -571,6 +572,8 @@ async function rollbackRuntimeSwap({ liveRoot, prevRoot, stopOwned, startOwned, 
 
 // ---- retained runtime cohorts -------------------------------------------------
 
+const DISPLACED_RUNTIME_PREFIX = 'runtime-displaced-';
+
 function retainedRuntimesRoot({ home }) {
   return join(crewDshHome({ home }), RETAINED_RUNTIMES_DIRNAME);
 }
@@ -592,12 +595,22 @@ function runtimeTreeVersion(root, read = readFileSync) {
 // Best-effort retention of the swapped-out prior runtime tree. Never throws
 // and never fails the caller: retention is an optimization for offline
 // rollback, not a correctness requirement of the migration itself.
-function retainPriorRuntime({ home, prevRoot, rename = renameSync }) {
+/**
+ * Retain a parked runtime tree under the version it ships.
+ *
+ * `removeUnreadable` exists for one caller: the rollback rotation, where the
+ * parked tree is the ONLY copy of the cohort just displaced. There, failing to
+ * read its version is not a reason to delete it — that would destroy the very
+ * copy the rotation exists to keep — so it stays parked and is found later by
+ * `findRetainedRuntime`. The forward migration path keeps the default, where an
+ * unreadable tree really is junk.
+ */
+function retainPriorRuntime({ home, prevRoot, rename = renameSync, removeUnreadable = true }) {
   try {
     if (!existsSync(prevRoot)) return { ok: true, retained: false };
     const version = runtimeTreeVersion(prevRoot);
     if (!version) {
-      // No version to key retention on; the tree is unreadable junk.
+      if (!removeUnreadable) return { ok: false, retained: false, prevRoot, error: 'parked cohort version unreadable; left in place' };
       try { rmSync(prevRoot, { recursive: true, force: true }); } catch {}
       return { ok: true, retained: false, reason: 'prior tree version unreadable; removed' };
     }
@@ -621,9 +634,24 @@ function retainPriorRuntime({ home, prevRoot, rename = renameSync }) {
 export function findRetainedRuntime({ home = homedir(), version, exists = existsSync, read = readFileSync } = {}) {
   if (typeof version !== 'string' || version.length === 0) return null;
   const dir = retainedRuntimeDir({ home, version });
-  if (!exists(dir)) return null;
-  if (runtimeTreeVersion(dir, read) !== version) return null;
-  return dir;
+  if (exists(dir) && runtimeTreeVersion(dir, read) === version) return dir;
+  // A rotation whose retain step failed leaves the displaced cohort parked in the
+  // harness home. It is a complete, valid copy of that cohort, so it is found
+  // here rather than being written off: otherwise a later offline rollback to
+  // that version reports RETAINED_MISSING while the tree sits on disk.
+  return findDisplacedRuntime({ home, version, exists, read });
+}
+
+function findDisplacedRuntime({ home, version, exists = existsSync, read = readFileSync }) {
+  let names;
+  try { names = readdirSync(crewDshHome({ home })); } catch { return null; }
+  for (const name of names) {
+    if (!name.startsWith(DISPLACED_RUNTIME_PREFIX)) continue;
+    const dir = join(crewDshHome({ home }), name);
+    if (!exists(dir)) continue;
+    if (runtimeTreeVersion(dir, read) === version) return dir;
+  }
+  return null;
 }
 
 // Offline cohort restore for cross-cohort rollback: move the retained tree
@@ -665,7 +693,7 @@ export async function restoreRetainedRuntime({
   // Park the displaced cohort instead of deleting it. Deleting it was what made a
   // second rollback impossible: after B→A the B tree was gone, so a later A→B
   // found no retained B. Retention has to rotate, like the forward path does.
-  const parked = join(crewDshHome({ home }), `runtime-displaced-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
+  const parked = join(crewDshHome({ home }), `${DISPLACED_RUNTIME_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`);
   let parkedLive = false;
   try {
     if (existsSync(liveRoot)) { rename(liveRoot, parked); parkedLive = true; }
@@ -681,10 +709,15 @@ export async function restoreRetainedRuntime({
     return { ok: false, code: 'DSH_RUNTIME_RESTORE_SWAP_FAILED', error: String(error?.message ?? error) };
   }
   // The cohort just displaced becomes the retained one, so the version this
-  // restore moved away from can still be rolled back to. A failure here leaves
-  // the tree parked rather than deleting it (see retainPriorRuntime).
-  const rotated = parkedLive ? retainPriorRuntime({ home, prevRoot: parked, rename }) : { ok: true, retained: false };
-  if (parkedLive && rotated.ok === false) log(`! could not retain the displaced runtime cohort; it remains at ${parked}: ${rotated.error ?? ''}`);
+  // restore moved away from can still be rolled back to. This parked tree is the
+  // only copy of that cohort, so an unreadable version keeps it rather than
+  // deleting it, and a failure is surfaced instead of passing as a clean restore.
+  const rotated = parkedLive
+    ? retainPriorRuntime({ home, prevRoot: parked, rename, removeUnreadable: false })
+    : { ok: true, retained: false };
+  if (parkedLive && rotated.ok === false) {
+    log(`! could not retain the displaced runtime cohort; it remains at ${parked}: ${rotated.error ?? ''}`);
+  }
   if (prepareOnly) {
     log(`- runtime tree prepared offline from retained tree (@${version}); process not started`);
     return { ok: true, version, liveRoot, prepared: true };

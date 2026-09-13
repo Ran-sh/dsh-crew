@@ -1212,6 +1212,85 @@ test('restoring a retained cohort retains the cohort it displaces', async () => 
   } finally { t.cleanup(); }
 });
 
+// Oracle's follow-up: the rotation routed the parked tree — now the only copy of
+// the displaced cohort — through a retention helper that deletes a tree whose
+// version it cannot read. Deleting the sole copy of a cohort is the opposite of
+// what the rotation is for.
+test('a displaced cohort with an unreadable version is kept, not deleted', async () => {
+  const { restoreRetainedRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const TARGET = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const harnessHome = crewDshHome({ home: t.dir });
+    // Live tree that exists but carries no readable cohort version.
+    const live = join(harnessHome, 'runtime');
+    mkdirSync(live, { recursive: true });
+    writeFileSync(join(live, 'marker.txt'), 'unversioned');
+    const retained = join(harnessHome, 'retained-runtimes', TARGET);
+    mkdirSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET }));
+    writeFileSync(join(retained, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${TARGET}\n`);
+
+    const r = await restoreRetainedRuntime({
+      home: t.dir, version: TARGET,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const parked = readdirSync(harnessHome).filter((name) => name.startsWith('runtime-displaced-'));
+    assert.equal(parked.length, 1, `the displaced tree is kept: ${JSON.stringify(readdirSync(harnessHome))}`);
+    assert.equal(
+      existsSync(join(harnessHome, parked[0], 'marker.txt')),
+      true,
+      'and it still holds the cohort it was parked for',
+    );
+  } finally { t.cleanup(); }
+});
+
+// And when retention itself fails, the parked cohort has to stay discoverable:
+// otherwise a later offline rollback reports RETAINED_MISSING while a complete
+// copy of that cohort sits on disk.
+test('a cohort parked by a failed retain is still found for a later rollback', async () => {
+  const { restoreRetainedRuntime, findRetainedRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const A = '0.1.2-alpha.5';
+  const B = '0.1.2-rc.1';
+  const t = tempHome();
+  try {
+    const harnessHome = crewDshHome({ home: t.dir });
+    const materialize = (root, version) => {
+      mkdirSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+      writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }));
+      writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), `// ${version}\n`);
+    };
+    materializeLiveRuntime({ home: t.dir, version: B });
+    materialize(join(harnessHome, 'retained-runtimes', A), A);
+
+    const r = await restoreRetainedRuntime({
+      home: t.dir, version: A,
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      // The park and the restore succeed; only the retain fails, which is what a
+      // locked or unwritable retained-runtimes directory produces.
+      rename: (from, to) => {
+        if (to.startsWith(join(harnessHome, 'retained-runtimes'))) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        renameSync(from, to);
+      },
+      log: () => {},
+    });
+    assert.equal(r.ok, true, 'the restore itself succeeded');
+    assert.equal(liveRuntimeVersion({ home: t.dir }), A, 'the target cohort is live');
+    const parked = readdirSync(harnessHome).find((n) => n.startsWith('runtime-displaced-'));
+    assert.equal(
+      findRetainedRuntime({ home: t.dir, version: B }),
+      join(harnessHome, parked),
+      'the parked cohort is discoverable, so B can still be rolled back to',
+    );
+  } finally { t.cleanup(); }
+});
+
 // And the reverse trip proves it end to end: A → B → A → B, with nothing seeded
 // by hand after the first update.
 test('rolling back and forward again does not consume the cohorts', async () => {

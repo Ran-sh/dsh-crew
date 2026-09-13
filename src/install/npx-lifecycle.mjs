@@ -163,11 +163,14 @@ export function readCurrentPointerState({ home = homedir() } = {}) {
   if (!isAbsolute(raw.path)) return { status: 'malformed', file, code: 'POINTER_PATH_NOT_ABSOLUTE' };
   // The pointer names the release that is live, and recovery acts on it. A path
   // outside the managed releases directory is a corrupt or tampered pointer, not
-  // a release, so it fails closed exactly like the other malformed cases.
-  if (managedReleasePath({ home, value: raw.path }) === null) {
+  // a release, so it fails closed exactly like the other malformed cases — and
+  // the canonical value is what the caller gets, so every later use acts on the
+  // path that was checked.
+  const canonical = managedReleasePath({ home, value: raw.path });
+  if (canonical === null) {
     return { status: 'malformed', file, code: 'POINTER_PATH_OUTSIDE_RELEASES' };
   }
-  return { status: 'valid', file, pointer: raw };
+  return { status: 'valid', file, pointer: { ...raw, path: canonical } };
 }
 
 /**
@@ -398,13 +401,22 @@ function readUpdateJournal({ home = homedir() } = {}) {
   }
   // Full schema check: a semantically broken journal (null candidate,
   // incomplete prior) must fail closed, never enter recovery. The paths are
-  // checked for containment too, because recovery deletes and moves them.
-  if (!validJournalCandidate({ home, value: raw.candidate })) {
+  // checked for containment too, because recovery deletes and moves them, and
+  // they are replaced with the canonical value that was checked so that every
+  // later use acts on the path that was validated rather than the string that
+  // happened to be written.
+  const canonicalCandidate = managedReleasePath({ home, value: raw.candidate?.stageDir });
+  if (!validJournalCandidate({ home, value: raw.candidate }) || canonicalCandidate === null) {
     return { malformed: true, file, code: 'JOURNAL_CANDIDATE_SCHEMA_INVALID' };
   }
-  if (raw.prior !== null && raw.prior !== undefined && !validJournalRelease({ home, value: raw.prior })) {
-    return { malformed: true, file, code: 'JOURNAL_PRIOR_SCHEMA_INVALID' };
+  if (raw.prior !== null && raw.prior !== undefined) {
+    const canonicalPrior = managedReleasePath({ home, value: raw.prior?.path });
+    if (!validJournalRelease({ home, value: raw.prior }) || canonicalPrior === null) {
+      return { malformed: true, file, code: 'JOURNAL_PRIOR_SCHEMA_INVALID' };
+    }
+    raw = { ...raw, prior: { ...raw.prior, path: canonicalPrior } };
   }
+  raw = { ...raw, candidate: { ...raw.candidate, stageDir: canonicalCandidate } };
   return raw;
 }
 
