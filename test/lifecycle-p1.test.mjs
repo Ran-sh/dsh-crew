@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync, renameSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, realpathSync, symlinkSync, renameSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -10,18 +10,24 @@ import {
   updateJournalFile,
   updateLockFile,
   readCurrentPointer,
+  currentPointerFile,
   beginReleaseActivation,
   commitActivatedRelease,
   crewReleasesDir,
 } from '../src/install/npx-lifecycle.mjs';
-import { crewDshHome } from '../src/install/install.mjs';
+import { crewDshHome, crewProfileDir } from '../src/install/install.mjs';
 import {
   crewDshRuntimeVersionDir,
   crewDshRuntimeRoot,
+  ensureCrewPluginRegistration,
   stageCrewDshRuntime,
   migrateCrewDshRuntime,
   TARGET_DSH_VERSION,
 } from '../src/dsh-cli-runtime.mjs';
+
+const PKG_NAME = '@ran-sh/dsh-crew';
+/** The loader link the host integrations are rendered against. */
+const crewPluginLinkPath = ({ home }) => join(crewProfileDir({ home }), 'node_modules', ...PKG_NAME.split('/'));
 
 function tempHome() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-p1-test-'));
@@ -817,12 +823,67 @@ function fakePayloadRelease({ home, name, version, dshVersion }) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({
     name: '@ran-sh/dsh-crew', version,
+    // Registration proves the release is loadable through the link, which needs
+    // a resolvable package entry.
+    main: './index.js',
     peerDependencies: { '@deepseek-ai/dsh': dshVersion },
+    // Registration also refuses a release that does not declare its bundle, so a
+    // fixture without this stands for a payload that could never have been
+    // installed — and recovery re-registers the prior release.
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
   }));
+  writeFileSync(join(dir, 'index.js'), 'module.exports = {};\n');
+  writeFileSync(join(dir, 'cordis.patch.yml'), '[]\n');
   mkdirSync(join(dir, 'node_modules'), { recursive: true });
   writeFileSync(join(dir, 'node_modules', '.keep'), '');
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'server.mjs'), '// server\n');
   return dir;
 }
+
+// The finding this closes: crash recovery repaired only the Crew profile, then
+// deleted the candidate — while the Codex, ZCode and Claude Code integrations
+// still named that candidate's directory. Pointing the integrations at the
+// profile's loader link instead means deleting a release cannot leave a dangling
+// reference, so the existing profile repair is enough. Recovery stays
+// synchronous, and nothing about a crash can reach the operator's host config.
+test('deleting a recovered candidate leaves no integration pointing at it', async () => {
+  const { reconcileUpdateJournal, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const t = tempHome();
+  try {
+    const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3' });
+    const candidateDir = fakePayloadRelease({ home: t.dir, name: 'candidate-1.0.4', version: '1.0.4' });
+    for (const dir of [priorDir, candidateDir]) {
+      const reg = ensureCrewPluginRegistration({ home: t.dir, root: dir, name: PKG_NAME });
+      assert.equal(reg.ok, true, JSON.stringify(reg));
+      // This is the path activation hands the Codex/ZCode/Claude installers, so
+      // it is what the operator's host configuration ends up naming.
+      assert.equal(reg.linkPath, crewPluginLinkPath({ home: t.dir }));
+    }
+    // Activation left the loader link on the candidate; the pointer never moved.
+    const linkPath = crewPluginLinkPath({ home: t.dir });
+    const recordedByIntegrations = linkPath;
+    assert.equal(realpathSync(linkPath), realpathSync(candidateDir), 'activation moved the link to the candidate');
+    // The integrations render against the link, so this is what they name.
+    assert.equal(existsSync(join(linkPath, 'src', 'server.mjs')), true);
+
+    writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.3', path: priorDir }));
+    writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+      stage: 'activating', prior: { name: PKG_NAME, version: '1.0.3', path: priorDir },
+      candidate: { name: PKG_NAME, version: '1.0.4', stageDir: candidateDir },
+    }));
+
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(existsSync(candidateDir), false, 'the orphan candidate is removed');
+
+    // Every integration names the link, and the link still resolves and still
+    // carries the server entry — so nothing was left pointing at a deleted dir.
+    assert.equal(realpathSync(linkPath), realpathSync(priorDir), 'the link is back on the prior release');
+    assert.equal(existsSync(join(linkPath, 'src', 'server.mjs')), true, 'and it still resolves to a runnable payload');
+    assert.equal(realpathSync(crewPluginLinkPath({ home: t.dir })), realpathSync(priorDir));
+  } finally { t.cleanup(); }
+});
 
 test('coordinated update migrates payload + runtime together and retains the prior cohort', async () => {
   const { performCoordinatedCohortUpdate, currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');

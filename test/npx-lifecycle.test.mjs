@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -462,12 +463,19 @@ test('install persists the payload under Crew-owned state and registers that pat
     assert.ok(profilePkg.dsh.profile.bundles.includes(PKG_NAME));
     assert.ok(existsSync(join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh', 'dsh-crew', 'package.json')));
 
-    // Integrations rendered against the persisted release, not the candidate.
-    const codexCall = calls.find(([name]) => name === 'installCodex');
-    assert.equal(codexCall[1].root, pointer.path);
-    const claudeCall = calls.find(([name]) => name === 'installClaudeCode');
-    assert.equal(claudeCall[1].root, pointer.path);
-  const startupCall = calls.find(([name]) => name === 'installWindowsStartup');
+    // Integrations are rendered against the profile's loader link, which is what
+    // registration re-points at the release — not against the release directory
+    // itself. A recorded release path goes stale the moment that release is
+    // pruned, and it is what made crash recovery unable to remove a candidate
+    // without breaking every integration that names it.
+    const linkPath = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'dsh-crew', 'node_modules', '@ran-sh', 'dsh-crew');
+    for (const name of ['installCodex', 'installClaudeCode']) {
+      const call = calls.find(([callName]) => callName === name);
+      assert.equal(call[1].root, linkPath, `${name} must render against the stable link`);
+      // …and the link really does resolve to the release that is live.
+      assert.equal(realpathSync(call[1].root), realpathSync(pointer.path), `${name} link must resolve to the release`);
+    }
+    const startupCall = calls.find(([name]) => name === 'installWindowsStartup');
     assert.equal(startupCall[1].root, runningPackageRoot(), 'supervisor assets stay on the current launcher generation across payload rollback');
 
     // The release is runnable standalone: its own bin exists and deps resolve locally.

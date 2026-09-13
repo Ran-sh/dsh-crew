@@ -2413,7 +2413,16 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   }
   log(`✓ Harness plugin registered (dedicated dsh-crew profile → ${releaseDir})`);
 
-  const codex = installer.installCodex({ home, root: releaseDir });
+  // The host integrations are pointed at the profile's loader link, not at the
+  // release directory. That link is what registration just re-pointed, so it
+  // always resolves to whichever release is live: an upgrade re-points it and
+  // the integrations keep working, and removing an old release can no longer
+  // leave four configurations naming a directory that is gone. Writing the
+  // release path directly is what made crash recovery unable to delete a
+  // candidate without breaking Codex, ZCode and Claude Code.
+  const integrationRoot = registration.linkPath ?? releaseDir;
+
+  const codex = installer.installCodex({ home, root: integrationRoot });
   if (codex.ok === false) {
     log(`✗ Codex Desktop integration failed: ${(codex.actions ?? []).join('; ')}`);
     return false;
@@ -2421,7 +2430,7 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   log('✓ Codex Desktop integration');
 
   if (installer.installZCode) {
-    const zcode = installer.installZCode({ home, root: releaseDir });
+    const zcode = installer.installZCode({ home, root: integrationRoot });
     if (zcode.ok === false) {
       log(`✗ ZCode integration failed (${zcode.code ?? 'unknown'})`);
       return false;
@@ -2436,7 +2445,7 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   }
   if (startup?.supported) log('✓ Windows login startup');
 
-  const claude = await installer.installClaudeCode({ home, root: releaseDir });
+  const claude = await installer.installClaudeCode({ home, root: integrationRoot });
   if (claude.ok === false) {
     log(`✗ Claude Code integration failed`);
     return false;
