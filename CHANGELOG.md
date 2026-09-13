@@ -4,6 +4,19 @@
 
 Future changes go here.
 
+## 1.10.4 — 2026-09-13
+
+Found by installing 1.10.3 from the registry into a throwaway project and asking
+it to do something real.
+
+- **A repository with no commits is reported as exactly that.** `git init`
+  followed by asking Crew for something is how a new project starts, and it failed
+  with a bare `GIT_ERROR` and a message about isolation — nothing an operator
+  could act on, for a repository that is perfectly valid. It now reports
+  `REPOSITORY_HAS_NO_COMMITS` and names the two ways forward: make an initial
+  commit, or run with `execution.isolation: shared`. A repository with one commit
+  behaves exactly as before.
+
 ## 1.10.3 — 2026-09-13
 
 A review of the install and lifecycle layer — the largest area never previously
