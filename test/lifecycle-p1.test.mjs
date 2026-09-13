@@ -50,7 +50,7 @@ async function swapWithRetries(run, tries = 5) {
   return last;
 }
 
-test('update lock is exclusive: second acquirer gets UPDATE_IN_PROGRESS', () => {
+test('update lock is exclusive: second acquirer gets UPDATE_IN_PROGRESS', async () => {
   const t = tempHome();
   try {
     const first = acquireUpdateLock({ home: t.dir });
@@ -68,7 +68,7 @@ test('update lock is exclusive: second acquirer gets UPDATE_IN_PROGRESS', () => 
 
 const releaseDir = (home, name) => join(crewReleasesDir({ home }), name);
 
-test('journal reconcile restores prior pointer and drops orphan stage', () => {
+test('journal reconcile restores prior pointer and drops orphan stage', async () => {
   const t = tempHome();
   try {
     const priorDir = releaseDir(t.dir, 'prior-1.0.3');
@@ -89,7 +89,7 @@ test('journal reconcile restores prior pointer and drops orphan stage', () => {
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
       candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: orphanDir },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, true);
     assert.equal(r.reconciled, true);
     const pointer = readCurrentPointer({ home: t.dir });
@@ -99,16 +99,16 @@ test('journal reconcile restores prior pointer and drops orphan stage', () => {
   } finally { t.cleanup(); }
 });
 
-test('journal reconcile is a no-op without a journal', () => {
+test('journal reconcile is a no-op without a journal', async () => {
   const t = tempHome();
   try {
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, true);
     assert.equal(r.reconciled, false);
   } finally { t.cleanup(); }
 });
 
-test('staged runtime version dir is versioned and separate from live runtime', () => {
+test('staged runtime version dir is versioned and separate from live runtime', async () => {
   const t = tempHome();
   try {
     const staged = crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION });
@@ -117,7 +117,7 @@ test('staged runtime version dir is versioned and separate from live runtime', (
   } finally { t.cleanup(); }
 });
 
-test('stageCrewDshRuntime fails closed without a package manager', () => {
+test('stageCrewDshRuntime fails closed without a package manager', async () => {
   const t = tempHome();
   try {
     const r = stageCrewDshRuntime({ home: t.dir, findCommand: () => null });
@@ -126,7 +126,7 @@ test('stageCrewDshRuntime fails closed without a package manager', () => {
   } finally { t.cleanup(); }
 });
 
-test('stageCrewDshRuntime verifies staged cohort version', () => {
+test('stageCrewDshRuntime verifies staged cohort version', async () => {
   const t = tempHome();
   try {
     const entry = join(crewDshRuntimeVersionDir({ home: t.dir, version: TARGET_DSH_VERSION }), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
@@ -144,7 +144,7 @@ test('stageCrewDshRuntime verifies staged cohort version', () => {
   } finally { t.cleanup(); }
 });
 
-test('dead lock owner is reclaimed, live owner is kept', () => {
+test('dead lock owner is reclaimed, live owner is kept', async () => {
   const t = tempHome();
   try {
     const first = acquireUpdateLock({ home: t.dir });
@@ -161,19 +161,19 @@ test('dead lock owner is reclaimed, live owner is kept', () => {
   } finally { t.cleanup(); }
 });
 
-test('malformed journal fails closed and is retained', () => {
+test('malformed journal fails closed and is retained', async () => {
   const t = tempHome();
   try {
     mkdirSync(join(t.dir, '.config', 'dsh-crew', 'app'), { recursive: true });
     writeFileSync(updateJournalFile({ home: t.dir }), '{truncated');
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_MALFORMED');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
   } finally { t.cleanup(); }
 });
 
-test('first-install crash removes orphan candidate pointer', () => {
+test('first-install crash removes orphan candidate pointer', async () => {
   const t = tempHome();
   try {
     const orphanDir = releaseDir(t.dir, 'orphan-9.9.9');
@@ -186,7 +186,7 @@ test('first-install crash removes orphan candidate pointer', () => {
       prior: null,
       candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: orphanDir },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, true);
     assert.equal(r.committed, false);
     assert.equal(existsSync(join(t.dir, '.config', 'dsh-crew', 'app', 'current.json')), false);
@@ -194,7 +194,7 @@ test('first-install crash removes orphan candidate pointer', () => {
   } finally { t.cleanup(); }
 });
 
-test('committed candidate finalizes instead of rolling back', () => {
+test('committed candidate finalizes instead of rolling back', async () => {
   const t = tempHome();
   try {
     const candidateDir = releaseDir(t.dir, 'candidate-9.9.9');
@@ -210,12 +210,12 @@ test('committed candidate finalizes instead of rolling back', () => {
       candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: candidateDir },
     }));
     // validateInstalledPayload requires the full payload shape; stub it.
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.ok(['JOURNAL_CANDIDATE_INVALID', undefined].includes(r.code) || r.ok === true || r.ok === false);
   } finally { t.cleanup(); }
 });
 
-test('begin/commit keeps pointer authoritative only after activation', () => {
+test('begin/commit keeps pointer authoritative only after activation', async () => {
   const t = tempHome();
   try {
     const stageDir = releaseDir(t.dir, 'candidate-9.9.9');
@@ -317,7 +317,7 @@ test('runtime recovery never starts a tree it could not restore', async () => {
   } finally { t.cleanup(); }
 });
 
-test('stale reclaim guard is recovered, live guard blocks', () => {
+test('stale reclaim guard is recovered, live guard blocks', async () => {
   const t = tempHome();
   try {
     const first = acquireUpdateLock({ home: t.dir });
@@ -367,7 +367,7 @@ test('migrateCrewDshRuntime installs at the live root and parks the old tree', a
   } finally { t.cleanup(); }
 });
 
-test('releaseUpdateLock verifies nonce: non-owner cannot delete', () => {
+test('releaseUpdateLock verifies nonce: non-owner cannot delete', async () => {
   const t = tempHome();
   try {
     const first = acquireUpdateLock({ home: t.dir });
@@ -421,7 +421,7 @@ test('migrateCrewDshRuntime restores the parked tree when the live install fails
   } finally { t.cleanup(); }
 });
 
-test('diverged pointer fails closed without touching releases', () => {
+test('diverged pointer fails closed without touching releases', async () => {
   const t = tempHome();
   try {
     const priorDir = releaseDir(t.dir, 'prior-1.0.3');
@@ -438,7 +438,7 @@ test('diverged pointer fails closed without touching releases', () => {
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
       candidate: { name: '@ran-sh/dsh-crew', version: '9.9.9', stageDir: candidateDir },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_POINTER_DIVERGED');
     assert.equal(existsSync(candidateDir), true);
@@ -446,7 +446,7 @@ test('diverged pointer fails closed without touching releases', () => {
   } finally { t.cleanup(); }
 });
 
-test('committed candidate finalizes with strong assertions', () => {
+test('committed candidate finalizes with strong assertions', async () => {
   const t = tempHome();
   try {
     const candidateDir = releaseDir(t.dir, 'candidate-9.9.9');
@@ -463,7 +463,7 @@ test('committed candidate finalizes with strong assertions', () => {
     }));
     // validateInstalledPayload requires full payload shape; an incomplete
     // stub must fail closed, not finalize.
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_CANDIDATE_INVALID');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true);
@@ -563,7 +563,7 @@ test('production migration path uses supervisor stop/start/verify', async () => 
   } finally { t.cleanup(); }
 });
 
-test('undo refuses to remove bundle re-pointed at later release', () => {
+test('undo refuses to remove bundle re-pointed at later release', async () => {
   const t = tempHome();
   try {
     const candidateDir = releaseDir(t.dir, 'candidate-A');
@@ -588,7 +588,7 @@ test('undo refuses to remove bundle re-pointed at later release', () => {
       prior: null,
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.0', stageDir: candidateDir },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_UNDO_FAILED');
     const after = JSON.parse(readFileSync(profileFile, 'utf8'));
@@ -740,7 +740,7 @@ test('rollback journal without verified flag never finalizes', async () => {
       prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: releaseDir(dir, 'prior-missing') },
       candidate: { name: '@ran-sh/dsh-crew', version: '0.5.6', stageDir: tgt },
     }));
-    const r = reconcileUpdateJournal({ home: dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_ROLLBACK_UNVERIFIED');
     assert.equal(existsSync(updateJournalFile({ home: dir })), true, 'journal retained');
@@ -772,7 +772,7 @@ test('rollback pre-commit crash preserves retained target release', async () => 
       prior: { name: '@ran-sh/dsh-crew', version: '0.5.7', path: priorDir },
       candidate: { name: '@ran-sh/dsh-crew', version: '0.5.6', stageDir: targetDir },
     }));
-    const r = reconcileUpdateJournal({ home: dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: dir, log: () => {} });
     assert.equal(r.ok, true);
     assert.equal(existsSync(targetDir), true, 'retained rollback target must survive recovery');
     assert.equal(JSON.parse(readFileSync(join(dir, '.config', 'dsh-crew', 'app', 'current.json'), 'utf8')).version, '0.5.7');
@@ -882,6 +882,71 @@ test('deleting a recovered candidate leaves no integration pointing at it', asyn
     assert.equal(realpathSync(linkPath), realpathSync(priorDir), 'the link is back on the prior release');
     assert.equal(existsSync(join(linkPath, 'src', 'server.mjs')), true, 'and it still resolves to a runnable payload');
     assert.equal(realpathSync(crewPluginLinkPath({ home: t.dir })), realpathSync(priorDir));
+  } finally { t.cleanup(); }
+});
+
+// The finding this closes: a crash after the coordinated update stopped 3210 left
+// the runtime down with nothing recording how to resume it, and the surviving
+// durable session then refused the next ordinary stop — so the machine could not
+// recover on its own. The window is now journaled, and recovery resumes that exact
+// window rather than asking for a second stop, which the session would refuse.
+async function maintenanceFixture(t, { startFails = false } = {}) {
+  const { currentPointerFile } = await import('../src/install/npx-lifecycle.mjs');
+  const PRIOR = '0.1.2-alpha.5';
+  const CANDIDATE = '0.1.2-rc.1';
+  const priorDir = fakePayloadRelease({ home: t.dir, name: 'release-1.0.3', version: '1.0.3', dshVersion: PRIOR });
+  writeFileSync(currentPointerFile({ home: t.dir }), JSON.stringify({ name: PKG_NAME, version: '1.0.3', path: priorDir }));
+  // The live tree already holds the prior cohort, so recovery has no tree to
+  // restore and goes straight to closing the window.
+  materializeLiveRuntime({ home: t.dir, version: PRIOR });
+  const harnessHome = crewDshHome({ home: t.dir });
+  writeFileSync(updateJournalFile({ home: t.dir }), JSON.stringify({
+    stage: 'coordinated-update',
+    prior: { name: PKG_NAME, version: '1.0.3', path: priorDir, dshVersion: PRIOR },
+    candidate: {
+      name: PKG_NAME, version: '1.0.4', dshVersion: CANDIDATE,
+      stageDir: fakePayloadRelease({ home: t.dir, name: 'stage-1.0.4', version: '1.0.4', dshVersion: CANDIDATE }),
+    },
+    runtime: {
+      state: 'staged',
+      liveRoot: join(harnessHome, 'runtime'),
+      priorRoot: join(harnessHome, 'runtime-prev-abc123'),
+      priorVersion: PRIOR,
+      candidateVersion: CANDIDATE,
+      retainedRoot: join(harnessHome, 'retained-runtimes'),
+      maintenance: { lease: 'txn-lease-1', runtime_id: 'runtime-xyz' },
+    },
+  }));
+  const starts = [];
+  const supervisorFactory = () => ({
+    startOwnedBackend: async (args) => {
+      starts.push(args);
+      return startFails ? { ok: false, code: 'MAINTENANCE_START_REFUSED' } : { ok: true };
+    },
+  });
+  return { PRIOR, priorDir, harnessHome, starts, supervisorFactory };
+}
+
+test('recovery restarts the runtime the interrupted update stopped', async () => {
+  const t = tempHome();
+  try {
+    const f = await maintenanceFixture(t);
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(f.starts.length, 1, 'the recorded window is resumed exactly once');
+    assert.deepEqual(f.starts[0], { lease: 'txn-lease-1', runtimeId: 'runtime-xyz' }, 'with the window that was journaled');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), false, 'the journal clears only once the runtime is back');
+  } finally { t.cleanup(); }
+});
+
+test('a window that cannot be closed keeps the journal and says so', async () => {
+  const t = tempHome();
+  try {
+    const f = await maintenanceFixture(t, { startFails: true });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {}, supervisorFactory: f.supervisorFactory });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'JOURNAL_MAINTENANCE_WINDOW_OPEN');
+    assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'so the same window is retried rather than lost');
   } finally { t.cleanup(); }
 });
 
@@ -1192,7 +1257,7 @@ test('coordinated commit crash before pointer write recovers to prior via reconc
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: candDir, dshVersion: TARGET_DSH_VERSION },
       runtime: { state: 'verified', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), candidateVersion: TARGET_DSH_VERSION, priorVersion: ALPHA },
     }));
-    const fin = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const fin = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(fin.ok, true, JSON.stringify(fin));
     assert.equal(fin.committed, true, 'verified candidate pointer finalizes');
     assert.equal(readCurrentPointer({ home: t.dir }).version, '1.0.4');
@@ -1212,7 +1277,7 @@ test('coordinated commit crash before pointer write recovers to prior via reconc
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: candDir, dshVersion: TARGET_DSH_VERSION },
       runtime: { state: 'staged', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: parked, priorVersion: ALPHA, candidateVersion: TARGET_DSH_VERSION, retainedRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'retained-runtimes') },
     }));
-    const rec = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const rec = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(rec.ok, true, JSON.stringify(rec));
     assert.equal(rec.committed, false, 'pre-commit crash recovers to prior');
     // live runtime must be restored to the PRIOR cohort (alpha.5).
@@ -1240,7 +1305,7 @@ test('malformed journal runtime path fails closed without touching anything', as
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: releaseDir(t.dir, 'escape-stage'), dshVersion: '0.1.2-rc.1' },
       runtime: { state: 'staged', liveRoot: join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime'), priorRoot: join(t.dir, '..', '..', 'escape'), priorVersion: '0.1.2-alpha.5', candidateVersion: '0.1.2-rc.1' },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_RUNTIME_INVALID');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained for operator');
@@ -1494,7 +1559,7 @@ test('coordinated journal without runtime segment fails closed (JOURNAL_RUNTIME_
       prior: { name: '@ran-sh/dsh-crew', version: '1.0.3', path: priorDir },
       candidate: { name: '@ran-sh/dsh-crew', version: '1.0.4', stageDir: join(crewReleasesDir({ home: t.dir }), 'stage') },
     }));
-    const r = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const r = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'JOURNAL_RUNTIME_INVALID');
     assert.equal(existsSync(updateJournalFile({ home: t.dir })), true, 'journal retained');

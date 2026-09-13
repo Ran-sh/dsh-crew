@@ -216,7 +216,7 @@ function makeOfficialWebProfile(home) {
 
 // ---------- package identity ----------
 
-test('package exposes exactly one natural CLI executable backed by an existing script', () => {
+test('package exposes exactly one natural CLI executable backed by an existing script', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   const bins = Object.entries(manifest.bin ?? {});
   assert.equal(bins.length, 1);
@@ -226,7 +226,7 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 1.10.2', () => {
+test('package, runtime identity, and changelog identify candidate 1.10.2', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.version, '1.10.2');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
@@ -235,7 +235,7 @@ test('package, runtime identity, and changelog identify candidate 1.10.2', () =>
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
 
-test('packaged lifecycle invokes npm on Windows without shell mode', () => {
+test('packaged lifecycle invokes npm on Windows without shell mode', async () => {
   assert.deepEqual(
     npmCliInvocation(
       ['pack', '@ran-sh/dsh-crew@latest', '--pack-destination', 'C:\\Users\\Test User\\Crew'],
@@ -275,7 +275,7 @@ test('packaged Windows npm invocation executes with a space-bearing prefix', { s
 
 // ---------- dependency closure ----------
 
-test('copyProductionDependencyTree replicates transitive dependencies and required peers', () => {
+test('copyProductionDependencyTree replicates transitive dependencies and required peers', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -292,7 +292,7 @@ test('copyProductionDependencyTree replicates transitive dependencies and requir
   } finally { t.cleanup(); }
 });
 
-test('copyProductionDependencyTree reports unresolved roots as missing', () => {
+test('copyProductionDependencyTree reports unresolved roots as missing', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -306,7 +306,7 @@ test('copyProductionDependencyTree reports unresolved roots as missing', () => {
 
 // ---------- staging / validation ----------
 
-test('staged payload strips peer/dev declarations, ships files, and validates from its own location', () => {
+test('staged payload strips peer/dev declarations, ships files, and validates from its own location', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -338,7 +338,7 @@ test('staged payload strips peer/dev declarations, ships files, and validates fr
   } finally { t.cleanup(); }
 });
 
-test('staging falls back to npm for locally missing dependencies and validates the result', () => {
+test('staging falls back to npm for locally missing dependencies and validates the result', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -361,7 +361,7 @@ test('staging falls back to npm for locally missing dependencies and validates t
   } finally { t.cleanup(); }
 });
 
-test('a failed boot smoke aborts staging without leaving a release behind', () => {
+test('a failed boot smoke aborts staging without leaving a release behind', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -375,7 +375,7 @@ test('a failed boot smoke aborts staging without leaving a release behind', () =
   } finally { t.cleanup(); }
 });
 
-test('payload smoke performs a real MCP initialize handshake after launcher help', () => {
+test('payload smoke performs a real MCP initialize handshake after launcher help', async () => {
   const calls = [];
   const runner = (command, args, options) => {
     calls.push({ command, args, options });
@@ -396,7 +396,7 @@ test('payload smoke performs a real MCP initialize handshake after launcher help
   assert.equal(initialize.params.clientInfo.name, 'dsh-crew-payload-smoke');
 });
 
-test('validateInstalledPayload fails closed on identity, artifact, or dependency gaps', () => {
+test('validateInstalledPayload fails closed on identity, artifact, or dependency gaps', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -518,7 +518,7 @@ for (const command of ['install', 'update']) {
   });
 }
 
-test('staging refuses malformed or escaping published file patterns before copying', () => {
+test('staging refuses malformed or escaping published file patterns before copying', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -1033,7 +1033,7 @@ test('jobs submit and cancel stop at the runtime capability gate', async () => {
 // anything. A corrupt or tampered journal naming a directory outside the managed
 // releases — including the official ~/.dsh tree this plugin must never touch —
 // has to fail closed with nothing removed.
-test('recovery refuses a journal whose candidate points outside the managed releases', () => {
+test('recovery refuses a journal whose candidate points outside the managed releases', async () => {
   const t = tempHome();
   const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
   try {
@@ -1043,14 +1043,14 @@ test('recovery refuses a journal whose candidate points outside the managed rele
       schemaVersion: 1, stage: 'staged', prior: null,
       candidate: { name: PKG_NAME, version: '9.9.9', stageDir: victim },
     }));
-    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const result = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(result.ok, false, 'a journal outside the managed tree must not reconcile');
     assert.equal(result.code, 'JOURNAL_CANDIDATE_SCHEMA_INVALID');
     assert.equal(existsSync(join(victim, 'irreplaceable.txt')), true, 'the directory is untouched');
   } finally { t.cleanup(); rmSync(victim, { recursive: true, force: true }); }
 });
 
-test('recovery refuses a journal whose prior points outside the managed releases', () => {
+test('recovery refuses a journal whose prior points outside the managed releases', async () => {
   const t = tempHome();
   const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
   try {
@@ -1060,7 +1060,7 @@ test('recovery refuses a journal whose prior points outside the managed releases
       prior: { name: PKG_NAME, version: '1.0.0', path: victim },
       candidate: { name: PKG_NAME, version: '9.9.9', stageDir: join(crewReleasesDir({ home: t.dir }), 'cand') },
     }));
-    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const result = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(result.ok, false);
     assert.equal(result.code, 'JOURNAL_PRIOR_SCHEMA_INVALID');
     assert.equal(existsSync(victim), true);
@@ -1068,7 +1068,7 @@ test('recovery refuses a journal whose prior points outside the managed releases
 });
 
 // The named red line: the official DeepSeek Harness tree is never touched.
-test('a journal naming the official dsh tree is refused and the tree survives', () => {
+test('a journal naming the official dsh tree is refused and the tree survives', async () => {
   const t = tempHome();
   const fakeDsh = mkdtempSync(join(tmpdir(), 'dsh-official-'));
   try {
@@ -1079,7 +1079,7 @@ test('a journal naming the official dsh tree is refused and the tree survives', 
       schemaVersion: 1, stage: 'staged', prior: null,
       candidate: { name: PKG_NAME, version: '9.9.9', stageDir: fakeDsh },
     }));
-    const result = reconcileUpdateJournal({ home: t.dir, log: () => {} });
+    const result = await reconcileUpdateJournal({ home: t.dir, log: () => {} });
     assert.equal(result.ok, false);
     assert.equal(existsSync(join(fakeDsh, 'profiles', 'web', 'config.json')), true);
   } finally { t.cleanup(); rmSync(fakeDsh, { recursive: true, force: true }); }
@@ -1087,7 +1087,7 @@ test('a journal naming the official dsh tree is refused and the tree survives', 
 
 // The pointer is what recovery acts on, so a pointer outside the managed tree is
 // a corrupt pointer rather than a release.
-test('a pointer naming a release outside the managed directory is malformed', () => {
+test('a pointer naming a release outside the managed directory is malformed', async () => {
   const t = tempHome();
   const victim = mkdtempSync(join(tmpdir(), 'dsh-crew-victim-'));
   try {
@@ -1101,7 +1101,7 @@ test('a pointer naming a release outside the managed directory is malformed', ()
 
 // Containment, not a string prefix: a path that resolves inside is accepted, and
 // one that resolves out is not.
-test('managedReleasePath accepts what resolves inside and refuses what resolves out', () => {
+test('managedReleasePath accepts what resolves inside and refuses what resolves out', async () => {
   const t = tempHome();
   try {
     const releases = crewReleasesDir({ home: t.dir });
@@ -1407,7 +1407,7 @@ test('credentials CLI exposes an independent plan-and-confirm purge flow', async
   assert.match(calls.at(-1)[1].body, /"confirm":true/);
 });
 
-test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', () => {
+test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', async () => {
   const bin = join(REPO_ROOT, 'bin', 'dsh-crew.mjs');
   const bad = spawnSync(process.execPath, [bin, 'banana'], { encoding: 'utf8', timeout: 60_000 });
   assert.equal(bad.status, 1);
@@ -1417,14 +1417,14 @@ test('real bin subprocess: unknown command exits 1 with usage; --help exits 0', 
   assert.match(help.stdout, /usage: dsh-crew/);
 });
 
-test('runningPackageRoot points at the repository checkout during tests', () => {
+test('runningPackageRoot points at the repository checkout during tests', async () => {
   assert.equal(runningPackageRoot(), REPO_ROOT);
   assert.equal(CREW_APP_DIRNAME, 'app');
 });
 
 // ---------- update candidate resolution and v0.3.5 migration recovery ----------
 
-test('compareVersions orders dotted numeric versions deterministically', () => {
+test('compareVersions orders dotted numeric versions deterministically', async () => {
   assert.equal(compareVersions('0.3.10', '0.3.9'), 1);
   assert.equal(compareVersions('0.3.3', '0.3.3'), 0);
   assert.equal(compareVersions('0.10.0', '0.9.0'), 1);
@@ -1435,7 +1435,7 @@ function makeCandidateDir(home, version) {
   return makeCandidate(home, { version });
 }
 
-test('resolveUpdateCandidate accepts a payload directory override', () => {
+test('resolveUpdateCandidate accepts a payload directory override', async () => {
   const t = tempHome();
   try {
     const dir = makeCandidateDir(t.dir, '9.8.7');
@@ -1447,7 +1447,7 @@ test('resolveUpdateCandidate accepts a payload directory override', () => {
   } finally { t.cleanup(); }
 });
 
-test('resolveUpdateCandidate extracts and validates a packed .tgz override', () => {
+test('resolveUpdateCandidate extracts and validates a packed .tgz override', async () => {
   const t = tempHome();
   try {
     const stage = join(t.dir, 'packsrc', 'package');
@@ -1468,7 +1468,7 @@ test('resolveUpdateCandidate extracts and validates a packed .tgz override', () 
   } finally { t.cleanup(); }
 });
 
-test('resolveUpdateCandidate registry mode packs via npm and verifies identity', () => {
+test('resolveUpdateCandidate registry mode packs via npm and verifies identity', async () => {
   const t = tempHome();
   try {
     const runner = (command, args) => {
@@ -1491,7 +1491,7 @@ test('resolveUpdateCandidate registry mode packs via npm and verifies identity',
   } finally { t.cleanup(); }
 });
 
-test('resolveUpdateCandidate fails closed on registry pack failure and identity mismatch', () => {
+test('resolveUpdateCandidate fails closed on registry pack failure and identity mismatch', async () => {
   const t = tempHome();
   try {
     const failRunner = () => ({ status: 1, stdout: '', stderr: 'E404 nope' });

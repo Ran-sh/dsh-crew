@@ -587,12 +587,34 @@ function validateJournalRuntimeSegment({ home, rt }) {
   return { ok: true };
 }
 
+/**
+ * Restart a runtime that a coordinated update left deliberately stopped.
+ *
+ * The window is the lease and runtime id the supervisor issued when it stopped
+ * 3210. Passing them back resumes that exact stopped window rather than asking
+ * for a new stop, which is the only thing the durable maintenance session
+ * accepts — a second independent stop is refused while the first is in force.
+ */
+async function closeMaintenanceWindow({ home, window, supervisorFactory = crewSupervisor, log = () => {} }) {
+  try {
+    const supervisor = supervisorFactory({ home });
+    const started = await supervisor.startOwnedBackend({ lease: window.lease, runtimeId: window.runtime_id });
+    if (started?.ok !== true) {
+      return { ok: false, code: started?.code ?? 'MAINTENANCE_START_FAILED', error: started?.error ?? null };
+    }
+    log('- recovery restarted the runtime that the interrupted update had stopped');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, code: 'MAINTENANCE_START_FAILED', error: String(error?.message ?? error) };
+  }
+}
+
 // Reconcile a leftover journal from a crashed update/install. The single
 // commit point is the pointer write: pointer == candidate means committed
 // (finalize, do NOT roll back); pointer == prior/absent means pre-commit
 // (restore activation surfaces, drop candidate). A malformed journal fails
 // closed and is retained for operator inspection.
-export function reconcileUpdateJournal({ home = homedir(), log = () => {}, installer = realInstaller } = {}) {
+export async function reconcileUpdateJournal({ home = homedir(), log = () => {}, installer = realInstaller, supervisorFactory = crewSupervisor } = {}) {
   const journal = readUpdateJournal({ home });
   if (!journal) return { ok: true, reconciled: false };
   if (journal.malformed) {
@@ -746,6 +768,18 @@ export function reconcileUpdateJournal({ home = homedir(), log = () => {}, insta
       // swap already; if it still exists it is an orphan of the failed swap
       // and may be removed. (rollback candidates are retained releases.)
       try { rmSync(candidateDir, { recursive: true, force: true }); } catch {}
+    }
+    // The prior release is back in place, so a runtime the interrupted update
+    // stopped has to be started again — otherwise recovery reports success and
+    // leaves 3210 down. The journal is kept until the window is closed, so a
+    // crash between the two retries with the same recorded window instead of
+    // losing track of a stopped runtime.
+    const openWindow = journal.stage === 'coordinated-update' ? journal.runtime?.maintenance ?? null : null;
+    if (openWindow?.lease && openWindow?.runtime_id) {
+      const closed = await closeMaintenanceWindow({ home, window: openWindow, supervisorFactory, log });
+      if (!closed.ok) {
+        return { ok: false, code: 'JOURNAL_MAINTENANCE_WINDOW_OPEN', stage: journal.stage, error: `the runtime was left stopped and could not be restarted (${closed.code ?? 'unknown'}); journal retained` };
+      }
     }
     clearUpdateJournal({ home });
     log(`- recovered update journal at stage ${journal.stage}: restored prior release ${journal.prior.version}`);
@@ -1850,7 +1884,7 @@ async function npxRollbackInner({ home, version: targetVersion, log, installer, 
   // Journal-aware entry: refuse to overwrite a journal left by a crashed
   // transaction. Reconcile it first (or fail closed) instead of silently
   // replacing it with the rollback intent.
-  const pending = reconcileUpdateJournal({ home, log });
+  const pending = await reconcileUpdateJournal({ home, log });
   if (!pending.ok) return { ok: false, error: `refusing rollback with unreconciled journal (${pending.code ?? 'unknown'})` };
   const current = readCurrentPointer({ home });
   if (!current?.path || !existsSync(current.path)) return { ok: false, error: 'no active Crew payload to roll back' };
@@ -2178,7 +2212,7 @@ export async function performCoordinatedCohortUpdate({
   // Journal the full coordinated intent BEFORE any destructive step. The
   // journal carries prior+candidate dshVersion plus runtime roots so a crash
   // at any point is recoverable by reconcileUpdateJournal.
-  writeUpdateJournal({
+  const journalBase = {
     home,
     stage: 'coordinated-update',
     prior: { name: prior.name, version: prior.version, path: prior.path, dshVersion: priorDshVersion },
@@ -2191,7 +2225,8 @@ export async function performCoordinatedCohortUpdate({
       candidateVersion: candidateDshVersion,
       retainedRoot,
     },
-  });
+  };
+  writeUpdateJournal(journalBase);
 
   const switchPointer = (release) => writeCurrentPointer({ home, name: release.name, version: release.version, path: release.path });
   const priorRelease = { name: prior.name, version: prior.version, path: prior.path };
@@ -2245,6 +2280,16 @@ export async function performCoordinatedCohortUpdate({
       // Nothing was swapped yet; just clear the journal (no activation ran).
       clearUpdateJournal({ home });
       return { ok: false, code: stopped.code ?? 'COORDINATED_STOP_FAILED', error: stopped.error ?? 'could not stop owned 3210' };
+    }
+    // The runtime is now deliberately stopped inside a durable maintenance
+    // window, and everything from here on mutates its tree. Record the window in
+    // the journal before that mutation: a crash in the next few steps used to
+    // leave 3210 down with no record of how to resume it, and the surviving
+    // session then refused the next ordinary stop, so the machine could not
+    // recover on its own. `startOwnedBackend` accepts this exact lease and
+    // runtime id, which is what recovery needs to close the window.
+    if (stopped.lease && stopped.runtime_id) {
+      writeUpdateJournal({ ...journalBase, runtime: { ...journalBase.runtime, maintenance: { lease: stopped.lease, runtime_id: stopped.runtime_id } } });
     }
     let liveMoved = false;
     try {
@@ -2511,7 +2556,7 @@ export async function npxInstall({
 }
 
 async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime, npmInstaller }) {
-  const reconciled = reconcileUpdateJournal({ home, log });
+  const reconciled = await reconcileUpdateJournal({ home, log });
   if (!reconciled.ok) return { ok: false, error: `update journal recovery failed (${reconciled.code ?? 'unknown'})` };
   const candidateRoot = sourceRoot ?? runningPackageRoot();
   const manifest = readManifest(candidateRoot);
@@ -2728,7 +2773,7 @@ export async function npxUpdate({
 }
 
 async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installer, ensureRuntime, npmInstaller, runner = spawnSync }) {
-  const journalRecovery = reconcileUpdateJournal({ home, log });
+  const journalRecovery = await reconcileUpdateJournal({ home, log });
   if (!journalRecovery.ok) return { ok: false, error: `update journal recovery failed (${journalRecovery.code ?? 'unknown'})` };
   // Candidate resolution: explicit path/dir override > a newer validated
   // running launcher > configured npm registry (@latest). This makes the
