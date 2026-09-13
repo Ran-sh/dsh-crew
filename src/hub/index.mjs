@@ -1330,6 +1330,19 @@ export function resolveHubSpawnPayload(payload, getConfig = () => ({}), dependen
   }
   // v0.2 role-based dispatch: reviewer / worker are gated by their role state,
   // and the tier slot is derived from the role (reviewer always → pro).
+  // A plain payload names no workspace or constraints, but it does name a role,
+  // and the role's profile states how that role runs. Only the advanced shape
+  // resolved it, so the same task submitted through the simple shape ran shared
+  // while the profile said worktree: the profile was silently ignored for the
+  // caller who wrote the least. A payload that names no role keeps its
+  // pass-through shape.
+  if (normalized.requested_isolation === undefined && (normalized.role === 'worker' || normalized.role === 'reviewer')) {
+    const registry = dependencies.profileRegistry ?? loadRoleProfiles();
+    const roleProfile = registry.ok ? resolveRoleProfile(registry, normalized.profile, normalized.role) : { ok: false };
+    if (roleProfile.ok && typeof roleProfile.profile?.isolation === 'string') {
+      normalized = { ...normalized, requested_isolation: roleProfile.profile.isolation };
+    }
+  }
   if (normalized.role === 'worker' || normalized.role === 'reviewer') {
     const hint = resolveRoleTierHint(normalized.role, normalized.tier);
     if (!hint.ok) return { ok: false, code: hint.code, error: hint.error };

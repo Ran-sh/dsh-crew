@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -12,7 +12,8 @@ import {
   zcodeStatus,
   resolveZCodeMcpTarget,
 } from '../src/install/zcode.mjs';
-import { installStatus } from '../src/install/install.mjs';
+import { installCodex, installStatus } from '../src/install/install.mjs';
+import { loaderLinkPath } from '../src/install/crew-paths.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const makeHome = () => mkdtempSync(join(tmpdir(), 'dsh-crew-zcode-test-'));
@@ -280,5 +281,40 @@ test('ZCode installer adopts an already-correct unowned MCP entry without a Wind
       mcp: { servers: { 'dsh-crew': { command: 'node', args: [join(ROOT, 'src', 'server.mjs')] } } },
     }));
     assert.equal(installZCode({ home, root: ROOT, env: {} }).ok, true);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// The installer points the host integrations at the profile's loader link, so an
+// upgrade re-points one link instead of rewriting four host configurations.
+// Readiness is called with the RELEASE directory, which is what `dsh-crew status`
+// has at hand, so it must look through the same link. Deriving the expected path
+// from the release directory instead made every correctly installed machine
+// report "needs repair" the instant the installer reported success.
+test('readiness judges the integrations against the loader link the installer wrote', (t) => {
+  const home = makeHome();
+  try {
+    const link = loaderLinkPath({ home, name: '@ran-sh/dsh-crew' });
+    mkdirSync(dirname(link), { recursive: true });
+    try {
+      symlinkSync(ROOT, link, 'junction');
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'EINVAL', 'UNKNOWN'].includes(error?.code)) { t.skip('this host cannot create directory links'); return; }
+      throw error;
+    }
+
+    // Installed from the link (what activateRelease does), judged against the
+    // release directory (what `dsh-crew status` does).
+    installZCode({ home, root: link, env: {} });
+    installCodex({ home, root: link, env: {} });
+    const status = installStatus({ home, root: ROOT, env: {} });
+    assert.deepEqual(status.zcode.missing, [], 'a link-installed ZCode integration is ready');
+    assert.deepEqual(status.codex.missing, [], 'a link-installed Codex integration is ready');
+
+    // A missing link is not silently accepted: the integrations then name a path
+    // that does not resolve to the release, which is a real repair case.
+    rmSync(link, { force: true });
+    const broken = installStatus({ home, root: ROOT, env: {} });
+    assert.equal(broken.zcode.ready, false);
+    assert.equal(broken.codex.ready, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

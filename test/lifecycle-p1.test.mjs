@@ -1913,6 +1913,71 @@ test('compensation failure retains the journal (recovery witness survives)', asy
   } finally { t.cleanup(); }
 });
 
+// Parking the live runtime tree renames it, and on Windows that rename can be
+// refused with EPERM for a moment after the previous process released it. The
+// first refusal used to end the migration; the same call succeeds milliseconds
+// later. Only the transient codes are retried.
+test('a transient Windows rename refusal does not fail the runtime park', async () => {
+  const { migrateCrewDshRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const ALPHA = '0.1.2-alpha.5';
+  const t = tempHome();
+  try {
+    const liveRoot = join(t.dir, '.config', 'dsh-crew', 'harness', 'runtime');
+    materializeLiveRuntime({ home: t.dir, version: ALPHA });
+    let refusals = 0;
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      prepareOnly: true,
+      stageOptions: {
+        runner: () => {
+          const entry = join(liveRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+          mkdirSync(join(entry, '..'), { recursive: true });
+          writeFileSync(entry, '// rc1');
+          writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: TARGET_DSH_VERSION }));
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+      rename: (from, to) => {
+        if (refusals < 2) {
+          refusals += 1;
+          throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+        }
+        return renameSync(from, to);
+      },
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+    assert.equal(refusals, 2, 'the refusal really happened');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(liveRuntimeVersion({ home: t.dir }), TARGET_DSH_VERSION);
+  } finally { t.cleanup(); }
+});
+
+test('a permanent rename failure is still reported', async () => {
+  const { migrateCrewDshRuntime } = await import('../src/dsh-cli-runtime.mjs');
+  const { TARGET_DSH_VERSION } = await import('../src/dsh-cohort.mjs');
+  const t = tempHome();
+  try {
+    materializeLiveRuntime({ home: t.dir, version: '0.1.2-alpha.5' });
+    const r = await migrateCrewDshRuntime({
+      home: t.dir,
+      version: TARGET_DSH_VERSION,
+      prepareOnly: true,
+      rename: () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); },
+      stopOwned: async () => ({ ok: true }),
+      startOwned: async () => ({ ok: true }),
+      verifyOwned: async () => ({ ok: true }),
+      log: () => {},
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'DSH_RUNTIME_PARK_FAILED');
+  } finally { t.cleanup(); }
+});
+
 test('registry-fallback migration prepareOnly never starts before payload activation', async () => {
   // migrateCrewDshRuntime(prepareOnly:true) must stop + install the tree but
   // NEVER start the process: the caller activates the matching payload first,

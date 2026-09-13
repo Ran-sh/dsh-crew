@@ -32,16 +32,9 @@ const TIER_STATES = ['disabled', 'manual', 'auto'];
 // paths must never default to the user's official ~/.dsh or its ``web`` profile.
 // A fresh Crew Hub config points at the Crew-owned port only; the former
 // shared-profile default 3080 is treated as a legacy value to migrate away from.
-export const CREW_PROFILE_NAME = 'dsh-crew';
-export const CREW_HOME_REL = join('.config', 'dsh-crew', 'harness');
 export const CREW_DEFAULT_HUB_URL = 'http://127.0.0.1:3210';
 export const CREW_LEGACY_HUB_URL = 'http://127.0.0.1:3080';
-export function crewDshHome({ home = homedir() } = {}) {
-  return join(home, CREW_HOME_REL);
-}
-export function crewProfileDir({ home = homedir() } = {}) {
-  return join(crewDshHome({ home }), 'profiles', CREW_PROFILE_NAME);
-}
+export { CREW_HOME_REL, CREW_PROFILE_NAME, crewDshHome, crewProfileDir } from './crew-paths.mjs';
 
 // The isolated default set: identical to the legacy defaults except the Hub URL,
 // so fresh Crew installs never point at the official web profile.

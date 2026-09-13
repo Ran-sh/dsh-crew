@@ -63,17 +63,41 @@ function splitSection(value) {
   return value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
-const NO_CHANGE_SENTINELS = new Set([
-  'no files changed',
-  'no file changed',
-  'no changes',
-  '无文件变更',
-  '没有文件变更',
-  '未更改任何文件',
-  '无变更',
-]);
+// A line that asserts the workspace ends unchanged. The report sections are
+// prose, so this has to recognize the assertion inside a sentence rather than
+// only as a whole line: "No net file changes — git status is empty" is the same
+// claim as "no changes", and it is the *better* report.
+const NO_CHANGE_ASSERTION_RE = new RegExp(
+  '^(?:'
+  + 'no\\s+(?:net\\s+)?(?:files?|changes?)\\b'
+  + '|nothing\\s+(?:was\\s+)?(?:changed|modified|added|removed|deleted)\\b'
+  + '|none\\s+(?:of\\s+the\\s+)?(?:files?|changes?)\\b'
+  + '|workspace\\s+(?:is\\s+|remains\\s+)?(?:unchanged|clean)\\b'
+  + '|(?:the\\s+)?(?:final\\s+|net\\s+)?(?:file\\s+)?changes?\\s*[:—-]\\s*(?:none|no\\b|empty)'
+  + '|无(?:文件)?变更|没有(?:文件)?变更|未(?:更改|修改)任何文件|工作区(?:保持)?不变'
+  + ')',
+);
 
+function isNoChangeAssertion(line) {
+  const normalized = line
+    .replace(/^(?:[-*+]\s+)+/, '')
+    .replace(/[`"'“”‘’]/g, '')
+    .replace(/[.!。！]+$/, '')
+    .trim()
+    .toLowerCase();
+  if (normalized === '') return false;
+  return NO_CHANGE_ASSERTION_RE.test(normalized);
+}
+
+// Whether the report claims the workspace holds changes. A report that asserts
+// the workspace ends unchanged is not claiming any, whatever else it describes:
+// an authorized task that creates something, verifies it and removes it must
+// describe that transient work, and describing it is not a claim that it is
+// still there. This can only ever turn a mismatch into a match when the
+// workspace really is unchanged — if it did change, `claimsChanges === false`
+// against real changes is still a mismatch, so no actual change is hidden.
 function deliveryClaimsChanges(outcome) {
+  if (outcome?.no_change_declared === true) return false;
   return Array.isArray(outcome?.changes) && outcome.changes.length > 0;
 }
 
@@ -110,15 +134,9 @@ export function applyWorkspaceEvidence(outcome, {
 }
 
 function parseChanges(section) {
-  return splitSection(section).filter((line) => {
-    const normalized = line
-      .replace(/^(?:[-*+]\s+)+/, '')
-      .replace(/[`"'“”‘’]/g, '')
-      .replace(/[.!。！]+$/g, '')
-      .trim()
-      .toLowerCase();
-    return !NO_CHANGE_SENTINELS.has(normalized);
-  });
+  // The declaration lines are dropped so the remaining list is what the report
+  // says about files; the no-change assertion itself is kept out of it.
+  return splitSection(section).filter((line) => !isNoChangeAssertion(line));
 }
 
 // The Tests section is parsed by the delivery contract's own parser. This module
@@ -163,6 +181,11 @@ export function buildOutcome({ result = '', deliveryMeta, executionStatus, stopR
     confidence: null,
     needs_escalation: false,
     changes: parseChanges(parsed.sections.Diff),
+    // The report's net claim about the workspace, read from the section as
+    // written. It cannot be inferred from `changes`: that list is filtered, so
+    // the declaration line is gone from it by the time anyone looks, and the
+    // lines that remain describe work the report already said it undid.
+    no_change_declared: splitSection(parsed.sections.Diff).some(isNoChangeAssertion),
     tests,
     tests_status: testsStatus ?? null,
     risks: splitSection(parsed.sections.Risks),

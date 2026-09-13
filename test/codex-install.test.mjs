@@ -94,6 +94,43 @@ test('Claude reinstall skips CLI only for matching registered marketplace and sn
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+// An earlier release wrote agents/worker.toml before the roles were renamed to
+// ds-worker/ds-reviewer. Nothing removed it, so every Codex start logged
+// "Ignoring malformed agent role definition" about a file of Crew's own that
+// Codex cannot use. Repairing it must not touch a role the operator wrote.
+test('install removes the abandoned pre-rename role stubs and nothing else', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-crew-codex-legacy-'));
+  try {
+    const agents = join(home, '.codex', 'agents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'worker.toml'), 'name = "worker"\n');
+    writeFileSync(join(agents, 'reviewer.toml'), '# a comment\nname = "reviewer"\n');
+    // The operator's own role of the same name: Codex requires
+    // developer_instructions, so this is not Crew's stub and must survive.
+    writeFileSync(join(agents, 'worker-keep.toml'), 'name = "keep"\ndeveloper_instructions = "mine"\n');
+    writeFileSync(join(agents, 'worker.toml.bak'), 'name = "worker"\n');
+
+    const result = installCodex({ home, env: {} });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(join(agents, 'worker.toml')), false, 'the abandoned stub is gone');
+    assert.equal(existsSync(join(agents, 'reviewer.toml')), false, 'its comment does not hide it');
+    assert.equal(existsSync(join(agents, 'worker-keep.toml')), true, 'an operator role is untouched');
+    assert.equal(existsSync(join(agents, 'worker.toml.bak')), true, 'unrelated files are untouched');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test('a user role named worker that Codex can actually load is never removed', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-crew-codex-user-'));
+  try {
+    const agents = join(home, '.codex', 'agents');
+    mkdirSync(agents, { recursive: true });
+    const mine = 'name = "worker"\ndeveloper_instructions = "my own worker role"\n';
+    writeFileSync(join(agents, 'worker.toml'), mine);
+    installCodex({ home, env: {} });
+    assert.equal(readFileSync(join(agents, 'worker.toml'), 'utf8'), mine);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 test('Case 1: install succeeds with ~/.codex available and no codex CLI (no spawn)', async () => {
   const home = makeHome();
   try {

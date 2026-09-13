@@ -44,6 +44,7 @@ import { samePayloadContent, capturePayloadContent } from './payload-content.mjs
 import { crewDshHome, crewProfileDir } from './install.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
+import { renameTree } from './tree-move.mjs';
 import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted } from './runtime-lifecycle.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
@@ -857,7 +858,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
         if (parked) {
           try {
             rmSync(rt.liveRoot, { recursive: true, force: true });
-            renameSync(parked, rt.liveRoot);
+            renameTree(parked, rt.liveRoot);
           } catch (error) {
             return { ok: false, code: 'JOURNAL_COORDINATED_RUNTIME_RESTORE_FAILED', stage: journal.stage, error: `prior runtime restore failed: ${error?.message ?? error}` };
           }
@@ -868,7 +869,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
           if (retainedDir && existsSync(retainedDir)) {
             try {
               rmSync(rt.liveRoot, { recursive: true, force: true });
-              renameSync(retainedDir, rt.liveRoot);
+              renameTree(retainedDir, rt.liveRoot);
               restored = true;
             } catch { /* fall through to fail closed */ }
           }
@@ -2434,14 +2435,14 @@ export async function performCoordinatedCohortUpdate({
       if (existsSync(liveRoot)) {
         // prevPath is unique per attempt and already recorded in the journal.
         try { rmSync(prevPath, { recursive: true, force: true }); } catch {}
-        renameSync(liveRoot, prevPath);
+        renameTree(liveRoot, prevPath);
         liveMoved = true;
       }
       mkdirSync(liveRoot, { recursive: true });
     } catch (error) {
       // Park failed: restore live tree before anything else.
       try {
-        if (liveMoved && !existsSync(liveRoot) && prevPath && existsSync(prevPath)) renameSync(prevPath, liveRoot);
+        if (liveMoved && !existsSync(liveRoot) && prevPath && existsSync(prevPath)) renameTree(prevPath, liveRoot);
       } catch { /* best effort */ }
       const comp = await compensate();
       return finalizeCompensationFailure({ home, code: 'COORDINATED_RUNTIME_PARK_FAILED', error: String(error?.message ?? error), comp });
@@ -2453,7 +2454,7 @@ export async function performCoordinatedCohortUpdate({
       let comp = { ok: false };
       try {
         rmSync(liveRoot, { recursive: true, force: true });
-        if (liveMoved && existsSync(prevPath)) renameSync(prevPath, liveRoot);
+        if (liveMoved && existsSync(prevPath)) renameTree(prevPath, liveRoot);
         comp = await compensate();
       } catch { /* compensate below already reports */ }
       return finalizeCompensationFailure({ home, code: installed.code ?? 'COORDINATED_RUNTIME_INSTALL_FAILED', error: installed.error ?? 'runtime install at live root failed', comp });

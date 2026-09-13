@@ -7,6 +7,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { renameTree } from './install/tree-move.mjs';
 import {
   existsSync,
   lstatSync,
@@ -460,7 +461,7 @@ export async function migrateCrewDshRuntime({
   let liveMoved = false;
   try {
     if (existsSync(liveRoot)) {
-      rename(liveRoot, prevRoot);
+      renameTree(liveRoot, prevRoot, { rename });
       liveMoved = true;
     }
     mkdirSync(liveRoot, { recursive: true });

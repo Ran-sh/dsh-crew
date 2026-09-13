@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { normalizeModelPriority } from '../model-routing.mjs';
 import { crewSkillFiles, installCrewSkill, readCrewSkill, removeCrewSkill } from './crew-skill.mjs';
 import { zcodeStatus } from './zcode.mjs';
+import { integrationRoot } from './crew-paths.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
@@ -372,6 +373,13 @@ export function writeGlobalConfig(patch) {
 
 /** What is currently installed where — drives the settings-page buttons. */
 export function installStatus({ home = homedir(), root = ROOT, env = process.env } = {}) {
+  // Host integrations are installed from the profile's loader link, not from the
+  // release directory, so an upgrade re-points one link instead of rewriting four
+  // host configurations. Readiness has to judge them against the path they were
+  // actually written with: deriving it from the release directory made every
+  // correctly installed machine read as needing repair.
+  const manifestName = readJson(join(root, 'package.json'), {})?.name ?? null;
+  const effectiveRoot = integrationRoot({ home, root, name: manifestName });
   const settings = readJson(join(home, '.claude', 'settings.json'), {});
   const enabled = settings.enabledPlugins;
   const claudeInstalled = !!(enabled && !Array.isArray(enabled) && enabled[PLUGIN_KEY]);
@@ -382,8 +390,8 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
   const claudeFootprint = claudeInstalled || typeof marketplaceRoot === 'string' || installedPluginRecord !== undefined;
   const claudeComponents = {
     enabled: claudeInstalled,
-    marketplace: normalizedPath(marketplaceRoot) === normalizedPath(root) && claudePluginRootReady(root),
-    snapshot: claudeSnapshotReady(home, root),
+    marketplace: normalizedPath(marketplaceRoot) === normalizedPath(effectiveRoot) && claudePluginRootReady(effectiveRoot),
+    snapshot: claudeSnapshotReady(home, effectiveRoot),
     permissions: claudePermissionsReady(settings),
   };
   const claudeMissing = Object.entries(claudeComponents).filter(([, present]) => !present).map(([key]) => key);
@@ -395,11 +403,11 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
   const workerTarget = codexRoleTarget(workerFile, 'ds-worker');
   const reviewerTarget = codexRoleTarget(reviewerFile, 'ds-reviewer');
   const mcpTarget = codexMcpTarget(configText);
-  const expectedTarget = normalizedPath(join(root, 'src', 'server.mjs'));
-  const expectedWorkerRole = renderedCodexRole(root, 'ds-worker.toml');
-  const expectedReviewerRole = renderedCodexRole(root, 'ds-reviewer.toml');
-  const expectedConfigPrompt = readText(join(root, 'codex', 'prompts', 'dsh-config.md'));
-  const expectedStatusPrompt = readText(join(root, 'codex', 'prompts', 'dsh-status.md'));
+  const expectedTarget = normalizedPath(join(effectiveRoot, 'src', 'server.mjs'));
+  const expectedWorkerRole = renderedCodexRole(effectiveRoot, 'ds-worker.toml');
+  const expectedReviewerRole = renderedCodexRole(effectiveRoot, 'ds-reviewer.toml');
+  const expectedConfigPrompt = readText(join(effectiveRoot, 'codex', 'prompts', 'dsh-config.md'));
+  const expectedStatusPrompt = readText(join(effectiveRoot, 'codex', 'prompts', 'dsh-status.md'));
   const components = {
     worker_role: expectedWorkerRole !== null && readText(workerFile) === expectedWorkerRole,
     reviewer_role: expectedReviewerRole !== null && readText(reviewerFile) === expectedReviewerRole,
@@ -422,8 +430,32 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
       missing: claudeMissing,
     },
     codex: { installed: codexInstalled, ready: missing.length === 0, components, missing },
-    zcode: zcodeStatus({ home, root }),
+    zcode: zcodeStatus({ home, root: effectiveRoot }),
   };
+}
+
+function removeLegacyCodexRoles({ agentsDir }) {
+  const actions = [];
+  for (const f of ['worker.toml', 'reviewer.toml']) {
+    const p = join(agentsDir, f);
+    if (!existsSync(p)) continue;
+    // Only Crew's own abandoned stub is removed. An earlier release wrote these
+    // before the roles were renamed to ds-worker/ds-reviewer, and every Codex
+    // start since has logged "Ignoring malformed agent role definition" about a
+    // file of ours that Codex cannot use: a role without `developer_instructions`
+    // is not a role, so anything that *is* a real user role cannot match here.
+    const text = readText(p);
+    if (typeof text !== 'string') continue;
+    const name = f.replace(/\.toml$/, '');
+    const stripped = text.replace(/#[^\n]*/g, '').trim();
+    if (/developer_instructions/.test(stripped)) continue;
+    if (!new RegExp(`^name\\s*=\\s*["']${name}["']$`).test(stripped)) continue;
+    const bak = backup(p);
+    if (bak) actions.push(`backup: ${bak}`);
+    rmSync(p);
+    actions.push(`removed obsolete role: ${p}`);
+  }
+  return actions;
 }
 
 export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
@@ -435,6 +467,7 @@ export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
     const p = join(codexHomeDir(home, env), 'agents', f);
     if (existsSync(p)) { backup(p); rmSync(p); actions.push(`removed: ${p} (backup kept)`); }
   }
+  actions.push(...removeLegacyCodexRoles({ agentsDir: join(codexHomeDir(home, env), 'agents') }));
   for (const f of ['dsh-config.md', 'dsh-status.md']) {
     const p = join(codexHomeDir(home, env), 'prompts', f);
     if (existsSync(p)) { rmSync(p); actions.push(`removed: ${p}`); }
@@ -596,6 +629,7 @@ export function installCodex({ home = homedir(), scope, root = ROOT, env = proce
     writeFileSync(join(promptsDir, f), readFileSync(join(promptsSrc, f), 'utf8'));
     actions.push(`prompt: ${join(promptsDir, f)}`);
   }
+  actions.push(...removeLegacyCodexRoles({ agentsDir }));
   if (scope !== 'project') {
     const act = writeGlobalCodexMcpServer(home, renderedPath, env);
     actions.push(...act);

@@ -181,8 +181,14 @@ export function createWorkflowRuntime(adapters, {
       phase: JOB_PHASES.CREATED,
       status: 'running',
       cancelling: false,
+      // Where it will run is not known until the workspace is allocated, and the
+      // first snapshot a caller sees is taken before that happens. Claiming
+      // `shared` there was a wrong answer for every job that ends up isolated:
+      // the caller was told the work happens in their own tree while it was
+      // about to happen in a worktree. `null` means not allocated yet;
+      // `requested_isolation` carries what was asked for.
       execution_cwd: spec.cwd,
-      isolation: 'shared',
+      isolation: null,
       base_revision: null,
       primary_workspace_dirty: false,
       attempts: [],

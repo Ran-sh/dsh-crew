@@ -74,6 +74,29 @@ test('other payload fields pass through untouched', () => {
   assert.deepEqual(r.payload, { task: 't', effort: 'max', cwd: '/w', preset: 'minimal', tier: 'flash' });
 });
 
+// The same task must run the same way whichever shape submits it. The role's
+// profile states how that role runs, and only the advanced Job Request shape
+// resolved it — a plain payload naming `role: worker` ran shared while the
+// profile said worktree, so the profile was ignored for the simpler caller.
+test('a plain role payload takes its isolation from the role profile', () => {
+  const registry = { ok: true, profiles: {
+    'worker-default': { role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true, timeout_seconds: 1800, review_strictness: 'standard' },
+    'reviewer-default': { role: 'reviewer', routing: 'stable', isolation: 'readonly', fallback: false, timeout_seconds: 1800, review_strictness: 'strict' },
+  } };
+  const worker = resolveHubSpawnPayload(raw({ task: 't', cwd: '/w', role: 'worker' }), () => cfg(), { profileRegistry: registry });
+  assert.equal(worker.ok, true);
+  assert.equal(worker.payload.requested_isolation, 'worktree');
+
+  const reviewer = resolveHubSpawnPayload(raw({ task: 't', cwd: '/w', role: 'reviewer' }), () => cfg(), { profileRegistry: registry });
+  assert.equal(reviewer.ok, true);
+  assert.equal(reviewer.payload.requested_isolation, 'readonly');
+
+  // An explicit workspace policy still wins over the profile.
+  const explicit = resolveHubSpawnPayload(raw({ task: 't', cwd: '/w', role: 'worker', workspace: { worktree: 'none' } }), () => cfg(), { profileRegistry: registry });
+  assert.equal(explicit.ok, true);
+  assert.equal(explicit.payload.requested_isolation, 'shared');
+});
+
 test('versioned HTTP request resolves profile, workspace, constraints and caller id', () => {
   const registry = { ok: true, profiles: {
     'worker-default': { role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true, timeout_seconds: 1800, review_strictness: 'standard' },

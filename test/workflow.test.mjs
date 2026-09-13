@@ -264,6 +264,73 @@ test('a verified zero-change task reaches success when the caller authorised it'
   assert.equal(outcome.workspace_evidence_ok, true);
 });
 
+// The declaration a real Worker wrote for an authorized temporary task, taken
+// verbatim from a live 3210 run. It says the workspace ends unchanged and then
+// describes the work that was undone — which is the only way to report this kind
+// of task honestly. The gate read the description as a claim that files had
+// changed, disagreed with git, and failed the run as WORKSPACE_MISMATCH even
+// though every check passed and the tree was provably clean.
+const DESCRIPTIVE_TEMP_TASK_RESULT = [
+  'Ran the checks and cleaned up.',
+  '',
+  '## Diff',
+  '- No net file changes — `git status --porcelain` is empty and all 27 pre-existing files retain their original SHA-256 hashes.',
+  '- `work/tmp-hello.ps1` — created transiently (530 bytes); **deleted**.',
+  '- `work/` — directory did not exist before, was created, then **deleted** (confirmed empty first).',
+  '',
+  '## Tests',
+  'PASS — powershell -File work/tmp-hello.ps1 (CP936) — len=4 hex=C4 E3 BA C3, exact match, no CR/LF',
+  'PASS — same script under UTF-8 — len=6 hex=E4 BD A0 E5 A5 BD, round-trips to 你 好',
+  'PASS — cleanup check — Test-Path work/tmp-hello.ps1 is False',
+  '',
+  '## Risks',
+  '- The script derives 你 好 from code points, so no source encoding is assumed.',
+].join('\n');
+
+test('a transient-work description is not a claim that the changes remain', () => {
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: DESCRIPTIVE_TEMP_TASK_RESULT, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.tests_status, 'PASS');
+  assert.equal(outcome.workspace_evidence_ok, true);
+  assert.equal(outcome.task_status, 'success');
+  assert.equal(outcome.no_change_verified, true);
+});
+
+// The safety property behind that: recognizing more ways of saying "no net
+// change" can only turn a mismatch into a match when git already proves the
+// workspace is unchanged. A report that declares no changes while git reports
+// real ones is still a mismatch, so nothing a worker failed to do can hide here.
+test('a no-change declaration never outvotes a workspace that really changed', () => {
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: DESCRIPTIVE_TEMP_TASK_RESULT, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: true,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.workspace_evidence_ok, false);
+  assert.equal(outcome.no_change_verified, undefined);
+  assert.notEqual(outcome.task_status, 'success');
+});
+
+test('a report that lists changes is still a change claim', () => {
+  const claimed = DESCRIPTIVE_TEMP_TASK_RESULT.replace(
+    '- No net file changes — `git status --porcelain` is empty and all 27 pre-existing files retain their original SHA-256 hashes.',
+    '- src/app.mjs — added the new export',
+  );
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: claimed, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.workspace_evidence_ok, false);
+  assert.equal(outcome.no_change_verified, undefined);
+});
+
 test('a temporary task with a cleanup failure still fails', () => {
   const failedCleanup = TEMP_TASK_RESULT.replace('PASS — cleanup check — path no longer exists', 'FAIL — cleanup check — the temporary script is still present');
   const outcome = applyWorkspaceEvidence(buildOutcome({ result: failedCleanup, stopReason: 'completed' }), {
