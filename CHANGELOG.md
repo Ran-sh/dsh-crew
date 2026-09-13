@@ -4,6 +4,57 @@
 
 Future changes go here.
 
+## 1.10.3 — 2026-09-13
+
+A review of the install and lifecycle layer — the largest area never previously
+reviewed — plus eight rounds of adversarial verification. Every finding was
+reproduced before it was fixed, and several fixes were themselves found to be
+wrong by the next round and redone.
+
+Host integrations point at the loader link, not at a release:
+
+- The Codex, ZCode and Claude Code integrations recorded the absolute path of the
+  release they were installed from. That path went stale the moment the release
+  was pruned, and it was why removing an old release was unsafe. They now record
+  the Crew profile's loader link, which registration re-points at whichever
+  release is live: an upgrade needs no rewrite of your host configuration, and
+  removing a release cannot leave a dangling reference. Existing installs carry
+  absolute paths from earlier versions; the next upgrade rewrites them.
+
+Crash recovery:
+
+- **A runtime tree is no longer replaced while a process may be running from it.**
+  Recovery decides by reading a state the update writes before it starts anything,
+  and a stop that cannot be positively proven leaves the tree alone rather than
+  guessing. An earlier version of this fix read "the supervisor could not obtain
+  the runtime's identity" as "nothing is running" — which is equally what a live
+  runtime with a timed-out request looks like — and would have swapped the tree
+  out from under it.
+- The maintenance window a coordinated update opens is recorded and resumed, so a
+  crash after it stops the runtime no longer strands it stopped. The durable
+  supervisor session is the authority, not the journal, because it exists from the
+  moment the stop lands.
+- A journal marked verified whose release pointer never moved is completed rather
+  than rolled back: the candidate is what is running, and rolling back would swap
+  the tree out from under it.
+- Runtime cohort retention rotates rather than consumes, so rolling back and then
+  forward again works instead of failing with the cohort it needed already gone.
+
+Payload identity:
+
+- The payload digest includes permission bits. A payload whose file mode changed
+  with identical bytes compared equal, so the repair that was the point of the
+  update was skipped.
+
+Known, deliberately not changed:
+
+- A first install that does not complete leaves everything in place and reports,
+  because Crew cannot prove which host records are its own. Finishing it is a
+  manual step, and the error names the candidate, the loader link and the journal.
+- The update and supervisor-handoff locks decide a live owner from the process id
+  alone, so a recycled pid can leave a stale lock looking live. The remedy is to
+  delete the lock file.
+
 ## 1.10.2 — 2026-09-13
 
 A first adversarial review of the install and lifecycle layer — the largest area
