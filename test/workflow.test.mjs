@@ -316,6 +316,42 @@ test('a no-change declaration never outvotes a workspace that really changed', (
   assert.notEqual(outcome.task_status, 'success');
 });
 
+// The same declaration stated as a closing summary. A real Worker ended its Diff
+// section with "**Final state: no files changed.**" after describing the work it
+// had undone, and the gate read the description as a claim that the work was
+// still there.
+test('a closing no-change summary is the same declaration', () => {
+  const withSummary = DESCRIPTIVE_TEMP_TASK_RESULT.replace(
+    '- No net file changes — `git status --porcelain` is empty and all 27 pre-existing files retain their original SHA-256 hashes.',
+    '- `work/tmp-hello.ps1` — created temporarily, then deleted. **Final state: no files changed.**',
+  );
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: withSummary, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.workspace_evidence_ok, true);
+  assert.equal(outcome.task_status, 'success');
+  assert.equal(outcome.no_change_verified, true);
+});
+
+// ...and it must not be found inside an unrelated clause.
+test('a no-change phrase inside another clause is not a declaration', () => {
+  const notADeclaration = DESCRIPTIVE_TEMP_TASK_RESULT.replace(
+    '- No net file changes — `git status --porcelain` is empty and all 27 pre-existing files retain their original SHA-256 hashes.',
+    '- `src/app.mjs` was edited; no other files were touched.',
+  );
+  const outcome = applyWorkspaceEvidence(buildOutcome({ result: notADeclaration, stopReason: 'completed' }), {
+    evidenceAvailable: true,
+    hasChanges: false,
+    allowNoChanges: true,
+    requireNoChangeAuthorization: true,
+  });
+  assert.equal(outcome.workspace_evidence_ok, false);
+  assert.equal(outcome.no_change_verified, undefined);
+});
+
 test('a report that lists changes is still a change claim', () => {
   const claimed = DESCRIPTIVE_TEMP_TASK_RESULT.replace(
     '- No net file changes — `git status --porcelain` is empty and all 27 pre-existing files retain their original SHA-256 hashes.',

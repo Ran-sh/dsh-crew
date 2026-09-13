@@ -81,12 +81,18 @@ const NO_CHANGE_ASSERTION_RE = new RegExp(
 function isNoChangeAssertion(line) {
   const normalized = line
     .replace(/^(?:[-*+]\s+)+/, '')
-    .replace(/[`"'“”‘’]/g, '')
+    .replace(/[`"'“”‘’*_]/g, '')
     .replace(/[.!。！]+$/, '')
     .trim()
     .toLowerCase();
   if (normalized === '') return false;
-  return NO_CHANGE_ASSERTION_RE.test(normalized);
+  // The assertion is usually a whole line, but a report may also end with it —
+  // "**Final state: no files changed.**" is the same declaration stated as a
+  // summary. Testing each sentence and clause is what finds it without matching
+  // a phrase that merely appears inside an unrelated one.
+  return normalized
+    .split(/\s*(?:[.:;,—–()\[\]]|->)\s*/)
+    .some((fragment) => fragment !== '' && NO_CHANGE_ASSERTION_RE.test(fragment.trim()));
 }
 
 // Whether the report claims the workspace holds changes. A report that asserts

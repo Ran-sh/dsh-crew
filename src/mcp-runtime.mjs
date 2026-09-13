@@ -222,6 +222,15 @@ export function buildMcpWorkflowRuntime(deps) {
         source,
         preset,
         delivery,
+        // Isolation belongs to this client: it already allocated the workspace
+        // and `spec.cwd` is the result. Saying so keeps the hub executing in that
+        // cwd instead of resolving an isolation of its own and allocating a
+        // second workspace — which put the work somewhere the client was not
+        // looking and captured no candidate for.
+        requested_isolation: 'shared',
+        // The same authorization the client was given, so the hub judges the
+        // workspace evidence against the same task contract.
+        allow_no_changes: spec.allow_no_changes === true,
       });
       spec.onAttemptStarted?.(spawned.id);
 

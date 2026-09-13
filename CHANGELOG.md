@@ -4,6 +4,27 @@
 
 Future changes go here.
 
+## 1.10.8 — 2026-09-13
+
+The 1.10.7 verification found two more reasons the same task could still fail
+through the MCP client.
+
+- **The declaration is recognized where a Worker actually writes it.** A report
+  that ends its Diff section with `**Final state: no files changed.**` after
+  describing the work it undid states the same thing as a bare `no changes`, and
+  was read as a change claim. Sentence and clause boundaries are now tested, so
+  the summary is found — while a no-change phrase inside an unrelated clause
+  ("`src/app.mjs` was edited; no other files were touched") is still a change
+  claim.
+- **The MCP client's attempt runs where the client said.** Isolation belongs to
+  the client, which allocates the workspace and passes its path as the cwd. The
+  attempt dispatch said nothing about isolation, so the Hub resolved one from the
+  role profile and allocated a second workspace — putting the work in a directory
+  the client was not looking at and could not capture a candidate for. The
+  dispatch now states that the workspace is already provided, and carries the
+  same `allow_no_changes` authorization the client was given so both layers judge
+  the evidence against the same contract.
+
 ## 1.10.7 — 2026-09-13
 
 The zero-change fix of 1.10.6 was verified again through both dispatch surfaces

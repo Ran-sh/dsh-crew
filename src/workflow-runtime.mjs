@@ -382,6 +382,10 @@ export function createWorkflowRuntime(adapters, {
           cwd: job.execution_cwd,
           effort: job.effort,
           timeout_seconds: job.timeout_seconds,
+          // Passed through so the executor judges the workspace evidence against
+          // the same task contract this workflow was given, instead of against a
+          // default that would refuse an authorization the caller granted.
+          allow_no_changes: job.allow_no_changes === true,
           policy,
           source: job.source,
           model_class_hint: job.model_class_hint,
