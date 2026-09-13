@@ -12,9 +12,11 @@ import { createStandaloneHarness } from './standalone-sdk.mjs';
 import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createShardWriter } from './status-shard.mjs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
+import { appendDeliveryInstructions, prependJobIdentity, parseDeliveryReport, formatDeliveryMetadata } from './delivery.mjs';
+import { jobDisplayName } from './job-identity.mjs';
+import { isCrewWorktreeName } from './workspace-isolation.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from './workspace-audit.mjs';
 import { buildOutcome, JOB_PHASES } from './workflow.mjs';
 import { raceWaiters } from './removable-waiter.mjs';
@@ -134,7 +136,14 @@ export function startJob({
   // The worker always gets the auditable Delivery Contract appended (unless it
   // already carries one), so its final message follows ## Diff / ## Tests /
   // ## Risks — or the review contract for reviewer-role jobs.
-  const workerPrompt = appendDeliveryInstructions(task, { tier, role, isReview: delivery === 'review' });
+  //
+  // It also opens with the job's Crew name, for the same reason the Hub does it:
+  // the Harness titles the session from the opening words of this prompt, so a
+  // standalone job should be as findable in that list as an isolated one.
+  const jobName = isCrewWorktreeName(basename(workspace))
+    ? basename(workspace)
+    : jobDisplayName({ purpose: role });
+  const workerPrompt = appendDeliveryInstructions(prependJobIdentity(task, { name: jobName, role }), { tier, role, isReview: delivery === 'review' });
   const id = `job-${nextId++}-${Date.now().toString(36)}`;
   const dotEnv = loadDotEnv();
   if (!process.env.DEEPSEEK_API_KEY && !dotEnv.DEEPSEEK_API_KEY) {

@@ -81,6 +81,27 @@ Then stop and return control to the Main Agent.
 Do not autonomously start a new task or delegate further work.` : ''}`;
 }
 
+/** A prompt that already carries the job identity header (added once). */
+export const JOB_HEADER_MARKER = 'Crew job ';
+
+/**
+ * Open the prompt with the job's Crew name.
+ *
+ * The Harness lists a dispatched job in its workspace panel under a title it
+ * derives from the opening words of the first message the agent receives, so
+ * without this a Crew job appears as "In this isolated git repository," or
+ * whatever the task happened to begin with — while its worktree is named
+ * `Crew_<date>_<time>_<purpose>`. Prefixing the name makes all three agree, and
+ * makes a job findable in that list by the same string an operator already uses
+ * on disk. Idempotent, so a re-dispatch or a review prompt is not doubled.
+ */
+export function prependJobIdentity(task, { name, role } = {}) {
+  if (typeof task !== 'string' || !name) return task;
+  if (task.startsWith(JOB_HEADER_MARKER)) return task;
+  const roleSuffix = role ? ` — role: ${role}` : '';
+  return `${JOB_HEADER_MARKER}${name}${roleSuffix}\n\n${task}`;
+}
+
 /**
  * Append the delivery instructions to a worker task prompt. Idempotent: a task
  * that already carries the delivery report (e.g. a review prompt, or a

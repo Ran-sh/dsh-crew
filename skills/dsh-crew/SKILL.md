@@ -86,12 +86,27 @@ review asks for changes, that is a task result to act on — not approval.
 
 ## Common ways a dispatch surprises you
 
-- **A task that only asks a question fails.** The delivery contract wants a
-  change; a reply-only task returns `DELIVERY_INCOMPLETE`. That is the gate
-  working, not the worker failing.
+- **A task that only asks a question fails.** The delivery contract wants
+  auditable evidence, and a reply with neither a change nor a verified check is
+  incomplete. That is the gate working, not the worker failing. A task that
+  changes nothing *on purpose* can pass — see the next entry.
+- **A job is named `Crew_<date>_<time>_<purpose>`.** The worktree directory, the
+  session the Harness lists in its workspace panel, and the name in a status
+  payload all use that one string, so a conversation can be matched to a
+  directory by eye. The purpose is the role: `worker` or `reviewer`.
+- **A verified zero-change task needs `constraints.allow_no_changes: true`.**
+  For a deliberately temporary job — create, verify, clean up, end with an empty
+  diff — that flag plus the reported checks is what certifies it. It requires a
+  clean, readable baseline, at least one `PASS` and no `FAIL`, and it relaxes
+  nothing else: no evidence, a failed check, a dirty baseline or an actual change
+  each still refuse.
 - **Isolated workspaces need git.** The default `worktree` isolation fails with
   `NOT_GIT_REPOSITORY` for a non-git workspace rather than silently sharing the
-  tree. Use `shared` deliberately if that is what you want.
+  tree. Use `shared` deliberately if that is what you want; `allow_no_changes`
+  works in either.
+- **A repository with no commits cannot be isolated.** `git init` with nothing
+  committed reports `REPOSITORY_HAS_NO_COMMITS` — there is no revision to start
+  from. Commit once, or run that job with `shared`.
 - **Long tasks need a longer timeout.** `timeout_seconds` is per attempt and
   caps at 7200; the default is far shorter than a real refactor.
 - **A worker cannot see your conversation.** Anything it needs must be in

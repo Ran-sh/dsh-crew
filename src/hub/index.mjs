@@ -5,7 +5,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, isAbsolute, resolve as resolvePath } from 'node:path';
+import { dirname, join, isAbsolute, resolve as resolvePath, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createShardWriter, readMergedStatus } from '../status-shard.mjs';
 import {
@@ -19,7 +19,7 @@ import {
 import { buildDirectSelectionTrace, resolveWorkerModel, resolveModel } from '../model-routing.mjs';
 import { scheduleAdmission } from '../model-schedule.mjs';
 import { readHarnessModelCatalog } from '../model-catalog.mjs';
-import { appendDeliveryInstructions, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
+import { appendDeliveryInstructions, prependJobIdentity, parseDeliveryReport, formatDeliveryMetadata } from '../delivery.mjs';
 import { captureWorkspaceBaseline, captureWorkspaceDiff, NOT_A_GIT_REPOSITORY } from '../workspace-audit.mjs';
 import { applyWorkspaceEvidence, buildOutcome, JOB_PHASES } from '../workflow.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
@@ -28,7 +28,8 @@ import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
 import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
-import { cleanupIsolatedWorkspace, createIsolatedWorkspace } from '../workspace-isolation.mjs';
+import { cleanupIsolatedWorkspace, createIsolatedWorkspace, isCrewWorktreeName } from '../workspace-isolation.mjs';
+import { jobDisplayName } from '../job-identity.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
 import { buildConfigReadinessMatrix } from '../config-readiness.mjs';
 import { localRequestCore, originLoopback } from '../local-request-guard.mjs';
@@ -831,7 +832,6 @@ export class WorkerRegistry {  constructor(ctx) {
     // it already carries one), so its final message follows ## Diff / ## Tests
     // / ## Risks — or the review contract for reviewer-role jobs.
     const jobRole = hasRole ? role : (delivery === 'review' || role === 'reviewer' ? 'reviewer' : 'worker');
-    const workerPrompt = appendDeliveryInstructions(task, { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
 
     const id = `hub-${this.nextId++}-${Date.now().toString(36)}`;
 
@@ -847,11 +847,21 @@ export class WorkerRegistry {  constructor(ctx) {
     let executionCwd = cwd;
     let isolatedWorkspace = null;
     if ((requested_isolation === 'worktree' && jobRole === 'worker') || requested_isolation === 'readonly') {
-      const created = await createIsolatedWorkspace({ cwd, jobId: id, baseRevision: workspace_branch });
+      const created = await createIsolatedWorkspace({ cwd, jobId: id, purpose: jobRole, baseRevision: workspace_branch });
       if (!created.ok) throw Object.assign(new Error(created.error ?? created.reason), { code: created.reason });
       executionCwd = created.worktreePath;
       isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot };
     }
+    // The Harness titles the session from the opening words of the prompt the
+    // agent receives, so the prompt opens with the job's Crew name: that makes the
+    // conversation, the worktree directory and the name an operator types the same
+    // string. An allocated worktree's name wins, so a collision suffix stays
+    // consistent between the two.
+    const jobName = isCrewWorktreeName(basename(executionCwd))
+      ? basename(executionCwd)
+      : jobDisplayName({ purpose: jobRole });
+    const workerPrompt = appendDeliveryInstructions(prependJobIdentity(task, { name: jobName, role: jobRole }), { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
+
     const sessionId = `session-${randomUUID()}`;
     // Record provenance while it is still knowable: a session header carries no
     // field naming who asked for the session, so a later Crew-scoped cleanup can
