@@ -4,6 +4,46 @@
 
 Future changes go here.
 
+## 1.10.5 — 2026-09-13
+
+Three reports from real use, each traced to its root cause before it was fixed.
+
+- **A task that delivers zero changes can succeed.** A task that is explicitly
+  authorized to change nothing — `constraints.allow_no_changes: true`, which is
+  what "create something, verify it, delete it" is — was reported as blocked with
+  `DELIVERY_INCOMPLETE` no matter what the evidence said, because the delivery
+  gate required a non-empty diff and the Hub only granted the authorization in an
+  isolated worktree. A shared workspace is an ordinary way to run, so that is
+  where the case was reported from. Both are fixed: `allow_no_changes` now
+  applies to a shared workspace against a clean, readable baseline, and the
+  report is accepted when the tests pass and the workspace is verifiably
+  unchanged. Nothing else moved — a missing evidence section, a failing test or a
+  failed cleanup still fails.
+- **The evidence sections are parsed once.** `delivery.mjs` and `workflow.mjs`
+  each carried their own `## Tests` parser, and the stricter one — the one that
+  decides `delivery.complete`, and therefore the failure code — rejected the
+  entire section for a single line it did not recognize, while the looser one had
+  already reported the same test rows as visible PASSes. That disagreement is why
+  the same run could show passing evidence and `tests_status: null` at once. One
+  parser now feeds both, so the aggregate status and the visible rows can no
+  longer contradict each other.
+- **A dispatched job is named the same thing everywhere.** The worktree, the
+  Harness session and the status payload now all carry
+  `Crew_<date>_<time>_<purpose>`; the Harness titles a session from the prompt it
+  receives, and that prompt is built from the worktree's own name.
+- **Locks identify their owner, not just its PID.** Update and handoff locks
+  recorded a PID and asked the operating system whether that PID existed. A
+  recycled PID — the system handing a dead owner's number to an unrelated
+  process — therefore looked like a live owner, and the lock could not be
+  reclaimed for as long as the stranger ran. Lock records now also carry the
+  owner's process start time.
+- **The update transaction is a state machine.** The coordinated update records
+  `before-stop`, `stopped`, `restarted`, `verified` and `committed` in order, one
+  legal forward edge at a time, so an interrupted update always leaves a journal
+  that describes a transaction that actually followed that order. Recovery's one
+  fatal question — may a start already have happened? — is answered from these
+  states alone.
+
 ## 1.10.4 — 2026-09-13
 
 Found by installing 1.10.3 from the registry into a throwaway project and asking
