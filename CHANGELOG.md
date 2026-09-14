@@ -4,6 +4,19 @@
 
 Future changes go here.
 
+## 2.0.2 — 2026-09-14
+
+- **One test no longer skips on Windows.** `reopening rejects a symlinked
+  manifest before reading it` needs a *file* symlink, which Windows grants only
+  with `SeCreateSymbolicLinkPrivilege`; without it the test skipped, and the
+  property it guards — the provider-delete guard refuses a manifest reached
+  through a link — went uncovered on the host that needs it most. The guard does
+  not care which kind of link it is: it walks every path segment and refuses when
+  any of them is a reparse point, and a directory junction is a reparse point
+  Windows grants without privilege. The same property is now asserted through a
+  junction, so it runs here; the file-symlink test still runs where file
+  symlinks are permitted.
+
 ## 2.0.1 — 2026-09-14
 
 Found by trying to make the readiness matrix green on a machine where the work

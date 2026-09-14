@@ -1257,3 +1257,35 @@ test('file adapter rollback restores every backed-up managed file', async () => 
   assert.equal(originalLifecycle.includes('SECRET'), false);
   assert.equal(existsSync(join(paths.dir, 'backups')), true);
 });
+
+// A file symlink needs SeCreateSymbolicLinkPrivilege on Windows, but a
+// directory junction does not — and the guard does not care which kind of link
+// it is: it walks every path segment and refuses when any of them is a reparse
+// point. So the same property can be exercised on a host that cannot make file
+// symlinks, instead of being skipped there.
+test('reopening rejects a manifest reached through a linked directory', async (t) => {
+  const paths = fixture();
+  const backupDir = join(paths.dir, 'backups');
+  const plan = planFor(paths.profileFile);
+  const hooks = createProviderDeleteFileHooks({ ...paths, backupDir });
+  await hooks.backup(plan);
+  await hooks.release();
+
+  const backupRoot = join(backupDir, plan.plan_id);
+  const outsideDir = join(paths.dir, 'outside-backup');
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, 'manifest.json'), readFileSync(join(backupRoot, 'manifest.json')));
+  rmSync(backupRoot, { recursive: true, force: true });
+  try {
+    symlinkSync(outsideDir, backupRoot, 'junction');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'EINVAL', 'UNKNOWN'].includes(error?.code)) {
+      t.skip('this host can create neither symlinks nor junctions');
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => createProviderDeleteFileHooks({
+    ...paths, backupDir, existingBackupId: plan.plan_id, expectedProviderId: plan.provider_id,
+  }), (error) => error.code === 'PROVIDER_DELETE_UNSAFE_PATH');
+});
