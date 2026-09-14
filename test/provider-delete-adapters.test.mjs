@@ -1160,7 +1160,16 @@ test('reopening rejects a symlinked manifest before reading it', async (t) => {
   rmSync(manifestFile, { force: true });
   try { symlinkSync(outside, manifestFile); }
   catch (error) {
-    if (['EPERM', 'EACCES'].includes(error?.code)) { t.skip('symlinks unavailable on this Windows host'); return; }
+    if (['EPERM', 'EACCES'].includes(error?.code)) {
+      // Not a missing test. Windows grants file symlinks only with
+      // SeCreateSymbolicLinkPrivilege (Developer Mode or elevation). This is the
+      // leaf shape — the manifest file itself is the link — and it still runs
+      // wherever that privilege exists, including the Linux CI job. What it
+      // cannot run here is covered by the junction test at the end of this file,
+      // which reaches the same guard through a link in the parent directory.
+      t.skip('this host cannot create a file symlink (Windows needs SeCreateSymbolicLinkPrivilege)');
+      return;
+    }
     throw error;
   }
   assert.throws(() => createProviderDeleteFileHooks({
