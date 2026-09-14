@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 2.0.7 — 2026-09-14
+
+- **The Claude Code refresh is given time to finish.** The step runs
+  `claude plugin uninstall` first, so that the snapshot is re-copied rather than
+  left stale — but the copy that follows is not the ~6s no-op an already-installed
+  plugin gets. Measured on the machine that hit this: `marketplace add` 3s,
+  `uninstall` 3s, `install` 163s, against a 120s ceiling. Every version update
+  therefore killed the install partway *after* removing the plugin, and left
+  Claude Code uninstalled; since 2.0.5 that is reported rather than checkmarked,
+  but it should not happen at all. The ceiling is now 300s, which the measured
+  copy fits in with room to spare.
+
 ## 2.0.6 — 2026-09-14
 
 - **The checkout install entry reports an unloaded integration too.** 2.0.5 taught

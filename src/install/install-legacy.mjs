@@ -599,7 +599,12 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   }
   try {
     const { execSync } = await import('node:child_process');
-    const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 });
+    // 300s, not 120: the install below runs after the uninstall, so it does a real
+    // copy of the plugin tree rather than the no-op an already-installed plugin
+    // gets. Measured on this machine: `marketplace add` 3s, `uninstall` 3s,
+    // `install` 163s (no-op install: 6s). The old ceiling killed the copy partway
+    // and left Claude Code without the plugin the same run had just removed.
+    const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300_000 });
     try { run(`claude plugin marketplace add ${JSON.stringify(mpDir)}`); actions.push('cli: marketplace registered'); }
     catch { actions.push('cli: marketplace add skipped (already registered)'); }
     // `plugin install` on an already-installed plugin is a no-op and leaves a
