@@ -11,7 +11,7 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, claudeSnapshotSettleMs, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, claudeIntegrationLine, claudeSnapshotSettleMs, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 // Only a timeout can leave a copy running past the shell's ceiling, so only a
 // timeout is worth waiting out. The error shapes are Node's, measured rather than
@@ -24,8 +24,12 @@ test('the plugin snapshot is only waited for after a timed-out CLI attempt', () 
   });
   assert.ok(claudeSnapshotSettleMs(timedOut) > 0, 'a timed-out install may still be writing the snapshot');
 
-  const killed = Object.assign(new Error('spawnSync C:\\WINDOWS\\system32\\cmd.exe SIGTERM'), { signal: 'SIGTERM' });
-  assert.ok(claudeSnapshotSettleMs(killed) > 0, 'a signalled child is also outside the shell\'s process tree');
+  // ENOBUFS (output over maxBuffer) reports SIGTERM too, and that child has
+  // already stopped; matching the signal alone spent the whole window on nothing.
+  const overflowed = Object.assign(new Error('spawnSync C:\\WINDOWS\\system32\\cmd.exe ENOBUFS'), {
+    code: 'ENOBUFS', signal: 'SIGTERM',
+  });
+  assert.equal(claudeSnapshotSettleMs(overflowed), 0, 'a buffer overflow is not a copy that is still running');
 
   const notInstalled = Object.assign(new Error("Command failed: claude plugin install\n'claude' is not recognized"), { status: 1 });
   assert.equal(claudeSnapshotSettleMs(notInstalled), 0, 'a CLI that does not exist never started a copy to wait for');
@@ -34,6 +38,81 @@ test('the plugin snapshot is only waited for after a timed-out CLI attempt', () 
   assert.equal(claudeSnapshotSettleMs(failed), 0, 'a non-zero exit left no writer behind');
 
   assert.equal(claudeSnapshotSettleMs(null), 0, 'an install that simply is not current has nothing to wait for');
+});
+
+// This installer writes user scope, so only a user-scope record means the
+// integration is installed. A project-scope record that happens to match used to
+// stand in for a missing user-scope snapshot, which made a failed install read as
+// a current one and let the installer skip the CLI step it still needed.
+test('a project-scope plugin record does not stand in for the user-scope install', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    makeClaudePluginRoot(root, 'same');
+    makeClaudePluginRoot(snapshot, 'same');
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'known_marketplaces.json'), JSON.stringify({ 'dsh-crew': {
+      source: { source: 'directory', path: root }, installLocation: root,
+    } }));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'project', installPath: snapshot }],
+    } }));
+    const status = installStatus({ home, root, env: {} }).claude;
+    assert.equal(status.components.snapshot, false, 'a project-scope record is not this installer\'s install');
+    assert.equal(status.ready, false);
+    const r = await installClaudeCode({ home, root });
+    assert.ok(!r.actions.includes('cli: skipped (registered marketplace and snapshot already current)'),
+      'the installer must not treat a project-scope record as an install it can skip');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// Both install entries branch on `ok === false` for this integration, and neither
+// could ever see it: a settings path that could not be written threw out of both
+// of them. The producer now exists, so the ✗ the entries render is reachable.
+test('an unwritable settings path fails the integration instead of throwing', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    makeClaudePluginRoot(root, 'same');
+    // `.claude` exists as a FILE, so the settings path under it cannot be created
+    writeFileSync(join(home, '.claude'), 'not a directory\n');
+    const r = await installClaudeCode({ home, root });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'CLAUDE_SETTINGS_UNWRITABLE');
+    assert.match(claudeIntegrationLine(r), /^✗ /, 'and the entries render it as the failure it is');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// The comparison has to cover what the plugin loads, not only what names it.
+// `worker.cordis.yml` is required before any dispatch (`src/jobs.mjs` throws
+// without it), so a snapshot missing it is not this release even when the manifest
+// that named it is byte-identical — which is how a stale snapshot read as current.
+test('the snapshot comparison covers files the plugin loads, not just its manifest', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    makeClaudePluginRoot(root, 'same');
+    makeClaudePluginRoot(snapshot, 'same');
+    writeFileSync(join(root, 'worker.cordis.yml'), 'worker overlay\n');
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'known_marketplaces.json'), JSON.stringify({ 'dsh-crew': {
+      source: { source: 'directory', path: root }, installLocation: root,
+    } }));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+
+    const missing = installStatus({ home, root, env: {} }).claude;
+    assert.equal(missing.components.snapshot, false, 'the snapshot lacks a file the plugin requires');
+
+    writeFileSync(join(snapshot, 'worker.cordis.yml'), 'worker overlay\n');
+    const complete = installStatus({ home, root, env: {} }).claude;
+    assert.equal(complete.components.snapshot, true, 'and it is current once it carries the same files');
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -312,7 +391,7 @@ test('Claude readiness validates marketplace, installed snapshot, and tool permi
     }
     mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
     writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
-      plugins: { 'dsh-crew@dsh-crew': { installPath: snapshot } },
+      plugins: { 'dsh-crew@dsh-crew': { scope: 'user', installPath: snapshot } },
     }));
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
       enabledPlugins: { 'dsh-crew@dsh-crew': true },
@@ -337,7 +416,7 @@ test('Claude readiness rejects a marketplace and cached snapshot from an older p
     makeClaudePluginRoot(oldSnapshot, 'old');
     mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
     writeFileSync(join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
-      plugins: { 'dsh-crew@dsh-crew': { installPath: oldSnapshot } },
+      plugins: { 'dsh-crew@dsh-crew': { scope: 'user', installPath: oldSnapshot } },
     }));
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
       enabledPlugins: { 'dsh-crew@dsh-crew': true },

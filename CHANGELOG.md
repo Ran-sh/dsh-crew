@@ -4,6 +4,36 @@
 
 Future changes go here.
 
+## 2.0.10 — 2026-09-14
+
+Findings from an independent review of the 2.0.6–2.0.9 Claude Code integration
+work. The 2.0.9 change itself was judged sound; these are defects in the code it
+relies on.
+
+- **A project-scope record no longer stands in for the user-scope install.** The
+  installer writes user scope, so that is the scope whose record means the
+  integration is installed — but the snapshot check accepted any scope, so a
+  project-scope record that happened to match made a missing user-scope snapshot
+  read as present and let the installer skip the CLI step it still needed. The
+  installer and `dsh-crew status` now require the scope they write.
+- **The snapshot comparison covers what the plugin loads, not just what names
+  it.** It compared `.claude-plugin/plugin.json`, `package.json`, `agents/`,
+  `commands/` and `src/`; `worker.cordis.yml` is required before any dispatch
+  (`src/jobs.mjs` throws without it) and the statusline scripts are named by the
+  settings this installer writes, so a snapshot missing either read as current.
+  `skills/`, `statusline/` and `worker.cordis.yml` are compared too.
+- **An unwritable settings path fails the integration instead of throwing out of
+  it.** Both install entries branch on `ok === false` and neither could ever see
+  it, because the settings write threw past both of them — a failure branch with
+  no producer.
+- **The settle wait is gated on `ETIMEDOUT` alone.** `ENOBUFS` reports `SIGTERM`
+  as well, so matching the signal spent the window on a child that had stopped.
+- **A timed-out `marketplace add` or `uninstall` now reaches that gate.** Both are
+  caught so the install can follow, and that catch was hiding a timeout too.
+- **A host without `claude` is described as such.** The managed entry probed
+  nothing, so it printed a repair command naming a CLI that is not installed; it
+  now reports the CLI as not detected, which is what the checkout entry already did.
+
 ## 2.0.9 — 2026-09-14
 
 - **The post-attempt wait is limited to the case that can still be writing.** 2.0.8

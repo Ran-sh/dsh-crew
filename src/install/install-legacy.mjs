@@ -23,6 +23,11 @@ const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
 const CLAUDE_PLUGIN_TIMEOUT_MS = 300_000;
 const CLAUDE_SNAPSHOT_SETTLE_MS = 180_000;
 const CLAUDE_SNAPSHOT_POLL_MS = 5_000;
+// The one scope this installer writes, and therefore the only scope whose record
+// means "the integration is installed". Accepting any scope let a project-scope
+// record stand in for a missing user-scope snapshot, so a failed install read as
+// a current one.
+const CLAUDE_PLUGIN_SCOPE = 'user';
 const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
 const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
 
@@ -200,7 +205,14 @@ function managedClaudeFileManifest(root, { maxFiles = 512, maxBytes = 8 * 1024 *
   try {
     add(join(root, '.claude-plugin', 'plugin.json'), join('.claude-plugin', 'plugin.json'));
     if (isFile(join(root, 'package.json'))) add(join(root, 'package.json'), 'package.json');
-    for (const directory of ['agents', 'commands', 'src']) walk(join(root, directory), directory);
+    // What the plugin loads, not just what names it. `worker.cordis.yml` is
+    // required before any dispatch (`src/jobs.mjs` throws without it) and the
+    // statusline scripts are named by the settings this installer writes, so a
+    // snapshot missing either is not this release even when the manifest it came
+    // from is byte-identical — which is exactly how a stale snapshot used to read
+    // as current.
+    if (isFile(join(root, 'worker.cordis.yml'))) add(join(root, 'worker.cordis.yml'), 'worker.cordis.yml');
+    for (const directory of ['agents', 'commands', 'skills', 'src', 'statusline']) walk(join(root, directory), directory);
     return files;
   } catch { return null; }
 }
@@ -212,11 +224,12 @@ function sameManagedClaudeFiles(expectedRoot, snapshotRoot) {
   return expected !== null && snapshot !== null && JSON.stringify(snapshot) === JSON.stringify(expected);
 }
 
-function claudeSnapshotReady(home, root) {
+function claudeSnapshotReady(home, root, { scope = null } = {}) {
   const installed = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {});
   const record = installed?.plugins?.[PLUGIN_KEY];
   const entries = Array.isArray(record) ? record : [record];
-  return entries.some((entry) => sameManagedClaudeFiles(root, entry?.installPath));
+  return entries.some((entry) => (scope === null || entry?.scope === scope)
+    && sameManagedClaudeFiles(root, entry?.installPath));
 }
 
 function claudePermissionsReady(settings) {
@@ -399,7 +412,10 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
   const claudeComponents = {
     enabled: claudeInstalled,
     marketplace: normalizedPath(marketplaceRoot) === normalizedPath(effectiveRoot) && claudePluginRootReady(effectiveRoot),
-    snapshot: claudeSnapshotReady(home, effectiveRoot),
+    // User scope only: this installer writes that scope, so it is the one whose
+    // record means the integration is installed. Accepting any scope let a
+    // project-scope record make a missing user-scope snapshot read as present.
+    snapshot: claudeSnapshotReady(home, effectiveRoot, { scope: CLAUDE_PLUGIN_SCOPE }),
     permissions: claudePermissionsReady(settings),
   };
   const claudeMissing = Object.entries(claudeComponents).filter(([, present]) => !present).map(([key]) => key);
@@ -512,6 +528,9 @@ export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
  */
 export function claudeIntegrationLine(result) {
   if (result?.ok === false) return '✗ Claude Code integration failed';
+  if (result?.detected === false) {
+    return '- Claude Code not detected; settings registered, CLI step skipped';
+  }
   if (result?.degraded === true) {
     return `- Claude Code integration registered, but not loaded: ${result.reason ?? 'plugin snapshot not refreshed'}`;
   }
@@ -530,8 +549,10 @@ export function claudeIntegrationLine(result) {
  * without Claude Code, to learn nothing it did not already know.
  */
 export function claudeSnapshotSettleMs(err) {
-  const timedOut = err?.code === 'ETIMEDOUT' || err?.signal === 'SIGTERM';
-  return timedOut ? CLAUDE_SNAPSHOT_SETTLE_MS : 0;
+  // Only the shell's own timeout can leave a copy running. Matching on the signal
+  // as well spent the whole window on an `ENOBUFS` (output over maxBuffer) child
+  // that had already stopped and could never make the snapshot current.
+  return err?.code === 'ETIMEDOUT' ? CLAUDE_SNAPSHOT_SETTLE_MS : 0;
 }
 
 export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
@@ -548,58 +569,66 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
 
   // 2. settings.json: marketplace + enabledPlugins + permissions allowlist.
   const settingsFile = join(home, '.claude', 'settings.json');
-  mkdirSync(dirname(settingsFile), { recursive: true });
-  const bak = backup(settingsFile);
-  if (bak) actions.push(`backup: ${bak}`);
-  const settings = readJson(settingsFile, {});
+  try {
+    mkdirSync(dirname(settingsFile), { recursive: true });
+    const bak = backup(settingsFile);
+    if (bak) actions.push(`backup: ${bak}`);
+    const settings = readJson(settingsFile, {});
 
-  // Both fields are records (see json.schemastore.org/claude-code-settings.json).
-  // Older versions of this installer wrote arrays, which Claude Code ignores
-  // with a warning — migrate those in place.
-  const markets = (settings.extraKnownMarketplaces && !Array.isArray(settings.extraKnownMarketplaces)
-    && typeof settings.extraKnownMarketplaces === 'object') ? settings.extraKnownMarketplaces : {};
-  if (Array.isArray(settings.extraKnownMarketplaces)) actions.push('migrated legacy extraKnownMarketplaces array');
-  markets[MARKETPLACE_NAME] = { source: { source: 'directory', path: mpDir } };
-  if (markets['dsh-workers']) {
-    delete markets['dsh-workers'];
-    actions.push('removed pre-rename dsh-workers marketplace entry');
-  }
-  settings.extraKnownMarketplaces = markets;
+    // Both fields are records (see json.schemastore.org/claude-code-settings.json).
+    // Older versions of this installer wrote arrays, which Claude Code ignores
+    // with a warning — migrate those in place.
+    const markets = (settings.extraKnownMarketplaces && !Array.isArray(settings.extraKnownMarketplaces)
+      && typeof settings.extraKnownMarketplaces === 'object') ? settings.extraKnownMarketplaces : {};
+    if (Array.isArray(settings.extraKnownMarketplaces)) actions.push('migrated legacy extraKnownMarketplaces array');
+    markets[MARKETPLACE_NAME] = { source: { source: 'directory', path: mpDir } };
+    if (markets['dsh-workers']) {
+      delete markets['dsh-workers'];
+      actions.push('removed pre-rename dsh-workers marketplace entry');
+    }
+    settings.extraKnownMarketplaces = markets;
 
-  const enabled = (settings.enabledPlugins && !Array.isArray(settings.enabledPlugins)
-    && typeof settings.enabledPlugins === 'object') ? settings.enabledPlugins : {};
-  if (Array.isArray(settings.enabledPlugins)) {
-    for (const key of settings.enabledPlugins) if (typeof key === 'string') enabled[key] = true;
-    actions.push('migrated legacy enabledPlugins array');
-  }
-  enabled[PLUGIN_KEY] = true;
-  if (enabled['dsh-workers@dsh-workers']) {
-    delete enabled['dsh-workers@dsh-workers'];
-    actions.push('removed pre-rename dsh-workers plugin entry');
-  }
-  settings.enabledPlugins = enabled;
+    const enabled = (settings.enabledPlugins && !Array.isArray(settings.enabledPlugins)
+      && typeof settings.enabledPlugins === 'object') ? settings.enabledPlugins : {};
+    if (Array.isArray(settings.enabledPlugins)) {
+      for (const key of settings.enabledPlugins) if (typeof key === 'string') enabled[key] = true;
+      actions.push('migrated legacy enabledPlugins array');
+    }
+    enabled[PLUGIN_KEY] = true;
+    if (enabled['dsh-workers@dsh-workers']) {
+      delete enabled['dsh-workers@dsh-workers'];
+      actions.push('removed pre-rename dsh-workers plugin entry');
+    }
+    settings.enabledPlugins = enabled;
 
-  settings.permissions = settings.permissions ?? {};
-  let allow = Array.isArray(settings.permissions.allow) ? settings.permissions.allow : [];
-  const preRename = allow.filter((r) => typeof r === 'string' && r.startsWith('mcp__plugin_dsh-workers_'));
-  if (preRename.length) {
-    allow = allow.filter((r) => !preRename.includes(r));
-    actions.push(`removed ${preRename.length} pre-rename permission rules`);
-  }
-  for (const tool of MCP_TOOLS) {
-    const rule = `mcp__plugin_dsh-crew_dsh-crew__${tool}`;
-    if (!allow.includes(rule)) allow.push(rule);
-  }
-  settings.permissions.allow = allow;
+    settings.permissions = settings.permissions ?? {};
+    let allow = Array.isArray(settings.permissions.allow) ? settings.permissions.allow : [];
+    const preRename = allow.filter((r) => typeof r === 'string' && r.startsWith('mcp__plugin_dsh-workers_'));
+    if (preRename.length) {
+      allow = allow.filter((r) => !preRename.includes(r));
+      actions.push(`removed ${preRename.length} pre-rename permission rules`);
+    }
+    for (const tool of MCP_TOOLS) {
+      const rule = `mcp__plugin_dsh-crew_dsh-crew__${tool}`;
+      if (!allow.includes(rule)) allow.push(rule);
+    }
+    settings.permissions.allow = allow;
 
-  if (statusline && !settings.statusLine) {
-    settings.statusLine = { type: 'command', command: `bash ${join(root, 'statusline', 'statusline.sh')}` };
-    actions.push('statusline: installed');
-  } else if (statusline) {
-    actions.push('statusline: skipped (one already configured)');
-  }
+    if (statusline && !settings.statusLine) {
+      settings.statusLine = { type: 'command', command: `bash ${join(root, 'statusline', 'statusline.sh')}` };
+      actions.push('statusline: installed');
+    } else if (statusline) {
+      actions.push('statusline: skipped (one already configured)');
+    }
 
-  writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+  } catch (error) {
+    // Both install entries branch on `ok === false` for this integration and
+    // neither could ever see it: a settings path that could not be backed up or
+    // written threw straight out of both of them. Failing to register is the
+    // integration failing, so it gets the shape its callers already handle.
+    return { ok: false, code: 'CLAUDE_SETTINGS_UNWRITABLE', error: String(error?.message ?? error), actions };
+  }
   actions.push(`settings: registered ${PLUGIN_KEY} + ${MCP_TOOLS.length} permission rules`);
 
   // Materialize the install through the claude CLI: registers the marketplace
@@ -612,7 +641,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   const marketplaceCurrent = registered?.source?.source === 'directory'
     && normalizedPath(registered.source.path) === normalizedPath(root)
     && normalizedPath(registered.installLocation) === normalizedPath(root);
-  if (marketplaceCurrent && installedEntries.some((entry) => entry?.scope === 'user'
+  if (marketplaceCurrent && installedEntries.some((entry) => entry?.scope === CLAUDE_PLUGIN_SCOPE
     && sameManagedClaudeFiles(root, entry.installPath))) {
     actions.push('cli: skipped (registered marketplace and snapshot already current)');
     return { ok: true, actions };
@@ -621,11 +650,22 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     actions.push('cli: skipped (non-default home; test mode)');
     return { ok: true, actions };
   }
-  // Set only when the CLI attempt threw, and only a timeout then justifies
-  // waiting for the snapshot: see claudeSnapshotSettleMs.
+  // The CLI is best-effort, but a host that does not have it must not be told to
+  // run it. The checkout entry already gates on this; doing it here too keeps the
+  // two entries describing the same machine the same way.
+  const { execSync, spawnSync } = await import('node:child_process');
+  const claudePresent = spawnSync(/^win/.test(process.platform) ? 'where' : 'which', ['claude'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).status === 0;
+  if (!claudePresent) {
+    actions.push('cli: skipped (claude not found)');
+    return { ok: true, detected: false, actions };
+  }
+  // Set only when a CLI step threw; only a timeout then justifies waiting for the
+  // snapshot, and `marketplace add` / `uninstall` can time out too — they are
+  // caught for other reasons and would otherwise hide it.
   let installError = null;
   try {
-    const { execSync } = await import('node:child_process');
     // 300s, not 120: the install below runs after the uninstall, so it does a real
     // copy of the plugin tree rather than the no-op an already-installed plugin
     // gets. Measured on this machine: `marketplace add` 3s, `uninstall` 3s,
@@ -633,18 +673,19 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     // and left Claude Code without the plugin the same run had just removed.
     const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: CLAUDE_PLUGIN_TIMEOUT_MS });
     try { run(`claude plugin marketplace add ${JSON.stringify(mpDir)}`); actions.push('cli: marketplace registered'); }
-    catch { actions.push('cli: marketplace add skipped (already registered)'); }
+    catch (err) { if (err?.code === 'ETIMEDOUT') installError = err; actions.push('cli: marketplace add skipped (already registered)'); }
     // `plugin install` on an already-installed plugin is a no-op and leaves a
     // stale snapshot in ~/.claude/plugins/cache — uninstall first so an update
     // always re-copies the current code.
-    try { run(`claude plugin uninstall ${PLUGIN_KEY}`); } catch {}
+    try { run(`claude plugin uninstall ${PLUGIN_KEY}`); }
+    catch (err) { if (err?.code === 'ETIMEDOUT') installError = err; }
     // Newer Claude Code (>= 2.1.x) dropped the -y flag; older builds accepted
     // it. Try without it first, fall back to the legacy flag.
     try {
-      run(`claude plugin install ${PLUGIN_KEY} --scope user`);
+      run(`claude plugin install ${PLUGIN_KEY} --scope ${CLAUDE_PLUGIN_SCOPE}`);
     } catch (errNoFlag) {
       if (!String(errNoFlag?.message ?? '').includes('unknown option')) throw errNoFlag;
-      run(`claude plugin install ${PLUGIN_KEY} --scope user -y`);
+      run(`claude plugin install ${PLUGIN_KEY} --scope ${CLAUDE_PLUGIN_SCOPE} -y`);
     }
     actions.push(`cli: plugin snapshot refreshed (${PLUGIN_KEY})`);
   } catch (err) {
@@ -657,7 +698,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // or failed leaves the snapshot exactly as stale as it was, and it is the
   // snapshot that `installStatus` reads. Saying so here is what lets the caller
   // stop printing a checkmark for a state it never verified.
-  if (claudeSnapshotReady(home, root)) return { ok: true, actions };
+  if (claudeSnapshotReady(home, root, { scope: CLAUDE_PLUGIN_SCOPE })) return { ok: true, actions };
   // The CLI can outlive the ceiling above. The install is a real copy of the
   // plugin tree — 163s measured on an idle machine, and ~6 minutes measured
   // during an activation, where the record landed well after any ceiling — and a
@@ -669,7 +710,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   while (Date.now() < settleDeadline) {
     await wait(CLAUDE_SNAPSHOT_POLL_MS);
-    if (claudeSnapshotReady(home, root)) {
+    if (claudeSnapshotReady(home, root, { scope: CLAUDE_PLUGIN_SCOPE })) {
       return { ok: true, actions: [...actions, 'cli: snapshot confirmed current after the ceiling'] };
     }
   }
