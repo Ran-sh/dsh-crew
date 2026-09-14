@@ -289,7 +289,10 @@ export function createWorkflowRuntime(adapters, {
 
   async function releaseWorkspace(job) {
     if (job.retain_workspace) {
-      job.workspace_retained = true;
+      // Retention means an isolated workspace was deliberately kept for
+      // recovery. A shared workspace is the caller's own and was never ours to
+      // keep, so an evidence failure there retains nothing.
+      if (job.workspaceHandle) job.workspace_retained = true;
       return;
     }
     if (!job.workspaceHandle) return;
@@ -342,7 +345,7 @@ export function createWorkflowRuntime(adapters, {
 
       if (isReviewJob) {
         transition(job, JOB_PHASES.REVIEWING, 'explicit reviewer');
-        const before = alloc?.ok && alloc.isolation === 'worktree' ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
+        const before = alloc?.ok ? await safeCapture(adapters, job.execution_cwd, job.base_revision) : null;
         // Explicit reviewers inspect the caller's stated task/workspace
         // directly. The bounded worker-candidate capsule belongs only to the
         // automatic post-worker review path; constructing it with no worker
@@ -553,8 +556,13 @@ export function createWorkflowRuntime(adapters, {
   }
 
   async function runReviewerAttempt(job, task, config, beforeCandidate, cwd = job.execution_cwd, baseRevision = job.base_revision) {
+    // Reviewing is the one role whose entire contract is "changed nothing", so
+    // its evidence is not exempted by isolation. In a worktree the pre-review
+    // candidate comes from the allocator or the worker and its absence is a real
+    // failure; a shared workspace has no such candidate, so fingerprint the tree
+    // the reviewer is about to touch — otherwise the reviewer is the one actor
+    // whose edits nothing observes.
     const requireFingerprint = (candidate) => {
-      if (job.isolation !== 'worktree') return;
       if (candidate?.ok === true && typeof candidate.fingerprint === 'string' && candidate.fingerprint.trim()) return;
       job.candidate_capture_failed = true;
       job.retain_workspace = true;
@@ -562,7 +570,9 @@ export function createWorkflowRuntime(adapters, {
         code: 'REVIEW_EVIDENCE_UNAVAILABLE',
       });
     };
-    requireFingerprint(beforeCandidate);
+    const before = beforeCandidate
+      ?? (job.isolation === 'worktree' ? null : await safeCapture(adapters, cwd, baseRevision));
+    requireFingerprint(before);
     const policy = resolveModelPolicy(config, 'reviewer', { attempt: 0 });
     const attemptId = attemptIdFor(adapters, job.id, 'review');
     job.current_attempt_id = attemptId;
@@ -594,9 +604,9 @@ export function createWorkflowRuntime(adapters, {
       fallback_reason: attemptView.selection_trace?.fallback_reason ?? null,
     }, 0);
     if (ar.status === 'failed' && attemptView.error_code) job.error_code = attemptView.error_code;
-    const afterCandidate = job.isolation === 'worktree' ? await safeCapture(adapters, cwd, baseRevision) : null;
+    const afterCandidate = await safeCapture(adapters, cwd, baseRevision);
     requireFingerprint(afterCandidate);
-    const review = normalizeReview({ attemptResult: ar, beforeCandidate, afterCandidate });
+    const review = normalizeReview({ attemptResult: ar, beforeCandidate: before, afterCandidate });
     recordCanonical(job, 'review.completed', {
       attempt_id: attemptView.id,
       status: review.status,

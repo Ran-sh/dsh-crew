@@ -11,7 +11,7 @@ PASS — node --test — passed
 ## Risks
 none`;
 
-function runtimeFor(results, config = {}) {
+function runtimeFor(results, config = {}, adapters = {}) {
   let index = 0;
   return createWorkflowRuntime({
     getConfig: () => normalizeGlobalConfig(config),
@@ -26,6 +26,7 @@ function runtimeFor(results, config = {}) {
     }),
     buildReviewTask: () => 'review',
     releaseWorkspace: async () => ({ ok: true }),
+    ...adapters,
   }, { idFactory: () => 'wf-code-test' });
 }
 
@@ -77,7 +78,26 @@ test('failed reviewer code remains diagnostic and fails closed the reviewer work
     stopReason: 'provider-error',
     error: 'review model unavailable',
     error_code: 'NO_WORKER_MODEL_AVAILABLE',
-  }]);
+  }], {}, {
+    // A reviewer is accepted only on workspace evidence, so this fixture needs
+    // the allocator and capture adapters that every production runtime supplies.
+    allocateWorkspace: async (spec) => ({
+      ok: true,
+      execution_cwd: spec.cwd,
+      base_revision: 'abc123',
+      isolation: 'worktree',
+      primary_workspace_dirty: false,
+      handle: 'wt-1',
+    }),
+    captureCandidate: async () => ({
+      ok: true,
+      kind: 'git-worktree',
+      base_revision: 'abc123',
+      changed_files: [],
+      patch: '',
+      fingerprint: 'fp-stable',
+    }),
+  });
   const job = rt.start({ role: 'reviewer', delivery: 'review', task: 'review', cwd: '/repo' });
   await rt.wait(job.id, 1000);
   const view = rt.get(job.id, { withResult: true });

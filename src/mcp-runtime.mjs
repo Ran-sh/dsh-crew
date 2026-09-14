@@ -283,8 +283,10 @@ export function buildMcpWorkflowRuntime(deps) {
     const config = getConfig();
     const isolation = config.execution?.isolation ?? 'worktree';
     // Explicit shared mode uses the requested workspace. Readonly profiles,
-    // including the default Reviewer, use a disposable worktree below so an
-    // accidental edit can be detected and never pollutes the primary tree.
+    // including the default Reviewer, take the disposable worktree below, so an
+    // accidental edit cannot reach the primary tree at all. A reviewer that was
+    // explicitly given a shared workspace still gets fingerprinted around its
+    // attempt, so an edit there is detected even though it is not prevented.
     if (job.requested_isolation === 'shared' || isolation === 'shared') {
       return { ok: true, execution_cwd: job.requested_cwd, isolation: 'shared', base_revision: null, primary_workspace_dirty: false, handle: null };
     }

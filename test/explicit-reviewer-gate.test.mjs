@@ -132,6 +132,85 @@ test('explicit reviewer failed execution fails the workflow', async () => {
   assert.ok(!v.canonical_events.some((e) => e.type === 'job.completed'), 'no job.completed event may exist');
 });
 
+// A reviewer's read-only-ness has to be provable in whichever workspace it was
+// given. A shared workspace has no allocator worktree to compare against, so the
+// client has to fingerprint the tree around the attempt itself; without that the
+// reviewer is the one actor whose edits nothing observes, and an editing reviewer
+// was accepted as `approve`.
+function makeSharedAdapter({ fingerprints = [] } = {}) {
+  const adapters = makeAdapter();
+  let captures = 0;
+  adapters.allocateWorkspace = async (spec) => ({
+    ok: true,
+    execution_cwd: spec.cwd,
+    base_revision: null,
+    isolation: 'shared',
+    primary_workspace_dirty: false,
+    handle: null,
+  });
+  adapters.captureCandidate = async () => {
+    const fingerprint = fingerprints[captures] ?? fingerprints.at(-1) ?? 'fp-shared';
+    captures += 1;
+    return {
+      ok: true,
+      kind: 'git-worktree',
+      base_revision: 'abc123',
+      changed_files: [],
+      patch: '',
+      fingerprint,
+    };
+  };
+  return { adapters, captures: () => captures };
+}
+
+async function runSharedReview(adapterOptions) {
+  const { adapters, captures } = makeSharedAdapter(adapterOptions);
+  const rt = createWorkflowRuntime(adapters, { idFactory });
+  const job = rt.start({ role: 'reviewer', task: 'review x', cwd: '/repo', source: 'test', delivery: 'review' });
+  await rt.wait(job.id, 2000);
+  return { view: rt.get(job.id, { withResult: true }), captures };
+}
+
+test('a shared-workspace reviewer that mutates the tree is not accepted as approve', async () => {
+  const { view, captures } = await runSharedReview({ fingerprints: ['fp-before', 'fp-after'] });
+  assert.equal(view.status, 'failed');
+  assert.equal(view.error_code, 'REVIEW_CHANGES_REQUESTED');
+  assert.equal(view.review.mutated_candidate, true);
+  assert.equal(view.review.invalidated, true);
+  assert.equal(view.review.verdict, 'request_changes');
+  assert.ok(captures() >= 2, 'shared isolation must fingerprint the tree around the review');
+  assert.ok(!view.canonical_events.some((e) => e.type === 'job.completed'), 'no job.completed event may exist');
+});
+
+test('a shared-workspace reviewer that leaves the tree untouched is still accepted', async () => {
+  const { view, captures } = await runSharedReview({ fingerprints: ['fp-same', 'fp-same'] });
+  assert.equal(view.status, 'done');
+  assert.equal(view.review.verdict, 'approve');
+  assert.equal(view.review.mutated_candidate, undefined);
+  assert.ok(captures() >= 2, 'shared isolation must fingerprint the tree around the review');
+});
+
+test('a reviewer with no capturable evidence fails closed in a shared workspace too', async () => {
+  const adapters = makeAdapter();
+  adapters.allocateWorkspace = async (spec) => ({
+    ok: true,
+    execution_cwd: spec.cwd,
+    base_revision: null,
+    isolation: 'shared',
+    primary_workspace_dirty: false,
+    handle: null,
+  });
+  adapters.captureCandidate = async () => null;
+  const rt = createWorkflowRuntime(adapters, { idFactory });
+  const job = rt.start({ role: 'reviewer', task: 'review x', cwd: '/repo', source: 'test', delivery: 'review' });
+  await rt.wait(job.id, 2000);
+  const view = rt.get(job.id, { withResult: true });
+  assert.equal(view.status, 'failed');
+  assert.equal(view.error_code, 'REVIEW_EVIDENCE_UNAVAILABLE');
+  assert.equal(view.workspace_retained, false, 'a shared workspace was never Crew-owned, so nothing is retained');
+  assert.ok(!view.canonical_events.some((e) => e.type === 'job.completed'));
+});
+
 for (const stage of ['before', 'after']) {
   for (const failure of ['null', 'missing-fingerprint', 'throw']) {
     test(`explicit review rejects ${failure} ${stage} evidence and retains workspace`, async () => {

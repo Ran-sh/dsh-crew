@@ -199,3 +199,88 @@ maybe('automatic reviewer runs against the isolated candidate workspace', async 
   assert.ok(at.calls.some((s) => s.role === 'reviewer'), 'reviewer attempt ran');
   assert.ok(v.candidate.fingerprint, 'candidate retained after review');
 });
+
+// A reviewer handed the caller's own workspace (shared isolation) has no
+// allocator worktree to compare against, and the primary tree is exactly where
+// an undetected edit does the most damage. The reviewer's whole contract is
+// "changed nothing", so its evidence is not exempted by isolation: the tree it is
+// about to touch is fingerprinted around the attempt, with the real Git adapters.
+function sharedWorkspaceAdapters() {
+  return {
+    allocateWorkspace: async (job) => ({
+      ok: true,
+      execution_cwd: job.requested_cwd,
+      base_revision: null,
+      isolation: 'shared',
+      primary_workspace_dirty: false,
+      handle: null,
+    }),
+    captureCandidate: ({ cwd, baseRevision }) => captureReal({ worktreePath: cwd, baseRevision }),
+    releaseWorkspace: async () => ({ ok: true }),
+  };
+}
+
+function reviewerAttempters({ writes = null } = {}) {
+  const calls = [];
+  return {
+    calls,
+    executeAttempt: async (spec) => {
+      calls.push(spec);
+      if (writes) writeFileSync(join(spec.cwd, writes), 'reviewer wrote this\n');
+      return {
+        id: `${spec.id}-r`, role: 'reviewer', attempt: 0, provider: 'p', model: 'reviewer',
+        selection_source: 'policy', status: 'done', result: REVIEW, stopReason: 'completed',
+      };
+    },
+    cancelAttempt: async () => {},
+  };
+}
+
+maybe('a shared-workspace reviewer that edits the primary tree is rejected', async (t) => {
+  const repo = makeGitRepo();
+  t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch {} });
+  const at = reviewerAttempters({ writes: 'reviewer-note.txt' });
+  const rt = makeRuntime(at, sharedWorkspaceAdapters(), { collaboration_mode: 'balanced' });
+  const job = rt.start({ role: 'reviewer', delivery: 'review', task: 'review it', cwd: repo, source: 'test' });
+  await rt.wait(job.id, 20000);
+  const v = rt.get(job.id, { withResult: true });
+
+  assert.equal(v.isolation, 'shared', 'this test is only meaningful in the shared workspace');
+  assert.equal(v.execution_cwd, repo, 'the reviewer ran in the caller primary tree');
+  assert.equal(v.status, 'failed');
+  assert.equal(v.error_code, 'REVIEW_CHANGES_REQUESTED');
+  assert.equal(v.review.mutated_candidate, true);
+  assert.equal(v.review.verdict, 'request_changes');
+  assert.ok(!v.canonical_events.some((e) => e.type === 'job.completed'), 'no job.completed event may exist');
+});
+
+maybe('a shared-workspace reviewer that leaves the primary tree alone is accepted', async (t) => {
+  const repo = makeGitRepo();
+  t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch {} });
+  const rt = makeRuntime(reviewerAttempters(), sharedWorkspaceAdapters(), { collaboration_mode: 'balanced' });
+  const job = rt.start({ role: 'reviewer', delivery: 'review', task: 'review it', cwd: repo, source: 'test' });
+  await rt.wait(job.id, 20000);
+  const v = rt.get(job.id, { withResult: true });
+
+  assert.equal(v.isolation, 'shared');
+  assert.equal(v.status, 'done');
+  assert.equal(v.review.verdict, 'approve');
+  assert.equal(v.review.mutated_candidate, undefined);
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }).trim(), '');
+});
+
+maybe('a shared-workspace reviewer is fingerprinted even when the tree was already dirty', async (t) => {
+  const repo = makeGitRepo();
+  t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch {} });
+  // the operator's own uncommitted work must be absorbed into the before-image,
+  // not read back as the reviewer's edit
+  writeFileSync(join(repo, 'operator-draft.mjs'), 'export const draft = 1;\n');
+  const rt = makeRuntime(reviewerAttempters(), sharedWorkspaceAdapters(), { collaboration_mode: 'balanced' });
+  const job = rt.start({ role: 'reviewer', delivery: 'review', task: 'review it', cwd: repo, source: 'test' });
+  await rt.wait(job.id, 20000);
+  const v = rt.get(job.id, { withResult: true });
+
+  assert.equal(v.status, 'done');
+  assert.equal(v.review.verdict, 'approve');
+  assert.equal(readFileSync(join(repo, 'operator-draft.mjs'), 'utf8'), 'export const draft = 1;\n');
+});
