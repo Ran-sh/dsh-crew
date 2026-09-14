@@ -11,7 +11,107 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, claudeIntegrationLine, claudeSnapshotSettleMs, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, claudeCliInvocation, claudeIntegrationLine, claudeSnapshotSettleMs, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, managedClaudeFileManifest, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+
+// Paths must arrive as arguments. `JSON.stringify` quotes for JSON, not for a
+// command processor, so a path containing `%NAME%` was expanded by the shell
+// before the CLI ever saw it — the install reported success and acted on a
+// different directory.
+test('the Claude CLI is invoked with an argument array, and refuses a path the shell would rewrite', () => {
+  assert.deepEqual(
+    claudeCliInvocation(['plugin', 'install', 'dsh-crew@dsh-crew', '--scope', 'user'], { platform: 'linux' }),
+    { command: 'claude', args: ['plugin', 'install', 'dsh-crew@dsh-crew', '--scope', 'user'] },
+    'a POSIX host runs the executable directly, with no shell in between',
+  );
+
+  const windows = claudeCliInvocation(['plugin', 'marketplace', 'add', 'C:\\plain\\payload'], {
+    platform: 'win32', environment: { ComSpec: 'cmd.exe' },
+  });
+  assert.equal(windows.command, 'cmd.exe');
+  assert.equal(windows.windowsVerbatimArguments, true);
+  assert.ok(windows.args.at(-1).includes('"C:\\plain\\payload"'), 'the path travels as a quoted argument');
+
+  assert.throws(
+    () => claudeCliInvocation(['plugin', 'marketplace', 'add', 'C:\\%CREW_REVIEW_PATH%\\payload'], { platform: 'win32' }),
+    /unsafe claude CLI argument/,
+    'a path the processor would rewrite is refused rather than escaped',
+  );
+});
+
+// Present but unparseable is not "no settings yet". Rebuilding it as an empty
+// configuration is how an operator's settings disappear, leaving them a backup to
+// restore by hand.
+test('a corrupt settings file is reported and left alone, not rebuilt empty', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    makeClaudePluginRoot(root, 'same');
+    const settingsFile = join(home, '.claude', 'settings.json');
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(settingsFile, '{ "enabledPlugins": ');
+    const before = readFileSync(settingsFile, 'utf8');
+    const r = await installClaudeCode({ home, root });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'CLAUDE_SETTINGS_UNREADABLE');
+    assert.equal(readFileSync(settingsFile, 'utf8'), before, 'the operator\'s file is untouched');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// The compared files can all be present while the server Claude Code launches
+// cannot start: it imports its runtime dependencies by bare specifier, so a copy
+// interrupted between `src/` and `node_modules/` used to read as ready.
+test('a snapshot whose declared dependencies do not resolve is not ready', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    makeClaudePluginRoot(root, 'same');
+    makeClaudePluginRoot(snapshot, 'same');
+    const declared = `${JSON.stringify({ name: 'dsh-crew', dependencies: { zod: '^3.24.0' } })}\n`;
+    writeFileSync(join(root, 'package.json'), declared);
+    writeFileSync(join(snapshot, 'package.json'), declared);
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'known_marketplaces.json'), JSON.stringify({ 'dsh-crew': {
+      source: { source: 'directory', path: root }, installLocation: root,
+    } }));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+
+    assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, false,
+      'the files match but the dependency is not there to import');
+
+    mkdirSync(join(snapshot, 'node_modules', 'zod'), { recursive: true });
+    writeFileSync(join(snapshot, 'node_modules', 'zod', 'package.json'), JSON.stringify({ name: 'zod', version: '3.24.0', main: 'index.js' }));
+    writeFileSync(join(snapshot, 'node_modules', 'zod', 'index.js'), 'module.exports = {};\n');
+    assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, true,
+      'and it is ready once the dependency resolves from the snapshot itself');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// The walk is bounded before it reads, and by more than bytes. Note the size bound
+// is a resource property, not an observable one: reading first and rejecting after
+// returns the same `null`, it just loads the file to find out.
+test('the snapshot walk is bounded by depth and directory count', () => {
+  const home = makeHome();
+  try {
+    const deepRoot = join(home, 'deep');
+    let nested = join(deepRoot, 'src');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'server.mjs'), 'export {};\n');
+    for (let i = 0; i < 20; i += 1) { nested = join(nested, `d${i}`); mkdirSync(nested); }
+    writeFileSync(join(nested, 'leaf.mjs'), 'export {};\n');
+    assert.equal(managedClaudeFileManifest(deepRoot), null, 'a tree deeper than the bound is rejected');
+
+    const wideRoot = join(home, 'wide');
+    let wide = join(wideRoot, 'src');
+    mkdirSync(wide, { recursive: true });
+    writeFileSync(join(wide, 'server.mjs'), 'export {};\n');
+    for (let i = 0; i < 300; i += 1) mkdirSync(join(wide, `d${i}`));
+    assert.equal(managedClaudeFileManifest(wideRoot), null, 'a tree wider than the bound is rejected');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 // Only a timeout can leave a copy running past the shell's ceiling, so only a
 // timeout is worth waiting out. The error shapes are Node's, measured rather than

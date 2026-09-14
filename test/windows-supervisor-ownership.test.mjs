@@ -156,6 +156,61 @@ function heartbeatCompatibility() {
   return JSON.parse(result.stdout.trim());
 }
 
+// A watcher can exit while the Hub it started keeps serving, and nothing else on
+// the machine can say that listener is Crew's. The identity is persisted when it
+// is established and re-proven field by field before adoption; port health alone
+// is never enough. This process stands in for both the root and the listener, so
+// the liveness and start-time checks run for real rather than against a stub.
+function ownedServiceRecovery() {
+  const quoted = helper.replaceAll("'", "''");
+  const lines = [
+    `. '${quoted}'`,
+    '$root = Join-Path $env:TEMP ("dsh-owned-" + [guid]::NewGuid().ToString("N"))',
+    'New-Item -ItemType Directory -Path $root -Force | Out-Null',
+    '$global:crewSupervisorRoot = $root',
+    '$global:crewOwnedServiceFile = Join-Path $root "owned-service.json"',
+    '$ticks = (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks',
+    '$crewHome = "C:\\crew-home"',
+    "function Get-PortState { param([int] $Port) return [pscustomobject]@{ State = 'occupied'; Pid = $PID; Error = $null } }",
+    "function Get-HealthState { param([pscustomobject] $Service) return [pscustomobject]@{ Ready = $true; Version = '2.0.10'; RuntimeId = 'runtime-under-test'; Error = $null } }",
+    'function New-Service { return [pscustomobject]@{ Name = "Crew backend"; Profile = "dsh-crew"; Home = $crewHome; Port = 3210; CrewOwned = $true; RootPid = $null; RootStartedAtUtcTicks = $null; ListenerPid = $null; ListenerStartedAtUtcTicks = $null } }',
+    'function Write-Record { param([string] $RuntimeId = "runtime-under-test", [long] $ProcessId = $PID, [string] $RoleProfile = "dsh-crew", [string] $RecordHome = $crewHome, [int] $Port = 3210) @{ schema_version = 1; profile = $RoleProfile; home = $RecordHome; port = $Port; root_pid = $ProcessId; root_started_at_utc_ticks = $ticks; listener_pid = $ProcessId; listener_started_at_utc_ticks = $ticks; runtime_id = $RuntimeId; recorded_at = 0 } | ConvertTo-Json -Compress | Set-Content -LiteralPath $global:crewOwnedServiceFile -Encoding ASCII }',
+    '$matching = New-Service',
+    'Write-Record',
+    '$adopted = Restore-OwnedServiceRecord -Service $matching',
+    '$identity = ($matching.ListenerPid -eq $PID) -and ($matching.RootPid -eq $PID) -and [bool] $matching.ListenerStartedAtUtcTicks',
+    '$wrongRuntime = New-Service; Write-Record -RuntimeId "some-other-runtime"',
+    '$runtimeRejected = (-not (Restore-OwnedServiceRecord -Service $wrongRuntime)) -and (-not $wrongRuntime.ListenerPid)',
+    '$wrongHome = New-Service; Write-Record -RecordHome "C:\\elsewhere"',
+    '$homeRejected = -not (Restore-OwnedServiceRecord -Service $wrongHome)',
+    '$dead = New-Service; Write-Record -ProcessId 999999',
+    '$deadRejected = -not (Restore-OwnedServiceRecord -Service $dead)',
+    '$absent = New-Service; Remove-Item -LiteralPath $global:crewOwnedServiceFile -Force',
+    '$absentRejected = -not (Restore-OwnedServiceRecord -Service $absent)',
+    'Remove-Item -LiteralPath $root -Recurse -Force',
+    'ConvertTo-Json -Compress -InputObject ([pscustomobject]@{ adopted = $adopted; identity = $identity; runtime_mismatch = $runtimeRejected; home_mismatch = $homeRejected; dead_pid = $deadRejected; absent = $absentRejected })',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', lines], {
+    encoding: 'utf8',
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    timeout: 60_000,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout.trim());
+}
+
+maybe('a live Hub is adopted only from a persisted record that proves itself', () => {
+  assert.deepEqual(ownedServiceRecovery(), {
+    adopted: true,
+    identity: true,
+    runtime_mismatch: true,
+    home_mismatch: true,
+    dead_pid: true,
+    absent: true,
+  });
+});
+
 maybe('launcher supervisor owns only the isolated 3210 service', () => {
   assert.deepEqual(supervisedServices(), [{ Profile: 'dsh-crew', Port: 3210, CrewOwned: true }]);
 });

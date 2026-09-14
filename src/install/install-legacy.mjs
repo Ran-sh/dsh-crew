@@ -4,6 +4,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync, statSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -178,26 +179,31 @@ function claudePluginRootReady(root) {
     && mcp.args[0] === '${CLAUDE_PLUGIN_ROOT}/src/server.mjs';
 }
 
-function managedClaudeFileManifest(root, { maxFiles = 512, maxBytes = 8 * 1024 * 1024 } = {}) {
+export function managedClaudeFileManifest(root, { maxFiles = 512, maxBytes = 8 * 1024 * 1024, maxDirectories = 256, maxDepth = 12 } = {}) {
   const files = [];
   let bytes = 0;
+  let directories = 0;
   const add = (file, relativePath) => {
     const info = lstatSync(file);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error('unsupported snapshot entry');
+    // Bound before reading, not after: reading first and rejecting afterwards
+    // loads a whole oversized file on the strength of its name.
+    if (files.length >= maxFiles || bytes + info.size > maxBytes) throw new Error('snapshot manifest bound exceeded');
     const content = readFileSync(file);
     bytes += content.length;
-    if (bytes > maxBytes || files.length >= maxFiles) throw new Error('snapshot manifest bound exceeded');
     files.push([relativePath.replace(/\\/g, '/'), createHash('sha256').update(content).digest('hex')]);
   };
-  const walk = (directory, relativeDirectory) => {
+  const walk = (directory, relativeDirectory, depth = 0) => {
+    if (depth > maxDepth) throw new Error('snapshot directory depth exceeded');
     if (!existsSync(directory)) return;
+    if (++directories > maxDirectories) throw new Error('snapshot directory count exceeded');
     const info = lstatSync(directory);
     if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('unsupported snapshot directory');
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const file = join(directory, entry.name);
       const relativePath = join(relativeDirectory, entry.name);
       if (entry.isSymbolicLink()) throw new Error('snapshot symlink not allowed');
-      if (entry.isDirectory()) walk(file, relativePath);
+      if (entry.isDirectory()) walk(file, relativePath, depth + 1);
       else if (entry.isFile()) add(file, relativePath);
       else throw new Error('unsupported snapshot entry');
     }
@@ -229,7 +235,8 @@ function claudeSnapshotReady(home, root, { scope = null } = {}) {
   const record = installed?.plugins?.[PLUGIN_KEY];
   const entries = Array.isArray(record) ? record : [record];
   return entries.some((entry) => (scope === null || entry?.scope === scope)
-    && sameManagedClaudeFiles(root, entry?.installPath));
+    && sameManagedClaudeFiles(root, entry?.installPath)
+    && claudeSnapshotResolvable(entry?.installPath));
 }
 
 function claudePermissionsReady(settings) {
@@ -555,6 +562,122 @@ export function claudeSnapshotSettleMs(err) {
   return err?.code === 'ETIMEDOUT' ? CLAUDE_SNAPSHOT_SETTLE_MS : 0;
 }
 
+/**
+ * Whether the snapshot can actually run, not merely whether its files match.
+ *
+ * `src/server.mjs` is the MCP server Claude Code launches, and it imports its
+ * runtime dependencies by bare specifier — so a copy interrupted between `src/`
+ * and `node_modules/` leaves a snapshot whose compared files are all present and
+ * whose server cannot start. Resolution is asked from the snapshot's own
+ * `package.json` against the dependencies it declares, so this stays bounded by
+ * what the package says it needs rather than by walking installed packages. A
+ * snapshot carrying no `package.json` declares nothing, and fails the file
+ * comparison instead.
+ */
+function claudeSnapshotResolvable(snapshotRoot) {
+  if (typeof snapshotRoot !== 'string' || !snapshotRoot.trim()) return false;
+  const manifest = readJson(join(snapshotRoot, 'package.json'), null);
+  const declared = manifest && manifest.dependencies && typeof manifest.dependencies === 'object'
+    ? Object.keys(manifest.dependencies)
+    : [];
+  if (!declared.length) return true;
+  let fromSnapshot;
+  try { fromSnapshot = createRequire(join(snapshotRoot, 'package.json')); } catch { return false; }
+  return declared.every((dependency) => {
+    try { fromSnapshot.resolve(dependency); return true; } catch { /* try the manifest path below */ }
+    try { fromSnapshot.resolve(`${dependency}/package.json`); return true; } catch { return false; }
+  });
+}
+
+/**
+ * How to run the `claude` CLI, as an executable plus an argument array.
+ *
+ * Paths go in as arguments and never into a shell string: `JSON.stringify` quotes
+ * for JSON, not for a command processor, so a path containing `%NAME%` was
+ * expanded before the CLI ever saw it. Windows has to reach the CLI through a
+ * command processor because a `.cmd` shim cannot be executed directly, so an
+ * argument the processor would act on is refused rather than escaped — a refused
+ * install is recoverable, a silently relocated path is not.
+ */
+export function claudeCliInvocation(args, { platform = process.platform, environment = process.env } = {}) {
+  const argv = args.map((arg) => String(arg));
+  if (platform !== 'win32') return { command: 'claude', args: argv };
+  const unsafe = argv.find((arg) => /[\0\r\n"%!^&|<>]/.test(arg));
+  if (unsafe !== undefined) throw new Error(`unsafe claude CLI argument: ${unsafe}`);
+  return {
+    command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', ['claude.cmd', ...argv.map((arg) => `"${arg}"`)].join(' ')],
+    windowsVerbatimArguments: true,
+  };
+}
+
+/**
+ * Kill a process and everything it started.
+ *
+ * The killed shell is not the process doing the work: `claude` is a grandchild
+ * that Windows does not reach when only its parent is terminated. An `uninstall`
+ * left running that way finishes *after* the install that followed it and deletes
+ * the plugin the install just registered, so the tree has to go, and the caller
+ * must not return until it has.
+ */
+async function killClaudeProcessTree(pid, { platform = process.platform } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  const { spawn } = await import('node:child_process');
+  if (platform === 'win32') {
+    await new Promise((done) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; done(); } };
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer.on('error', finish);
+      killer.on('close', finish);
+    });
+    return;
+  }
+  try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+}
+
+/**
+ * Run one CLI step to completion, or end it and its descendants on timeout.
+ *
+ * Resolves only once nothing from this step can still be running, so the next
+ * step cannot be raced by the previous one. A timeout is reported in the shape
+ * `execSync` uses, so the settle rule reads it the same way.
+ */
+async function runClaudeStep(args, { timeoutMs = CLAUDE_PLUGIN_TIMEOUT_MS } = {}) {
+  let invocation;
+  try { invocation = claudeCliInvocation(args); }
+  catch (error) { return { ok: false, timedOut: false, status: null, error }; }
+  const { spawn } = await import('node:child_process');
+  return await new Promise((resolve) => {
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments === true,
+      detached: process.platform !== 'win32',
+    });
+    let timedOut = false;
+    let kill = null;
+    let stderr = '';
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const detail = stderr.slice(-400);
+      // Never report a step finished while its tree may still be writing.
+      const done = () => resolve(timedOut
+        ? { ok: false, timedOut: true, status: null, detail, error: Object.assign(new Error('claude CLI step timed out'), { code: 'ETIMEDOUT', signal: 'SIGTERM', status: null }) }
+        : { ok: code === 0, timedOut: false, status: code, detail, error: null });
+      if (kill) kill.then(done, done); else done();
+    };
+    let code = null;
+    const timer = setTimeout(() => { timedOut = true; kill = killClaudeProcessTree(child.pid); }, timeoutMs);
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', (error) => { stderr += String(error?.message ?? error); code = null; finish(); });
+    child.on('close', (value) => { code = value; finish(); });
+  });
+}
+
 export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
   const actions = [];
 
@@ -573,7 +696,21 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     mkdirSync(dirname(settingsFile), { recursive: true });
     const bak = backup(settingsFile);
     if (bak) actions.push(`backup: ${bak}`);
-    const settings = readJson(settingsFile, {});
+    const settingsPresent = existsSync(settingsFile);
+    const parsed = readJson(settingsFile, null);
+    if (parsed === null && settingsPresent) {
+      // Present but unparseable is not "no settings yet". Rebuilding it as an
+      // empty configuration is exactly how an operator's settings disappear, with
+      // a backup left for them to restore by hand — the file is theirs, and an
+      // unreadable one is not permission to replace it.
+      return {
+        ok: false,
+        code: 'CLAUDE_SETTINGS_UNREADABLE',
+        error: `${settingsFile} is present but not valid JSON`,
+        actions,
+      };
+    }
+    const settings = parsed ?? {};
 
     // Both fields are records (see json.schemastore.org/claude-code-settings.json).
     // Older versions of this installer wrote arrays, which Claude Code ignores
@@ -653,7 +790,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // The CLI is best-effort, but a host that does not have it must not be told to
   // run it. The checkout entry already gates on this; doing it here too keeps the
   // two entries describing the same machine the same way.
-  const { execSync, spawnSync } = await import('node:child_process');
+  const { spawnSync } = await import('node:child_process');
   const claudePresent = spawnSync(/^win/.test(process.platform) ? 'where' : 'which', ['claude'], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).status === 0;
@@ -661,37 +798,41 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     actions.push('cli: skipped (claude not found)');
     return { ok: true, detected: false, actions };
   }
-  // Set only when a CLI step threw; only a timeout then justifies waiting for the
-  // snapshot, and `marketplace add` / `uninstall` can time out too — they are
-  // caught for other reasons and would otherwise hide it.
-  let installError = null;
-  try {
-    // 300s, not 120: the install below runs after the uninstall, so it does a real
-    // copy of the plugin tree rather than the no-op an already-installed plugin
-    // gets. Measured on this machine: `marketplace add` 3s, `uninstall` 3s,
-    // `install` 163s (no-op install: 6s). The old ceiling killed the copy partway
-    // and left Claude Code without the plugin the same run had just removed.
-    const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: CLAUDE_PLUGIN_TIMEOUT_MS });
-    try { run(`claude plugin marketplace add ${JSON.stringify(mpDir)}`); actions.push('cli: marketplace registered'); }
-    catch (err) { if (err?.code === 'ETIMEDOUT') installError = err; actions.push('cli: marketplace add skipped (already registered)'); }
-    // `plugin install` on an already-installed plugin is a no-op and leaves a
-    // stale snapshot in ~/.claude/plugins/cache — uninstall first so an update
-    // always re-copies the current code.
-    try { run(`claude plugin uninstall ${PLUGIN_KEY}`); }
-    catch (err) { if (err?.code === 'ETIMEDOUT') installError = err; }
-    // Newer Claude Code (>= 2.1.x) dropped the -y flag; older builds accepted
-    // it. Try without it first, fall back to the legacy flag.
-    try {
-      run(`claude plugin install ${PLUGIN_KEY} --scope ${CLAUDE_PLUGIN_SCOPE}`);
-    } catch (errNoFlag) {
-      if (!String(errNoFlag?.message ?? '').includes('unknown option')) throw errNoFlag;
-      run(`claude plugin install ${PLUGIN_KEY} --scope ${CLAUDE_PLUGIN_SCOPE} -y`);
-    }
-    actions.push(`cli: plugin snapshot refreshed (${PLUGIN_KEY})`);
-  } catch (err) {
-    installError = err;
-    actions.push(`cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY} (${String(err?.message ?? err).slice(0, 120)})`);
+  // Each step runs to completion — including ending the whole process tree on a
+  // timeout — before the next one starts, and the settle window is the widest any
+  // step asks for. Two things this replaces: an `uninstall` left running past its
+  // timeout finished *after* the install that followed and deleted the plugin the
+  // install had just registered, and a later step's ordinary failure used to erase
+  // an earlier step's timeout from the evidence.
+  // 300s, not 120: the install runs after the uninstall, so it does a real copy of
+  // the plugin tree rather than the no-op an already-installed plugin gets.
+  // Measured on this machine: `marketplace add` 3s, `uninstall` 3s, `install` 163s
+  // (no-op install: 6s). The old ceiling killed the copy partway and left Claude
+  // Code without the plugin the same run had just removed.
+  let settleMs = 0;
+  const noteStep = (step) => { settleMs = Math.max(settleMs, claudeSnapshotSettleMs(step?.error)); };
+
+  const marketplace = await runClaudeStep(['plugin', 'marketplace', 'add', mpDir]);
+  noteStep(marketplace);
+  actions.push(marketplace.ok
+    ? 'cli: marketplace registered'
+    : `cli: marketplace add failed${marketplace.timedOut ? ' (timed out)' : ''}`);
+
+  // `plugin install` on an already-installed plugin is a no-op and leaves a
+  // stale snapshot in ~/.claude/plugins/cache — uninstall first so an update
+  // always re-copies the current code.
+  noteStep(await runClaudeStep(['plugin', 'uninstall', PLUGIN_KEY]));
+
+  // Newer Claude Code (>= 2.1.x) dropped the -y flag; older builds accepted it.
+  // Try without it first, fall back to the legacy flag.
+  let install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE]);
+  if (!install.ok && !install.timedOut && /unknown option/i.test(String(install.detail ?? ''))) {
+    install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE, '-y']);
   }
+  noteStep(install);
+  actions.push(install.ok
+    ? `cli: plugin snapshot refreshed (${PLUGIN_KEY})`
+    : `cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY}${install.timedOut ? ' (timed out)' : ''}`);
   // Report the state that resulted, not the step that was attempted. The CLI is
   // best-effort — a machine without `claude` is a supported install, and its
   // settings alone are correct — but a CLI that is present and slow, timed out,
@@ -706,7 +847,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // is still running keeps writing while this function has already given up on
   // it. Wait for the snapshot to settle before reporting it missing, or the
   // update says "not loaded" about a plugin that is loading.
-  const settleDeadline = Date.now() + claudeSnapshotSettleMs(installError);
+  const settleDeadline = Date.now() + settleMs;
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   while (Date.now() < settleDeadline) {
     await wait(CLAUDE_SNAPSHOT_POLL_MS);

@@ -4,6 +4,55 @@
 
 Future changes go here.
 
+## 2.0.11 — 2026-09-14
+
+Seven findings from a review of 2.0.10's install, snapshot verification and
+supervisor recovery paths. Several pre-date that release; the Hub being AVAILABLE
+does not mean these branches had fired.
+
+- **A timed-out step can no longer act after the next one.** `uninstall` and
+  `install` ran through `execSync`, whose timeout kills the shell but not the
+  `claude` process beneath it — on Windows that grandchild is outside the shell's
+  process tree. An `uninstall` left running finished *after* the install that
+  followed and deleted the plugin the install had just registered. Each step now
+  runs as a managed child that is killed **with its whole tree** on timeout, and
+  the step does not report finished until nothing of it can still be running.
+  Waiting longer does not fix this; the process has to be accounted for.
+- **A corrupt settings file is reported, not overwritten.** `readJson(file, {})`
+  treated "unparseable" as "no settings yet" and rebuilt an empty configuration,
+  taking the operator's settings with it. A present-but-unreadable file now fails
+  the integration with `CLAUDE_SETTINGS_UNREADABLE` and is left exactly as it was.
+- **A snapshot whose runtime dependencies do not resolve is not ready.** The
+  comparison covered source and configuration but not `node_modules`, and
+  `src/server.mjs` — the MCP server Claude Code launches — imports its runtime
+  dependencies by bare specifier. A copy interrupted between `src/` and
+  `node_modules/` therefore read as ready while the server could not start. The
+  dependencies the snapshot's own `package.json` declares must now resolve from
+  the snapshot itself.
+- **An earlier step's timeout survives a later step's ordinary failure.** The
+  timeout evidence was a single variable overwritten by whichever step failed
+  last, so a timed-out `marketplace add` followed by a plain install failure
+  settled for zero. The widest window any step asks for is kept.
+- **The CLI is invoked with an argument array, never a shell string.**
+  `JSON.stringify` quotes for JSON, not for a command processor: a path containing
+  `%NAME%` arrived expanded, so the install reported success and acted on a
+  different directory. Windows still reaches the CLI through a command processor —
+  a `.cmd` shim cannot be executed directly — so an argument the processor would
+  act on is refused rather than escaped.
+- **The snapshot walk is bounded before it reads**, and by more than bytes: a file
+  is size-checked before being loaded rather than after, and directory count and
+  recursion depth are bounded too.
+- **A Hub outliving its watcher can be recovered.** The supervisor wrote nothing
+  to disk about the process it owned, so when a watcher exited while the Hub kept
+  serving, a later watcher could never take over — it retried forever, or the
+  interactive launch gave up after 90s, and the orphan had to be stopped by hand.
+  What is not recoverable is adopting on port health, which would put a process
+  Crew does not own within reach of `Stop-OwnedListener`. The identity is now
+  persisted when it is established and re-proven field by field — PID, start time,
+  port ownership, profile, Crew home and the live `runtime_id` — before a later
+  watcher adopts it. Anything that does not match is refused, and the record is
+  cleared when ownership is dropped.
+
 ## 2.0.10 — 2026-09-14
 
 Findings from an independent review of the 2.0.6–2.0.9 Claude Code integration

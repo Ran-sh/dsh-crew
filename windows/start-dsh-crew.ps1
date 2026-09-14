@@ -437,8 +437,16 @@ function Get-HealthState {
         $diskReadable = $true
       }
       $cohortMatches = $diskReadable -and $runtime.dsh_version -eq $expectedDshVersion
+      # Read through PSObject: StrictMode is on, so a response that simply omits the
+      # property would throw and be swallowed as "not ready" rather than being
+      # reported absent.
+      $runtimeId = $null
+      if ($null -ne $runtime) {
+        $runtimeIdProperty = $runtime.PSObject.Properties['runtime_id']
+        if ($null -ne $runtimeIdProperty -and $null -ne $runtimeIdProperty.Value) { $runtimeId = [string] $runtimeIdProperty.Value }
+      }
       if ($response.ok -eq $true -and $version -and $cohortMatches) {
-        return [pscustomobject]@{ Ready = $true; Version = [string] $version; Error = $null }
+        return [pscustomobject]@{ Ready = $true; Version = [string] $version; RuntimeId = $runtimeId; Error = $null }
       }
       if (-not $diskReadable) {
         return [pscustomobject]@{ Ready = $false; Version = $null; Error = 'disk runtime manifest unreadable; cannot prove cohort identity' }
@@ -549,6 +557,92 @@ function Get-FreshSupervisorHeartbeat {
   $observed = Get-SupervisorHeartbeatRecord -MaxAgeSeconds $MaxAgeSeconds
   if ($observed -and $observed.State -eq 'ready') { return $observed.Record }
   return $null
+}
+
+# ---- Persisted ownership of the live Hub -----------------------------------
+# A watcher can exit while the Hub it started keeps serving. Nothing else on the
+# machine can tell a later watcher that such a listener is Crew's: port health
+# says a process answers, not whose it is, and adopting on health alone would put
+# a stranger's listener within reach of Stop-OwnedListener. So the identity is
+# written down when it is established, and re-proven field by field — PID, start
+# time, port, profile, Crew home and live runtime_id — before any later watcher
+# adopts it. A record that merely exists is not authority; it may name a Hub from
+# a previous cohort, another profile, or a PID the system has since recycled.
+
+$crewOwnedServiceFile = Join-Path $crewSupervisorRoot 'owned-service.json'
+
+function Write-OwnedServiceRecord {
+  param([pscustomobject] $Service, [string] $RuntimeId = $null)
+  if (-not $Service.CrewOwned -or -not $Service.RootPid -or -not $Service.RootStartedAtUtcTicks) { return }
+  $record = @{
+    schema_version = 1
+    profile = [string] $Service.Profile
+    home = [string] $Service.Home
+    port = [int] $Service.Port
+    root_pid = [int] $Service.RootPid
+    root_started_at_utc_ticks = [long] $Service.RootStartedAtUtcTicks
+    listener_pid = if ($Service.ListenerPid) { [int] $Service.ListenerPid } else { $null }
+    listener_started_at_utc_ticks = if ($Service.ListenerStartedAtUtcTicks) { [long] $Service.ListenerStartedAtUtcTicks } else { $null }
+    runtime_id = $RuntimeId
+    recorded_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  } | ConvertTo-Json -Compress
+  try {
+    if (-not (Test-Path -LiteralPath $crewSupervisorRoot -PathType Container)) { New-Item -ItemType Directory -Path $crewSupervisorRoot -Force | Out-Null }
+    $temp = Join-Path $crewSupervisorRoot ("owned-service.{0}.tmp" -f $PID)
+    Write-Utf8NoBom -Path $temp -Content $record
+    Move-Item -LiteralPath $temp -Destination $crewOwnedServiceFile -Force
+  } catch { /* ownership record is best-effort, like the heartbeat */ }
+}
+
+function Clear-OwnedServiceRecord {
+  try {
+    if (Test-Path -LiteralPath $crewOwnedServiceFile -PathType Leaf) { Remove-Item -LiteralPath $crewOwnedServiceFile -Force }
+  } catch { }
+}
+
+function Get-OwnedServiceRecord {
+  try {
+    if (-not (Test-Path -LiteralPath $crewOwnedServiceFile -PathType Leaf)) { return $null }
+    $record = Get-Content -LiteralPath $crewOwnedServiceFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($record.schema_version -ne 1) { return $null }
+    return $record
+  } catch {
+    return $null
+  }
+}
+
+function Restore-OwnedServiceRecord {
+  param([pscustomobject] $Service, [pscustomobject] $Health = $null)
+  if (-not $Service.CrewOwned) { return $false }
+  $record = Get-OwnedServiceRecord
+  if (-not $record) { return $false }
+  if ([string] $record.profile -ne [string] $Service.Profile) { return $false }
+  if ([string] $record.home -ne [string] $Service.Home) { return $false }
+  if ([int] $record.port -ne [int] $Service.Port) { return $false }
+  if (-not $record.root_pid -or -not $record.root_started_at_utc_ticks) { return $false }
+  if (-not $record.listener_pid -or -not $record.listener_started_at_utc_ticks) { return $false }
+  # Without this, an interrupted write could leave a record whose listener half is
+  # simply absent, and "absent" must never read as "the Hub this record names".
+  if ([string]::IsNullOrWhiteSpace([string] $record.runtime_id)) { return $false }
+  try {
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  } catch {
+    return $false
+  }
+  # Start times come from Get-Process, since Win32_Process carries none: the table
+  # only has to establish that the PID exists before the ticks are compared.
+  if (-not (Test-TrackedProcessIdentity -ProcessId ([int] $record.root_pid) -ExpectedStartTicks ([long] $record.root_started_at_utc_ticks) -ProcessTable $processes)) { return $false }
+  if (-not (Test-TrackedProcessIdentity -ProcessId ([int] $record.listener_pid) -ExpectedStartTicks ([long] $record.listener_started_at_utc_ticks) -ProcessTable $processes)) { return $false }
+  $port = Get-PortState $Service.Port
+  if ($port.State -ne 'occupied' -or -not $port.Pid -or [int] $port.Pid -ne [int] $record.listener_pid) { return $false }
+  $live = if ($Health) { $Health } else { Get-HealthState $Service }
+  if (-not $live.Ready) { return $false }
+  if ([string] $live.RuntimeId -ne [string] $record.runtime_id) { return $false }
+  $Service.RootPid = [int] $record.root_pid
+  $Service.RootStartedAtUtcTicks = [long] $record.root_started_at_utc_ticks
+  $Service.ListenerPid = [int] $record.listener_pid
+  $Service.ListenerStartedAtUtcTicks = [long] $record.listener_started_at_utc_ticks
+  return $true
 }
 
 function Ensure-CrewSupervisorRunning {
@@ -967,7 +1061,7 @@ function Get-TrackedProcessTree {
 }
 
 function Set-TrackedListenerIdentity {
-  param([pscustomobject] $Service)
+  param([pscustomobject] $Service, [string] $RuntimeId = $null)
   $port = Get-PortState $Service.Port
   if ($port.State -ne 'occupied' -or -not $port.Pid) { return $false }
   $tree = @(Get-TrackedProcessTree -Service $Service)
@@ -976,6 +1070,7 @@ function Set-TrackedListenerIdentity {
     $listener = Get-Process -Id $port.Pid -ErrorAction Stop
     $Service.ListenerPid = [int] $port.Pid
     $Service.ListenerStartedAtUtcTicks = $listener.StartTime.ToUniversalTime().Ticks
+    Write-OwnedServiceRecord -Service $Service -RuntimeId $RuntimeId
     return $true
   } catch {
     return $false
@@ -1057,6 +1152,10 @@ function Start-CrewService {
     $Service.ListenerStartedAtUtcTicks = $null
     $Service.ConsecutiveFailures = 0
     $Service.State = 'starting'
+    # Recorded before the Hub is healthy on purpose: the record is written again
+    # with the listener identity once it is, and only that later write is
+    # adoptable, because this one carries no runtime_id to prove itself against.
+    Write-OwnedServiceRecord -Service $Service
     Write-LaunchLog ('Started {0} on port {1}; PID={2}; stdout={3}; stderr={4}' -f $Service.Profile, $Service.Port, $process.Id, $stdout, $stderr)
   } finally {
     $env:DSH_HOME = $previousHome
@@ -1070,7 +1169,7 @@ function Wait-CrewServices {
       $health = Get-HealthState $service
       $service.LastError = $health.Error
       if ($health.Ready) {
-        if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service)) {
+        if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service -RuntimeId $health.RuntimeId)) {
           throw ('{0} is healthy on {1}, but this supervisor cannot prove process ownership.' -f $service.Name, $service.Port)
         }
         if ($service.CrewOwned -and -not (Test-CrewServiceOwnership -Service $service)) {
@@ -1118,7 +1217,16 @@ function Ensure-CrewServices {
     $health = Get-HealthState $service
     if ($health.Ready) {
       $wasReady = $service.State -eq 'ready'
-      if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service)) {
+      if ($service.CrewOwned -and -not $service.ListenerPid) {
+        # A watcher that exited leaves its Hub serving with nothing in memory to
+        # say whose it is. Re-prove the persisted identity before touching it;
+        # this is the only path by which a later watcher may adopt a live Hub,
+        # and it never adopts on port health alone.
+        if (Restore-OwnedServiceRecord -Service $service -Health $health) {
+          Write-LaunchLog ('{0} on {1} recovered from the persisted ownership record; listener PID={2}.' -f $service.Name, $service.Port, $service.ListenerPid)
+        }
+      }
+      if ($service.CrewOwned -and -not $service.ListenerPid -and -not (Set-TrackedListenerIdentity -Service $service -RuntimeId $health.RuntimeId)) {
         throw ('{0} is healthy on {1}, but this supervisor cannot prove process ownership.' -f $service.Name, $service.Port)
       }
       if ($service.CrewOwned -and -not (Test-CrewServiceOwnership -Service $service)) {
@@ -1157,6 +1265,7 @@ function Ensure-CrewServices {
         $service.ListenerPid = $null
         $service.ListenerStartedAtUtcTicks = $null
         $service.ConsecutiveFailures = 0
+        Clear-OwnedServiceRecord
         $port = Get-PortState $service.Port
       }
     }
