@@ -15,6 +15,14 @@ import { integrationRoot } from './crew-paths.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
+// A Claude Code plugin refresh is a real copy of the plugin tree, and its cost
+// tracks machine load: 163s measured idle, ~6 minutes measured during an
+// activation. The ceiling bounds the shell's patience, and the settle window
+// keeps watching afterwards, because a timed-out child on Windows is not in the
+// shell's process tree and goes on writing once the shell has given up.
+const CLAUDE_PLUGIN_TIMEOUT_MS = 300_000;
+const CLAUDE_SNAPSHOT_SETTLE_MS = 180_000;
+const CLAUDE_SNAPSHOT_POLL_MS = 5_000;
 const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
 const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
 
@@ -604,7 +612,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     // gets. Measured on this machine: `marketplace add` 3s, `uninstall` 3s,
     // `install` 163s (no-op install: 6s). The old ceiling killed the copy partway
     // and left Claude Code without the plugin the same run had just removed.
-    const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300_000 });
+    const run = (cmd) => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: CLAUDE_PLUGIN_TIMEOUT_MS });
     try { run(`claude plugin marketplace add ${JSON.stringify(mpDir)}`); actions.push('cli: marketplace registered'); }
     catch { actions.push('cli: marketplace add skipped (already registered)'); }
     // `plugin install` on an already-installed plugin is a no-op and leaves a
@@ -630,6 +638,21 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // snapshot that `installStatus` reads. Saying so here is what lets the caller
   // stop printing a checkmark for a state it never verified.
   if (claudeSnapshotReady(home, root)) return { ok: true, actions };
+  // The CLI can outlive the ceiling above. The install is a real copy of the
+  // plugin tree — 163s measured on an idle machine, and ~6 minutes measured
+  // during an activation, where the record landed well after any ceiling — and a
+  // timed-out child on Windows is not in the shell's process tree, so a copy that
+  // is still running keeps writing while this function has already given up on
+  // it. Wait for the snapshot to settle before reporting it missing, or the
+  // update says "not loaded" about a plugin that is loading.
+  const settleDeadline = Date.now() + CLAUDE_SNAPSHOT_SETTLE_MS;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  while (Date.now() < settleDeadline) {
+    await wait(CLAUDE_SNAPSHOT_POLL_MS);
+    if (claudeSnapshotReady(home, root)) {
+      return { ok: true, actions: [...actions, 'cli: snapshot confirmed current after the ceiling'] };
+    }
+  }
   return {
     ok: true,
     degraded: true,

@@ -4,6 +4,19 @@
 
 Future changes go here.
 
+## 2.0.8 — 2026-09-14
+
+- **The Claude Code refresh is watched to completion, not just timed.** 2.0.7
+  raised the shell ceiling to 300s from a measurement that the post-uninstall
+  copy took 163s. That measurement was taken on an idle machine; during an
+  activation the same copy took about six minutes, so the update still reported
+  the integration as not loaded — while the timed-out `claude` process, which on
+  Windows is not in the shell's process tree and so is not reached by the kill,
+  went on writing and finished the job minutes later. The step now polls the
+  snapshot it is actually judged by, for up to 180s past the ceiling, so a copy
+  that is still landing is reported as landing. A refresh that genuinely fails
+  still reports degraded, one settle window later.
+
 ## 2.0.7 — 2026-09-14
 
 - **The Claude Code refresh is given time to finish.** The step runs
