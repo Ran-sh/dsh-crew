@@ -4,6 +4,25 @@
 
 Future changes go here.
 
+## 2.0.3 — 2026-09-14
+
+- **An authorised zero-change task can be verified outside a Git repository.**
+  `constraints.allow_no_changes: true` covers work that is meant to leave no net
+  change — read-only inspection, or a bounded smoke that creates a temporary file
+  and removes it again. The Hub could only prove that from a clean Git baseline,
+  so the same task a repository certifies came back `partial` with
+  `workspace_evidence_ok: null` when it ran in a plain directory. A non-Git
+  workspace whose initial tree holds only directories can now be baselined by
+  walking it — paths and entry kinds, never file contents — and the after-run
+  walk is compared against it. A tree that already contains files, links or
+  special entries stays unverifiable and fails closed, and a reviewer's approval
+  is invalidated when such a workspace changes under it.
+- **A Git failure is no longer reported as "not a Git repository."** Every runner
+  error became `NOT_A_GIT_REPOSITORY`, which named the wrong cause — and it was
+  the single condition the new directory fallback keys on. A non-zero `git` exit
+  now surfaces as `GIT_ERROR`, and the fallback applies only when every baseline
+  read agreed the directory is not a repository.
+
 ## 2.0.2 — 2026-09-14
 
 - **One test no longer skips on Windows.** `reopening rejects a symlinked
