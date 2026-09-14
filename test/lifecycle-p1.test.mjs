@@ -162,12 +162,12 @@ test('dead lock owner is reclaimed, live owner is kept', async () => {
   } finally { t.cleanup(); }
 });
 
-test('a recycled PID does not keep a dead lock alive', async () => {
+test('a recycled PID does not keep a dead lock alive', async (ctx) => {
   const t = tempHome();
   try {
     mkdirSync(dirname(updateLockFile({ home: t.dir })), { recursive: true });
     const ownToken = processStartToken(process.pid);
-    if (ownToken === null) { t.skip('this platform cannot report a process start time'); return; }
+    if (ownToken === null) { ctx.skip('this platform cannot report a process start time'); return; }
     // The exact hazard: the lock names a pid that IS live, because the original
     // owner died and the operating system handed its pid to somebody else.
     // `kill(pid, 0)` succeeds, so a PID-only liveness check calls this owner
