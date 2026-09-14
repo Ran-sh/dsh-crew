@@ -4,6 +4,27 @@
 
 Future changes go here.
 
+## 2.0.4 — 2026-09-14
+
+- **A reviewer's read-only-ness is verified in every isolation mode.** The role's
+  whole contract is that it changed nothing, and that was the one claim the
+  acceptance gate stopped checking outside a worktree: `runReviewerAttempt`
+  skipped both fingerprint captures whenever the job was not isolated, so in a
+  shared workspace no before- or after-image existed, no mutation could be
+  detected, and a reviewer that edited the tree it was reviewing was accepted as
+  `approve`. Reviewer evidence is no longer exempted by isolation — a shared
+  workspace is fingerprinted around the attempt, and a reviewer whose workspace
+  moved is refused with `REVIEW_CHANGES_REQUESTED` exactly as it would be in a
+  worktree. This is detection, not prevention: the default `readonly` profile
+  still keeps a reviewer out of the primary tree, so an explicit shared override
+  can no longer pass unnoticed, but it can still write.
+- **A shared workspace no longer reports a retention that never happened.**
+  `workspace_retained` was set whenever evidence capture failed, but a shared
+  workspace is the caller's own and was never Crew's to keep. The allocator
+  comment now says what the code does: `readonly` profiles take the disposable
+  worktree, and an explicitly shared workspace is fingerprinted rather than
+  exempted.
+
 ## 2.0.3 — 2026-09-14
 
 - **An authorised zero-change task can be verified outside a Git repository.**
