@@ -5,15 +5,17 @@
 //
 // Discipline: strictly read-only. Only git porcelain reads are issued — never
 // reset / stash / clean / checkout, and nothing here writes to disk. A
-// non-git directory degrades to { kind: 'no-git' } instead of failing, and a
-// pre-dirty workspace is flagged (dirtyBaseline) rather than hidden.
+// non-git directory degrades to { kind: 'no-git' } by default, and a pre-dirty
+// workspace is flagged (dirtyBaseline) rather than hidden. Hub callers may
+// opt into a bounded directory-only snapshot for initially empty non-Git trees.
 //
 // The default `git` runner is replaceable with an injected runner in tests:
 // it receives (argsArray, { cwd }) and resolves { code, stdout, stderr }.
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { win32 } from 'node:path';
+import { lstat, opendir, realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -22,7 +24,10 @@ export const DIFF_LIMIT = 64 * 1024;
 export const NOT_A_GIT_REPOSITORY = 'NOT_A_GIT_REPOSITORY';
 export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
 export const GIT_TIMEOUT = 'GIT_TIMEOUT';
+export const GIT_ERROR = 'GIT_ERROR';
 export const GIT_TIMEOUT_MS = 8000;
+const EMPTY_TREE_ENTRY_LIMIT = 20_000;
+const EMPTY_TREE_DEPTH_LIMIT = 64;
 
 const SENSITIVE_SUFFIXES = ['.pem', '.key'];
 const SENSITIVE_PREFIXES = ['credentials', 'secret'];
@@ -85,13 +90,101 @@ async function runGit(runner, args, opts) {
     if (/not a git repository/i.test(stderr)) {
       return { ok: false, reason: NOT_A_GIT_REPOSITORY, error: stderr.trim() };
     }
+    if (Number.isInteger(r.code) && r.code !== 0) {
+      return { ok: false, reason: GIT_ERROR, error: 'git audit failed' };
+    }
     return { ok: true, code: r.code ?? 0, stdout: r.stdout ?? '', stderr };
   } catch (err) {
     const msg = err?.message ?? String(err);
+    const diagnostic = `${err?.stderr ?? ''}\n${msg}`;
+    if (/not a git repository/i.test(diagnostic)) return { ok: false, reason: NOT_A_GIT_REPOSITORY, error: 'not a git repository' };
     if (err?.code === 'ETIMEDOUT' || err?.killed === true || /timed out|timeout/i.test(msg)) return { ok: false, reason: GIT_TIMEOUT, error: 'git audit timed out' };
     if (/ENOENT|spawn git/i.test(msg)) return { ok: false, reason: GIT_NOT_FOUND, error: msg };
-    return { ok: false, reason: NOT_A_GIT_REPOSITORY, error: msg };
+    return { ok: false, reason: GIT_ERROR, error: 'git audit failed' };
   }
+}
+
+function samePath(left, right) {
+  const normalizedLeft = resolve(left).replace(/[\\/]+$/, '');
+  const normalizedRight = resolve(right).replace(/[\\/]+$/, '');
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function pathIsWithin(root, candidate) {
+  const rel = relative(root, candidate);
+  const comparable = process.platform === 'win32' ? rel.toLowerCase() : rel;
+  return comparable === '' || (comparable !== '..' && !comparable.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * Capture names and entry kinds only; never open file contents. This fallback
+ * is eligible only when the pre-run tree has no files or links, so it can prove
+ * that a temporary file/directory was removed without reading existing data.
+ */
+async function captureDirectoryEntries(cwd) {
+  let root;
+  try {
+    const requested = resolve(cwd);
+    const requestedStat = await lstat(requested);
+    if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) {
+      return { ok: false, reason: 'WORKSPACE_ROOT_UNSAFE' };
+    }
+    root = await realpath(requested);
+  } catch {
+    return { ok: false, reason: 'WORKSPACE_SCAN_UNAVAILABLE' };
+  }
+
+  const pending = [{ absolute: root, depth: 0 }];
+  const entries = [];
+  let regularFileCount = 0;
+  let linkOrSpecialCount = 0;
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current.depth > EMPTY_TREE_DEPTH_LIMIT) return { ok: false, reason: 'WORKSPACE_SCAN_LIMIT' };
+      const beforeStat = await lstat(current.absolute);
+      if (!beforeStat.isDirectory() || beforeStat.isSymbolicLink()) return { ok: false, reason: 'WORKSPACE_SCAN_UNAVAILABLE' };
+      const canonical = await realpath(current.absolute);
+      if (!pathIsWithin(root, canonical)) return { ok: false, reason: 'WORKSPACE_SCAN_UNAVAILABLE' };
+      const children = await opendir(canonical);
+      for await (const child of children) {
+        if (entries.length >= EMPTY_TREE_ENTRY_LIMIT) return { ok: false, reason: 'WORKSPACE_SCAN_LIMIT' };
+        const absolute = resolve(canonical, child.name);
+        const entryPath = relative(root, absolute).split(sep).join('/');
+        const stat = await lstat(absolute);
+        let type;
+        if (stat.isSymbolicLink()) {
+          type = 'link';
+          linkOrSpecialCount += 1;
+        } else if (stat.isDirectory()) {
+          type = 'directory';
+          pending.push({ absolute, depth: current.depth + 1 });
+        } else if (stat.isFile()) {
+          type = 'file';
+          regularFileCount += 1;
+        } else {
+          type = 'special';
+          linkOrSpecialCount += 1;
+        }
+        entries.push({ path: entryPath, type });
+      }
+      const afterStat = await lstat(current.absolute);
+      const afterCanonical = await realpath(current.absolute);
+      if (!afterStat.isDirectory() || afterStat.isSymbolicLink()
+        || !samePath(canonical, afterCanonical)
+        || beforeStat.mtimeMs !== afterStat.mtimeMs
+        || beforeStat.ctimeMs !== afterStat.ctimeMs) {
+        return { ok: false, reason: 'WORKSPACE_SCAN_UNAVAILABLE' };
+      }
+    }
+  } catch {
+    return { ok: false, reason: 'WORKSPACE_SCAN_UNAVAILABLE' };
+  }
+
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  return { ok: true, entries, regularFileCount, linkOrSpecialCount };
 }
 
 function splitFirstTab(line) {
@@ -136,10 +229,11 @@ export function parseChanges(nameStatus, statusPorcelain) {
 
 /**
  * Read-only pre-run snapshot of a workspace. Returns a git snapshot
- * { kind:'git', status, nameStatus, stat, dirty, changes } or a degraded
- * { kind:'no-git', reason, error } for non-repos / missing git. Never throws.
+ * { kind:'git', status, nameStatus, stat, dirty, changes }, an opted-in
+ * { kind:'filesystem-empty', entries } for an empty non-Git tree, or a degraded
+ * { kind:'no-git', reason, error } for other non-repos / missing Git. Never throws.
  */
-export async function captureWorkspaceBaseline({ cwd, git } = {}) {
+export async function captureWorkspaceBaseline({ cwd, git, allowEmptyNonGitDirectory = false } = {}) {
   const runner = git ?? defaultRunner;
   if (!cwd) return { kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace cwd is required' };
   const [status, nameStatus, stat] = await Promise.all([
@@ -147,8 +241,19 @@ export async function captureWorkspaceBaseline({ cwd, git } = {}) {
     runGit(runner, ['diff', '--name-status'], { cwd }),
     runGit(runner, ['diff', '--stat'], { cwd }),
   ]);
-  for (const r of [status, nameStatus, stat]) {
-    if (!r.ok) return { kind: 'no-git', reason: r.reason, error: r.error };
+  const results = [status, nameStatus, stat];
+  const failures = results.filter((result) => !result.ok);
+  if (failures.length > 0) {
+    const allExplicitlyNonGit = failures.length === results.length
+      && failures.every((result) => result.reason === NOT_A_GIT_REPOSITORY);
+    if (allExplicitlyNonGit && allowEmptyNonGitDirectory === true) {
+      const tree = await captureDirectoryEntries(cwd);
+      if (tree.ok && tree.regularFileCount === 0 && tree.linkOrSpecialCount === 0) {
+        return { kind: 'filesystem-empty', entries: tree.entries };
+      }
+    }
+    const failed = failures.find((result) => result.reason !== NOT_A_GIT_REPOSITORY) ?? failures[0];
+    return { kind: 'no-git', reason: failed.reason, error: failed.error };
   }
   const changes = parseChanges(nameStatus.stdout, status.stdout);
   return {
@@ -203,6 +308,15 @@ async function buildPatch(runner, { cwd, changes, limit }) {
 export async function captureWorkspaceDiff({ cwd, baseline, git, limit = DIFF_LIMIT } = {}) {
   const runner = git ?? defaultRunner;
   if (!cwd) return { kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace cwd is required' };
+  if (baseline?.kind === 'filesystem-empty') {
+    const tree = await captureDirectoryEntries(cwd);
+    if (!tree.ok) return { kind: 'no-git', reason: tree.reason, error: 'filesystem audit unavailable' };
+    return {
+      kind: 'filesystem-empty',
+      dirtyBaseline: false,
+      unchanged: JSON.stringify(tree.entries) === JSON.stringify(baseline.entries),
+    };
+  }
   if (!baseline || baseline.kind !== 'git') {
     return { kind: 'no-git', reason: baseline?.reason ?? NOT_A_GIT_REPOSITORY, error: baseline?.error };
   }

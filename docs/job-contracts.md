@@ -85,13 +85,18 @@ Per-job precedence is request `constraints` > Profile > session defaults.
 `auto`, `existing`, or `none`. Workspace preflight reports `READY`, `CONFLICT`,
 `READ_ONLY`, or `UNAVAILABLE` before dispatch.
 
-`constraints.allow_no_changes: true` is reserved for explicitly read-only
-search, inspection, or analysis work. It does not blindly convert a partial
-Delivery Report into success: Crew requires an isolated candidate with zero
-changed files, a complete Delivery Report, at least one passing evidence check,
-and no failed check. If the Worker reports no changes but the workspace contains
-edits—or reports changes while the workspace is empty—the workflow fails closed
-with workspace-evidence mismatch.
+`constraints.allow_no_changes: true` is for tasks explicitly expected to leave
+no net workspace changes, including read-only search/inspection and bounded
+temporary smoke work. It does not blindly convert a partial Delivery Report
+into success: Crew requires a complete Delivery Report, at least one passing
+evidence check, no failed check, and machine-verifiable zero net workspace
+changes. For Hub jobs, that evidence comes from a clean Git baseline, or from a
+non-Git workspace whose initial tree contains only directories; the latter audit
+compares paths and entry types without opening file contents. Non-Git trees that
+already contain files, links, or special entries remain unverifiable and fail
+closed. If the Worker reports no changes but the workspace contains edits—or
+reports changes while the workspace is empty—the workflow fails closed with
+workspace-evidence mismatch.
 
 The CLI is a JSON projection of the same local HTTP surface:
 

@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -19,6 +19,7 @@ import {
   parseChanges,
   NOT_A_GIT_REPOSITORY,
   GIT_TIMEOUT,
+  GIT_ERROR,
   GIT_TIMEOUT_MS,
   resolveWindowsGit,
   DIFF_LIMIT,
@@ -133,9 +134,56 @@ test('baseline degrades to NOT_A_GIT_REPOSITORY without throwing', async () => {
   assert.equal(b.reason, NOT_A_GIT_REPOSITORY);
 });
 
+test('empty non-git directory snapshots are opt-in', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-audit-opt-in-'));
+  const notGit = async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  try {
+    const defaultBaseline = await captureWorkspaceBaseline({ cwd: dir, git: notGit });
+    assert.equal(defaultBaseline.kind, 'no-git');
+    const hubBaseline = await captureWorkspaceBaseline({ cwd: dir, git: notGit, allowEmptyNonGitDirectory: true });
+    assert.equal(hubBaseline.kind, 'filesystem-empty');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('baseline never throws on runner errors', async () => {
   const b = await captureWorkspaceBaseline({ cwd: '/proj', git: async () => { throw new Error('boom'); } });
   assert.equal(b.kind, 'no-git');
+  assert.equal(b.reason, GIT_ERROR);
+});
+
+test('an unrelated Git error does not enable the non-git directory fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-git-error-audit-'));
+  const gitFailure = async () => {
+    throw Object.assign(new Error('fatal: detected dubious ownership in repository'), {
+      stderr: 'fatal: detected dubious ownership in repository',
+    });
+  };
+  try {
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, git: gitFailure });
+    assert.equal(baseline.kind, 'no-git');
+    assert.equal(baseline.reason, GIT_ERROR);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a mixed Git failure does not enable the non-git directory fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-mixed-git-audit-'));
+  const git = async (args) => {
+    if (args.join(' ') === 'diff --name-status') {
+      return { code: 128, stdout: '', stderr: 'fatal: detected dubious ownership in repository' };
+    }
+    return { code: 128, stdout: '', stderr: 'fatal: not a git repository' };
+  };
+  try {
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, git, allowEmptyNonGitDirectory: true });
+    assert.equal(baseline.kind, 'no-git');
+    assert.equal(baseline.reason, GIT_ERROR);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------- captureWorkspaceDiff (fake runner) ----------
@@ -191,6 +239,64 @@ test('captureWorkspaceDiff with a no-git baseline degrades without throwing', as
   assert.equal(d.kind, 'no-git');
 });
 
+test('empty non-git workspace can prove a temporary file was fully cleaned up', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-empty-audit-'));
+  const notGit = async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  try {
+    mkdirSync(join(dir, 'outputs'));
+    mkdirSync(join(dir, 'work'));
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, git: notGit, allowEmptyNonGitDirectory: true });
+    assert.equal(baseline.kind, 'filesystem-empty');
+
+    const script = join(dir, 'work', 'smoke.py');
+    writeFileSync(script, 'print("temporary")\n');
+    const during = await captureWorkspaceDiff({ cwd: dir, baseline, git: notGit });
+    assert.equal(during.kind, 'filesystem-empty');
+    assert.equal(during.unchanged, false);
+
+    rmSync(script);
+    const leftoverDirectory = join(dir, 'work', 'leftover');
+    mkdirSync(leftoverDirectory);
+    const withLeftoverDirectory = await captureWorkspaceDiff({ cwd: dir, baseline, git: notGit });
+    assert.equal(withLeftoverDirectory.unchanged, false);
+    rmdirSync(leftoverDirectory);
+
+    const after = await captureWorkspaceDiff({ cwd: dir, baseline, git: notGit });
+    assert.equal(after.kind, 'filesystem-empty');
+    assert.equal(after.unchanged, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('non-git baselines with existing files remain unverifiable without reading their contents', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-nonempty-audit-'));
+  const notGit = async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository' });
+  try {
+    const secret = 'DO-NOT-READ-OR-RETURN';
+    writeFileSync(join(dir, 'credentials.json'), secret);
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, git: notGit, allowEmptyNonGitDirectory: true });
+    assert.equal(baseline.kind, 'no-git');
+    assert.equal(JSON.stringify(baseline).includes(secret), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('non-git baselines with directory links remain unverifiable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-linked-audit-'));
+  const outside = mkdtempSync(join(tmpdir(), 'dsh-crew-linked-target-'));
+  try {
+    symlinkSync(outside, join(dir, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, allowEmptyNonGitDirectory: true });
+    assert.equal(baseline.kind, 'no-git');
+    assert.equal(baseline.reason, NOT_A_GIT_REPOSITORY);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('captureWorkspaceDiff never throws on runner errors', async () => {
   const d = await captureWorkspaceDiff({ cwd: '/proj', baseline: { kind: 'git' }, git: async () => { throw new Error('boom'); } });
   assert.equal(d.kind, 'no-git');
@@ -238,6 +344,28 @@ test('real temp git repo: baseline → modify → diff with redaction', { skip: 
     assert.doesNotMatch(diff.patch, /topsecret/);
     assert.deepEqual(diff.redacted, ['.env']);
     assert.equal(diff.dirtyBaseline, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('real temp non-git directory: empty-tree baseline detects temporary entries and cleanup', { skip: !gitAvailable() }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-empty-live-audit-'));
+  try {
+    mkdirSync(join(dir, 'work'));
+    const baseline = await captureWorkspaceBaseline({ cwd: dir, allowEmptyNonGitDirectory: true });
+    assert.equal(baseline.kind, 'filesystem-empty');
+
+    const script = join(dir, 'work', 'smoke.py');
+    writeFileSync(script, 'print("temporary")\n');
+    const during = await captureWorkspaceDiff({ cwd: dir, baseline });
+    assert.equal(during.kind, 'filesystem-empty');
+    assert.equal(during.unchanged, false);
+
+    rmSync(script);
+    const after = await captureWorkspaceDiff({ cwd: dir, baseline });
+    assert.equal(after.kind, 'filesystem-empty');
+    assert.equal(after.unchanged, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { applyHubWorkspaceEvidence, resolveHubSpawnPayload } from '../src/hub/index.mjs';
+import { applyHubWorkspaceEvidence, invalidateReviewForWorkspaceMutation, resolveHubSpawnPayload } from '../src/hub/index.mjs';
 
 const raw = (patch = {}) => ({ ...patch });
 const cfg = (patch = {}) => ({
@@ -232,6 +232,47 @@ test('a shared workspace still cannot certify zero changes it cannot prove', () 
     assert.notEqual(gated.no_change_verified, true, JSON.stringify(workspaceDiff));
     assert.notEqual(gated.task_status, 'success', JSON.stringify(workspaceDiff));
   }
+});
+
+test('an explicit no-change task in an audited empty non-git workspace can pass', () => {
+  const outcome = {
+    task_status: 'success',
+    execution_status: 'completed',
+    tests: [{ status: 'PASS', command: 'smoke', summary: 'temporary file removed' }],
+    changes: [],
+    delivery: { complete: true, missing: [] },
+  };
+  const cleanTree = { kind: 'filesystem-empty', unchanged: true };
+  const verified = applyHubWorkspaceEvidence({
+    outcome, workspaceDiff: cleanTree, allowNoChanges: true, isolation: 'shared', role: 'worker',
+  });
+  assert.equal(verified.workspace_evidence_ok, true);
+  assert.equal(verified.no_change_verified, true);
+  assert.equal(verified.task_status, 'success');
+
+  const leftover = applyHubWorkspaceEvidence({
+    outcome, workspaceDiff: { kind: 'filesystem-empty', unchanged: false },
+    allowNoChanges: true, isolation: 'shared', role: 'worker',
+  });
+  assert.equal(leftover.workspace_evidence_ok, false);
+  assert.equal(leftover.no_change_verified, undefined);
+  assert.equal(leftover.task_status, 'partial');
+});
+
+test('reviewer approval is invalidated when an empty non-git workspace changes', () => {
+  const approved = { verdict: 'approve', status: 'done', delivery_complete: true };
+  const unchanged = invalidateReviewForWorkspaceMutation({
+    role: 'reviewer', review: approved, workspaceDiff: { kind: 'filesystem-empty', unchanged: true },
+  });
+  assert.equal(unchanged.verdict, 'approve');
+  assert.equal(unchanged.mutated_candidate, undefined);
+
+  const changed = invalidateReviewForWorkspaceMutation({
+    role: 'reviewer', review: approved, workspaceDiff: { kind: 'filesystem-empty', unchanged: false },
+  });
+  assert.equal(changed.verdict, 'request_changes');
+  assert.equal(changed.mutated_candidate, true);
+  assert.equal(changed.invalidated, true);
 });
 
 test('a shared workspace with no authorisation is never certified', () => {

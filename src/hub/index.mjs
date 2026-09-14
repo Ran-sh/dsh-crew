@@ -502,10 +502,9 @@ export function hubCanonicalEvents(job = {}) {
 
 export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChanges = false, isolation = 'shared', role = 'worker' } = {}) {
   void isolation;
-  const changes = workspaceDiff?.changes ?? {};
-  const hasChanges = ['modified', 'deleted', 'renamed', 'untracked']
-    .some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
-  const evidenceAvailable = workspaceDiff?.kind === 'git' && workspaceDiff.dirtyBaseline !== true;
+  const hasChanges = workspaceHasChanges(workspaceDiff);
+  const evidenceAvailable = (workspaceDiff?.kind === 'git' && workspaceDiff.dirtyBaseline !== true)
+    || (workspaceDiff?.kind === 'filesystem-empty' && typeof workspaceDiff.unchanged === 'boolean');
   return applyWorkspaceEvidence(outcome, {
     evidenceAvailable,
     hasChanges,
@@ -519,6 +518,19 @@ export function applyHubWorkspaceEvidence({ outcome, workspaceDiff, allowNoChang
     allowNoChanges: allowNoChanges === true,
     requireNoChangeAuthorization: role === 'worker',
   });
+}
+
+function workspaceHasChanges(workspaceDiff) {
+  if (workspaceDiff?.kind === 'filesystem-empty') return workspaceDiff.unchanged !== true;
+  const changes = workspaceDiff?.changes ?? {};
+  return ['modified', 'deleted', 'renamed', 'untracked']
+    .some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
+}
+
+export function invalidateReviewForWorkspaceMutation({ role, review, workspaceDiff } = {}) {
+  if (role !== 'reviewer' || !review || !['git', 'filesystem-empty'].includes(workspaceDiff?.kind)) return review;
+  if (!workspaceHasChanges(workspaceDiff)) return review;
+  return { ...review, mutated_candidate: true, invalidated: true, verdict: 'request_changes' };
 }
 
 /**
@@ -602,7 +614,7 @@ export class WorkerRegistry {  constructor(ctx) {
       task_status: job.outcome?.task_status ?? null,
       workspace_evidence_ok: job.outcome?.workspace_evidence_ok ?? null,
       review_verdict: job.review?.verdict ?? null,
-      workspace_diff_available: !!job.workspaceDiff && job.workspaceDiff.kind === 'git',
+      workspace_diff_available: !!job.workspaceDiff && ['git', 'filesystem-empty'].includes(job.workspaceDiff.kind),
       workspace_retained: job.workspace_retained === true,
       cleanup_warning: job.cleanup_warning ?? null,
       profile_id: job.profile_id ?? null,
@@ -935,7 +947,8 @@ export class WorkerRegistry {  constructor(ctx) {
     // Read-only pre-run snapshot (async, never blocks dispatch): the audit
     // only needs the before-state by the time the worker finishes. Non-repos
     // degrade to { kind:'no-git' } instead of failing the job.
-    job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
+    job.baseline = await captureWorkspaceBaseline({ cwd: executionCwd, allowEmptyNonGitDirectory: true })
+      .catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace audit failed' }));
     try {
       this.assertProviderNotMutating(selection.provider, providerMutationEpoch);
       this.acquireProviderLease(selection.provider);
@@ -1120,7 +1133,7 @@ export class WorkerRegistry {  constructor(ctx) {
         });
         job.phase = job.status === 'done' ? JOB_PHASES.COMPLETED : job.status === 'cancelled' ? JOB_PHASES.CANCELLED : JOB_PHASES.FAILED;
         // Read-only after-snapshot of the workspace: bounded, redacted patch.
-        job.workspaceDiff = job.baseline.kind === 'git'
+        job.workspaceDiff = ['git', 'filesystem-empty'].includes(job.baseline.kind)
           ? await captureWorkspaceDiff({ cwd: executionCwd, baseline: job.baseline }).catch(() => ({ kind: 'no-git', reason: NOT_A_GIT_REPOSITORY, error: 'workspace diff failed' }))
           : job.baseline;
         job.outcome = applyHubWorkspaceEvidence({
@@ -1139,15 +1152,11 @@ export class WorkerRegistry {  constructor(ctx) {
             error: { code: job.error_code, message: job.error },
           });
         }
-        if (job.role === 'reviewer' && job.review && job.workspaceDiff?.kind === 'git') {
-          const changes = job.workspaceDiff.changes ?? {};
-          const mutated = ['modified', 'deleted', 'renamed', 'untracked'].some((key) => Array.isArray(changes[key]) && changes[key].length > 0);
-          if (mutated) {
-            job.review.mutated_candidate = true;
-            job.review.invalidated = true;
-            job.review.verdict = 'request_changes';
-          }
-        }
+        job.review = invalidateReviewForWorkspaceMutation({
+          role: job.role,
+          review: job.review,
+          workspaceDiff: job.workspaceDiff,
+        });
         if (job.isolatedWorkspace) {
           const cleanup = await cleanupIsolatedWorkspace(job.isolatedWorkspace).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
           job.workspace_retained = cleanup.ok !== true;
