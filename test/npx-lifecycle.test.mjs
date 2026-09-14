@@ -57,6 +57,7 @@ import {
   reconcileUpdateJournal,
   readCurrentPointerState,
   managedReleasePath,
+  claudeIntegrationLine,
 } from '../src/install/npx-lifecycle.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
@@ -226,13 +227,32 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.0.4', async () => {
+test('package, runtime identity, and changelog identify candidate 2.0.5', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.0.4');
+  assert.equal(manifest.version, '2.0.5');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.0.4');
+  assert.equal(RUNTIME_VERSION, '2.0.5');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
+});
+
+// A Claude Code install that could not load the plugin used to be reported as a
+// checkmark. `installClaudeCode` keeps `ok: true` because a machine without the
+// `claude` CLI is a supported install, and the caller only had `ok` to branch on,
+// so its failure branch was unreachable. What matters is whether the snapshot
+// Claude Code will load is the current one, so that is verified and reported.
+test('a Claude Code integration that did not load is reported, not checkmarked', () => {
+  assert.equal(claudeIntegrationLine({ ok: true }), '✓ Claude Code integration');
+  assert.equal(claudeIntegrationLine({ ok: false }), '✗ Claude Code integration failed');
+
+  const degraded = claudeIntegrationLine({
+    ok: true,
+    degraded: true,
+    reason: 'Claude Code has not loaded the plugin; run: claude plugin install dsh-crew@dsh-crew',
+  });
+  assert.match(degraded, /^-\s/, 'a degraded integration is neither a checkmark nor an abort');
+  assert.match(degraded, /claude plugin install dsh-crew@dsh-crew/, 'and it names the command that fixes it');
+  assert.doesNotMatch(claudeIntegrationLine({ ok: true, degraded: true }), /✓/);
 });
 
 test('packaged lifecycle invokes npm on Windows without shell mode', async () => {

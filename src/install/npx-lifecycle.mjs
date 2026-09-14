@@ -2626,6 +2626,25 @@ function currentInstallationHealth({ home }) {
   return { installed: true, healthy: validated.ok && registered, validated, registered, pointer };
 }
 
+/**
+ * What the operator is told about the Claude Code integration.
+ *
+ * A missing `claude` CLI is a supported install, so `installClaudeCode` stays
+ * best-effort and keeps `ok: true`. A CLI that is present and fails or times out
+ * is a different thing: it leaves Claude Code without the plugin snapshot while
+ * the settings still name it, which is the state that later reads as "needs
+ * repair". This line used to be `${ok === false ? '✗' : '✓'}`, and since `ok` was
+ * never false, the failure branch could not fire and a broken integration was
+ * reported as a checkmark.
+ */
+export function claudeIntegrationLine(result) {
+  if (result?.ok === false) return '✗ Claude Code integration failed';
+  if (result?.degraded === true) {
+    return `- Claude Code integration registered, but not loaded: ${result.reason ?? 'plugin snapshot not refreshed'}`;
+  }
+  return '✓ Claude Code integration';
+}
+
 async function activateRelease({ home, releaseDir, manifest, log, installer, supervisorRoot = runningPackageRoot() }) {
   const registration = ensureCrewPluginRegistration({ home, root: releaseDir, name: manifest.name });
   if (!registration.ok) {
@@ -2668,10 +2687,10 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
 
   const claude = await installer.installClaudeCode({ home, root: integrationRoot });
   if (claude.ok === false) {
-    log(`✗ Claude Code integration failed`);
+    log(claudeIntegrationLine(claude));
     return false;
   }
-  log('✓ Claude Code integration');
+  log(claudeIntegrationLine(claude));
 
   // The official ~/.dsh/profiles/web tree is read-only: activation never
   // repairs or mutates the official bridge. The isolated 3210 Crew backend

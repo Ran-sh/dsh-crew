@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 2.0.5 — 2026-09-14
+
+- **A host integration that did not load is no longer reported as a checkmark.**
+  `installClaudeCode` keeps `ok: true` on purpose — a machine without the `claude`
+  CLI is a supported install, and its settings are written either way — but the
+  caller branched on `ok` alone, so the `✗ Claude Code integration failed` line
+  could never print. On this machine `claude plugin install` hit the installer's
+  120-second ceiling *after* the step had already removed the previous
+  registration: Claude Code was left with the plugin uninstalled, the update
+  printed `✓ Claude Code integration`, and `dsh-crew status` read "needs repair"
+  afterwards. The install now verifies the snapshot Claude Code will actually
+  load, and reports the resulting state — `- Claude Code integration registered,
+  but not loaded: …` — naming the command that fixes it. The update still
+  succeeds; it just stops claiming something it never checked.
+
 ## 2.0.4 — 2026-09-14
 
 - **A reviewer's read-only-ness is verified in every isolation mode.** The role's

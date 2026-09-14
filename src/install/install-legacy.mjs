@@ -600,7 +600,20 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   } catch (err) {
     actions.push(`cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY} (${String(err?.message ?? err).slice(0, 120)})`);
   }
-  return { ok: true, actions };
+  // Report the state that resulted, not the step that was attempted. The CLI is
+  // best-effort — a machine without `claude` is a supported install, and its
+  // settings alone are correct — but a CLI that is present and slow, timed out,
+  // or failed leaves the snapshot exactly as stale as it was, and it is the
+  // snapshot that `installStatus` reads. Saying so here is what lets the caller
+  // stop printing a checkmark for a state it never verified.
+  if (claudeSnapshotReady(home, root)) return { ok: true, actions };
+  return {
+    ok: true,
+    degraded: true,
+    code: 'CLAUDE_PLUGIN_SNAPSHOT_STALE',
+    reason: `Claude Code has not loaded the plugin; run: claude plugin install ${PLUGIN_KEY}`,
+    actions,
+  };
 }
 
 export function installCodex({ home = homedir(), scope, root = ROOT, env = process.env } = {}) {
