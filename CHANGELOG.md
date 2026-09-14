@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 2.0.6 — 2026-09-14
+
+- **The checkout install entry reports an unloaded integration too.** 2.0.5 taught
+  `installClaudeCode` to say when it had left Claude Code without the plugin, and
+  the managed `dsh-crew update` path to print it — but `scripts/setup.mjs` has its
+  own Claude step that only tested `ok`, so `node scripts/setup.mjs install` kept
+  printing `✓ Claude Code integration` for the same degraded result. Both entries
+  now render through one function, `claudeIntegrationLine`, so a result one of
+  them handles cannot be checkmarked by the other. The checkout step is extracted
+  as `runClaudeIntegrationStep`, which also makes it testable without running a
+  real dependency install and client build.
+
 ## 2.0.5 — 2026-09-14
 
 - **A host integration that did not load is no longer reported as a checkmark.**

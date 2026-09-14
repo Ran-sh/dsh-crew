@@ -13,6 +13,7 @@ import {
   setupInstall,
   setupUninstall,
   setupStatus,
+  runClaudeIntegrationStep,
   readPackageName,
   checkRoot,
   spawnCommand,
@@ -159,6 +160,85 @@ test('install without Claude CLI skips Claude; with Claude detected it installs 
       depRunner: () => ({ ok: true, text: 'deps' }),
     });
     assert.equal(r.ok, true);
+  } finally { t.cleanup(); }
+});
+
+// Both install entries render the Claude result through the same function, so a
+// result one of them learned to handle cannot be checkmarked by the other.
+// `degraded` is the case that matters: the CLI is present, the settings were
+// written, and Claude Code still has no plugin to load — which `dsh-crew status`
+// reports as "needs repair", so an install must not call it a success.
+test('a checkout install reports an unloaded Claude Code integration instead of a checkmark', async () => {
+  const t = makeTemp();
+  try {
+    const logs = [];
+    const r = await runClaudeIntegrationStep({
+      log: (m) => logs.push(m),
+      root: t.dir,
+      home: t.dir,
+      installer: {
+        installClaudeCode: async () => ({
+          ok: true,
+          degraded: true,
+          code: 'CLAUDE_PLUGIN_SNAPSHOT_STALE',
+          reason: 'Claude Code has not loaded the plugin; run: claude plugin install dsh-crew@dsh-crew',
+          actions: ['settings: registered dsh-crew@dsh-crew + 6 permission rules'],
+        }),
+      },
+    });
+    assert.equal(r.ok, true, 'a degraded integration does not abort the install');
+    const joined = logs.join('\n');
+    assert.doesNotMatch(joined, /✓/, 'nothing about this result is a checkmark');
+    assert.match(joined, /^-\s.*not loaded/m);
+    assert.match(joined, /claude plugin install dsh-crew@dsh-crew/, 'and it names the command that fixes it');
+  } finally { t.cleanup(); }
+});
+
+test('a checkout install still checkmarks a loaded Claude Code integration', async () => {
+  const t = makeTemp();
+  try {
+    const logs = [];
+    const r = await runClaudeIntegrationStep({
+      log: (m) => logs.push(m),
+      root: t.dir,
+      home: t.dir,
+      installer: { installClaudeCode: async () => ({ ok: true, actions: ['cli: plugin snapshot refreshed (dsh-crew@dsh-crew)'] }) },
+    });
+    assert.equal(r.ok, true);
+    assert.match(logs.join('\n'), /^✓ Claude Code integration$/m);
+  } finally { t.cleanup(); }
+});
+
+test('a checkout install fails when the Claude Code integration itself fails', async () => {
+  const t = makeTemp();
+  try {
+    const logs = [];
+    const r = await runClaudeIntegrationStep({
+      log: (m) => logs.push(m),
+      root: t.dir,
+      home: t.dir,
+      installer: { installClaudeCode: async () => ({ ok: false, code: 'CLAUDE_SETTINGS_UNWRITABLE' }) },
+    });
+    assert.equal(r.ok, false);
+    assert.match(logs.join('\n'), /^✗ Claude Code integration failed$/m);
+  } finally { t.cleanup(); }
+});
+
+test('a dry-run checkout install plans the Claude Code step without calling the installer', async () => {
+  const t = makeTemp();
+  try {
+    const logs = [];
+    let called = 0;
+    const r = await runClaudeIntegrationStep({
+      dryRun: true,
+      log: (m) => logs.push(m),
+      root: t.dir,
+      home: t.dir,
+      installer: { installClaudeCode: async () => { called += 1; return { ok: true }; } },
+    });
+    assert.equal(r.ok, true);
+    assert.equal(called, 0, 'dry-run must not execute the installer');
+    assert.match(logs.join('\n'), /Claude Code integration \(dry-run\)/);
   } finally { t.cleanup(); }
 });
 

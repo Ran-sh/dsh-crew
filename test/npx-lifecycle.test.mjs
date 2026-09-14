@@ -57,8 +57,10 @@ import {
   reconcileUpdateJournal,
   readCurrentPointerState,
   managedReleasePath,
-  claudeIntegrationLine,
 } from '../src/install/npx-lifecycle.mjs';
+// Rendered by both install entries, so it lives with the install that produces
+// the result rather than with either caller.
+import { claudeIntegrationLine } from '../src/install/install.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
   officialWebIntegrationStateFile,
@@ -227,11 +229,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.0.5', async () => {
+test('package, runtime identity, and changelog identify candidate 2.0.6', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.0.5');
+  assert.equal(manifest.version, '2.0.6');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.0.5');
+  assert.equal(RUNTIME_VERSION, '2.0.6');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });

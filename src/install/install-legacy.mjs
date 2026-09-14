@@ -492,6 +492,24 @@ export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
   return { ok: true, actions: actions.length ? actions : ['nothing to remove'] };
 }
 
+/**
+ * The one line both install entries print for a Claude Code integration result.
+ *
+ * A missing `claude` CLI is a supported install, so `installClaudeCode` stays
+ * best-effort and keeps `ok: true`. A CLI that is present and fails or times out
+ * is a different thing: it leaves Claude Code without the plugin snapshot while
+ * the settings still name it, which is the state `installStatus` later reads as
+ * "needs repair". This used to be rendered separately in each entry — and only
+ * one of them learned about `degraded`, so the other kept printing a checkmark.
+ */
+export function claudeIntegrationLine(result) {
+  if (result?.ok === false) return '✗ Claude Code integration failed';
+  if (result?.degraded === true) {
+    return `- Claude Code integration registered, but not loaded: ${result.reason ?? 'plugin snapshot not refreshed'}`;
+  }
+  return '✓ Claude Code integration';
+}
+
 export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
   const actions = [];
 

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import * as realInstaller from '../src/install/install.mjs';
-import { crewDshHome, crewProfileDir, CREW_PROFILE_NAME } from '../src/install/install.mjs';
+import { crewDshHome, crewProfileDir, CREW_PROFILE_NAME, claudeIntegrationLine } from '../src/install/install.mjs';
 import {
   ensureCrewDshRuntime,
   ensureCrewPluginRegistration,
@@ -136,6 +136,30 @@ function mark(log, ok, text) {
   return ok;
 }
 
+/**
+ * The Claude Code step of a checkout install.
+ *
+ * Extracted so it can be exercised directly: the rest of setupInstall runs a real
+ * dependency install and client build, which a unit test must not do. Both
+ * install entries render the same result through `claudeIntegrationLine`, so a
+ * result one entry learned to handle cannot be silently checkmarked by the other.
+ */
+export async function runClaudeIntegrationStep({
+  dryRun = false,
+  log = console.log,
+  root = ROOT,
+  home = homedir(),
+  installer = realInstaller,
+} = {}) {
+  if (dryRun) { mark(log, true, 'Claude Code integration (dry-run)'); return { ok: true }; }
+  const r = installer.installClaudeCode
+    ? await installer.installClaudeCode({ home, root })
+    : await realInstaller.installClaudeCode({ home, root });
+  log(claudeIntegrationLine(r));
+  if (r.ok === false) return { ok: false, error: 'Claude Code integration failed' };
+  return { ok: true };
+}
+
 export async function setupInstall({
   dryRun = false,
   log = console.log,
@@ -250,13 +274,8 @@ export async function setupInstall({
   }
 
   if (commandExists('claude')) {
-    if (dryRun) mark(log, true, 'Claude Code integration (dry-run)');
-    else {
-      const r = installer.installClaudeCode ? await installer.installClaudeCode({ home, root }) : await realInstaller.installClaudeCode({ home, root });
-      const ok = r.ok !== false;
-      mark(log, ok, ok ? 'Claude Code integration' : 'Claude Code integration failed');
-      if (!ok) return { ok: false, error: 'Claude Code integration failed' };
-    }
+    const r = await runClaudeIntegrationStep({ dryRun, log, root, home, installer });
+    if (!r.ok) return r;
   } else log('- Claude Code not detected, skipped');
 
   log('');

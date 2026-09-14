@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
-import { crewDshHome, crewProfileDir } from './install.mjs';
+import { crewDshHome, crewProfileDir, claudeIntegrationLine } from './install.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
 import { renameTree } from './tree-move.mjs';
@@ -2624,25 +2624,6 @@ function currentInstallationHealth({ home }) {
   const validated = validateInstalledPayload(pointer.path, { expectedName: pointer.name, expectedVersion: pointer.version });
   const registered = registrationHealthy({ home, name: pointer.name, releaseDir: pointer.path });
   return { installed: true, healthy: validated.ok && registered, validated, registered, pointer };
-}
-
-/**
- * What the operator is told about the Claude Code integration.
- *
- * A missing `claude` CLI is a supported install, so `installClaudeCode` stays
- * best-effort and keeps `ok: true`. A CLI that is present and fails or times out
- * is a different thing: it leaves Claude Code without the plugin snapshot while
- * the settings still name it, which is the state that later reads as "needs
- * repair". This line used to be `${ok === false ? '✗' : '✓'}`, and since `ok` was
- * never false, the failure branch could not fire and a broken integration was
- * reported as a checkmark.
- */
-export function claudeIntegrationLine(result) {
-  if (result?.ok === false) return '✗ Claude Code integration failed';
-  if (result?.degraded === true) {
-    return `- Claude Code integration registered, but not loaded: ${result.reason ?? 'plugin snapshot not refreshed'}`;
-  }
-  return '✓ Claude Code integration';
 }
 
 async function activateRelease({ home, releaseDir, manifest, log, installer, supervisorRoot = runningPackageRoot() }) {
