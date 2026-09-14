@@ -18,10 +18,13 @@ const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
 // A Claude Code plugin refresh is a real copy of the plugin tree, and its cost
 // tracks machine load: 163s measured idle, ~6 minutes measured during an
-// activation. The ceiling bounds the shell's patience, and the settle window
-// keeps watching afterwards, because a timed-out child on Windows is not in the
-// shell's process tree and goes on writing once the shell has given up.
-const CLAUDE_PLUGIN_TIMEOUT_MS = 300_000;
+// activation. The install is the step that copies, so it gets the ceiling that
+// has to fit that; `marketplace add` and `uninstall` measure ~3s each and keep a
+// short one. Sizing the install ceiling below the copy is not a slow update, it is
+// a broken integration: the tree is killed and Claude Code is left without the
+// plugin the same run had just removed.
+const CLAUDE_STEP_TIMEOUT_MS = 300_000;
+const CLAUDE_INSTALL_TIMEOUT_MS = 900_000;
 const CLAUDE_SNAPSHOT_SETTLE_MS = 180_000;
 const CLAUDE_SNAPSHOT_POLL_MS = 5_000;
 // The one scope this installer writes, and therefore the only scope whose record
@@ -643,7 +646,7 @@ async function killClaudeProcessTree(pid, { platform = process.platform } = {}) 
  * step cannot be raced by the previous one. A timeout is reported in the shape
  * `execSync` uses, so the settle rule reads it the same way.
  */
-async function runClaudeStep(args, { timeoutMs = CLAUDE_PLUGIN_TIMEOUT_MS } = {}) {
+async function runClaudeStep(args, { timeoutMs = CLAUDE_STEP_TIMEOUT_MS } = {}) {
   let invocation;
   try { invocation = claudeCliInvocation(args); }
   catch (error) { return { ok: false, timedOut: false, status: null, error }; }
@@ -824,10 +827,11 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   noteStep(await runClaudeStep(['plugin', 'uninstall', PLUGIN_KEY]));
 
   // Newer Claude Code (>= 2.1.x) dropped the -y flag; older builds accepted it.
-  // Try without it first, fall back to the legacy flag.
-  let install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE]);
+  // Try without it first, fall back to the legacy flag. This is the step that
+  // copies, so it carries the ceiling sized for the copy.
+  let install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE], { timeoutMs: CLAUDE_INSTALL_TIMEOUT_MS });
   if (!install.ok && !install.timedOut && /unknown option/i.test(String(install.detail ?? ''))) {
-    install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE, '-y']);
+    install = await runClaudeStep(['plugin', 'install', PLUGIN_KEY, '--scope', CLAUDE_PLUGIN_SCOPE, '-y'], { timeoutMs: CLAUDE_INSTALL_TIMEOUT_MS });
   }
   noteStep(install);
   actions.push(install.ok

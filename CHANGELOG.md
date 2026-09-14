@@ -4,6 +4,21 @@
 
 Future changes go here.
 
+## 2.0.12 — 2026-09-14
+
+- **The copying step gets a ceiling that fits the copy.** 2.0.11 gives each
+  `claude` step a managed child killed with its tree on timeout, which is what
+  stops a timed-out `uninstall` from deleting the plugin the next step registered.
+  It also removed the accident that had been hiding a mis-sized ceiling: an
+  orphaned `install` used to finish its copy minutes after its shell gave up, so
+  300s *looked* adequate while every refresh was in fact outliving it. With the
+  tree killed instead, 300s is a genuinely broken integration, and the first
+  activation under the new code produced exactly that — reported honestly, with no
+  process left behind. The copy measures 163s idle, ~360s under an activation and
+  407s on the run that produced this change, so `install` — the step that copies —
+  now has 900s, while `marketplace add` and `uninstall` measure ~3s and keep the
+  short one.
+
 ## 2.0.11 — 2026-09-14
 
 Seven findings from a review of 2.0.10's install, snapshot verification and
