@@ -4,6 +4,20 @@
 
 Future changes go here.
 
+## 2.0.9 — 2026-09-14
+
+- **The post-attempt wait is limited to the case that can still be writing.** 2.0.8
+  waited 180s for the plugin snapshot whenever the CLI attempt had not left it
+  current — including when `claude` is not installed at all, where no process was
+  ever started and there is nothing to wait for. The managed `dsh-crew update` path
+  runs the integration unconditionally, so a machine without Claude Code paid a
+  fixed three minutes on every update. The wait now applies only to a timed-out or
+  signalled attempt, which is the one that can leave a copy running past the
+  shell's ceiling; a missing CLI exits with status 1 and a failing CLI with its own
+  non-zero status, and both are now reported immediately. Measured on the reported
+  branch — stale snapshot and no `claude` on PATH — the same call went from 184.6s
+  to 0.6s while still reporting the integration as not loaded.
+
 ## 2.0.8 — 2026-09-14
 
 - **The Claude Code refresh is watched to completion, not just timed.** 2.0.7

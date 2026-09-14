@@ -518,6 +518,22 @@ export function claudeIntegrationLine(result) {
   return '✓ Claude Code integration';
 }
 
+/**
+ * How long to keep watching the plugin snapshot after a failed CLI attempt.
+ *
+ * Zero unless that attempt timed out. The install is a real copy of the plugin
+ * tree, and a timed-out child on Windows is not in the shell's process tree, so
+ * it can go on writing after the shell has given up — that is the only case with
+ * something to wait for. A `claude` that is not installed exits with status 1 and
+ * never started a copy, and a CLI that failed on its own terms has already
+ * stopped; waiting on either cost a fixed 180s on every update of a machine
+ * without Claude Code, to learn nothing it did not already know.
+ */
+export function claudeSnapshotSettleMs(err) {
+  const timedOut = err?.code === 'ETIMEDOUT' || err?.signal === 'SIGTERM';
+  return timedOut ? CLAUDE_SNAPSHOT_SETTLE_MS : 0;
+}
+
 export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
   const actions = [];
 
@@ -605,6 +621,9 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     actions.push('cli: skipped (non-default home; test mode)');
     return { ok: true, actions };
   }
+  // Set only when the CLI attempt threw, and only a timeout then justifies
+  // waiting for the snapshot: see claudeSnapshotSettleMs.
+  let installError = null;
   try {
     const { execSync } = await import('node:child_process');
     // 300s, not 120: the install below runs after the uninstall, so it does a real
@@ -629,6 +648,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     }
     actions.push(`cli: plugin snapshot refreshed (${PLUGIN_KEY})`);
   } catch (err) {
+    installError = err;
     actions.push(`cli: plugin install failed — run manually: claude plugin install ${PLUGIN_KEY} (${String(err?.message ?? err).slice(0, 120)})`);
   }
   // Report the state that resulted, not the step that was attempted. The CLI is
@@ -645,7 +665,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // is still running keeps writing while this function has already given up on
   // it. Wait for the snapshot to settle before reporting it missing, or the
   // update says "not loaded" about a plugin that is loading.
-  const settleDeadline = Date.now() + CLAUDE_SNAPSHOT_SETTLE_MS;
+  const settleDeadline = Date.now() + claudeSnapshotSettleMs(installError);
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   while (Date.now() < settleDeadline) {
     await wait(CLAUDE_SNAPSHOT_POLL_MS);

@@ -11,7 +11,30 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, codexHomeDir, codexLegacyPolicyDigest, claudeSnapshotSettleMs, installClaudeCode, installCodex, installStatus, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+
+// Only a timeout can leave a copy running past the shell's ceiling, so only a
+// timeout is worth waiting out. The error shapes are Node's, measured rather than
+// assumed: a timeout is `code: ETIMEDOUT, signal: SIGTERM, status: null`, while a
+// `claude` that is not installed is `status: 1` and a CLI that failed on its own
+// terms is its own non-zero status — neither with a code or a signal.
+test('the plugin snapshot is only waited for after a timed-out CLI attempt', () => {
+  const timedOut = Object.assign(new Error('spawnSync C:\\WINDOWS\\system32\\cmd.exe ETIMEDOUT'), {
+    code: 'ETIMEDOUT', signal: 'SIGTERM', status: null,
+  });
+  assert.ok(claudeSnapshotSettleMs(timedOut) > 0, 'a timed-out install may still be writing the snapshot');
+
+  const killed = Object.assign(new Error('spawnSync C:\\WINDOWS\\system32\\cmd.exe SIGTERM'), { signal: 'SIGTERM' });
+  assert.ok(claudeSnapshotSettleMs(killed) > 0, 'a signalled child is also outside the shell\'s process tree');
+
+  const notInstalled = Object.assign(new Error("Command failed: claude plugin install\n'claude' is not recognized"), { status: 1 });
+  assert.equal(claudeSnapshotSettleMs(notInstalled), 0, 'a CLI that does not exist never started a copy to wait for');
+
+  const failed = Object.assign(new Error('Command failed: claude plugin install'), { status: 2 });
+  assert.equal(claudeSnapshotSettleMs(failed), 0, 'a non-zero exit left no writer behind');
+
+  assert.equal(claudeSnapshotSettleMs(null), 0, 'an install that simply is not current has nothing to wait for');
+});
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
