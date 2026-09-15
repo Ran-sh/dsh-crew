@@ -4,6 +4,48 @@
 
 Future changes go here.
 
+## 2.1.3 — 2026-09-15
+
+- **A workspace whose sessions are already gone can be cleaned up.** The planner
+  selected a workspace only when every one of its sessions was in the selection,
+  so a workspace whose sessions had already been removed matched no scope at all —
+  not `crew`, not `worktree`, not `before`, not even `all`. After an earlier
+  cleanup deleted the sessions while something else put the workspace rows back,
+  48 of them stayed in the sidebar forever, each opening nothing: `dsh-crew`'s own
+  preview offered to remove 2 of the 51. A child that is gone from the session
+  store now counts as covered when the provenance ledger recorded Crew creating
+  it — the same evidence that makes a live session Crew's makes a removed one
+  Crew's — and `archiveHistory` proves the session really is absent before the
+  record goes, because a live session named as already gone would drop its
+  workspace and leave the artifact behind.
+- **The maintenance window covers the second server on the DSH home.** The
+  Crew-managed frontend on 3080 boots from the same Crew-managed entry as the hub,
+  so it runs on the same home, and DSH's JSON storage replaces each unit file
+  whole with last-write-wins. Stopping only the hub is what let a cleanup be
+  undone: the last maintenance deleted 49 workspaces and 64 sessions, the sessions
+  stayed gone, and the workspace rows were back on disk minutes after the
+  operation reported DONE, written by the frontend from the copy it still held in
+  memory. A history maintenance now asks the launcher for that server too
+  (`refresh_frontend`), stops it **before** the backend so a failure aborts with
+  everything still running, records it in the STOPPED session, and starts it again
+  after the new runtime is verified. The npx lifecycle sends no such flag — a
+  runtime-tree swap does not touch that store.
+- **The window is re-probed, not taken on the launcher's word.** 3210, and 3080
+  when the session records that the frontend was stopped, must both be free;
+  the executor re-checks this every time it re-checks its lease, so a server that
+  starts mid-transaction stops the write rather than racing it.
+- **A cleanup that is undone anyway is reported, not reported as done.** The store
+  is compared against the manifest's own removals after the runtime is verified;
+  a writer that put them back produces FAILED with
+  `HISTORY_STORE_CHANGED_AFTER_APPLY` and the number of returned rows, instead of
+  DONE. FAILED is terminal, so the backend is not fenced and nothing needs
+  recovering — there is nothing half-applied to recover.
+- The launcher stops the frontend only when it can prove it is the managed one,
+  using the same listener proof the start path already requires. A Crew-patched
+  3080 it did not start is refused (it is on a Crew home either way), and a
+  listener that is not Crew-patched — the legacy official frontend on its own
+  home, or anything unrelated — is left running.
+
 ## 2.1.2 — 2026-09-15
 
 - **A desktop launch returns as soon as Crew is supervised, instead of waiting

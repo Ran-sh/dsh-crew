@@ -53,31 +53,63 @@ export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'c
   };
   const withinTime = (row) => cutoff === null
     || (instant(row.createdAt) !== null && instant(row.createdAt) < cutoff);
+  const present = new Set(sessions.map(row => row.id));
+  const worktreeSessions = new Set(sessions.filter(row => row.worktree === true).map(row => row.id));
   const selected = new Set(sessions.filter(row => admitted(row) && withinTime(row)).map(row => row.id));
   // A workspace carries no provenance of its own: it follows its sessions, and
   // only when every one of them is selected. Checking `admitted(row)` here would
   // test a workspace id against a session ledger and always fail. A provenance
-  // scope additionally requires at least one selected child — an empty workspace
-  // holds no Crew work, so it is not Crew's to remove; `all` keeps its historical
+  // scope additionally requires at least one child — an empty workspace holds no
+  // Crew work, so it is not Crew's to remove; `all` keeps its historical
   // behaviour of following an empty workspace.
+  //
+  // A child whose artifact is already gone cannot be "selected": there is
+  // nothing left to select. Such a child still counts as covered when the ledger
+  // recorded Crew creating it, the same evidence that makes a live one Crew's.
+  // Without that, a workspace whose sessions were removed by an earlier cleanup
+  // became permanently unreachable — every scope demanded its children, and its
+  // children no longer existed — which is exactly how 48 dead rows stayed in the
+  // store while the operator could only see them.
   const requiresOwnedChild = scope === 'crew' || scope === 'worktree';
-  const workspaceIds = workspaces.filter(row => {
+  // One decision per workspace, from that row alone: what a row is allowed to
+  // remove must never depend on which rows were visited before it.
+  const decideWorkspace = (row) => {
     const children = ids(row.sessionIds);
-    return withinTime(row) && (!requiresOwnedChild || children.length > 0)
-      && children.every(id => selected.has(id));
+    if (children.length === 0) return { ok: !requiresOwnedChild, absent: [] };
+    // Worktree scope marks a live child by its session header. A gone child has
+    // no header left, so the workspace's own path under the worktree root is the
+    // only marker there is.
+    if (scope === 'worktree' && row.worktree !== true && !children.every(id => worktreeSessions.has(id))) return { ok: false, absent: [] };
+    const gone = [];
+    for (const id of children) {
+      if (selected.has(id)) continue;
+      // Kept back by the scope, or gone with no record that Crew made it.
+      if (present.has(id) || !origin.has(id)) return { ok: false, absent: [] };
+      gone.push(id);
+    }
+    return { ok: true, absent: gone };
+  };
+  const absent = new Set();
+  const workspaceIds = workspaces.filter(row => {
+    if (!withinTime(row)) return false;
+    const decision = decideWorkspace(row);
+    if (!decision.ok) return false;
+    for (const id of decision.absent) absent.add(id);
+    return true;
   }).map(row => row.id).sort();
+  const absentSessionIds = [...absent].sort();
   const sessionIds = [...selected].sort();
   const signature = {
     operation, scope, cutoff,
-    workspaces: workspaces.map(row => ({ id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt, sessionIds: ids(row.sessionIds) })),
-    sessions: sessions.map(row => ({ id: row.id, createdAt: row.createdAt, revision: row.revision })),
+    workspaces: workspaces.map(row => ({ id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt, sessionIds: ids(row.sessionIds), worktree: row.worktree === true })),
+    sessions: sessions.map(row => ({ id: row.id, createdAt: row.createdAt, revision: row.revision, worktree: row.worktree === true })),
     active,
     crewSessionIds: [...origin].sort(),
   };
   return {
     schemaVersion: 1, operation, scope,
     before: cutoff === null ? null : new Date(cutoff).toISOString(),
-    timeBasis: 'createdAt', workspaceIds, sessionIds,
+    timeBasis: 'createdAt', workspaceIds, sessionIds, absentSessionIds,
     counts: { workspaces: workspaceIds.length, sessions: sessionIds.length },
     protectedCounts: { workspaces: workspaces.length - workspaceIds.length, sessions: sessions.length - sessionIds.length },
     executable: active.length === 0 && (workspaceIds.length > 0 || sessionIds.length > 0),

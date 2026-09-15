@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const WORKSPACE = 'harness/storages/workspace.json';
@@ -121,16 +121,52 @@ async function requireStopped(assertStopped) {
   if (typeof assertStopped !== 'function' || await assertStopped() !== true) fail('BACKEND_NOT_STOPPED');
 }
 
+/**
+ * Every session id that still has an artifact under `harness/sessions`.
+ *
+ * A request may name sessions as "already gone" so that a workspace they belong
+ * to stops being unreachable. That claim decides whether a record is deleted, so
+ * it is proven here rather than trusted: a live session named as absent would
+ * drop its workspace while leaving the artifact behind.
+ */
+function presentSessionIds(root) {
+  const sessionsRoot = pathInside(root, 'harness/sessions');
+  let projects;
+  try { projects = readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return new Set(); }
+  if (projects.length > 20000) fail('INVALID_FILE');
+  const present = new Set();
+  for (const project of projects) {
+    if (!project.isDirectory() || project.isSymbolicLink()) continue;
+    let entries;
+    try { entries = readdirSync(join(sessionsRoot, project.name), { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !validId(entry.name)) continue;
+      const directory = join(sessionsRoot, project.name, entry.name);
+      if (entry.isSymbolicLink()) { present.add(entry.name); continue; }
+      let files = [];
+      try { files = readdirSync(directory); } catch { present.add(entry.name); continue; }
+      if (files.some(name => /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name))) present.add(entry.name);
+    }
+  }
+  return present;
+}
+
 /** Internal offline primitive: caller must own the maintenance lease + update lock. */
 export async function archiveHistory({ crewRoot, request, assertStopped, archiveId = randomUUID() }) {
   await requireStopped(assertStopped);
   if (!request || !['archive', 'delete'].includes(request.operation) || !Array.isArray(request.artifacts)
     || !Array.isArray(request.sessionIds) || !Array.isArray(request.workspaceIds)
-    || request.artifacts.length > 10000 || request.workspaceIds.length > 10000) fail('INVALID_REQUEST');
+    || !Array.isArray(request.absentSessionIds ?? [])
+    || request.artifacts.length > 10000 || request.workspaceIds.length > 10000
+    || (request.absentSessionIds ?? []).length > 10000) fail('INVALID_REQUEST');
   const selectedSessions = new Set(request.sessionIds);
   const selectedWorkspaces = new Set(request.workspaceIds);
-  if ([...selectedSessions, ...selectedWorkspaces].some(id => !validId(id))
+  const absentSessions = new Set(request.absentSessionIds ?? []);
+  const removedSessions = new Set([...selectedSessions, ...absentSessions]);
+  if ([...removedSessions, ...selectedWorkspaces].some(id => !validId(id))
     || selectedSessions.size !== request.sessionIds.length || selectedWorkspaces.size !== request.workspaceIds.length
+    || absentSessions.size !== (request.absentSessionIds ?? []).length
+    || absentSessions.size !== removedSessions.size - selectedSessions.size
     || request.artifacts.length !== selectedSessions.size
     || new Set(request.artifacts.map(f => f.sessionId)).size !== selectedSessions.size
     || request.artifacts.some(f => !selectedSessions.has(f.sessionId))) fail('INVALID_SELECTION');
@@ -140,12 +176,16 @@ export async function archiveHistory({ crewRoot, request, assertStopped, archive
   const after = structuredClone(before);
   for (const id of selectedWorkspaces) {
     const record = before.tables.workspaces[id];
-    if (!record || record.sessionIds.some(sid => !selectedSessions.has(sid))) fail('PREVIEW_CHANGED');
+    if (!record || record.sessionIds.some(sid => !removedSessions.has(sid))) fail('PREVIEW_CHANGED');
     delete after.tables.workspaces[id];
   }
+  if (absentSessions.size > 0) {
+    const live = presentSessionIds(crewRoot);
+    for (const id of absentSessions) if (live.has(id)) fail('PREVIEW_CHANGED');
+  }
   after.global.workspaceIds = after.global.workspaceIds.filter(id => !selectedWorkspaces.has(id));
-  after.global.archivedSessionIds = after.global.archivedSessionIds.filter(id => !selectedSessions.has(id));
-  for (const record of Object.values(after.tables.workspaces)) record.sessionIds = record.sessionIds.filter(id => !selectedSessions.has(id));
+  after.global.archivedSessionIds = after.global.archivedSessionIds.filter(id => !removedSessions.has(id));
+  for (const record of Object.values(after.tables.workspaces)) record.sessionIds = record.sessionIds.filter(id => !removedSessions.has(id));
   let size = 0;
   const files = request.artifacts.map(file => {
     const bytes = readBounded(artifactPath(crewRoot, file));

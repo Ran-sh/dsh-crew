@@ -107,3 +107,57 @@ test('scope defaults to crew so a forgotten range cannot reach the operator sess
   input.crewSessionIds = ['old-session'];
   assert.deepEqual(plan(input).sessionIds, ['old-session'], 'the default must be the narrow scope');
 });
+
+// A cleanup used to be able to remove sessions and leave their workspaces behind:
+// every scope required a workspace's children to be selected, and the children no
+// longer existed to be selected. Those rows were then unreachable forever, and
+// all the operator could see was a sidebar full of workspaces that opened
+// nothing. The ledger still records who made those sessions, so the same evidence
+// that makes a live session Crew's makes a gone one Crew's too.
+test('a workspace whose sessions are already gone follows the ledger, not the file listing', async () => {
+  const plan = await planner();
+  const orphan = {
+    workspaces: [{ id: 'orphaned', createdAt: old, sessionIds: ['gone-session'] }],
+    sessions: [],
+    activeSessionIds: [],
+    crewSessionIds: ['gone-session'],
+  };
+  const crew = plan(orphan, { scope: 'crew' });
+  assert.deepEqual(crew.workspaceIds, ['orphaned']);
+  assert.deepEqual(crew.sessionIds, [], 'there is no artifact left to delete');
+  assert.deepEqual(crew.absentSessionIds, ['gone-session'], 'a gone child is reported, not hidden');
+  assert.equal(crew.executable, true);
+
+  // Absence from the ledger is not authorship, in either direction.
+  assert.deepEqual(plan({ ...orphan, crewSessionIds: [] }, { scope: 'crew' }).workspaceIds, []);
+  assert.deepEqual(plan({ ...orphan, crewSessionIds: [] }, { scope: 'all' }).workspaceIds, [],
+    'even the widest scope refuses to remove a record it cannot attribute');
+});
+
+test('a live session still protects the workspace that names it', async () => {
+  const plan = await planner();
+  const input = {
+    workspaces: [{ id: 'mixed', createdAt: old, sessionIds: ['gone-session', 'live-session'] }],
+    sessions: [{ id: 'live-session', createdAt: old, revision: 'r1' }],
+    activeSessionIds: [],
+    crewSessionIds: ['gone-session'],
+  };
+  // The gone child is covered, but the live one is not selected by this scope
+  // and is not Crew's: deleting the row would delete the operator's workspace.
+  assert.deepEqual(plan(input, { scope: 'crew' }).workspaceIds, [], 'a child that survives the scope keeps its workspace');
+  // `all` selects that child too, so the row follows both of its children out.
+  assert.deepEqual(plan(input, { scope: 'all' }).workspaceIds, ['mixed']);
+});
+
+test('worktree scope needs the path marker when there is no session header left to carry it', async () => {
+  const plan = await planner();
+  const orphan = {
+    workspaces: [{ id: 'orphaned', createdAt: old, sessionIds: ['gone-session'] }],
+    sessions: [],
+    activeSessionIds: [],
+    crewSessionIds: ['gone-session'],
+  };
+  assert.deepEqual(plan(orphan, { scope: 'worktree' }).workspaceIds, [], 'no header and no path marker');
+  assert.deepEqual(plan({ ...orphan, workspaces: [{ ...orphan.workspaces[0], worktree: true }] }, { scope: 'worktree' }).workspaceIds,
+    ['orphaned'], 'the workspace path under the worktree root is the marker that survives');
+});

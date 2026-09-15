@@ -42,6 +42,44 @@ test('archive refuses live backend, stale bytes and paths outside the session al
   assert.equal(readFileSync(join(f.root, f.file), 'utf8'), 'private conversation\n');
 });
 
+// The state this whole path exists for: a workspace left behind by an earlier
+// cleanup, whose sessions are already gone. There is no artifact to delete, so
+// the only thing the request can do is remove the record — and it has to prove
+// the session really is gone before that record goes.
+test('a workspace whose session is already gone can be removed, and the claim is proven', async t => {
+  const f = fixture(t); const api = await load();
+  const store = JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json'), 'utf8'));
+  store.tables.workspaces.w1.sessionIds = ['gone-session'];
+  const bytes = Buffer.from(JSON.stringify(store));
+  writeFileSync(join(f.root, 'harness/storages/workspace.json'), bytes);
+  rmSync(join(f.root, f.file), { force: true });
+  const claim = { operation: 'archive', workspaceHash: hash(bytes), workspaceIds: ['w1'], sessionIds: [], absentSessionIds: ['gone-session'], artifacts: [] };
+
+  // A live session named as absent would drop its workspace and leave the
+  // artifact behind, so the claim is checked against the session store.
+  const liveArtifact = join(f.root, 'harness/sessions/project/gone-session/session.jsonl');
+  mkdirSync(join(f.root, 'harness/sessions/project/gone-session'), { recursive: true });
+  writeFileSync(liveArtifact, 'still here\n');
+  await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: claim, assertStopped: () => true }), /CHANGED/);
+  rmSync(liveArtifact, { force: true });
+
+  const result = await api.archiveHistory({ crewRoot: f.root, request: claim, assertStopped: () => true });
+  assert.equal(result.counts.workspaces, 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json'), 'utf8')).global.workspaceIds, []);
+  await api.restoreHistory({ crewRoot: f.root, archiveId: result.id, assertStopped: () => true });
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'harness/storages/workspace.json'), 'utf8')), store,
+    'the record comes back exactly, with the gone child still named');
+});
+
+test('an absent-session claim that overlaps the deletions it is not is rejected', async t => {
+  const f = fixture(t); const api = await load();
+  const overlapping = { ...f.request, sessionIds: ['session-a'], absentSessionIds: ['session-a'] };
+  await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: overlapping, assertStopped: () => true }), /INVALID_SELECTION/);
+  const misdeclared = { ...f.request, absentSessionIds: ['session-a'] };
+  await assert.rejects(api.archiveHistory({ crewRoot: f.root, request: misdeclared, assertStopped: () => true }), /INVALID_SELECTION/,
+    'a session cannot be both deleted and declared already gone');
+});
+
 test('restore fails without overwriting a new conflicting log', async t => {
   const f = fixture(t); const api = await load();
   const archived = await api.archiveHistory({ crewRoot: f.root, request: f.request, assertStopped: () => true });

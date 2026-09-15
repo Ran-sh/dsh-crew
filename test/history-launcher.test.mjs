@@ -28,3 +28,38 @@ test('native Crew panel includes history controls without adding them to the off
   assert.match(full, /<HistoryPanel/);
   assert.doesNotMatch(quick, /HistoryPanel/);
 });
+
+// The window has to cover every server on the DSH home, not just the hub: the
+// managed frontend on 3080 holds the same workspace store in memory and writes
+// the whole file back. The launcher stops it and proves both ports free; this is
+// the independent re-probe the operation runs before it trusts that.
+test('a stopped window is proven by both ports, not by the launcher word', async () => {
+  const { stoppedWindowIsClean } = await import('../src/history/runner.mjs');
+  const session = (extra = {}) => ({ ok: true, state: 'present', session: { lease: 'L', runtime_id: 'R', ...extra } });
+  const probe = free => async (port) => { if (!free.includes(port)) throw Error(`port ${port} must not be probed`); return true; };
+
+  assert.equal(await stoppedWindowIsClean({ session: session(), lease: 'L', runtimeId: 'R', probe: probe([3210]) }), true,
+    'a hub-only window does not need 3080');
+  assert.equal(await stoppedWindowIsClean({ session: session({ frontend_stopped: true }), lease: 'L', runtimeId: 'R', probe: probe([3210, 3080]) }), true);
+  assert.equal(await stoppedWindowIsClean({ session: session({ frontend_stopped: true }), lease: 'L', runtimeId: 'R',
+    probe: async (port) => port !== 3080 }), false, 'a frontend that came back is not a clean window');
+  assert.equal(await stoppedWindowIsClean({ session: { ok: true, state: 'present', session: { lease: 'other', runtime_id: 'R' } }, lease: 'L', runtimeId: 'R', probe: async () => true }), false);
+  assert.equal(await stoppedWindowIsClean({ session: { ok: true, state: 'absent' }, lease: 'L', runtimeId: 'R', probe: async () => true }), false);
+  assert.equal(await stoppedWindowIsClean({ session: { ok: false }, lease: 'L', runtimeId: 'R', probe: async () => true }), false);
+  assert.equal(await stoppedWindowIsClean({ session: session(), lease: 'L', runtimeId: 'R', probe: async () => false }), false);
+});
+
+test('the launcher window is opt-in, recorded, and restored', () => {
+  const source = readFileSync(helper, 'utf8');
+  const lifecycle = readFileSync(new URL('../src/install/npx-lifecycle.mjs', import.meta.url), 'utf8');
+  // Opt-in: the npx lifecycle's stop defaults the flag off, so a runtime-tree
+  // swap keeps stopping only the hub.
+  assert.match(lifecycle, /stopOwnedBackend: async \(\{ lease = null, runtimeId = null, refreshFrontend = false \}/);
+  assert.match(lifecycle, /extra: refreshFrontend \? \{ refresh_frontend: true \} : null/);
+  // The window records what it stopped, publishes STOPPED only with both, and
+  // the matching start gives it back.
+  assert.match(source, /frontend_stopped = \$FrontendStopped/);
+  assert.match(source, /Set-MaintenanceSession \$request \$frontendStopped/);
+  assert.match(source, /SUPERVISOR_FRONTEND_STOP_FAILED/);
+  assert.match(source, /if \(\$restoreFrontend\) \{ Start-CrewManagedFrontendQuietly \}/);
+});

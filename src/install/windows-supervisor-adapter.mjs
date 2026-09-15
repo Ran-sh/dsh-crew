@@ -281,8 +281,11 @@ export function createWindowsSupervisorHandoffHooks({
     verifyExactWatcher: async ({ expected, role }) => inspect(expected, {
       allowHelperDrift: role === 'old' && !sameHash(expected?.helper_hash, target.helper_hash),
     }),
-    maintenanceStop: async ({ lease, runtime_id: runtimeId }) => maintenanceClient?.stopOwnedBackend?.({ lease, runtimeId })
-      ?? { ok: false, code: 'SUPERVISOR_MAINTENANCE_UNAVAILABLE' },
+    maintenanceStop: async ({ lease, runtime_id: runtimeId, refresh_frontend: refreshFrontend = false }) => maintenanceClient?.stopOwnedBackend?.({
+      lease,
+      runtimeId,
+      ...(refreshFrontend ? { refreshFrontend: true } : {}),
+    }) ?? { ok: false, code: 'SUPERVISOR_MAINTENANCE_UNAVAILABLE' },
     maintenanceStatus: async ({ lease, runtime_id: runtimeId }) => {
       const durable = readMaintenanceSession(appRoot);
       if (!durable.ok) return durable;

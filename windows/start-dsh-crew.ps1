@@ -227,7 +227,7 @@ function Test-CrewWebSessionUrl {
 }
 
 function Open-CrewManagedFrontend {
-  param([int] $TimeoutSeconds = 90)
+  param([int] $TimeoutSeconds = 90, [switch] $Quiet)
   # The 3080 frontend boots from the same Crew-managed Harness entry as 3210,
   # against that entry's own DSH_HOME (npm runtime -> Crew home, source cohort
   # -> its own tree). No official ~/.dsh state is read or written here.
@@ -253,7 +253,7 @@ function Open-CrewManagedFrontend {
       if (-not (Test-OfficialWebReady)) { throw 'The Crew-managed 3080 frontend is not ready; its process was left running.' }
       $existingUrl = Get-CrewWebSessionUrl
       if ($existingUrl -and (Test-CrewWebSessionUrl -Url $existingUrl)) {
-        Open-CrewBrowserUrl -Url $existingUrl
+        if (-not $Quiet) { Open-CrewBrowserUrl -Url $existingUrl }
         Write-LaunchLog 'Opened the existing Crew-managed Harness frontend on 3080 with its session URL.'
         return $true
       }
@@ -289,7 +289,10 @@ function Open-CrewManagedFrontend {
         }
         if (Test-OfficialWebReady) {
           $startedUrl = Get-CrewWebSessionUrl -OutputLog $stdout
-          if ($startedUrl) { Open-CrewBrowserUrl -Url $startedUrl; return $true }
+          if ($startedUrl) {
+            if (-not $Quiet) { Open-CrewBrowserUrl -Url $startedUrl }
+            return $true
+          }
         }
       }
       if ($process.HasExited) { throw ('Crew-managed Harness exited before readiness. Diagnostic log: {0}' -f $stderr) }
@@ -302,14 +305,70 @@ function Open-CrewManagedFrontend {
   }
 }
 
-function Test-OfficialWebReady {
-  try {
+function Test-OfficialWebReady {  try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3080/' -TimeoutSec 2
     return $response.StatusCode -ge 200 -and $response.StatusCode -lt 300
   } catch {
     # An authenticated official UI may reject this cookie-free health request.
     if ($_.Exception.Response) { return [int] $_.Exception.Response.StatusCode -in @(401, 403) }
     return $false
+  }
+}
+
+# ---- The other server on this DSH home -------------------------------------
+# The Crew-managed frontend on 3080 boots from the same Crew-managed entry as the
+# hub, so it runs on the same DSH home: same sessions, same settings, and the
+# same `storages/workspace.json`. DSH's JSON storage replaces that whole file and
+# lets the last writer win, so an external rewrite of it only sticks while no
+# server holds the file in memory. A history maintenance is exactly such an
+# external rewrite, which is why it asks for this server to be stopped too —
+# stopping the hub alone is what let a cleanup be undone minutes later.
+function Stop-CrewManagedFrontend {
+  param([int] $TimeoutSeconds = 15)
+  $port = Get-PortState -Port 3080
+  if ($port.State -eq 'free') { return $true }
+  # An unenumerable listener is not provably free: fail closed rather than write
+  # under a server that might hold the very file being rewritten.
+  if ($port.State -ne 'occupied' -or -not $port.Pid) { return $false }
+  $ours = $false
+  if ($dshCliIsNodeEntry) {
+    $official = [pscustomobject]@{ NodePath = $dshCommand; Entry = $dshCli; Profile = 'web' }
+    $ours = Test-OfficialHarnessListener -OwnerPid ([int] $port.Pid) -Official $official -Profile 'web'
+  }
+  if (-not $ours) {
+    # Crew did not start this listener, so it cannot be proven to share the
+    # workspace store. A Crew-patched one is on a Crew home either way and is
+    # refused; the legacy official frontend and anything unrelated keep running,
+    # exactly as the start path leaves a foreign 3080 alone.
+    $patched = $false
+    try {
+      $probe = Invoke-RestMethod -Uri 'http://127.0.0.1:3080/_dsh/dsh-crew/bridge-status' -TimeoutSec 2
+      $patched = $probe.surface -eq 'official-bridge'
+    } catch { $patched = $false }
+    if ($patched) { return $false }
+    Write-LaunchLog 'A 3080 listener that is not the Crew-managed frontend was left running; it does not serve this DSH home.' 'WARN'
+    return $true
+  }
+  try { Stop-Process -Id ([int] $port.Pid) -Force -ErrorAction Stop } catch { return $false }
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $port = Get-PortState -Port 3080
+    if ($port.State -eq 'free') { return $true }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  Write-LaunchLog ('The Crew-managed frontend on 3080 did not release the port within {0}s.' -f $TimeoutSeconds) 'WARN'
+  return $false
+}
+
+function Start-CrewManagedFrontendQuietly {
+  # Give back what a maintenance window took. Never fatal: the next desktop
+  # launch starts the frontend anyway, and that is where the operator reloads
+  # from, because a restarted frontend answers on a new session URL.
+  try {
+    if (Open-CrewManagedFrontend -Quiet) { Write-LaunchLog 'Crew-managed frontend on 3080 is serving again after maintenance.' }
+    else { Write-LaunchLog 'Crew-managed frontend on 3080 was not restarted after maintenance; the next desktop launch will start it.' 'WARN' }
+  } catch {
+    Write-LaunchLog ('Crew-managed frontend on 3080 could not be restarted after maintenance: {0}' -f $_.Exception.Message) 'WARN'
   }
 }
 
@@ -824,7 +883,7 @@ function Test-MaintenanceSessionActive {
 }
 
 function Set-MaintenanceSession {
-  param([object] $Request)
+  param([object] $Request, [bool] $FrontendStopped = $false)
   # Strong-failure semantics: the STOPPED result may only be published after
   # the session is durably written AND read back with exact identity. Any
   # failure returns $false and the caller must NOT claim the stopped window.
@@ -836,6 +895,9 @@ function Set-MaintenanceSession {
       runtime_id = $Request.runtime_id
       stopped_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
       request_id = $Request.request_id
+      # Recorded so the matching start restores what this window stopped: the
+      # 3080 frontend shares the workspace store the maintenance is rewriting.
+      frontend_stopped = $FrontendStopped
     } | ConvertTo-Json -Compress
     $temp = Join-Path $crewSupervisorRoot ("maintenance-session.{0}.tmp" -f $PID)
     Write-Utf8NoBom -Path $temp -Content $session
@@ -941,8 +1003,30 @@ function Invoke-CrewMaintenanceRequests {
         Write-LaunchLog ('Maintenance-stop {0} rejected: live runtime_id mismatch.' -f $request.request_id) 'WARN'
         continue
       }
+      # `refresh_frontend` is how a history maintenance asks for the whole DSH
+      # home to be quiet, not just 3210: the managed frontend shares the
+      # workspace store this operation rewrites. The npx lifecycle does not ask,
+      # because a runtime-tree swap does not touch that store.
+      $refreshFrontend = $false
+      if ($request.extra) {
+        $refreshFlag = $request.extra.PSObject.Properties['refresh_frontend']
+        $refreshFrontend = $null -ne $refreshFlag -and $refreshFlag.Value -eq $true
+      }
+      $frontendStopped = $false
+      if ($refreshFrontend) {
+        # Stopped BEFORE the backend: a failure here must abort with everything
+        # still running. Aborting after 3210 is down would leave no session
+        # published, and ordinary supervision would restart it mid-transaction.
+        if (-not (Stop-CrewManagedFrontend)) {
+          Write-MaintenanceResult $request 'SUPERVISOR_FRONTEND_STOP_FAILED'
+          Write-LaunchLog ('Maintenance-stop {0} could not stop the Crew-managed frontend on 3080; nothing was stopped.' -f $request.request_id) 'ERROR'
+          continue
+        }
+        $frontendStopped = $true
+      }
       $port = Get-PortState $crew.Port
       if ($port.State -ne 'occupied' -or -not $port.Pid) {
+        if ($frontendStopped) { Start-CrewManagedFrontendQuietly }
         Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
         continue
       }
@@ -955,15 +1039,16 @@ function Invoke-CrewMaintenanceRequests {
         # durably written AND read back with exact identity. A session write
         # failure must never tell npx it owns a stopped window it cannot
         # later prove (that race auto-restarts 3210 mid tree-swap).
-        $sessionDurable = Set-MaintenanceSession $request
+        $sessionDurable = Set-MaintenanceSession $request $frontendStopped
         if ($sessionDurable) {
-          Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id }
+          Write-MaintenanceResult $request 'STOPPED' @{ lease = $request.lease; stopped_runtime_id = $request.runtime_id; frontend_stopped = $frontendStopped }
           Write-LaunchLog ('Maintenance-stop {0} executed; lease issued.' -f $request.request_id)
         } else {
           Write-MaintenanceResult $request 'SUPERVISOR_SESSION_PERSIST_FAILED'
           Write-LaunchLog ('Maintenance-stop {0} stopped the process but the STOPPED session could not be persisted; NOT publishing STOPPED.' -f $request.request_id) 'ERROR'
         }
       } else {
+        if ($frontendStopped) { Start-CrewManagedFrontendQuietly }
         Write-MaintenanceResult $request 'SUPERVISOR_STOP_FAILED'
       }
     } elseif ($request.operation -eq 'maintenance-start') {
@@ -985,6 +1070,8 @@ function Invoke-CrewMaintenanceRequests {
         Write-LaunchLog ('Maintenance-start {0} rejected: no matching STOPPED session (lease/identity mismatch).' -f $request.request_id) 'WARN'
         continue
       }
+      $frontendProperty = $session.PSObject.Properties['frontend_stopped']
+      $restoreFrontend = $null -ne $frontendProperty -and $frontendProperty.Value -eq $true
       $livePort = Get-PortState $crew.Port
       if ($livePort.State -ne 'free') {
         # occupied AND unknown both fail closed: the stopped window is not
@@ -1026,6 +1113,9 @@ function Invoke-CrewMaintenanceRequests {
         Write-MaintenanceResult $request 'VERIFY_FAILED' @{ lease = $lease; runtime_id = $failedRuntimeId }
         Write-LaunchLog ('Maintenance-start {0} verification failed.' -f $request.request_id) 'ERROR'
       }
+      # After the result, so a slow frontend boot never delays the transaction
+      # this start is here to close.
+      if ($restoreFrontend) { Start-CrewManagedFrontendQuietly }
     } else {
       # Unknown maintenance op: remove and report.
       Write-MaintenanceResult $request 'MAINTENANCE_UNKNOWN_OP'

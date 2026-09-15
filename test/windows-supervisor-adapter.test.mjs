@@ -69,14 +69,19 @@ test('adapter preserves the durable maintenance lease and expected versions', as
   });
 
   await hooks.maintenanceStop({ lease: 'lease-1', runtime_id: 'runtime-old' });
-  await hooks.maintenanceStart({ lease: 'lease-1', runtime_id: 'runtime-old' });
-  assert.deepEqual(calls, [
+  await hooks.maintenanceStart({ lease: 'lease-1', runtime_id: 'runtime-old' });  assert.deepEqual(calls, [
     ['stop', { lease: 'lease-1', runtimeId: 'runtime-old' }],
     ['start', {
       lease: 'lease-1', runtimeId: 'runtime-old',
       expectedCrewVersion: '2.0.0', expectedDshVersion: '0.1.2-rc.1',
     }],
   ]);
+
+  // A history maintenance rewrites the workspace store the managed 3080
+  // frontend shares, so it asks for that server to be stopped by the same
+  // window. A runtime-tree swap does not, and sends no flag at all.
+  await hooks.maintenanceStop({ lease: 'lease-2', runtime_id: 'runtime-old', refresh_frontend: true });
+  assert.deepEqual(calls.at(-1), ['stop', { lease: 'lease-2', runtimeId: 'runtime-old', refreshFrontend: true }]);
 });
 
 test('adapter permits helper-file drift only for a fully attested stale watcher', async () => {

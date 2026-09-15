@@ -160,6 +160,86 @@ maybe('the interactive entry is wired to the start-only wait', () => {
   assert.ok(flow.indexOf('Wait-CrewSupervisorStarted') < flow.indexOf('Ensure-CrewSupervisorRunning'));
 });
 
+// The managed frontend shares the hub's workspace store, so a history
+// maintenance stops it for the same window. Which listener may be stopped is
+// the question these pin: the launcher's own proof, then the Crew bridge as the
+// fallback for a Crew-patched server it did not start.
+function frontendScenario(body) {
+  const script = [
+    `. '${helper.replaceAll("'", "''")}'`,
+    '$script:stopped = @()',
+    '$script:portState = "free"',
+    '$script:verified = $true',
+    '$script:bridgeAnswers = $false',
+    // The installed entry is a node entry in production; the test-import seam
+    // has no installed CLI to inspect, so the scenario states it.
+    '$script:dshCliIsNodeEntry = $true',
+    'function Write-LaunchLog { param($Message,$Level) }',
+    'function Get-PortState { param([int] $Port) if ($script:portState -eq "free") { return [pscustomobject]@{ State="free"; Pid=$null; Error=$null } }; if ($script:portState -eq "unknown") { return [pscustomobject]@{ State="unknown"; Pid=$null; Error="probe failed" } }; return [pscustomobject]@{ State="occupied"; Pid=4242; Error=$null } }',
+    'function Test-OfficialHarnessListener { param($OwnerPid,$Official,[string]$Profile) return $script:verified }',
+    'function Stop-Process { [CmdletBinding()] param([int]$Id,[switch]$Force) $script:stopped += $Id; $script:portState = "free" }',
+    'function Invoke-RestMethod { param($Uri,$TimeoutSec) if (-not $script:bridgeAnswers) { throw "no bridge" }; return [pscustomobject]@{ surface="official-bridge" } }',
+    body,
+  ].join('\n');
+  const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8', windowsHide: true, timeout: 60_000,
+    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout.trim());
+}
+
+maybe('a maintenance window stops the verified managed frontend', () => {
+  const result = frontendScenario([
+    '$script:portState = "occupied"; $script:verified = $true',
+    '$ok = Stop-CrewManagedFrontend -TimeoutSeconds 1',
+    '@{ok=$ok;stopped=@($script:stopped);state=$script:portState} | ConvertTo-Json -Compress',
+  ].join('\n'));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.stopped, [4242]);
+  assert.equal(result.state, 'free');
+});
+
+maybe('a Crew-patched listener the launcher did not start is refused, not stopped', () => {
+  const result = frontendScenario([
+    '$script:portState = "occupied"; $script:verified = $false; $script:bridgeAnswers = $true',
+    '$ok = Stop-CrewManagedFrontend -TimeoutSeconds 1',
+    '@{ok=$ok;stopped=@($script:stopped);state=$script:portState} | ConvertTo-Json -Compress',
+  ].join('\n'));
+  assert.equal(result.ok, false, 'it may hold the store being rewritten');
+  assert.deepEqual(result.stopped, []);
+  assert.equal(result.state, 'occupied');
+});
+
+maybe('a foreign 3080 that is not Crew-patched is left running and does not block', () => {
+  const result = frontendScenario([
+    '$script:portState = "occupied"; $script:verified = $false; $script:bridgeAnswers = $false',
+    '$ok = Stop-CrewManagedFrontend -TimeoutSeconds 1',
+    '@{ok=$ok;stopped=@($script:stopped);state=$script:portState} | ConvertTo-Json -Compress',
+  ].join('\n'));
+  assert.equal(result.ok, true, 'the legacy official frontend serves its own home');
+  assert.deepEqual(result.stopped, []);
+  assert.equal(result.state, 'occupied');
+});
+
+maybe('an unenumerable 3080 fails closed and a free one is already clean', () => {
+  const unknown = frontendScenario([
+    '$script:portState = "unknown"',
+    '$ok = Stop-CrewManagedFrontend -TimeoutSeconds 1',
+    '@{ok=$ok;stopped=@($script:stopped)} | ConvertTo-Json -Compress',
+  ].join('\n'));
+  assert.equal(unknown.ok, false, 'an unprovable listener is not a clean window');
+  assert.deepEqual(unknown.stopped, []);
+
+  const free = frontendScenario([
+    '$script:portState = "free"',
+    '$ok = Stop-CrewManagedFrontend -TimeoutSeconds 1',
+    '@{ok=$ok;stopped=@($script:stopped)} | ConvertTo-Json -Compress',
+  ].join('\n'));
+  assert.equal(free.ok, true);
+  assert.deepEqual(free.stopped, []);
+});
+
 maybe('Windows PowerShell 5.1 parses the root-array frontend overlay', () => {
   const home = mkdtempSync(join(tmpdir(), 'dsh-crew-overlay-'));
   try {

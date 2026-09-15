@@ -1,6 +1,6 @@
 {
   "name": "dsh-crew",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Dispatch subtasks to DeepSeek Harness (DSH) agents as native subagents with live progress",
   "author": {
     "name": "ZSeven-W"
@@ -8,7 +8,9 @@
   "mcpServers": {
     "dsh-crew": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/src/server.mjs"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/src/server.mjs"
+      ]
     }
   }
 }

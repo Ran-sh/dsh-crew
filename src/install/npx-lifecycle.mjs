@@ -1639,7 +1639,7 @@ export function createCrewSupervisor({
     }
   }
   return {
-    stopOwnedBackend: async ({ lease = null, runtimeId = null } = {}) => {
+    stopOwnedBackend: async ({ lease = null, runtimeId = null, refreshFrontend = false } = {}) => {
       const { readMaintenanceSession } = await import('../supervisor/restart-request.mjs');
       const durable = readMaintenanceSession(appRoot);
       if (!durable.ok) {
@@ -1675,7 +1675,11 @@ export function createCrewSupervisor({
         lease: lease ?? `txn-${now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         runtime_id: identity.runtime_id,
       };
-      const result = await writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity });
+      const result = await writeMaintenance({ operation: 'maintenance-stop', lease: transaction.lease, identity,
+        // A history maintenance rewrites the workspace store the managed 3080
+        // frontend shares, so it asks for that server too. A runtime-tree swap
+        // does not, and leaves the flag unset.
+        extra: refreshFrontend ? { refresh_frontend: true } : null });
       if (!result.ok) {
         // A failed stop must not leave a usable lease behind: clear it so a
         // later startOwnedBackend() fails closed instead of presenting a

@@ -77,12 +77,15 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
     for (const row of sessions) if (crewSet.has(row.id)) row.crew = true;
     // The isolated-workspace marker: the hub stamps every worktree session with a
     // cwd under the Crew worktree root, so that subset is scopeable on its own.
+    // A workspace carries the same marker from its own path, which is all that is
+    // left of a workspace whose sessions were already removed.
     const worktreeRoot = defaultWorktreeRoot().replaceAll('\\', '/').toLowerCase();
-    for (const row of sessions) {
-      if (row.crew === true && typeof row.cwd === 'string' && row.cwd.replaceAll('\\', '/').toLowerCase().startsWith(worktreeRoot)) row.worktree = true;
-    }
+    const underWorktreeRoot = value => typeof value === 'string' && value.replaceAll('\\', '/').toLowerCase().startsWith(worktreeRoot);
+    for (const row of sessions) if (row.crew === true && underWorktreeRoot(row.cwd)) row.worktree = true;
+    for (const row of workspaces) if (underWorktreeRoot(row.path)) row.worktree = true;
     const plan = planHistoryCleanup({ workspaces, sessions, crewSessionIds, activeSessionIds: gate.idle() ? [] : ['active-agent'] }, options);
     const selected = new Set(plan.sessionIds);
+    const alreadyGone = new Set(plan.absentSessionIds ?? []);
     const byId = new Map(sessions.map(row => [row.id, row]));
     const queue = sessions.filter(row => !selected.has(row.id));
     for (let i = 0; i < queue.length; i++) {
@@ -90,12 +93,16 @@ export function createHistoryService({ crewRoot, agents, persistence, runtimeId,
       if (parent && selected.delete(parent.id)) queue.push(parent);
     }
     plan.sessionIds = plan.sessionIds.filter(id => selected.has(id));
-    plan.workspaceIds = plan.workspaceIds.filter(id => store.tables.workspaces[id].sessionIds.every(sid => selected.has(sid)));
+    // Same rule the plan used, re-applied after the ancestor closure dropped
+    // sessions from the selection: a workspace follows its children, and a child
+    // the plan proved Crew's own but already removed still counts.
+    plan.workspaceIds = plan.workspaceIds.filter(id => store.tables.workspaces[id].sessionIds.every(sid => selected.has(sid) || alreadyGone.has(sid)));
     plan.counts = { workspaces: plan.workspaceIds.length, sessions: plan.sessionIds.length };
     plan.executable = gate.idle() && plan.counts.workspaces + plan.counts.sessions > 0;
     if (!plan.executable && !plan.blockedReason) plan.blockedReason = 'EMPTY_SELECTION';
     const request = { operation: plan.operation, workspaceHash: historyHash(bytes), workspaceIds: plan.workspaceIds,
-      sessionIds: plan.sessionIds, artifacts: sessions.filter(row => selected.has(row.id)).map(row => row.artifact) };
+      sessionIds: plan.sessionIds, absentSessionIds: plan.absentSessionIds ?? [],
+      artifacts: sessions.filter(row => selected.has(row.id)).map(row => row.artifact) };
     const revision = historyHash(JSON.stringify([runtimeId, plan.revision, request]));
     return { plan: { ...plan, revision, items: workspaces.filter(row => plan.workspaceIds.includes(row.id)).slice(0, 100).map(row => ({ id: row.id, title: row.title })) }, request };
   }

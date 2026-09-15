@@ -19,6 +19,17 @@ function verifyDisk(root, manifest) {
   }
 }
 
+function removedWorkspaceIds(root, archiveId) {
+  const manifest = readHistoryManifest(root, archiveId);
+  return Object.keys(manifest.before.tables.workspaces).filter(id => !Object.hasOwn(manifest.after.tables.workspaces, id));
+}
+
+function workspacesStillPresent(root, ids) {
+  if (ids.length === 0) return [];
+  const current = decodeWorkspaceStore(readHistoryBytes(historyPath(root, 'harness/storages/workspace.json')));
+  return ids.filter(id => Object.hasOwn(current.tables.workspaces, id));
+}
+
 /** Detached executor core; injected boundaries make the real transaction testable. */
 export async function runHistoryOperation({ crewRoot, id, acquire, release, supervisor, checkFence,
   assertStopped, verifyRunning, recover = false }) {
@@ -46,7 +57,11 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
     if (!alreadyStarted) {
       if (!recover || await assertStopped(state) !== true) await checkFence(state);
       save('STOPPING');
-      const stopped = await supervisor.stopOwnedBackend({ lease: state.lease, runtimeId: state.runtimeId });
+      // `refresh_frontend`: this operation rewrites `storages/workspace.json`,
+      // which the Crew-managed frontend on 3080 shares, so the launcher stops
+      // that server for the same window and starts it again afterwards. The npx
+      // lifecycle stops only 3210, because a tree swap leaves that file alone.
+      const stopped = await supervisor.stopOwnedBackend({ lease: state.lease, runtimeId: state.runtimeId, refresh_frontend: true });
       if (!stopped?.ok || await assertStopped(state) !== true) throw Error('HISTORY_STOP_NOT_VERIFIED');
       const archiveId = state.operation === 'restore' ? state.archiveId : state.id;
       const manifestFile = historyPath(crewRoot, `history/transactions/${archiveId}/manifest.json`);
@@ -73,6 +88,21 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
     }
     save('VERIFYING');
     if (await verifyRunning(state) !== true) throw Error('HISTORY_RESTART_NOT_VERIFIED');
+    // The store this operation rewrote is shared with every other DSH server on
+    // the same home, and each of them writes the whole file back from memory. A
+    // process that stayed live across the window puts back exactly what was
+    // removed, and from here that is indistinguishable from success: the
+    // manifest is applied and the runtime is up. Ask the disk instead, and say
+    // so rather than report a cleanup that did not happen.
+    if (!state.rolledBack && state.operation !== 'restore') {
+      const returned = workspacesStillPresent(crewRoot, removedWorkspaceIds(crewRoot, state.archiveId ?? state.id));
+      if (returned.length > 0) {
+        state = { ...state, phase: 'FAILED', code: 'HISTORY_STORE_CHANGED_AFTER_APPLY',
+          counts: { ...(state.counts ?? {}), returned: returned.length } };
+        writeHistoryState(crewRoot, state);
+        return state;
+      }
+    }
     if (state.operation === 'delete' && !state.rolledBack) {
       await finalizeHistoryDeletion({ crewRoot, archiveId: state.archiveId ?? state.id, assertRestarted: () => verifyRunning(state) });
     }

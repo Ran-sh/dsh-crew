@@ -13,9 +13,13 @@ async function fixture(t) {
   writeFileSync(file, 'test conversation');
   writeFileSync(join(root, 'harness/storages/workspace.json'), JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: { initialized: true, workspaceIds: ['w1'], archivedSessionIds: [] }, tables: { workspaces: { w1: { path: '/project', title: 'Example', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', sessionIds: ['session-a'] } } } }));
   const agents = { list: () => [], create: async () => ({}) };
-  const persistence = { supportsRawArtifacts: true, listSnapshots: async () => existsSync(file) ? [{ header: { id: 'session-a', createdAt: 1767225600000 }, revision: 'revision1' }] : [], locate: () => ({ kind: 'jsonl', path: file }) };
-  const { createHistoryService } = await import('../src/history/service.mjs');
+  const persistence = { supportsRawArtifacts: true, listSnapshots: async () => existsSync(file) ? [{ header: { id: 'session-a', createdAt: 1767225600000 }, revision: 'revision1' }] : [], locate: () => ({ kind: 'jsonl', path: file }) };  const { createHistoryService } = await import('../src/history/service.mjs');
   const launched = [];
+  const origins = new Set();
+  // The writer probe asks the live 3080 frontend whether it shares this home,
+  // and the fixture's home is a temp directory: left real, the answer would
+  // depend on whether the operator's frontend happens to be running.
+  const writers = { current: null };
   let now = 1000;
   // The default provenance source is the machine-global ledger, and the plan
   // revision hashes its whole contents — so a test that reads the operator's real
@@ -23,9 +27,10 @@ async function fixture(t) {
   // an intermittent HISTORY_PREVIEW_CHANGED under parallel CI load, in two
   // different tests of this file. The fixture owns this input like it already
   // owns the store and the clock.
-  const service = createHistoryService({ crewRoot: root, agents, persistence, runtimeId: 'test-runtime', launch: async id => launched.push(id), now: () => now, readOrigins: () => new Set() });
+  const service = createHistoryService({ crewRoot: root, agents, persistence, runtimeId: 'test-runtime', launch: async id => launched.push(id), now: () => now,
+    readOrigins: () => origins });
   t.after(() => service.dispose());
-  return { root, file, agents, persistence, service, launched, advance: () => { now += 700000; } };
+  return { root, file, agents, persistence, service, launched, origins, advance: () => { now += 700000; } };
 }
 
 test('preview is non-destructive and execution requires confirmation plus a fresh server-owned plan', async t => {
@@ -196,4 +201,43 @@ test('recovery finishes deletion after a late successful restart without another
   await runHistoryOperation({ ...deps, recover: true, verifyRunning: async () => true, supervisor: { stopOwnedBackend: async () => { stops++; throw Error('unexpected stop'); } } });
   assert.equal(stops, 0); assert.equal(f.service.status().phase, 'DONE');
   assert.equal(existsSync(join(f.root, `history/transactions/${op.id}/files/0.bin`)), false);
+});
+
+test('a workspace left behind by an earlier cleanup is cleared, and a writer that puts it back is reported', async t => {
+  const f = await fixture(t);
+  const { runHistoryOperation } = await import('../src/history/operation.mjs');
+  const storeFile = join(f.root, 'harness/storages/workspace.json');
+  const withOrphan = JSON.parse(readFileSync(storeFile, 'utf8'));
+  withOrphan.tables.workspaces.w1.sessionIds = ['gone-session'];
+  writeFileSync(storeFile, JSON.stringify(withOrphan));
+  rmSync(f.file, { force: true });
+  f.persistence.listSnapshots = async () => [];
+  f.origins.add('gone-session');
+  const deps = () => { let stopped = false; return { crewRoot: f.root, acquire: () => ({ ok: true }), release: () => ({ ok: true }),
+    checkFence: () => f.service.fencedCheck(), assertStopped: () => stopped,
+    supervisor: { stopOwnedBackend: async () => { stopped = true; return { ok: true }; }, startOwnedBackend: async () => { stopped = false; return { ok: true }; } } }; };
+
+  const p = await f.service.preview({ operation: 'delete', scope: 'crew' });
+  assert.equal(p.counts.workspaces, 1, 'the orphaned workspace is reachable now');
+  assert.equal(p.counts.sessions, 0, 'and there is no session left to delete');
+  const op = await f.service.execute({ planId: p.planId, confirm: true, acknowledgement: 'DELETE' });
+  await runHistoryOperation({ ...deps(), id: op.id, verifyRunning: async () => true });
+  assert.equal(f.service.status().phase, 'DONE');
+  assert.deepEqual(JSON.parse(readFileSync(storeFile, 'utf8')).global.workspaceIds, []);
+
+  // Now the same thing with a writer still holding the pre-cleanup list: the
+  // rewrite is applied, the runtime comes back, and the rows return. Reporting
+  // DONE there is the bug this check exists for.
+  const again = JSON.parse(readFileSync(storeFile, 'utf8'));
+  again.tables.workspaces.w1 = withOrphan.tables.workspaces.w1;
+  again.global.workspaceIds = ['w1'];
+  const restoredBytes = JSON.stringify(again);
+  writeFileSync(storeFile, restoredBytes);
+  const next = await f.service.preview({ operation: 'delete', scope: 'crew' });
+  const second = await f.service.execute({ planId: next.planId, confirm: true, acknowledgement: 'DELETE' });
+  const status = await runHistoryOperation({ ...deps(), id: second.id, verifyRunning: async () => { writeFileSync(storeFile, restoredBytes); return true; } });
+  assert.equal(status.phase, 'FAILED');
+  assert.equal(status.code, 'HISTORY_STORE_CHANGED_AFTER_APPLY');
+  assert.equal(status.counts.returned, 1);
+  assert.equal(f.service.status().code, 'HISTORY_STORE_CHANGED_AFTER_APPLY');
 });
