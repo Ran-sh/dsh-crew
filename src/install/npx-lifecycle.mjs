@@ -1263,6 +1263,25 @@ export function validateInstalledPayload(dir, { expectedName, expectedVersion, a
 // pointer write LAST -> clear journal -> GC (prior protected until commit).
 // A crash at any point before the pointer write leaves the prior release
 // authoritative and the journal behind for reconcileUpdateJournal.
+/**
+ * Drop the stage marker a copied candidate carries from the moment it is written.
+ *
+ * Ordered for callers that have already journaled the candidate, never before:
+ * a crash between the journal and this must leave a journaled candidate rather
+ * than a marker-free orphan that reads as complete but was never in a
+ * transaction.
+ */
+function clearStageMarker(stageDir) {
+  try {
+    rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true });
+  } catch (error) {
+    throw Object.assign(new Error(`cannot clear stage marker: ${error?.message ?? error}`), { code: 'STAGE_MARKER_REMOVE_FAILED' });
+  }
+  if (existsSync(join(stageDir, INCOMPLETE_MARKER))) {
+    throw Object.assign(new Error('stage marker still present after removal'), { code: 'STAGE_MARKER_REMOVE_FAILED' });
+  }
+}
+
 export function beginReleaseActivation({ stageDir, manifest, home, prior = null }) {
   // Survives pointer commit and updater crashes; versions alone cannot prove
   // that a same-version code replacement has reached the running process.
@@ -1277,14 +1296,7 @@ export function beginReleaseActivation({ stageDir, manifest, home, prior = null 
     prior: prior ? { name: prior.name, version: prior.version, path: prior.path } : null,
     candidate: { name: manifest.name, version: manifest.version, stageDir },
   });
-  try {
-    rmSync(join(stageDir, INCOMPLETE_MARKER), { force: true });
-  } catch (error) {
-    throw Object.assign(new Error(`cannot clear stage marker: ${error?.message ?? error}`), { code: 'STAGE_MARKER_REMOVE_FAILED' });
-  }
-  if (existsSync(join(stageDir, INCOMPLETE_MARKER))) {
-    throw Object.assign(new Error('stage marker still present after removal'), { code: 'STAGE_MARKER_REMOVE_FAILED' });
-  }
+  clearStageMarker(stageDir);
   return stageDir;
 }
 
@@ -2531,6 +2543,19 @@ export async function performCoordinatedCohortUpdate({
     if (!marked.ok) {
       const comp = await compensate().catch(() => ({ ok: false }));
       return finalizeCompensationFailure({ home, code: marked.code ?? 'JOURNAL_MARK_FAILED', error: 'coordinated journal mark-verified failed', comp });
+    }
+
+    // This path commits the pointer itself and never goes through
+    // beginReleaseActivation, so the stage marker the candidate was copied with
+    // has to be cleared here — at the same point in the order, after the journal
+    // and before the commit. Left behind, it is permanent: every health check
+    // then reads a running payload as incomplete, which is what `dsh-crew status`
+    // reports as "unverifiable/damaged".
+    try {
+      clearStageMarker(stageDir);
+    } catch (error) {
+      const comp = await compensate().catch(() => ({ ok: false }));
+      return finalizeCompensationFailure({ home, code: error?.code ?? 'STAGE_MARKER_REMOVE_FAILED', error: error?.message ?? 'cannot clear stage marker', comp });
     }
 
     // COMMIT POINT / LAST: pointer write after the verified journal.

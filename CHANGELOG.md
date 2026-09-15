@@ -4,6 +4,19 @@
 
 Future changes go here.
 
+## 2.1.1 — 2026-09-15
+
+- **A cross-cohort update no longer commits a release it leaves marked
+  incomplete.** The coordinated path writes the pointer itself and never goes
+  through `beginReleaseActivation`, which is where the stage marker was cleared —
+  so a cohort swap committed a payload still carrying `.dsh-crew-incomplete`.
+  `validateInstalledPayload` rejects that, which is how `dsh-crew status` reported
+  the running payload of the 2.1.0 swap as `unverifiable/damaged`: healthy and
+  serving, read as broken, and permanently, since nothing else clears the file.
+  The marker is now cleared on that path too, at the same point in the order —
+  after the journal, before the commit — with a test that stages a candidate
+  carrying the marker and asserts the committed release validates.
+
 ## 2.1.0 — 2026-09-15
 
 - **Moves the pinned Harness cohort from `0.1.5-rc.2` to `0.1.6-alpha.1`.** The

@@ -14,6 +14,8 @@ import {
   beginReleaseActivation,
   commitActivatedRelease,
   crewReleasesDir,
+  validateInstalledPayload,
+  INCOMPLETE_MARKER,
 } from '../src/install/npx-lifecycle.mjs';
 import { crewDshHome, crewProfileDir } from '../src/install/install.mjs';
 import { processStartToken } from '../src/process-identity.mjs';
@@ -1284,6 +1286,11 @@ test('coordinated update migrates payload + runtime together and retains the pri
     }
     const calls = [];
     const staged = fakeStagedRuntime({ home: t.dir, version: TARGET_DSH_VERSION, marker: 'candidate' });
+    // A staged candidate carries the incomplete marker from the copy — that is how
+    // stageCandidatePayload leaves it. This path commits the pointer itself and
+    // never goes through beginReleaseActivation, so without clearing it here the
+    // marker is permanent and the payload every health check reads as incomplete.
+    writeFileSync(join(candDir, INCOMPLETE_MARKER), `${Date.now()}\n`);
     const r = await performCoordinatedCohortUpdate({
       home: t.dir,
       log: () => {},
@@ -1313,6 +1320,14 @@ test('coordinated update migrates payload + runtime together and retains the pri
     assert.equal(existsSync(join(retainedDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')), true, 'prior cohort retained');
     // Journal cleared (transaction committed).
     assert.equal(existsSync(join(appDir, 'update-journal.json')), false, 'journal cleared');
+    // And the stage marker is gone, so the release the pointer now names reads as
+    // complete instead of "unverifiable/damaged" forever.
+    assert.equal(existsSync(join(candDir, INCOMPLETE_MARKER)), false, 'stage marker cleared on the coordinated path');
+    assert.equal(
+      validateInstalledPayload(candDir, { expectedName: '@ran-sh/dsh-crew', expectedVersion: '1.0.4' }).ok,
+      true,
+      'the committed release validates as complete',
+    );
     // verify used the CANDIDATE crew version + cohort together (no unsupported pair).
     assert.ok(calls.some(([op, v]) => op === 'verify' && v === '1.0.4'), JSON.stringify(calls));
   } finally { t.cleanup(); }
