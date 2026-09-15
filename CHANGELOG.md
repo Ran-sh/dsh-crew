@@ -4,6 +4,27 @@
 
 Future changes go here.
 
+## 2.1.4 — 2026-09-15
+
+- **2.1.3 stopped the hub and left the frontend running.** The window request
+  names its option `refresh_frontend` in the durable document the launcher reads
+  and `refreshFrontend` in the client that writes it; the history operation called
+  the client with the launcher's spelling, so the flag was dropped and the stop
+  went ahead without the frontend. Found by running the cleanup it was written
+  for: the maintenance reported DONE, the 48 rows stayed gone, and the STOPPED
+  receipt said `frontend_stopped: false` with the frontend still holding port
+  3080. The shipped claim from 2.1.3 was therefore false in the field even though
+  every test passed — the seam between the two names was the one thing nothing
+  asserted.
+- Both halves of that boundary are now pinned: the client must turn
+  `refreshFrontend` into `extra.refresh_frontend` in the request, and the
+  operation must pass `refreshFrontend` for every stop it issues. Both assertions
+  fail on the spelling that shipped in 2.1.3.
+- Verified against the live machine rather than in tests only: a maintenance-stop
+  carrying the flag stopped both servers (`frontend_stopped: true`, ports 3210 and
+  3080 free), and the matching start brought the hub back verified and the
+  frontend back serving on 3080.
+
 ## 2.1.3 — 2026-09-15
 
 - **A workspace whose sessions are already gone can be cleaned up.** The planner

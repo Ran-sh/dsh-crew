@@ -164,6 +164,20 @@ test('maintenance client resumes start with an externally persisted lease and id
     assert.equal(requests[1].lease, requests[0].lease);
     assert.equal(requests[1].runtime_id, requests[0].runtime_id);
     assert.deepEqual(requests[1].extra, { expected_crew_version: '2.0.0', expected_dsh_version: '0.1.2-rc.1' });
+    // A stop that does not ask for the frontend carries no flag at all: the
+    // launcher reads `extra.refresh_frontend`, and a runtime-tree swap must not
+    // stop a server whose store it leaves alone.
+    assert.equal(requests[0].extra, null);
+
+    // The history maintenance asks the window to cover the managed frontend too,
+    // because it rewrites the workspace store that server shares. The option is
+    // named on both sides of this boundary — `refreshFrontend` in the client,
+    // `refresh_frontend` in the durable request — and getting one of them wrong
+    // fails silently: the stop still succeeds and the frontend is simply never
+    // stopped.
+    const windowClient = createCrewSupervisor(options);
+    await windowClient.stopOwnedBackend({ lease: 'lease-window', runtimeId: 'rid-live', refreshFrontend: true });
+    assert.deepEqual(requests[2].extra, { refresh_frontend: true });
   } finally { t.cleanup(); }
 });
 

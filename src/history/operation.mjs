@@ -57,11 +57,11 @@ export async function runHistoryOperation({ crewRoot, id, acquire, release, supe
     if (!alreadyStarted) {
       if (!recover || await assertStopped(state) !== true) await checkFence(state);
       save('STOPPING');
-      // `refresh_frontend`: this operation rewrites `storages/workspace.json`,
+      // `refreshFrontend`: this operation rewrites `storages/workspace.json`,
       // which the Crew-managed frontend on 3080 shares, so the launcher stops
       // that server for the same window and starts it again afterwards. The npx
       // lifecycle stops only 3210, because a tree swap leaves that file alone.
-      const stopped = await supervisor.stopOwnedBackend({ lease: state.lease, runtimeId: state.runtimeId, refresh_frontend: true });
+      const stopped = await supervisor.stopOwnedBackend({ lease: state.lease, runtimeId: state.runtimeId, refreshFrontend: true });
       if (!stopped?.ok || await assertStopped(state) !== true) throw Error('HISTORY_STOP_NOT_VERIFIED');
       const archiveId = state.operation === 'restore' ? state.archiveId : state.id;
       const manifestFile = historyPath(crewRoot, `history/transactions/${archiveId}/manifest.json`);

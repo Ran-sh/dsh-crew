@@ -65,10 +65,10 @@ test('live native agents and failed executor spawn leave history untouched and a
 test('full maintenance archives, restores and deletes disposable history using exact stop/start phases', async t => {
   const f = await fixture(t);
   const { runHistoryOperation } = await import('../src/history/operation.mjs');
-  const calls = []; let stopped = false;
+  const calls = []; let stopped = false; const stopOptions = [];
   const deps = { crewRoot: f.root, acquire: () => ({ ok: true, nonce: 'lock' }), release: () => ({ ok: true }),
     checkFence: () => f.service.fencedCheck(), assertStopped: () => stopped,
-    supervisor: { stopOwnedBackend: async () => { calls.push('stop'); stopped = true; return { ok: true }; }, startOwnedBackend: async () => { calls.push('start'); stopped = false; return { ok: true }; } },
+    supervisor: { stopOwnedBackend: async options => { calls.push('stop'); stopOptions.push(options); stopped = true; return { ok: true }; }, startOwnedBackend: async () => { calls.push('start'); stopped = false; return { ok: true }; } },
     verifyRunning: async () => !stopped };
   const p = await f.service.preview({ scope: 'all' }); const op = await f.service.execute({ planId: p.planId, confirm: true });
   await runHistoryOperation({ ...deps, id: op.id });
@@ -80,6 +80,13 @@ test('full maintenance archives, restores and deletes disposable history using e
   await runHistoryOperation({ ...deps, id: del.id });
   assert.equal(existsSync(f.file), false); assert.equal(f.service.archives().length, 0);
   assert.deepEqual(calls, ['stop', 'start', 'stop', 'start', 'stop', 'start']);
+  // Every stop this operation issues asks for the window to cover the managed
+  // frontend as well: it shares the workspace store being rewritten, and the
+  // option is spelled `refreshFrontend` here while the durable request it
+  // becomes says `refresh_frontend`. Passing the wrong one stops the hub, leaves
+  // the frontend running, and reports success — the exact bug this pins.
+  assert.equal(stopOptions.length, 3);
+  for (const options of stopOptions) assert.equal(options.refreshFrontend, true);
 });
 
 test('restart failure leaves durable recovery fencing and no successful deletion', async t => {
