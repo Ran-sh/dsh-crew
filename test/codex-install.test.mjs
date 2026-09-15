@@ -11,7 +11,7 @@ import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, claudeCliInvocation, claudeIntegrationLine, claudeSnapshotSettleMs, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, managedClaudeFileManifest, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
+import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, claudeCliInvocation, claudeIntegrationLine, claudeSnapshotSettleMs, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, managedClaudeFileManifest, pickClaudeCommand, runClaudeStep, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
 // Paths must arrive as arguments. `JSON.stringify` quotes for JSON, not for a
 // command processor, so a path containing `%NAME%` was expanded by the shell
@@ -60,16 +60,19 @@ test('a corrupt settings file is reported and left alone, not rebuilt empty', as
 // The compared files can all be present while the server Claude Code launches
 // cannot start: it imports its runtime dependencies by bare specifier, so a copy
 // interrupted between `src/` and `node_modules/` used to read as ready.
-test('a snapshot whose declared dependencies do not resolve is not ready', async () => {
+test('a snapshot whose entry cannot import its dependencies is not ready', async () => {
   const home = makeHome();
   try {
     const root = join(home, 'payload');
     const snapshot = join(home, 'snapshot');
     makeClaudePluginRoot(root, 'same');
     makeClaudePluginRoot(snapshot, 'same');
-    const declared = `${JSON.stringify({ name: 'dsh-crew', dependencies: { zod: '^3.24.0' } })}\n`;
-    writeFileSync(join(root, 'package.json'), declared);
-    writeFileSync(join(snapshot, 'package.json'), declared);
+    // What has to be present is what the launched entry imports, so the entry has
+    // to import something before this check has anything to prove. The package's
+    // own dependency list is not a substitute: it names twenty-eight of them,
+    // including meta-packages the server never imports from here, and requiring all
+    // of those to resolve read this working machine as broken.
+    for (const base of [root, snapshot]) writeFileSync(join(base, 'src', 'server.mjs'), "import 'zod';\nexport {};\n");
     const plugins = join(home, '.claude', 'plugins');
     mkdirSync(plugins, { recursive: true });
     writeFileSync(join(plugins, 'known_marketplaces.json'), JSON.stringify({ 'dsh-crew': {
@@ -78,38 +81,152 @@ test('a snapshot whose declared dependencies do not resolve is not ready', async
     writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
       'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
     } }));
+    const snapshotReady = () => installStatus({ home, root, env: {} }).claude.components.snapshot;
 
-    assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, false,
-      'the files match but the dependency is not there to import');
+    assert.equal(snapshotReady(), false, 'the files match but the import resolves nowhere');
 
     mkdirSync(join(snapshot, 'node_modules', 'zod'), { recursive: true });
     writeFileSync(join(snapshot, 'node_modules', 'zod', 'package.json'), JSON.stringify({ name: 'zod', version: '3.24.0', main: 'index.js' }));
     writeFileSync(join(snapshot, 'node_modules', 'zod', 'index.js'), 'module.exports = {};\n');
-    assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, true,
-      'and it is ready once the dependency resolves from the snapshot itself');
+    assert.equal(snapshotReady(), true, 'and it is ready once the import resolves from the snapshot itself');
+
+    // A manifest without the module it names is the shape a copy interrupted
+    // partway through a package leaves: resolving the manifest is not loading it.
+    // `index.js` goes too — CommonJS falls back to it when `main` does not exist,
+    // so leaving it in place would resolve after all.
+    writeFileSync(join(snapshot, 'node_modules', 'zod', 'package.json'), JSON.stringify({ name: 'zod', version: '3.24.0', main: 'missing.js' }));
+    rmSync(join(snapshot, 'node_modules', 'zod', 'index.js'), { force: true });
+    assert.equal(snapshotReady(), false, 'a manifest whose entry is absent is not importable');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 // The walk is bounded before it reads, and by more than bytes. Note the size bound
 // is a resource property, not an observable one: reading first and rejecting after
 // returns the same `null`, it just loads the file to find out.
-test('the snapshot walk is bounded by depth and directory count', () => {
+// The bounds have to be exercised with a root the walk will actually enter. The
+// earlier version of this test built trees with no `.claude-plugin/plugin.json`,
+// so the manifest returned null at its first `add` and never reached the walk —
+// it asserted the right answer for the wrong reason. The bounds are passed
+// explicitly here so the fixtures stay small enough to be honest about.
+test('the snapshot walk is bounded by depth, entry count and directory count', () => {
   const home = makeHome();
   try {
+    const okRoot = join(home, 'ok');
+    makeClaudePluginRoot(okRoot, 'same');
+    const baseline = managedClaudeFileManifest(okRoot);
+    assert.ok(Array.isArray(baseline) && baseline.length > 0, 'a normal tree produces a manifest at all');
+
     const deepRoot = join(home, 'deep');
+    makeClaudePluginRoot(deepRoot, 'same');
     let nested = join(deepRoot, 'src');
-    mkdirSync(nested, { recursive: true });
-    writeFileSync(join(nested, 'server.mjs'), 'export {};\n');
-    for (let i = 0; i < 20; i += 1) { nested = join(nested, `d${i}`); mkdirSync(nested); }
+    for (let i = 0; i < 5; i += 1) { nested = join(nested, `d${i}`); mkdirSync(nested); }
     writeFileSync(join(nested, 'leaf.mjs'), 'export {};\n');
-    assert.equal(managedClaudeFileManifest(deepRoot), null, 'a tree deeper than the bound is rejected');
+    assert.equal(managedClaudeFileManifest(deepRoot, { maxDepth: 2 }), null, 'deeper than the bound is rejected');
 
     const wideRoot = join(home, 'wide');
-    let wide = join(wideRoot, 'src');
-    mkdirSync(wide, { recursive: true });
-    writeFileSync(join(wide, 'server.mjs'), 'export {};\n');
-    for (let i = 0; i < 300; i += 1) mkdirSync(join(wide, `d${i}`));
-    assert.equal(managedClaudeFileManifest(wideRoot), null, 'a tree wider than the bound is rejected');
+    makeClaudePluginRoot(wideRoot, 'same');
+    const wide = join(wideRoot, 'src');
+    for (let i = 0; i < 8; i += 1) mkdirSync(join(wide, `d${i}`));
+    assert.equal(managedClaudeFileManifest(wideRoot, { maxDirectories: 3 }), null, 'more directories than the bound is rejected');
+    assert.ok(Array.isArray(managedClaudeFileManifest(wideRoot, { maxDirectories: 32 })), 'and the same tree is fine under a wider bound');
+
+    const manyRoot = join(home, 'many');
+    makeClaudePluginRoot(manyRoot, 'same');
+    for (let i = 0; i < 20; i += 1) writeFileSync(join(manyRoot, 'src', `f${i}.mjs`), 'export {};\n');
+    assert.equal(managedClaudeFileManifest(manyRoot, { maxEntries: 10 }), null, 'more entries than the bound is rejected');
+    assert.ok(Array.isArray(managedClaudeFileManifest(manyRoot, { maxEntries: 512 })), 'and the same tree is fine under a wider bound');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// `where claude` reports the extensionless shim, the `.cmd`, and the native binary
+// on the same machine. Detection and execution are different questions: execution
+// hardcoded `.cmd`, so a host shipping only `claude.exe` was detected and then
+// could not be run.
+test('the Claude CLI is chosen from what the machine actually has', () => {
+  assert.equal(pickClaudeCommand(['C:\\npm\\claude', 'C:\\npm\\claude.cmd'], { platform: 'win32' }), 'C:\\npm\\claude.cmd');
+  assert.equal(pickClaudeCommand(['C:\\npm\\claude.cmd', 'C:\\native\\claude.exe'], { platform: 'win32' }), 'C:\\native\\claude.exe');
+  assert.equal(pickClaudeCommand(['C:\\native\\claude.exe'], { platform: 'win32' }), 'C:\\native\\claude.exe');
+  assert.equal(pickClaudeCommand([], { platform: 'win32' }), null);
+  assert.equal(pickClaudeCommand(['/usr/local/bin/claude'], { platform: 'linux' }), '/usr/local/bin/claude');
+
+  assert.deepEqual(
+    claudeCliInvocation(['plugin', 'install'], { platform: 'win32', executable: 'C:\\native\\claude.exe' }),
+    { command: 'C:\\native\\claude.exe', args: ['plugin', 'install'] },
+    'a native executable starts directly, with no command processor to quote for',
+  );
+});
+
+// A step whose output nobody reads blocks on its own pipe once the buffer fills —
+// 64 KiB is enough — and is then killed at the ceiling for being talkative rather
+// than for being stuck. 2 MiB stands in for any step that prints a lot.
+test('a step that prints more than a pipe buffer is drained, not deadlocked', async () => {
+  const result = await runClaudeStep(['-e', 'process.stdout.write("x".repeat(2 * 1024 * 1024))'], {
+    executable: process.execPath, timeoutMs: 30_000,
+  });
+  assert.equal(result.timedOut, false, 'the step finished on its own');
+  assert.equal(result.ok, true, String(result.detail).slice(0, 200));
+});
+
+// The step has to end even when the child will not: a termination that never lands
+// must resolve and say so, not wait forever for a close that is not coming.
+test('a step that will not finish ends, and reports whether its tree is gone', async () => {
+  const result = await runClaudeStep(['-e', 'setTimeout(() => {}, 60_000)'], {
+    executable: process.execPath, timeoutMs: 1_500,
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.terminated, true, 'the kill lands and the close confirms it');
+  assert.equal(result.error?.code, 'ETIMEDOUT');
+});
+
+// The case the step was pending on: a termination that reports failure. Nothing
+// will close the child, so the step has to give up on it and say the tree is
+// unconfirmed rather than wait for a close that is not coming. The child exits on
+// its own shortly after; `terminate` and the grace are injected so this does not
+// depend on coaxing a real unkillable process out of the machine.
+test('a termination that does not land still ends the step, unconfirmed', async () => {
+  const failed = await runClaudeStep(['-e', 'setTimeout(() => {}, 3_000)'], {
+    executable: process.execPath, timeoutMs: 300, killGraceMs: 300, terminate: async () => false,
+  });
+  assert.equal(failed.timedOut, true);
+  assert.equal(failed.terminated, false, 'a kill that reports failure leaves the tree unconfirmed');
+  assert.equal(failed.ok, false);
+
+  // And a kill that reports success still has to be confirmed by the close: the
+  // claim is not the evidence.
+  const claimed = await runClaudeStep(['-e', 'setTimeout(() => {}, 3_000)'], {
+    executable: process.execPath, timeoutMs: 300, killGraceMs: 300, terminate: async () => true,
+  });
+  assert.equal(claimed.timedOut, true);
+  assert.equal(claimed.terminated, false, 'a successful kill is only confirmed once the child closes');
+});
+
+// A fast path that skipped the dependency check answered "already current" for a
+// snapshot the status surface reads as not ready - the same snapshot, two
+// different answers from the same machine.
+test('the already-current fast path requires the snapshot to resolve too', async () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    makeClaudePluginRoot(root, 'same');
+    makeClaudePluginRoot(snapshot, 'same');
+    // Same snapshot, two entry points: the fast path answered "already current"
+    // while the status surface read the same tree as not ready, because only one
+    // of them asked whether the entry's imports resolve.
+    for (const base of [root, snapshot]) writeFileSync(join(base, 'src', 'server.mjs'), "import 'zod';\nexport {};\n");
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'known_marketplaces.json'), JSON.stringify({ 'dsh-crew': {
+      source: { source: 'directory', path: root }, installLocation: root,
+    } }));
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+    const r = await installClaudeCode({ home, root });
+    assert.ok(!r.actions.includes('cli: skipped (registered marketplace and snapshot already current)'),
+      'a snapshot the status surface reads as not ready is not "already current"');
+    assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, false);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

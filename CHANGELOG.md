@@ -4,6 +4,50 @@
 
 Future changes go here.
 
+## 2.0.13 — 2026-09-15
+
+Seven findings from a review of 2.0.12's install path. Two are P1 and were
+introduced by 2.0.11's managed-child change; the rest pre-date it.
+
+- **A step's output is drained.** Both streams were piped and only stderr was
+  read, so a step printing more than a pipe buffer (64 KiB) blocked on its own
+  write and was killed at the ceiling for being talkative rather than for being
+  stuck. Both are read now, keeping a bounded tail for the report.
+- **A termination that does not land still ends the step.** The step resolved only
+  from the child's close event, so a `taskkill` that failed — or hung — left it
+  pending forever with the failure ignored. The kill is bounded as well, and the
+  result reports `terminated: false` rather than waiting on a close that is not
+  coming.
+- **The "already current" fast path asks what the status surface asks.** It checked
+  the files but not whether the snapshot can load, so one tree got two answers:
+  `ok: true` / "already current" from the installer and "not ready" from
+  `dsh-crew status`.
+- **The dependency check asks the entry, not the manifest.** `src/server.mjs`
+  imports `@modelcontextprotocol/sdk/server/mcp.js`, `.../stdio.js` and `zod`, and
+  those are what must resolve, from the entry. Requiring the *declared* list to
+  resolve was wrong twice over: it names 28 dependencies including meta-packages
+  the server never imports from here, and two of them resolve by no means at all
+  while the integration demonstrably works — so the rule read this healthy machine
+  as needing repair. Resolution now goes through the entry's own `require`, which
+  keeps subpath specifiers intact: the bare package name does not resolve through
+  its `exports`, the subpaths do.
+- **The `claude` executable is the one the machine has.** `where claude` reports
+  the extensionless shim, `claude.cmd` and `claude.exe`; execution hardcoded
+  `.cmd`, so a host with only the native binary was detected and then could not be
+  run. A native executable is preferred and started directly, with no command
+  processor to quote for.
+- **A failed marketplace registration no longer uninstalls the plugin.** The
+  uninstall exists so the install re-copies rather than no-oping; doing it after
+  the step that says where the plugin comes from has failed leaves the machine with
+  neither, and that is the shape a refused path produces — where nothing was even
+  attempted. `marketplace add` exits 0 when the marketplace is already registered
+  (measured on this machine), so a failure there is a real one.
+- **Directory enumeration is bounded while it runs**, not after: `readdirSync`
+  materialised the whole listing before any limit applied. The earlier test for
+  this built trees with no plugin manifest, so the walk returned at its first
+  `add` and the bounds were never exercised — it asserted the right answer for the
+  wrong reason.
+
 ## 2.0.12 — 2026-09-14
 
 - **The copying step gets a ceiling that fits the copy.** 2.0.11 gives each
