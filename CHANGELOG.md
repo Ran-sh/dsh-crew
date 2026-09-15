@@ -4,6 +4,25 @@
 
 Future changes go here.
 
+## 2.0.15 — 2026-09-15
+
+- **The module scan understands regular-expression literals, so one can no longer
+  desynchronise it.** 2.0.14 taught the snapshot check to follow local imports
+  transitively, but read the source with a token scan that had no regex branch: the
+  quote inside `/^['"]/` — and the ones in the TOML matchers further down the same
+  file — opened a phantom string literal that swallowed text up to the next quote
+  anywhere in the file. Two consequences, one of them shipped. It read this healthy
+  machine as "needs repair", because the source between two quoted keywords came
+  back as a specifier named `, ` and nothing resolves that. And it could hide a real
+  import behind the phantom literal, so a snapshot that genuinely cannot load could
+  read as ready — the more dangerous half, and the reason this is a scanner fix
+  rather than a filter on the results. Tokens now come from a scanner that handles
+  line and block comments, string and template literals, regex literals chosen by
+  what the previous token can end, identifiers and punctuation; a shape check then
+  drops anything that is not a path or a package name, so a scan artefact can never
+  be resolved as a dependency. On this machine the entry's transitive walk reads
+  21 files in ~180ms and the integration is ready.
+
 ## 2.0.14 — 2026-09-15
 
 - **The snapshot check follows local imports, rather than only the entry's first

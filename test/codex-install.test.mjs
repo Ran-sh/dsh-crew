@@ -893,3 +893,46 @@ test('snapshot readiness checks commented dynamic imports and CommonJS dependenc
     assert.equal(ready(), true);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+// The scan is lexical, and a regex literal holding a quote desynchronises it: the
+// phantom string swallows text up to the next quote in the file, which can expose
+// a keyword as a bare token and hand back the source between two of them as a
+// "specifier". Resolving those read a working install as broken — which is what
+// shipping this check did to its own payload, whose helpers are written as
+// /^['"]/ and whose TOML matchers quote too.
+test('a quote inside a regex literal does not become a specifier', () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    for (const directory of [root, snapshot]) {
+      makeClaudePluginRoot(directory, 'same');
+      writeFileSync(join(directory, 'src', 'server.mjs'), [
+        "const literal = (token) => token && /^['\"]/.test(token);",
+        "const KEYWORDS = ['import', 'export', 'require'];",
+        'if (!KEYWORDS.includes(token)) continue;',
+        "import 'zod';",
+        "import './helper.mjs';",
+        'export {};',
+        '',
+      ].join('\n'));
+      writeFileSync(join(directory, 'src', 'helper.mjs'), 'export const helper = 1;\n');
+    }
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+    const ready = () => installStatus({ home, root, env: {} }).claude.components.snapshot;
+
+    // The relative import has to survive the guard or the walk stops at the entry
+    // and the real dependency below is never reached — which is how a guard that
+    // rejected './helper.mjs' reported a broken snapshot as ready.
+    assert.equal(ready(), false, 'the real dependency is still required');
+    const dependency = join(snapshot, 'node_modules', 'zod');
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, 'package.json'), JSON.stringify({ name: 'zod', version: '3.24.0', main: 'index.js' }));
+    writeFileSync(join(dependency, 'index.js'), 'module.exports = {};\n');
+    assert.equal(ready(), true, 'and the source between quoted keywords is not read as one');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

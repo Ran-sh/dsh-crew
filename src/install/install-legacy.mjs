@@ -36,6 +36,79 @@ const CLAUDE_SNAPSHOT_POLL_MS = 5_000;
 // record stand in for a missing user-scope snapshot, so a failed install read as
 // a current one.
 const CLAUDE_PLUGIN_SCOPE = 'user';
+// What a module specifier can look like: a relative or absolute path, a package
+// name, or a scoped one. Anything else the scan produces is the source text
+// between two quotes, not a dependency.
+const SPECIFIER_SHAPE = /^(?:(?:\.{1,2}\/|\/|[A-Za-z]:[\\/])[^\s"']*|(?:@[^/\s]+\/[^/\s]+|[A-Za-z][\w.-]*)(?:\/[^\s"']*)?)$/;
+
+// A `/` starts a regular expression, not a division, when the last significant
+// token could not end an expression. Getting this wrong desynchronises the scan:
+// the quotes inside a regex were read as string delimiters, and everything after
+// them — including real imports — was swallowed into a phantom literal.
+const REGEX_MAY_FOLLOW = new Set([
+  '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '=>',
+  'return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'instanceof', 'do', 'else', 'yield', 'await',
+]);
+
+/**
+ * Split module source into tokens: comments dropped, string and template literals
+ * kept whole, regular-expression literals kept whole, identifiers single, and
+ * everything else one character. Specifiers are then read from tokens rather than
+ * from the raw text, so a keyword inside a comment or a string is not a
+ * declaration and a quote inside a regex is not a string.
+ */
+export function tokenizeModuleSource(source) {
+  const tokens = [];
+  const text = String(source ?? '');
+  let i = 0;
+  let previous = null;
+  const push = (token) => { tokens.push(token); previous = token; };
+  const scanQuoted = (quote) => {
+    let j = i + 1;
+    while (j < text.length) {
+      if (text[j] === '\\') { j += 2; continue; }
+      if (text[j] === quote) { j += 1; break; }
+      if (quote !== '`' && text[j] === '\n') break;
+      j += 1;
+    }
+    push(text.slice(i, j));
+    i = j;
+  };
+  const scanRegex = () => {
+    let j = i + 1;
+    let inClass = false;
+    while (j < text.length) {
+      const c = text[j];
+      if (c === '\\') { j += 2; continue; }
+      if (c === '\n') break;
+      if (inClass) { if (c === ']') inClass = false; }
+      else if (c === '[') inClass = true;
+      else if (c === '/') { j += 1; break; }
+      j += 1;
+    }
+    while (j < text.length && /[a-z]/i.test(text[j])) j += 1;
+    push(text.slice(i, j));
+    i = j;
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    if (/\s/.test(ch)) { i += 1; continue; }
+    if (ch === '/' && text[i + 1] === '/') { const end = text.indexOf('\n', i); i = end === -1 ? text.length : end; continue; }
+    if (ch === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i + 2); i = end === -1 ? text.length : end + 2; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { scanQuoted(ch); continue; }
+    if (ch === '/' && (previous === null || REGEX_MAY_FOLLOW.has(previous))) { scanRegex(); continue; }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1;
+      while (j < text.length && /[\w$]/.test(text[j])) j += 1;
+      push(text.slice(i, j));
+      i = j;
+      continue;
+    }
+    push(ch);
+    i += 1;
+  }
+  return tokens;
+}
 const POLICY_START = '<!-- DSH CREW MANAGED POLICY:START -->';
 const POLICY_END = '<!-- DSH CREW MANAGED POLICY:END -->';
 
@@ -616,7 +689,7 @@ function claudeSnapshotResolvable(snapshotRoot) {
       const source = readFileSync(entry, 'utf8');
       const fromEntry = createRequire(entry);
       // Consume comments and literals as complete tokens before recognizing declarations.
-      const tokens = (source.match(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]/g) ?? []).filter((token) => !token.startsWith('/*') && !token.startsWith('//'));
+      const tokens = tokenizeModuleSource(source);
       const specifiers = [];
       const literal = (token) => token && /^['"]/.test(token);
       for (let i = 0; i < tokens.length; i += 1) {
@@ -636,7 +709,14 @@ function claudeSnapshotResolvable(snapshotRoot) {
           if (tokens[j] === 'from' && literal(tokens[j + 1])) { specifiers.push(tokens[j + 1].slice(1, -1)); break; }
         }
       }
-      return specifiers.every((specifier) => {
+      // The scan is lexical, and a regex literal holding a quote — `/^['"]/`, or
+      // the TOML matchers above — desynchronises it: the phantom string swallows
+      // text up to the next quote in the file, which can expose a keyword as a
+      // bare token and hand back the source between two of them as a "specifier".
+      // Those are not module specifiers, and resolving them read a working install
+      // as broken, so anything not shaped like a path or a package name is dropped.
+      const shaped = specifiers.filter((specifier) => isBuiltin(specifier) || SPECIFIER_SHAPE.test(specifier));
+      return shaped.every((specifier) => {
         if (isBuiltin(specifier)) return true;
         const target = fromEntry.resolve(specifier);
         if (!existsSync(target)) return false;
