@@ -4,6 +4,34 @@
 
 Future changes go here.
 
+## 2.1.2 — 2026-09-15
+
+- **A desktop launch returns as soon as Crew is supervised, instead of waiting
+  for 3210.** `--open` opened the frontend on 3080 and then blocked on
+  `Ensure-CrewSupervisorRunning`, which requires a live heartbeat *and* a ready
+  3210 — so the operator's window was held for the whole first boot of the
+  backend. On this machine that was the entire launch: 71.5s of a 71.5s cold
+  start, 31.2s of a 32.3s cold start, 0.15s of a 3.9s warm start. The interactive
+  entry now waits for a supervisor to exist (`Wait-CrewSupervisorStarted`, bounded
+  at 30s, satisfied by the heartbeat the watcher publishes before it first touches
+  the port) and reports where 3210 actually is. Nothing is skipped: the watcher
+  performs the readiness wait either way, and 3080 is already serving when the
+  decision is made. Blocking entries keep the readiness wait unchanged — the
+  `--open` branch is the only caller of the new helper, and a test pins that.
+- The two entries share one spawn path (`Start-CrewSupervisorProcess`), so the
+  legacy-watcher refusal and the "already running" answer cannot drift apart.
+- **A slow hub is no longer reported as a failed launch.** A first boot on a
+  loaded machine took 78s here; the operator saw a deadline message for a system
+  that was coming up correctly. The launch now says 3210 is still starting, and
+  says so in one line without the log prefix.
+- **A maintenance-fenced launch no longer reports an empty reason.** The fence
+  branch clears `LastError` because it never consults health, so the startup wait
+  printed `dsh-crew:3210 ()` — naming neither the cause nor the state. It now
+  names the fence.
+- The managed launcher skips its `pause` when `DSH_CREW_LAUNCHER_NO_PAUSE=1`,
+  which a wrapper that reports the failure itself sets; without it the operator
+  pressed a key twice for one failure.
+
 ## 2.1.1 — 2026-09-15
 
 - **A cross-cohort update no longer commits a release it leaves marked

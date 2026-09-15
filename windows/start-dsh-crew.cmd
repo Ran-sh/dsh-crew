@@ -35,13 +35,15 @@ if not exist "%LAUNCH_HELPER%" (
   >>"%LAUNCH_LOG%" echo [%date% %time%] ERROR Managed launcher helper is missing: %LAUNCH_HELPER%
   echo ERROR: DSH Crew launcher helper is missing.
   echo Repair it with: dsh-crew update
-  if /i "%LAUNCH_MODE%"=="open" pause
+  if /i "%LAUNCH_MODE%"=="open" if not "%DSH_CREW_LAUNCHER_NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%LAUNCH_HELPER%" -Mode "%LAUNCH_MODE%"
 set "LAUNCH_EXIT=%ERRORLEVEL%"
-if not "%LAUNCH_EXIT%"=="0" if /i "%LAUNCH_MODE%"=="open" pause
+rem DSH_CREW_LAUNCHER_NO_PAUSE: a wrapper that reports the failure itself asks
+rem for the pause to be skipped here, so the operator presses a key once.
+if not "%LAUNCH_EXIT%"=="0" if /i "%LAUNCH_MODE%"=="open" if not "%DSH_CREW_LAUNCHER_NO_PAUSE%"=="1" pause
 exit /b %LAUNCH_EXIT%
 
 :invalid_argument
@@ -51,7 +53,8 @@ exit /b 64
 
 :help
 echo Usage: %~nx0 [--open ^| --background ^| --watch]
-echo   --open        Open official Harness on 3080, then start Crew silently on 3210.
+echo   --open        Open official Harness on 3080 and return once Crew is supervised;
+echo                 3210 keeps starting in the background.
 echo   --background  Start the Crew-owned 3210 service silently.
 echo   --watch       Keep the Crew-owned 3210 service healthy.
 exit /b 0

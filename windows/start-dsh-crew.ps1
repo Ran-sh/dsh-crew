@@ -645,18 +645,50 @@ function Restore-OwnedServiceRecord {
   return $true
 }
 
-function Ensure-CrewSupervisorRunning {
-  param([int] $TimeoutSeconds = 90)
-  $watcher = $null
+# Spawns the persistent watcher when no live one is present, and returns its
+# heartbeat record when one already is. Shared so that the interactive and the
+# blocking entries agree on what counts as "a supervisor is already running" —
+# two answers to that question would let one entry spawn a duplicate that the
+# mutex immediately kills.
+function Start-CrewSupervisorProcess {
   $observed = Get-SupervisorHeartbeatRecord
   if ($observed -and $observed.State -eq 'legacy-v1') {
     throw 'CREW_SUPERVISOR_UPGRADE_REQUIRED: a legacy watcher is active and must be handed off before interactive launch.'
   }
-  if (-not $observed) {
-    $arguments = @(Get-SupervisorLaunchArguments -ScriptPath $PSCommandPath)
-    $watcher = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru
-    Write-LaunchLog ('Started persistent Crew supervisor; PID={0}.' -f $watcher.Id)
+  if ($observed) { return $observed }
+  $arguments = @(Get-SupervisorLaunchArguments -ScriptPath $PSCommandPath)
+  $watcher = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru
+  Write-LaunchLog ('Started persistent Crew supervisor; PID={0}.' -f $watcher.Id)
+  return $null
+}
+
+# Waits only for the watcher to exist, not for 3210 to answer. The watcher
+# publishes its heartbeat before it first touches the port, so this returns as
+# soon as Crew is being supervised. Used by the interactive entry: 3080 is
+# already serving by then, and making the operator's window wait for a first
+# 3210 boot (measured 18-78s on this machine, longer under load) delays nothing
+# they can see — the watcher performs that same wait either way.
+function Wait-CrewSupervisorStarted {
+  param([int] $TimeoutSeconds = 30)
+  $observed = Start-CrewSupervisorProcess
+  if ($observed) {
+    Write-LaunchLog ('Persistent Crew supervisor already running; PID={0}.' -f $observed.Record.pid)
+    return $true
   }
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $record = Get-SupervisorHeartbeatRecord
+    if ($record) {
+      Write-LaunchLog ('Persistent Crew supervisor started; PID={0}; state={1}.' -f $record.Record.pid, $record.State)
+      return $true
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Ensure-CrewSupervisorRunning {  param([int] $TimeoutSeconds = 90)
+  $null = Start-CrewSupervisorProcess
 
   $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
   if (-not $crew) { throw 'Crew-owned 3210 service definition is missing.' }
@@ -1211,7 +1243,10 @@ function Ensure-CrewServices {
     # matching maintenance-start owns the launch right.
     if ($service.CrewOwned -and (Test-MaintenanceSessionActive)) {
       $service.State = 'maintenance'
-      $service.LastError = $null
+      # Say why, rather than clearing the field: an empty reason reaches the
+      # startup wait as "deadline exceeded: dsh-crew:3210 ()", which reads like a
+      # fault when the fence is the supervisor doing exactly as it was told.
+      $service.LastError = 'a maintenance session holds the launch right (an update is mid-handoff); auto-start deferred'
       continue
     }
     $health = Get-HealthState $service
@@ -1393,10 +1428,35 @@ try {
     exit 0
   }
 
-  Ensure-CrewSupervisorRunning
-
   if ($Mode -eq 'open') {
-    Write-LaunchLog 'Official frontend is on 3080; Crew is running silently on 3210.'
+    # A desktop launch promises the frontend on 3080, and that is up in about a
+    # second. The supervisor owns 3210 from the moment it starts — it publishes
+    # its heartbeat before it first touches the port — so this waits for the
+    # watcher to be running, reports where 3210 actually is, and returns. Holding
+    # the operator's window for 3210 readiness bought nothing: the watcher is
+    # doing that wait anyway, and under load a first boot here has taken 78s.
+    if (-not (Wait-CrewSupervisorStarted)) {
+      throw 'No Crew supervisor started within 30s; 3210 has nothing watching it.'
+    }
+    $crew = $services | Where-Object { $_.CrewOwned } | Select-Object -First 1
+    $health = if ($crew) { Get-HealthState $crew } else { $null }
+    if ($health -and $health.Ready) {
+      Write-LaunchLog 'Official frontend is on 3080; Crew is ready on 3210.'
+    } else {
+      Write-LaunchLog ('Official frontend is on 3080; the supervisor is bringing 3210 up in the background. Last health: {0}' -f $health.Error) 'WARN'
+    }
+    # Operator-facing summary rather than a log line: clicking Crew before 3210
+    # answers looks like a broken feature, so say that it is still coming up.
+    Write-Host ''
+    Write-Host 'DSH Crew: the frontend is on http://127.0.0.1:3080.' -ForegroundColor Green
+    if ($health -and $health.Ready) {
+      Write-Host 'Backend 3210 is ready.' -ForegroundColor Green
+    } else {
+      Write-Host 'Backend 3210 is still starting; Crew features appear once it answers.' -ForegroundColor Yellow
+    }
+    Write-Host ("Diagnostic log: {0}" -f $launcherLog) -ForegroundColor DarkGray
+  } else {
+    Ensure-CrewSupervisorRunning
   }
   Write-LaunchLog ('Launcher completed successfully in {0:n1}s.' -f ((Get-Date) - $startedAt).TotalSeconds)
   exit 0
