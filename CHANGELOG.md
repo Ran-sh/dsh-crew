@@ -4,6 +4,23 @@
 
 Future changes go here.
 
+## 2.1.0 — 2026-09-15
+
+- **Moves the pinned Harness cohort from `0.1.5-rc.2` to `0.1.6-alpha.1`.** The
+  overlay composes unchanged: every `sdk-minimal` base row Crew overrides still
+  exists, every package it inserts is still published at the new cohort, and the
+  `agents.create` / `sessions.flush` / `webServer` surface the hub mounts on is
+  unchanged. The cohort adds `mcp-resources` to the base profile and drops `e2b`
+  and `code-runtime`, neither of which Crew names. The base-row contract test pins
+  the new set, so a future cohort that renames a row Crew overrides fails there
+  instead of at boot.
+- Crew names nothing that 0.1.6 renamed or removed: the `agent/session-start`
+  event, the PTC packages and the `workflow-ptc` executor, Ralph, the deprecated
+  session history readers, `SandboxProvider.confine`, or `ShellExecutor.start`.
+- Verified by booting `sdk-minimal` with Crew's `worker.cordis.yml` against the new
+  cohort: exit 0 with empty stderr, where the same boot with an overlay naming an
+  unknown row and package fails with `plugin tree failed to load`.
+
 ## 2.0.15 — 2026-09-15
 
 - **The module scan understands regular-expression literals, so one can no longer

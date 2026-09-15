@@ -5,7 +5,7 @@
 // - HUB_PROTOCOL_VERSION changes only when Hub <-> MCP wire semantics become
 //   incompatible.
 //
-// The Harness/DSH cohort version (e.g. 0.1.5-rc.2) is a THIRD, independent
+// The Harness/DSH cohort version (e.g. 0.1.6-alpha.1) is a THIRD, independent
 // domain: it identifies the installed @deepseek-ai/dsh package generation,
 // never the Crew release. Verifiers must compare the cohort against
 // dsh_version, never against runtime_version.
@@ -36,7 +36,7 @@ export {
 // included in the identity contract.
 const RUNTIME_ID = randomUUID();
 
-export const RUNTIME_VERSION = '2.0.15';
+export const RUNTIME_VERSION = '2.1.0';
 export const HUB_PROTOCOL_VERSION = 1;
 
 export const HUB_CAPABILITIES = Object.freeze([
