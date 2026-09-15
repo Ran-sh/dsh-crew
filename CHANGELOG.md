@@ -4,6 +4,22 @@
 
 Future changes go here.
 
+## 2.0.14 — 2026-09-15
+
+- **The snapshot check follows local imports, rather than only the entry's first
+  line of them.** `src/server.mjs` is the MCP server Claude Code launches, and a
+  copy interrupted anywhere in the module graph it reaches — not only in the files
+  it names directly — leaves a snapshot that cannot start while every compared file
+  is present. The check now walks relative imports transitively, through
+  re-exports, and terminates on cycles. Specifiers are read from a token stream
+  that consumes comments and string literals whole, so the word `import` inside
+  either is not mistaken for a declaration; builtins are recognised by `isBuiltin`
+  rather than by an assumed `node:` prefix; a CommonJS `require` is followed as
+  well; and nothing is executed to find out — the fixture that proves this throws
+  if it ever is. The bounds are unchanged in kind: 512 entries and 8 MiB, of which
+  the shipping plugin uses about a fifth. The real machine reads ready in ~140ms
+  warm, and the walk is still rooted inside the snapshot and refuses symlinks.
+
 ## 2.0.13 — 2026-09-15
 
 Seven findings from a review of 2.0.12's install path. Two are P1 and were

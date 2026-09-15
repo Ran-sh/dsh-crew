@@ -839,3 +839,57 @@ test('an unset or blank CODEX_HOME falls back to ~/.codex', (t) => {
   assert.equal(existsSync(join(home, '.codex', 'config.toml')), true);
   assert.equal(installStatus({ home, root: ROOT, env: {} }).codex.components.mcp, true);
 });
+
+
+test('snapshot readiness follows local imports, re-exports and cycles without executing them', () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    for (const directory of [root, snapshot]) {
+      makeClaudePluginRoot(directory, 'same');
+      writeFileSync(join(directory, 'src', 'server.mjs'), "// import 'not-a-dependency';\nconst note = \"import 'also-not-a-dependency'\";\nimport './helper.mjs';\n");
+      writeFileSync(join(directory, 'src', 'helper.mjs'), "export * from './nested.mjs';\n");
+      writeFileSync(join(directory, 'src', 'nested.mjs'), "import './helper.mjs'; import 'crew-fixture-dependency'; throw new Error('must not execute');\n");
+    }
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+    const ready = () => installStatus({ home, root, env: {} }).claude.components.snapshot;
+    assert.equal(ready(), false, 'a missing indirect package fails readiness');
+    const dependency = join(snapshot, 'node_modules', 'crew-fixture-dependency');
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, 'package.json'), JSON.stringify({ name: 'crew-fixture-dependency', main: 'index.js' }));
+    writeFileSync(join(dependency, 'index.js'), 'module.exports = {};');
+    assert.equal(ready(), true, 'cycles terminate and installed indirect dependencies pass without executing code');
+    for (const directory of [root, snapshot]) rmSync(join(directory, 'src', 'nested.mjs'));
+    assert.equal(ready(), false, 'matching snapshots with a missing imported local file still fail');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test('snapshot readiness checks commented dynamic imports and CommonJS dependencies', () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    const snapshot = join(home, 'snapshot');
+    for (const directory of [root, snapshot]) {
+      makeClaudePluginRoot(directory, 'same');
+      writeFileSync(join(directory, 'src', 'server.mjs'), "import(/* local */ './helper.cjs');\n");
+      writeFileSync(join(directory, 'src', 'helper.cjs'), "require('fs'); require('node:path'); require(/* package */ 'crew-fixture-commonjs');\n");
+    }
+    const plugins = join(home, '.claude', 'plugins');
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
+      'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
+    } }));
+    const ready = () => installStatus({ home, root, env: {} }).claude.components.snapshot;
+    assert.equal(ready(), false);
+    const dependency = join(snapshot, 'node_modules', 'crew-fixture-commonjs');
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, 'index.js'), 'module.exports = {};');
+    assert.equal(ready(), true);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

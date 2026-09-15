@@ -57,6 +57,7 @@ import {
   reconcileUpdateJournal,
   readCurrentPointerState,
   managedReleasePath,
+  collectExternalSpecifiers,
 } from '../src/install/npx-lifecycle.mjs';
 // Rendered by both install entries, so it lives with the install that produces
 // the result rather than with either caller.
@@ -229,11 +230,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.0.13', async () => {
+test('package, runtime identity, and changelog identify candidate 2.0.14', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.0.13');
+  assert.equal(manifest.version, '2.0.14');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.0.13');
+  assert.equal(RUNTIME_VERSION, '2.0.14');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -255,6 +256,31 @@ test('a Claude Code integration that did not load is reported, not checkmarked',
   assert.match(degraded, /^-\s/, 'a degraded integration is neither a checkmark nor an abort');
   assert.match(degraded, /claude plugin install dsh-crew@dsh-crew/, 'and it names the command that fixes it');
   assert.doesNotMatch(claudeIntegrationLine({ ok: true, degraded: true }), /✓/);
+});
+
+// The scan behind payload staging is a regex, and writing a keyword as a string is
+// ordinary JavaScript. Without a quote boundary, `['import', 'export',
+// 'require'].includes(word)` let the closing quote of `'import'` stand in for the
+// opening quote of a specifier: it captured the text between two keywords, and
+// staging failed with "import target not resolvable from payload: ," on code that
+// imports nothing at all — which is what shipping this check did to its own payload.
+test('the payload import scan does not read a quoted keyword as a specifier', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-spec-'));
+  try {
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'scan.mjs'), [
+      "const KEYWORDS = ['import', 'export', 'require'];",
+      'if (!KEYWORDS.includes(token) || !["import", "require"].includes(token)) continue;',
+      "import 'zod';",
+      "import './local.mjs';",
+      "export { thing } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "const lazy = await import('node:fs');",
+      "const pkg = require('some-package');",
+      '',
+    ].join('\n'));
+    assert.deepEqual(collectExternalSpecifiers(dir), ['zod', '@modelcontextprotocol/sdk/server/mcp.js', 'some-package'],
+      'only specifiers a real declaration names are collected');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('packaged lifecycle invokes npm on Windows without shell mode', async () => {

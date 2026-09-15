@@ -4,7 +4,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, readdirSync, rmSync, statSync, lstatSync, opendirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -593,25 +593,58 @@ export function claudeSnapshotSettleMs(err) {
  * present is what *it* imports. The manifest is not a substitute: it declares 28
  * dependencies, including meta-packages the server never imports from here, and
  * requiring all of them to resolve read a working install as broken. Resolution
- * is asked from the entry itself, and subpath specifiers are kept as they are —
+ * follows local modules from the entry, and subpath specifiers are kept as they are —
  * `@modelcontextprotocol/sdk/server/mcp.js` resolves through its package's
  * `exports`, which the bare package name does not.
  */
 function claudeSnapshotResolvable(snapshotRoot) {
   if (typeof snapshotRoot !== 'string' || !snapshotRoot.trim()) return false;
-  const entry = join(snapshotRoot, 'src', 'server.mjs');
-  if (!existsSync(entry)) return false;
-  let source;
-  try { source = readFileSync(entry, 'utf8'); } catch { return false; }
-  const specifiers = [...source.matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)]
-    .map((match) => match[1])
-    .filter((specifier) => !specifier.startsWith('.') && !specifier.startsWith('node:'));
-  if (!specifiers.length) return true;
-  let fromEntry;
-  try { fromEntry = createRequire(entry); } catch { return false; }
-  return specifiers.every((specifier) => {
-    try { return existsSync(fromEntry.resolve(specifier)); } catch { return false; }
-  });
+  const root = resolve(snapshotRoot);
+  const visited = new Set();
+  let bytes = 0;
+  const inspect = (entry) => {
+    if (visited.has(entry)) return true;
+    if (visited.size >= 512) return false;
+    const local = relative(root, entry);
+    if (local.startsWith('..') || resolve(root, local) !== entry) return false;
+    visited.add(entry);
+    try {
+      const info = lstatSync(entry);
+      if (!info.isFile() || info.isSymbolicLink() || bytes + info.size > 8 * 1024 * 1024) return false;
+      bytes += info.size;
+      if (!/\.[cm]?js$/i.test(entry)) return true;
+      const source = readFileSync(entry, 'utf8');
+      const fromEntry = createRequire(entry);
+      // Consume comments and literals as complete tokens before recognizing declarations.
+      const tokens = (source.match(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|[^\s]/g) ?? []).filter((token) => !token.startsWith('/*') && !token.startsWith('//'));
+      const specifiers = [];
+      const literal = (token) => token && /^['"]/.test(token);
+      for (let i = 0; i < tokens.length; i += 1) {
+        if (!['import', 'export', 'require'].includes(tokens[i])) continue;
+        if (tokens[i - 1] === '.') continue;
+        let next = i + 1;
+        while (tokens[next]?.startsWith('/*') || tokens[next]?.startsWith('//')) next += 1;
+        if (['import', 'require'].includes(tokens[i]) && tokens[next] === '(') {
+          if (literal(tokens[next + 1])) specifiers.push(tokens[next + 1].slice(1, -1));
+          continue;
+        }
+        if (tokens[i] === 'require') continue;
+        if (literal(tokens[next])) { specifiers.push(tokens[next].slice(1, -1)); continue; }
+        // Only import/export declarations can introduce a `from` clause.
+        if (tokens[next] === '.' || tokens[next] === '(' || ['const', 'let', 'var', 'function', 'class', 'default', 'async'].includes(tokens[next])) continue;
+        for (let j = next; j < tokens.length && tokens[j] !== ';'; j += 1) {
+          if (tokens[j] === 'from' && literal(tokens[j + 1])) { specifiers.push(tokens[j + 1].slice(1, -1)); break; }
+        }
+      }
+      return specifiers.every((specifier) => {
+        if (isBuiltin(specifier)) return true;
+        const target = fromEntry.resolve(specifier);
+        if (!existsSync(target)) return false;
+        return specifier.startsWith('.') ? inspect(target) : true;
+      });
+    } catch { return false; }
+  };
+  return inspect(join(root, 'src', 'server.mjs'));
 }
 
 /**

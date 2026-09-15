@@ -1181,9 +1181,15 @@ export function defaultPayloadSmoke(dir, { nodePath = process.execPath, runner =
 // Keyword boundaries reject identifiers containing the keywords
 // ('legacy-import') and member calls (.from); captures stay on one line and
 // bounded — real specifiers never span lines.
-const IMPORT_SPECIFIER_RE = /(?<![\w.\-])(?:from|import|require)\b\s*\(?\s*["']([^"'\n]{1,200})["']/g;
+//
+// A quote before the keyword is rejected too. Writing the keyword as a string —
+// `['import', 'export', 'require'].includes(word)` — is ordinary JavaScript, and
+// without this the closing quote of `'import'` was taken for the opening quote of
+// a specifier: it captured the text between two keywords and the payload failed to
+// stage on code that imports nothing at all.
+const IMPORT_SPECIFIER_RE = /(?<![\w.\-'"`])(?:from|import|require)\b\s*\(?\s*["']([^"'\n]{1,200})["']/g;
 
-function collectExternalSpecifiers(dir) {
+export function collectExternalSpecifiers(dir) {
   const specifiers = new Set();
   const walk = (root) => {
     if (!existsSync(root)) return;
