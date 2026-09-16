@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 import { createHistoryService } from '../src/history/service.mjs';
 import { registerHistoryHttp } from '../src/history/http.mjs';
 import { runHistoryOperation } from '../src/history/operation.mjs';
+import { CREW_SESSIONS_REL } from '../src/install/crew-paths.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.CREW_PLAYWRIGHT_MODULE || 'playwright');
@@ -17,8 +18,8 @@ const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const root = mkdtempSync(join(tmpdir(), 'crew-history-e2e-'));
 const output = mkdtempSync(join(tmpdir(), 'crew-history-ui-shots-'));
 mkdirSync(join(root, 'harness/storages'), { recursive: true });
-mkdirSync(join(root, 'harness/sessions/example/session-test'), { recursive: true });
-const file = join(root, 'harness/sessions/example/session-test/session.jsonl');
+mkdirSync(join(root, CREW_SESSIONS_REL, 'example/session-test'), { recursive: true });
+const file = join(root, CREW_SESSIONS_REL, 'example/session-test/session.jsonl');
 writeFileSync(file, 'DISPOSABLE TEST CONVERSATION');
 writeFileSync(join(root, 'harness/storages/workspace.json'), JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: { initialized: true, workspaceIds: ['test-workspace'], archivedSessionIds: [] }, tables: { workspaces: { 'test-workspace': { path: '/example/project', title: 'Disposable workspace', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', sessionIds: ['session-test'] } } } }));
 const errors = []; let stopped = false; let operationPromise;

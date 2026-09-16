@@ -172,8 +172,27 @@ export function buildOutcome({ result = '', deliveryMeta, executionStatus, stopR
   const parsed = parseDeliveryReport(result);
   // The aggregate status and the visible entries come from one parse, so they can
   // no longer disagree about whether the Tests section is evidence.
-  const parsedTests = parseTestsSection(parsed.sections.Tests);
-  const testsStatus = parsedTests.status ?? parsed.tests_status ?? deliveryMeta?.tests_status;
+  //
+  // `parseDeliveryReport` already decided which contract this message answered —
+  // it reads the format off the headings that are present, and only a coding
+  // report has a Tests obligation. A review report has no Tests rule, so a
+  // reviewer that also lists what it checked under `## Tests` is describing its
+  // own coverage; reading those rows with the worker's rule made an honest
+  // `NOT RUN — <check> — <reason>`, which is exactly the answer the contract asks
+  // for when something cannot be verified, downgrade the reviewer to `partial`
+  // and surface `TESTS_NOT_RUN`. The role was penalised for the disclosure the
+  // contract requires, so the coding Tests rule now applies only to coding
+  // reports. The format decision stays in one place: this consumes it.
+  const reviewReport = parsed.format === 'review';
+  const parsedTests = reviewReport
+    ? { valid: false, status: undefined, tests: [] }
+    : parseTestsSection(parsed.sections.Tests);
+  // `deliveryMeta` is the same report read a second way, so for a review it can
+  // only reintroduce the verdict the gate above just dropped. It is a fallback
+  // for coding reports, not a way around the format gate.
+  const testsStatus = reviewReport
+    ? undefined
+    : (parsedTests.status ?? parsed.tests_status ?? deliveryMeta?.tests_status);
   const tests = parsedTests.tests;
   const execStatus = executionStatus ?? (stopReason === 'completed' ? 'completed' : 'failed');
   return {

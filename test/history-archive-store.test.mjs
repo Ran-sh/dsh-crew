@@ -221,3 +221,45 @@ test('malformed duplicate artifact manifests are rejected before restore publica
   await assert.rejects(api.restoreHistory({ crewRoot: f.root, archiveId: archived.id, assertStopped: () => true }), /INVALID_MANIFEST/);
   assert.equal(existsSync(join(f.root, f.file)), false);
 });
+
+// The store this module walks and the store the reviewer evidence pointer names
+// are the same directory, so both now read one literal. If they ever drift the
+// failure is silent in both directions: a missing-session claim would go
+// unproven against the wrong tree, or the reviewer would be handed a path that
+// does not exist. This pins the two together.
+test('the session store path and the artifact pattern share one source', async t => {
+  const api = await load();
+  const paths = await import('../src/install/crew-paths.mjs');
+
+  assert.equal(paths.CREW_SESSIONS_REL, 'harness/sessions');
+  const home = mkdtempSync(join(tmpdir(), 'crew-paths-test-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  assert.equal(
+    paths.crewHarnessSessionsDir({ home }),
+    join(home, '.config', 'dsh-crew', 'harness', 'sessions'),
+  );
+
+  // The literal has to be POSIX with exactly two segments: `pathInside` rejects a
+  // relative path containing a backslash, and the artifact pattern is matched
+  // against archive-relative paths. A backslash would land inside a segment here.
+  assert.deepEqual(paths.CREW_SESSIONS_REL.split('/'), ['harness', 'sessions']);
+
+  // Pins the wiring, not just agreement. Provenance is not provable from here —
+  // a hand-written identical literal would satisfy this too — which is why the
+  // literal value is pinned above as well. What this catches is the drift that
+  // matters: move the store and the artifact filter moves with it.
+  assert.ok(
+    api.SESSION_ARTIFACT_PATTERN.source.replace(/\\\//g, '/').startsWith(`^${paths.CREW_SESSIONS_REL}/`),
+    'the pattern must be compiled from CREW_SESSIONS_REL',
+  );
+
+  const artifact = `${paths.CREW_SESSIONS_REL}/project/session-a/session.jsonl`;
+  assert.ok(api.SESSION_ARTIFACT_PATTERN.test(artifact));
+  assert.ok(api.SESSION_ARTIFACT_PATTERN.test(`${paths.CREW_SESSIONS_REL}/project/session-a/session.v3.jsonl.zstd`));
+  assert.equal(api.isSessionArtifactPath(artifact, 'session-a'), true);
+
+  // ...and it still rejects a session artifact rooted anywhere else.
+  assert.equal(api.SESSION_ARTIFACT_PATTERN.test('elsewhere/sessions/project/session-a/session.jsonl'), false);
+  assert.equal(api.SESSION_ARTIFACT_PATTERN.test('harness/sessions/project/session-a/session.v0.jsonl'), false);
+  assert.equal(api.SESSION_ARTIFACT_PATTERN.test('harness/sessions/project/session-a/session.jsonl.bak'), false);
+});

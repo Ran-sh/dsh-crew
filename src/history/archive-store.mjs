@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
+import { CREW_SESSIONS_REL } from '../install/crew-paths.mjs';
+
 const WORKSPACE = 'harness/storages/workspace.json';
 const LIMIT = 512 * 1024 * 1024;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -31,7 +33,8 @@ function pathInside(root, relativePath) {
 // `session.vN.jsonl` (N >= 1) after that, each optionally zstd-compressed.
 // Sharing the shape between the inventory and the archive guard keeps both in
 // step when the backend's naming changes.
-export const SESSION_ARTIFACT_PATTERN = /^harness\/sessions\/[^/]+\/[^/]+\/session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/;
+const SESSION_ARTIFACT_DIR = CREW_SESSIONS_REL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const SESSION_ARTIFACT_PATTERN = new RegExp(`^${SESSION_ARTIFACT_DIR}/[^/]+/[^/]+/session(?:\\.v[1-9][0-9]*)?\\.jsonl(?:\\.zstd)?$`);
 
 export function isSessionArtifactPath(relativePath, sessionId) {
   return typeof relativePath === 'string'
@@ -130,7 +133,7 @@ async function requireStopped(assertStopped) {
  * drop its workspace while leaving the artifact behind.
  */
 function presentSessionIds(root) {
-  const sessionsRoot = pathInside(root, 'harness/sessions');
+  const sessionsRoot = pathInside(root, CREW_SESSIONS_REL);
   let projects;
   try { projects = readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return new Set(); }
   if (projects.length > 20000) fail('INVALID_FILE');

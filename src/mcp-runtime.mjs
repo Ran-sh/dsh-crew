@@ -18,6 +18,7 @@ import {
 } from './workspace-isolation.mjs';
 import { startJob, waitJob, jobView, cancelJob } from './jobs.mjs';
 import { hub } from './hub-client.mjs';
+import { crewHarnessSessionsDir } from './install/crew-paths.mjs';
 
 const SESSION_CONFIG_KEYS = [
   'default_tier', 'default_effort', 'mode', 'default_timeout_seconds',
@@ -155,6 +156,10 @@ export function attemptFromView(view, spec) {
     provider: view?.provider ?? null,
     model: view?.model ?? null,
     execution_context: view?.execution_context ?? null,
+    // The Hub's own session id for this attempt. It is the key to the attempt's
+    // persisted execution record, which is what lets a later reviewer read the
+    // raw tool results instead of trusting the worker's summary of them.
+    session_id: view?.sessionId ?? null,
     selection_source: source,
     selection_trace: selectionTrace,
     status: view?.status ?? 'failed',
@@ -339,6 +344,10 @@ export function buildMcpWorkflowRuntime(deps) {
       captureCandidate,
       releaseWorkspace,
       buildReviewTask,
+      // Where the Harness writes session records. The automatic review needs it
+      // to point the reviewer at the worker's raw execution evidence; without it
+      // the reviewer can only re-read the worker's own summary of what ran.
+      evidenceRoot: () => crewHarnessSessionsDir(),
       getConfig,
       getRuntimeControls,
     },

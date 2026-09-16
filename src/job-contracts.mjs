@@ -82,8 +82,13 @@ function evidenceStatus(view) {
   if (view?.status === 'failed' || view?.phase === 'failed' || view?.outcome?.execution_status === 'failed') return 'FAIL';
   if (view?.review?.verdict === 'request_changes' || view?.outcome?.task_status === 'partial') return 'PARTIAL';
   if (view?.outcome?.task_status === 'blocked') return 'BLOCKED';
-  if (view?.role === 'reviewer' && view?.outcome == null) {
-    return view.status === 'done' && view.review?.status === 'done'
+  // A reviewer is judged by its verdict, whether or not an outcome was built for
+  // it. Keying this branch on `outcome == null` meant the hub — which always
+  // builds one — took the generic path below, where a complete review contract
+  // was enough for PASS even when the verdict was `inconclusive`. The review
+  // verdict is the reviewer's whole product, so it is what has to be approving.
+  if (view?.role === 'reviewer' && view.review) {
+    return view.status === 'done' && view.review.status === 'done'
       && view.review.verdict === 'approve' && view.review.delivery_complete === true
       && view.review.mutated_candidate !== true ? 'PASS' : 'PARTIAL';
   }

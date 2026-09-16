@@ -508,7 +508,19 @@ export function createWorkflowRuntime(adapters, {
         if (decision.step === 'review') {
           transition(job, JOB_PHASES.REVIEWING, 'automatic review');
           const before = job.candidate;
-          const reviewTask = adapters.buildReviewTask(job.original_task, { outcome, candidate: job.candidate ?? null }, { strictness: job.review_strictness ?? 'standard' });
+          // The reviewed attempt's own persisted execution record. The capsule
+          // already carries the worker's *summary* of what it ran; this is the
+          // handle to what it actually ran, which is the only thing that lets the
+          // reviewer check a transient workspace that no longer holds the work.
+          const reviewed = [...job.attempts].reverse().find((a) => a.role !== 'reviewer');
+          const reviewTask = adapters.buildReviewTask(job.original_task, {
+            outcome,
+            candidate: job.candidate ?? null,
+            evidence: {
+              sessionId: reviewed?.session_id ?? null,
+              root: adapters.evidenceRoot?.() ?? null,
+            },
+          }, { strictness: job.review_strictness ?? 'standard' });
           const review = await runReviewerAttempt(job, reviewTask, config, before, job.execution_cwd, job.base_revision);
         if (job.cancelling) { await cancelWorkflow(job); return; }
           job.review = review;
@@ -633,6 +645,7 @@ export function createWorkflowRuntime(adapters, {
       provider: ar.provider ?? null,
       model: ar.model ?? null,
       execution_context: ar.execution_context ?? null,
+      session_id: ar.session_id ?? null,
       selection_source: ar.selection_source ?? null,
       selection_trace: ar.selection_trace ?? null,
       status: ar.status ?? 'failed',

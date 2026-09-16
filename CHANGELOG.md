@@ -4,6 +4,44 @@
 
 Future changes go here.
 
+## 2.1.5 — 2026-09-16
+
+- **An approving reviewer was recorded as `partial`.** `parseDeliveryReport`
+  reads the delivery contract off the headings a message carries, and only a
+  coding report has a Tests obligation — but `buildOutcome` parsed the `## Tests`
+  section unconditionally, so a reviewer that also listed its own coverage had an
+  honest `NOT RUN — <check> — <reason>` row read as the worker's test evidence.
+  `classifyTaskStatus` turned that into `partial`, and `evidenceStatus` turned
+  that into `PARTIAL` / `TESTS_NOT_RUN` on a job whose verdict was `approve`: the
+  role was penalised for the disclosure the contract requires. The coding Tests
+  rule now applies only to coding reports, and the `deliveryMeta.tests_status`
+  fallback can no longer reinstate a verdict the format gate dropped.
+- **`evidenceStatus` judged a reviewer by its contract, not its verdict.** Its
+  reviewer branch was keyed on `outcome == null`, so the Hub — which always builds
+  an outcome — took the generic path, where a complete contract was enough for
+  `PASS` even when the verdict was `inconclusive`. A reviewer is now judged by
+  `approve`, matching the acceptance gate.
+- **An automatic reviewer could only re-read the worker's summary of what ran.**
+  The capsule embeds the worker's reported changes and tests and tells the
+  reviewer to inspect the workspace, which is impossible for transient work that
+  was created, run and removed before the review started; the reviewer's only
+  options were trusting the summary or running an equivalent check of its own. It
+  now carries a pointer to the reviewed attempt's persisted execution record (the
+  Hub session id plus the Crew harness session store), so it can read the original
+  `tool/result` entries — the bytes a write produced, and the captured output and
+  exit code of every command — from the attempt that actually ran.
+- `harness/sessions` was written out in three shapes: an absolute path helper for
+  that pointer, a POSIX literal for `pathInside`, and a compiled regex for the
+  artifact filter. All three now derive from one constant, so moving the store
+  can not update the walk and silently leave the filter behind. Behavior is
+  unchanged: the compiled pattern is identical and the resolved directory is the
+  same under both path semantics.
+- Verified live rather than in tests only: a combined worker → automatic reviewer
+  workflow on an activated payload finished `completed / reviewed: true` with the
+  worker `done/success` and the reviewer `done/success/approve` — no `partial` —
+  after the reviewer read the worker's raw execution record and confirmed the
+  script source, the exit code, the stdout bytes and the cleanup.
+
 ## 2.1.4 — 2026-09-15
 
 - **2.1.3 stopped the hub and left the frontend running.** The window request
