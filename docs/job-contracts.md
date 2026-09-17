@@ -22,6 +22,16 @@ changes/tests/risks, changed-file names, base revision, and candidate
 fingerprint. It opens the relevant files and runs `git diff` in the isolated
 workspace when deeper inspection is needed.
 
+The capsule also carries a pointer to the reviewed attempt's persisted execution
+record — the Hub session id plus the Crew harness session store — because a
+transient change leaves nothing in the workspace to inspect once it has been
+created, run and removed. That record is the only account of what actually ran:
+its `tool/result` entries hold the exact bytes a `write` produced, and the
+captured output and exit code of every command. What travels is the pointer,
+never the record, and it is omitted entirely when either half is unknown rather
+than naming a path that would not hold the attempt. A reviewer's own
+reproduction is not a substitute for reading it.
+
 The Hub keeps only the latest assistant message needed as the final Delivery
 Report. It does not retain an ever-growing list of intermediate assistant
 messages.
