@@ -4,6 +4,26 @@
 
 Future changes go here.
 
+## 2.2.1 — 2026-09-17
+
+- **Retained runtime cohorts are pruned again.** `gcRetainedRuntimes` existed to
+  drop a retained cohort once no release pins it, but nothing ever called it, so
+  `retained-runtimes/` only grew. It now runs at the commit points that already
+  prune releases, and resolves each surviving release through the same chain
+  every other caller uses — the manifest's exact `@deepseek-ai/dsh` pin, then the
+  `release-cohort.json` sidecar — so a legacy release that records its cohort only
+  in the sidecar keeps its runtime. The whole pass is skipped, with a warning
+  naming the release, when any directory under `releases/` cannot name its
+  cohort: "nothing pins it" and "could not tell" must not prune the same way.
+  Pruning is best-effort on top of that, because it runs after the pointer is
+  written and the journal cleared and must never fail a committed update.
+- **Dead code removed.** Twenty-four symbols nothing referenced are gone
+  (including four never-called installer functions), 84 declarations that were
+  exported but used only inside their own module no longer are, and four scripts
+  no file or workflow named were deleted. The `release-cohort.json` filename is
+  now single-sourced from `dsh-cohort.mjs`, which is what that module's header
+  always claimed.
+
 ## 2.2.0 — 2026-09-17
 
 - **A project has two workspaces instead of one per job.** The Harness groups
