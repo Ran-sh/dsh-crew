@@ -7,10 +7,17 @@
 // of the first message the agent receives — so they only agree if they are built
 // from the same string. This module is that string.
 //
-// The shape is `Crew_<YYYYMMDD>_<HHMMSS>_<purpose>`, matching the worktree naming
-// rule; `src/workspace-isolation.mjs` allocates worktrees in the same shape, and a
-// test asserts that every name produced here satisfies its ownership grammar, so
-// the two cannot drift apart silently.
+// The shape is `Crew_<YYYYMMDD>_<HHMMSS>_<purpose>`, matching the disposable
+// worktree naming rule; `src/workspace-isolation.mjs` allocates those in the same
+// shape, and a test asserts that every name produced here satisfies its ownership
+// grammar, so the two cannot drift apart silently. A job that runs in a
+// caller-supplied Crew worktree is still named after that directory.
+//
+// A job running in one of the stable per-role workspaces is the exception, and
+// the agreement above deliberately does not apply to it: `dsh-crew-worker` is
+// shared by every job that uses it, so naming jobs after their workspace would
+// give them all one title. There the workspace groups the sessions and this name
+// tells them apart.
 
 export const JOB_NAME_PREFIX = 'Crew_';
 export const JOB_PURPOSE_MAX = 32;

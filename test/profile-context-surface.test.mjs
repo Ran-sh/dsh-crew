@@ -38,7 +38,10 @@ test('readonly profiles are isolated instead of sharing the primary workspace', 
   const mcpRuntime = readFileSync(new URL('../src/mcp-runtime.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(mcpRuntime, /job\.requested_isolation === 'readonly' \|\| job\.requested_isolation === 'shared'/);
   assert.match(mcpRuntime, /job\.requested_isolation === 'shared'/);
-  assert.match(mcpRuntime, /createIsolatedWorkspace/);
+  // The isolation is the project's stable workspace now rather than a worktree
+  // of the job's own; what this asserts is that a readonly profile still takes
+  // the isolated path instead of being folded into shared.
+  assert.match(mcpRuntime, /ensureCrewWorkspace/);
 });
 
 test('result polling accepts an event cursor for incremental canonical watch', () => {

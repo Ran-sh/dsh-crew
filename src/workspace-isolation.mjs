@@ -645,6 +645,73 @@ async function ownershipDrift(run, worktreePath, expect) {
 export const WORKTREE_CLEANUP_RETRIES = 3;
 export const WORKTREE_CLEANUP_BACKOFF_MS = 150;
 
+/**
+ * Is `worktreePath` a worktree Crew created, for this repository?
+ *
+ * The same identity check the automatic prune uses, exposed for the stable
+ * per-role workspaces: they are created once and then adopted by every later
+ * job, and "adopt" has to mean the same thing it means to the pruner — shape,
+ * name, path, repository and incarnation all matching a record Crew wrote.
+ * Anything less would let a directory that merely has the right name be reused
+ * as if Crew had made it.
+ */
+export async function crewOwnsWorktree({ worktreePath, repoRoot, git } = {}) {
+  const run = git ?? defaultRunner;
+  const repo = await commonDirOf(run, repoRoot);
+  if (!repo) return false;
+  const incarnation = await incarnationOf(run, worktreePath);
+  return Boolean(readOwnership({ worktreePath, repo, incarnation }));
+}
+
+/**
+ * Create a worktree of `repoRoot` at an exact path, and record ownership.
+ *
+ * `createIsolatedWorkspace` reserves a name it invents; the stable per-role
+ * workspaces already have their path, so this is the same creation without the
+ * reservation step. Ownership is recorded only after git succeeded, so a failed
+ * creation never leaves a claim on a tree that does not exist.
+ */
+export async function createWorktreeAt({ dir, repoRoot, revision, purpose, at, git } = {}) {
+  const run = git ?? defaultRunner;
+  const res = await runGit(run, ['worktree', 'add', '--detach', dir, revision], { cwd: repoRoot });
+  if (!res.ok) {
+    const released = await cleanupIsolatedWorkspace({ worktreePath: dir, repoRoot, git: run, reservation: true });
+    return {
+      ok: false,
+      reason: res.reason,
+      error: res.error,
+      ...(released.ok ? {} : { cleanupBlocked: true, cleanupError: released.error }),
+    };
+  }
+  const headRes = await runGit(run, ['rev-parse', 'HEAD'], { cwd: dir });
+  const created = headRes.ok ? headRes.stdout.trim() : '';
+  const commonDir = await commonDirOf(run, repoRoot);
+  const incarnation = commonDir ? await claimIncarnation(run, dir) : null;
+  const owned = Boolean(commonDir && incarnation && created)
+    && recordOwnership({ worktreePath: dir, repo: commonDir, incarnation, head: created, purpose, at });
+  return { ok: true, worktreePath: dir, repoRoot, owned };
+}
+
+/**
+ * Return a stable workspace to a known revision before a job starts.
+ *
+ * The workspace outlives the job, so without this a job would inherit whatever
+ * the previous one left — and the candidate diff, which is taken against a base
+ * revision, would then contain someone else's work. `reset --hard` discards
+ * tracked modifications; `clean -fd` removes untracked files but deliberately
+ * not ignored ones, so a workspace's `node_modules` survives. A reset that fails
+ * is reported rather than ignored: starting a job on an unknown tree is what the
+ * reset exists to prevent.
+ */
+export async function resetWorktreeTo({ worktreePath, revision, git } = {}) {
+  const run = git ?? defaultRunner;
+  const reset = await runGit(run, ['reset', '--hard', revision], { cwd: worktreePath });
+  if (!reset.ok) return { ok: false, reason: reset.reason, error: reset.error };
+  const clean = await runGit(run, ['clean', '-fd'], { cwd: worktreePath });
+  if (!clean.ok) return { ok: false, reason: clean.reason, error: clean.error };
+  return { ok: true };
+}
+
 export async function cleanupIsolatedWorkspace({
   worktreePath,
   repoRoot,

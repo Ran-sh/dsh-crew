@@ -11,7 +11,6 @@ import { createWorkflowRuntime } from './workflow-runtime.mjs';
 import { CONFIG_SCHEMA_VERSION, normalizeGlobalConfig } from './policy.mjs';
 import { buildDirectSelectionTrace, enrichSelectionTrace } from './model-routing.mjs';
 import {
-  createIsolatedWorkspace,
   cleanupIsolatedWorkspace,
   inspectRepository,
   captureCandidate as captureIsolationCandidate,
@@ -19,6 +18,7 @@ import {
 import { startJob, waitJob, jobView, cancelJob } from './jobs.mjs';
 import { hub } from './hub-client.mjs';
 import { crewHarnessSessionsDir } from './install/crew-paths.mjs';
+import { ensureCrewWorkspace, releaseCrewWorkspace } from './crew-workspaces.mjs';
 
 const SESSION_CONFIG_KEYS = [
   'default_tier', 'default_effort', 'mode', 'default_timeout_seconds',
@@ -301,25 +301,27 @@ export function buildMcpWorkflowRuntime(deps) {
     if (!repo.ok) {
       return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `${job.role ?? 'worker'} needs an isolated git worktree: ${repo.error ?? repo.reason}` };
     }
-    // The worktree name carries what the job was for, so an operator reading the
-    // directory list can tell a worker tree from a reviewer tree without opening
-    // anything. Role is the honest answer; it is what the job actually is.
-    const created = await createIsolatedWorkspace({
+    // The job runs in this project's stable worker/reviewer workspace rather
+    // than a worktree of its own, so the sessions the Harness groups by cwd
+    // accumulate in two entries instead of one per job. The workspace is reset
+    // to the job's base revision on the way in, so the candidate diff is still
+    // this job's work alone, and it is held for the job's duration so two jobs
+    // cannot share it.
+    const workspace = await ensureCrewWorkspace({
       cwd: job.requested_cwd,
-      jobId: job.id,
-      purpose: job.role ?? 'job',
+      role: job.role ?? 'worker',
       baseRevision: job.workspace_branch ?? repo.baseRevision,
     });
-    if (!created.ok) {
-      return { ok: false, reason: created.reason ?? 'WORKTREE_CREATE_FAILED', error: `worktree create failed: ${created.error ?? ''}` };
+    if (!workspace.ok) {
+      return { ok: false, reason: workspace.reason ?? 'WORKTREE_CREATE_FAILED', error: `workspace unavailable: ${workspace.error ?? ''}` };
     }
     return {
       ok: true,
-      execution_cwd: created.worktreePath,
-      base_revision: created.baseRevision,
+      execution_cwd: workspace.worktreePath,
+      base_revision: workspace.baseRevision,
       isolation: 'worktree',
       primary_workspace_dirty: repo.dirty === true,
-      handle: { worktreePath: created.worktreePath, repoRoot: created.repoRoot },
+      handle: { worktreePath: workspace.worktreePath, repoRoot: workspace.repoRoot, stable: true, release: workspace.release },
     };
   };
 
@@ -327,6 +329,9 @@ export function buildMcpWorkflowRuntime(deps) {
 
   const releaseWorkspace = async (handle) => {
     if (!handle) return { ok: true };
+    // A stable workspace is not disposed of — it is the directory the next job
+    // and every session it produced belong to. Only the lock is dropped.
+    if (handle.stable === true) return { ok: releaseCrewWorkspace(handle) };
     try {
       const r = await cleanupIsolatedWorkspace({ worktreePath: handle.worktreePath, repoRoot: handle.repoRoot });
       return { ok: r.ok, error: r.ok ? undefined : r.error };

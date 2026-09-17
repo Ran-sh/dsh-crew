@@ -27,10 +27,11 @@ import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { loadCiEvidence } from '../ci-evidence.mjs';
+import { ensureCrewWorkspace, releaseCrewWorkspace } from '../crew-workspaces.mjs';
 import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
 import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
-import { cleanupIsolatedWorkspace, createIsolatedWorkspace, isCrewWorktreeName } from '../workspace-isolation.mjs';
+import { cleanupIsolatedWorkspace, isCrewWorktreeName } from '../workspace-isolation.mjs';
 import { jobDisplayName } from '../job-identity.mjs';
 import { assessWorkspaceReadiness } from '../workspace-readiness.mjs';
 import { buildConfigReadinessMatrix } from '../config-readiness.mjs';
@@ -861,16 +862,21 @@ export class WorkerRegistry {  constructor(ctx) {
     let executionCwd = cwd;
     let isolatedWorkspace = null;
     if ((requested_isolation === 'worktree' && jobRole === 'worker') || requested_isolation === 'readonly') {
-      const created = await createIsolatedWorkspace({ cwd, jobId: id, purpose: jobRole, baseRevision: workspace_branch });
+      // This project's stable worker/reviewer workspace, reset to the job's base
+      // revision and held for the job's duration, so the Harness groups these
+      // sessions into two entries instead of one per job.
+      const created = await ensureCrewWorkspace({ cwd, role: jobRole, baseRevision: workspace_branch });
       if (!created.ok) throw Object.assign(new Error(created.error ?? created.reason), { code: created.reason });
       executionCwd = created.worktreePath;
-      isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot };
+      isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot, stable: true, release: created.release };
     }
     // The Harness titles the session from the opening words of the prompt the
-    // agent receives, so the prompt opens with the job's Crew name: that makes the
-    // conversation, the worktree directory and the name an operator types the same
-    // string. An allocated worktree's name wins, so a collision suffix stays
-    // consistent between the two.
+    // agent receives, so the prompt opens with the job's Crew name. An allocated
+    // worktree's name wins, so a collision suffix stays consistent between the
+    // two. A stable workspace deliberately does *not* win: its directory name is
+    // shared by every job that uses it, so naming jobs after it would give them
+    // all one title and leave an operator unable to tell them apart. The
+    // workspace groups; the job name distinguishes.
     const jobName = isCrewWorktreeName(basename(executionCwd))
       ? basename(executionCwd)
       : jobDisplayName({ purpose: jobRole });
@@ -1158,7 +1164,14 @@ export class WorkerRegistry {  constructor(ctx) {
           review: job.review,
           workspaceDiff: job.workspaceDiff,
         });
-        if (job.isolatedWorkspace) {
+        if (job.isolatedWorkspace?.stable === true) {
+          // A stable workspace is not disposed of — it is the directory the next
+          // job and every session it produced belong to. Only the lock is dropped.
+          const released = releaseCrewWorkspace(job.isolatedWorkspace);
+          job.workspace_retained = false;
+          const workspaceCleanupWarning = released ? null : 'workspace lock was not held at release';
+          job.cleanup_warning = [handleCleanupWarning, workspaceCleanupWarning].filter(Boolean).join('; ') || null;
+        } else if (job.isolatedWorkspace) {
           const cleanup = await cleanupIsolatedWorkspace(job.isolatedWorkspace).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
           job.workspace_retained = cleanup.ok !== true;
           const workspaceCleanupWarning = cleanup.ok === true ? null : cleanup.error ?? 'worktree cleanup failed';
