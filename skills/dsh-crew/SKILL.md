@@ -90,20 +90,23 @@ review asks for changes, that is a task result to act on — not approval.
   auditable evidence, and a reply with neither a change nor a verified check is
   incomplete. That is the gate working, not the worker failing. A task that
   changes nothing *on purpose* can pass — see the next entry.
-- **A job is named `Crew_<date>_<time>_<purpose>`.** The worktree directory, the
-  session the Harness lists in its workspace panel, and the name in a status
-  payload all use that one string, so a conversation can be matched to a
-  directory by eye. The purpose is the role: `worker` or `reviewer`.
+- **A project has two workspaces, and a job is named `Crew_<date>_<time>_<purpose>`.**
+  Worker jobs and the review that follows one run in `dsh-crew-worker`; an
+  explicit reviewer runs in `dsh-crew-review`. The Harness groups sessions by the
+  directory a job ran in, so those two are what an operator sees in the panel,
+  however many jobs have run. The job's own name still distinguishes it inside
+  the group.
 - **A verified zero-change task needs `constraints.allow_no_changes: true`.**
   For a deliberately temporary job — create, verify, clean up, end with an empty
   diff — that flag plus the reported checks is what certifies it. It requires a
   clean, readable baseline, at least one `PASS` and no `FAIL`, and it relaxes
   nothing else: no evidence, a failed check, a dirty baseline or an actual change
   each still refuse.
-- **Isolated workspaces need git.** The default `worktree` isolation fails with
+- **Isolated workspaces need git.** The default isolation fails with
   `NOT_GIT_REPOSITORY` for a non-git workspace rather than silently sharing the
-  tree. Use `shared` deliberately if that is what you want; `allow_no_changes`
-  works in either.
+  tree; a directory already sitting at the workspace path that Crew did not
+  create fails with `WORKSPACE_CONFLICT` instead of being deleted. Use `shared`
+  deliberately if that is what you want; `allow_no_changes` works in either.
 - **A repository with no commits cannot be isolated.** `git init` with nothing
   committed reports `REPOSITORY_HAS_NO_COMMITS` — there is no revision to start
   from. Commit once, or run that job with `shared`.
@@ -140,11 +143,13 @@ unrestricted. Defaults mirror DeepSeek's published peak hours.
 
 ## Work
 
-`isolation: worktree` is the default: a coding worker runs in a per-job git
-worktree and the primary tree is untouched. Non-git workspaces fail with
-`NOT_GIT_REPOSITORY` rather than silently sharing the tree; use `shared`
-explicitly if that is what you want. Concurrent jobs are capped by
-`max_parallel`.
+The default isolation gives a coding worker a git worktree of its own project,
+and the primary tree is untouched. That worktree is the project's stable worker
+or reviewer workspace, reset to the job's base revision before it runs, so the
+candidate diff is that job's work alone. One job at a time runs in each — a
+second finds the workspace held and is refused with `WORKSPACE_BUSY` rather than
+sharing it, because two jobs in one tree would each see the other's edits. So
+concurrency is bounded by workspaces even where `max_parallel` is higher.
 
 The reviewer gate is `required` by default: an unreviewed change fails. Review
 findings and failing tests are results to address, never a reason to bypass the
@@ -153,9 +158,13 @@ gate.
 ## History
 
 Session storage is shared between 3080 and 3210 — clearing one clears both.
-Cleanup is scoped by provenance, and the default scope is **Crew-created only**,
-so the operator's own conversations survive. `all` removes theirs too; use it
-deliberately. Archived batches are restorable from the panel.
+The default scope is **Crew's own workspaces**: sessions Crew recorded creating
+that ran in `dsh-crew-worker`, `dsh-crew-review`, or a per-job worktree an
+earlier release left behind. The operator's own conversations survive, and so
+does anything Crew ran in a directory that is not one of its workspaces.
+`all` removes theirs too; use it deliberately. The panel's date field narrows
+any scope to sessions created before it, and workspaces with newer sessions are
+kept. Archived batches are restorable from the panel.
 
 ## When Crew is unavailable
 

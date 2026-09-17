@@ -4,6 +4,45 @@
 
 Future changes go here.
 
+## 2.2.0 — 2026-09-17
+
+- **A project has two workspaces instead of one per job.** The Harness groups
+  sessions by the directory a job ran in and matches that directory exactly, so
+  a per-job worktree meant a new workspace entry in the panel for every job an
+  operator ran. A worker job and the review that follows it now run in
+  `dsh-crew-worker`, an explicit reviewer in `dsh-crew-review`, and both are
+  reused: the panel stays at two entries per project however many jobs run. The
+  job's own name still distinguishes it inside the group, since naming jobs after
+  their workspace would have given them all one title.
+- **One job at a time per workspace.** The workspaces are shared, so two jobs in
+  one tree would each see the other's edits: the client captures a candidate only
+  for isolated trees, the Hub diffs the whole tree before and after and would
+  attribute the other job's work to this one, and the reviewer's before/after
+  fingerprint would read it as a mutated candidate and force `request_changes`.
+  Nothing serialised by directory before. A job now holds its workspace for its
+  whole life; a second job waits briefly and is then refused with
+  `WORKSPACE_BUSY` rather than sharing. This is the throughput cost of the
+  change: effective concurrency is bounded by workspaces, not `max_parallel`.
+- **Each job still starts from its base revision.** The workspace outlives the
+  job, so it is reset on the way in — `reset --hard` for tracked files and
+  `clean -fd` for untracked ones, leaving ignored files such as `node_modules`
+  alone. Without it a job would inherit the last one's work and the candidate
+  diff, taken against a base revision, would contain it. The consequence is
+  deliberate and worth stating: a workspace does not accumulate work across
+  jobs.
+- A directory already sitting where a workspace belongs, that Crew did not
+  create, is refused with `WORKSPACE_CONFLICT` rather than deleted — deleting it
+  would be a destructive guess about a directory Crew cannot claim.
+- **Cleanup defaults to those workspaces.** The default scope is no longer
+  "everything Crew created" but "sessions in Crew's own workspaces" — the two
+  stable ones plus the per-job trees earlier releases left behind, so those stay
+  cleanable rather than stranded. It cannot remove a session the operator opened,
+  nor one Crew ran outside its own workspaces. The panel's existing date field
+  now narrows this scope as well as `before`, and omitting it means "everything
+  in these workspaces" rather than an error; a date that is supplied and
+  malformed still fails, so a typo cannot silently widen the range. The scope
+  value keeps its old name for compatibility.
+
 ## 2.1.8 — 2026-09-16
 
 - **Cancelling a workflow reported success while the job it had just started ran

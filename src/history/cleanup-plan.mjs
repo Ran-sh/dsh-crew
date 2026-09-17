@@ -31,14 +31,24 @@ function records(values) {
 /**
  * Pure preview only. No filesystem or project-path operations are performed.
  *
- * `scope` defaults to `crew`: a caller that forgets to narrow the range gets the
- * one range that cannot remove sessions the operator opened themselves. Widening
- * to `all` is always an explicit choice.
+ * `scope` defaults to `worktree` — Crew's own workspaces — because that is the
+ * range an operator is actually asking for when they clear a Crew project out,
+ * and it still cannot remove a session the operator opened themselves or one
+ * Crew ran in someone else's directory. Widening to `all` is always explicit.
+ *
+ * The value is named `worktree` for compatibility and now means workspaces: the
+ * pair a project's jobs run in, plus the per-job trees earlier releases left
+ * behind, so those stay cleanable instead of being stranded by the change.
  */
-export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'crew', before } = {}) {
+export function planHistoryCleanup(snapshot, { operation = 'archive', scope = 'worktree', before } = {}) {
   if (!['archive', 'delete'].includes(operation) || !['all', 'crew', 'worktree', 'before'].includes(scope)) throw new Error('HISTORY_INVALID_OPTIONS');
-  const cutoff = scope === 'before' ? instant(before) : null;
+  // `worktree` takes the same time window as `before`, but optionally: the panel
+  // supplies one when the operator picks a date, and its absence means "everything
+  // in these workspaces" rather than an error. A date that was supplied and is
+  // malformed still fails, so a typo cannot silently widen the range.
+  const cutoff = (scope === 'before' || scope === 'worktree') ? instant(before) : null;
   if (scope === 'before' && (typeof before !== 'string' || cutoff === null)) throw new Error('HISTORY_INVALID_CUTOFF');
+  if (scope === 'worktree' && before !== undefined && cutoff === null) throw new Error('HISTORY_INVALID_CUTOFF');
   const workspaces = records(snapshot.workspaces);
   const sessions = records(snapshot.sessions);
   const active = ids(snapshot.activeSessionIds);

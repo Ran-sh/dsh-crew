@@ -101,11 +101,44 @@ test('worktree scope narrows crew sessions to the isolated-workspace subset', as
   assert.deepEqual(plan(input, { scope: 'crew' }).sessionIds, ['old-in-mixed', 'old-session']);
 });
 
-test('scope defaults to crew so a forgotten range cannot reach the operator sessions', async () => {
+test('scope defaults to Crew\'s own workspaces, so a forgotten range cannot reach the operator sessions', async () => {
   const plan = await planner();
   const input = snapshot();
   input.crewSessionIds = ['old-session'];
-  assert.deepEqual(plan(input).sessionIds, ['old-session'], 'the default must be the narrow scope');
+  input.sessions = input.sessions.map((s) => (s.id === 'old-session' ? { ...s, worktree: true } : s));
+  assert.deepEqual(plan(input).sessionIds, ['old-session'], 'the default is Crew\'s workspaces');
+  assert.deepEqual(plan(input).workspaceIds, ['old-workspace'], 'and the workspace follows its only child');
+});
+
+test('a Crew session outside a Crew workspace is not in the default scope', async () => {
+  // The scope is the workspaces, not everything Crew ever ran: a job dispatched
+  // with a shared workspace runs in the caller's directory, and that is not one
+  // of these.
+  const plan = await planner();
+  const input = snapshot();
+  input.crewSessionIds = ['old-session'];
+  assert.deepEqual(plan(input).sessionIds, [], 'no workspace marker means no default selection');
+});
+
+test('the workspace scope takes an optional window, and a malformed one still fails', async () => {
+  const plan = await planner();
+  const input = snapshot();
+  input.crewSessionIds = ['old-in-mixed', 'new-session'];
+  input.sessions = input.sessions.map((s) => (s.id === 'old-in-mixed' || s.id === 'new-session' ? { ...s, worktree: true } : s));
+
+  // No window: everything in Crew's workspaces.
+  assert.deepEqual(plan(input, { scope: 'worktree' }).sessionIds, ['new-session', 'old-in-mixed']);
+
+  // With a window: the newer session is held back, and because the workspace
+  // still has a live child that was not selected, the workspace is held back
+  // with it — a workspace never follows a subset of its children.
+  const windowed = plan(input, { scope: 'worktree', before: recent });
+  assert.deepEqual(windowed.sessionIds, ['old-in-mixed']);
+  assert.deepEqual(windowed.workspaceIds, []);
+
+  // A date that was supplied and is unparseable is an error, not "no window":
+  // a typo must not silently widen the range to everything.
+  assert.throws(() => plan(input, { scope: 'worktree', before: 'not-a-date' }), /HISTORY_INVALID_CUTOFF/);
 });
 
 // A cleanup used to be able to remove sessions and leave their workspaces behind:

@@ -8,7 +8,7 @@ back to the caller.
 
 ```text
 caller objective
-  -> Worker in isolated workspace
+  -> Worker in the project's stable worker workspace (or a caller-named one)
   -> structured outcome + candidate reference
   -> optional Reviewer inspects the workspace directly
   -> compact Result Contract + canonical job events
@@ -21,6 +21,10 @@ The Reviewer receives a bounded capsule containing the objective, reported
 changes/tests/risks, changed-file names, base revision, and candidate
 fingerprint. It opens the relevant files and runs `git diff` in the isolated
 workspace when deeper inspection is needed.
+
+The workspace a job ran in is grouped by directory, not created per job: a
+reviewer reviewing in place runs in the worker's workspace, and only an explicit
+reviewer gets `dsh-crew-review`. See the isolation note above.
 
 The capsule also carries a pointer to the reviewed attempt's persisted execution
 record — the Hub session id plus the Crew harness session store — because a
@@ -94,6 +98,15 @@ Per-job precedence is request `constraints` > Profile > session defaults.
 `workspace.branch` pins the isolated base revision; `workspace.worktree` accepts
 `auto`, `existing`, or `none`. Workspace preflight reports `READY`, `CONFLICT`,
 `READ_ONLY`, or `UNAVAILABLE` before dispatch.
+
+With the default isolation a job runs in its project's stable workspace —
+`dsh-crew-worker`, or `dsh-crew-review` for an explicit reviewer — rather than a
+tree of its own, which is what keeps the Harness session panel at two entries per
+project. The workspace is reset to the job's base revision before it runs, so the
+candidate is still that job's work alone, and it is held for the job's duration: a
+second job finds it held and is refused with `WORKSPACE_BUSY` instead of sharing a
+tree with the first. `none` (shared) keeps the caller's directory and takes no
+lock.
 
 `constraints.allow_no_changes: true` is for tasks explicitly expected to leave
 no net workspace changes, including read-only search/inspection and bounded
