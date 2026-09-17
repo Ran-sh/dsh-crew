@@ -39,12 +39,31 @@ rows remain `NOT_RUN` until a trusted higher layer supplies explicit evidence.
 - `provider_health`
 - `reviewer_health`
 - `model_execution`
+- `worker_primary_callable`
+- `worker_escalation_callable`
+- `reviewer_primary_callable`
+- `provider_lifecycle_consistent`
 - `deepseek_flash`
 - `deepseek_pro`
-- `opencode_go_mimo_qwen`
 - `reviewer_pipeline`
 - `cancellation_timeout_escalation`
 - `standalone_official`
+
+This list is the one the code builds; it had drifted, listing a row that was
+removed and omitting four that exist.
+
+Coverage of a provider is not a row per provider. `deepseek_flash` and
+`deepseek_pro` are the exception: they name DeepSeek Official because that
+provider has its own slots, and a machine running its workers elsewhere has no
+such execution to show — the row says so rather than borrowing another
+provider's. Everything else that answers "can this machine's configured route
+actually run" — `provider_health`, `reviewer_health`, `model_execution`,
+`worker_primary_callable`, `reviewer_primary_callable`, `reviewer_pipeline` — is
+filtered to whatever route is currently selected, so an operator on other
+providers is covered by those and loses nothing by the two DeepSeek rows
+reading `NOT_RUN`. A static row per provider was tried and replaced by these
+dynamic signals; `opencode_go_mimo_qwen` was that attempt's last trace in this
+document.
 
 `provider_health` and `reviewer_health` describe only the currently resolved
 Worker and Reviewer routes. A fresh negative observation overrides historical
