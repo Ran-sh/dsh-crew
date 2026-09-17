@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Future changes go here.
+
+## 2.1.6 — 2026-09-16
+
 - **The CI rows of the readiness matrix can now be evidenced.** `linux_deterministic`,
   `windows_regressions` and `macos_smoke` were `NOT_RUN` on every machine, always:
   the matrix is deliberately inert — it never reads files, GitHub or the network —
