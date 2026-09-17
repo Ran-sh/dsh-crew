@@ -18,7 +18,7 @@ function fakeApi({
   tagType = 'commit',
   tagSha = SHA,
   tagStatus = 200,
-  runs = [{ id: 35101355507, name: 'CI', conclusion: 'success' }],
+  runs = [{ id: 35101355507, name: 'CI', conclusion: 'success', event: 'push', head_repository: { full_name: REPO } }],
   jobs = [
     { name: 'deterministic', conclusion: 'success', labels: ['ubuntu-latest'] },
     { name: 'windows-paths', conclusion: 'success', labels: ['windows-latest'] },
@@ -125,7 +125,7 @@ test('one platform failing does not withdraw another platform evidence', async (
   // linux row asks about. Coupling the rows to the run's aggregate conclusion
   // would let a single flaky platform blank the whole CI section.
   const { fetchImpl } = fakeApi({
-    runs: [{ id: 7, name: 'CI', conclusion: 'failure' }],
+    runs: [{ id: 7, name: 'CI', conclusion: 'failure', event: 'push', head_repository: { full_name: REPO } }],
     jobs: [
       { name: 'deterministic', conclusion: 'success', labels: ['ubuntu-latest'] },
       { name: 'macos-smoke', conclusion: 'failure', labels: ['macos-latest'] },
@@ -137,8 +137,41 @@ test('one platform failing does not withdraw another platform evidence', async (
 });
 
 test('a commit with no CI run at all evidences nothing', async () => {
-  const { fetchImpl } = fakeApi({ runs: [{ id: 1, name: 'Publish', conclusion: 'success' }] });
+  const { fetchImpl } = fakeApi({ runs: [{ id: 1, name: 'Publish', conclusion: 'success', event: 'push', head_repository: { full_name: REPO } }] });
   assert.deepEqual(await loadCiEvidence({ version: '2.1.5', fetchImpl, repo: REPO }), {});
+});
+
+// A job *name* is not a platform. Matching on the name alone let a job called
+// `deterministic` that ran on a macOS runner mint `linux_deterministic: PASS`,
+// with the mismatch visible only in a display string.
+test('a job whose runner is not the platform its row claims evidences nothing', async () => {
+  const { fetchImpl } = fakeApi({
+    jobs: [
+      { name: 'deterministic', conclusion: 'success', labels: ['macos-latest'] },
+      { name: 'macos-smoke', conclusion: 'success', labels: ['ubuntu-latest'] },
+    ],
+  });
+  const evidence = await loadCiEvidence({ version: '2.1.5', fetchImpl, repo: REPO });
+  assert.equal(Object.hasOwn(evidence, 'linux_deterministic'), false, 'a macOS runner must not evidence the linux row');
+  assert.equal(Object.hasOwn(evidence, 'macos_smoke'), false, 'nor an ubuntu runner the macOS row');
+});
+
+test('a job with no runner labels at all evidences nothing', async () => {
+  const { fetchImpl } = fakeApi({ jobs: [{ name: 'deterministic', conclusion: 'success' }] });
+  const evidence = await loadCiEvidence({ version: '2.1.5', fetchImpl, repo: REPO });
+  assert.equal(Object.hasOwn(evidence, 'linux_deterministic'), false, 'an unlabelled job proves no platform');
+});
+
+test('a run this repository did not push is not evidence', async () => {
+  // A pull request carries its own workflow file, so a PR run can define a
+  // passing job of any name.
+  clearCiEvidenceCache();
+  const pr = fakeApi({ runs: [{ id: 9, name: 'CI', conclusion: 'success', event: 'pull_request', head_repository: { full_name: REPO } }] });
+  assert.deepEqual(await loadCiEvidence({ version: '2.1.5', fetchImpl: pr.fetchImpl, repo: REPO }), {});
+
+  clearCiEvidenceCache();
+  const fork = fakeApi({ runs: [{ id: 10, name: 'CI', conclusion: 'success', event: 'push', head_repository: { full_name: 'attacker/dsh-crew' } }] });
+  assert.deepEqual(await loadCiEvidence({ version: '2.1.5', fetchImpl: fork.fetchImpl, repo: REPO }), {}, 'a fork run is not this repository');
 });
 
 test('an untagged version evidences nothing: the code is not what CI validated', async () => {
@@ -182,6 +215,30 @@ test('evidence is memoized so the readiness route does not re-fetch on every rea
   const afterFirst = calls.length;
   await loadCiEvidence({ version: '2.1.5', fetchImpl, repo: REPO });
   assert.equal(calls.length, afterFirst, 'the second read must be served from cache');
+});
+
+test('a negative result is not cached for the full window', async () => {
+  // One transient failure must not freeze a row at NOT_RUN for ten minutes.
+  const { fetchImpl, calls } = fakeApi({ tagStatus: 404 });
+  const t0 = 1_000_000;
+  await loadCiEvidence({ version: '9.9.9', fetchImpl, repo: REPO, now: () => t0 });
+  const afterFirst = calls.length;
+  assert.ok(afterFirst > 0, 'precondition: it did ask');
+
+  await loadCiEvidence({ version: '9.9.9', fetchImpl, repo: REPO, now: () => t0 + 30_000 });
+  assert.equal(calls.length, afterFirst, 'inside the negative TTL it stays cached');
+
+  await loadCiEvidence({ version: '9.9.9', fetchImpl, repo: REPO, now: () => t0 + 61_000 });
+  assert.ok(calls.length > afterFirst, 'past the negative TTL it must ask again');
+});
+
+test('a credential-less result is not served to a call that offers a token', async () => {
+  const anon = fakeApi();
+  await loadCiEvidence({ version: '2.1.5', fetchImpl: anon.fetchImpl, repo: REPO });
+  const withToken = fakeApi();
+  const evidence = await loadCiEvidence({ version: '2.1.5', fetchImpl: withToken.fetchImpl, repo: REPO, token: 'tok' });
+  assert.equal(evidence.linux_deterministic.status, 'PASS');
+  assert.ok(withToken.calls.length > 0, 'the token-bearing call must not reuse the anonymous cache entry');
 });
 
 test('a token is forwarded when offered and never required', async () => {

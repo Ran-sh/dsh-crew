@@ -4,6 +4,35 @@
 
 Future changes go here.
 
+## 2.1.7 — 2026-09-16
+
+- **The CI evidence layer accepted a job by name, so a name could stand in for a
+  platform.** `PLATFORM_JOBS.runner` was only ever used to build the display
+  string: a job called `deterministic` that ran on a macOS runner minted
+  `linux_deterministic: PASS`, with the mismatch visible only in a parenthetical
+  label that gated nothing. That is precisely the "looks validated, isn't" the
+  matrix exists to refuse. A job now has to carry a runner label naming the
+  platform its row claims, and a job with no labels proves no platform at all.
+- **A run was accepted on its workflow name.** `run.name === 'CI'` is not an
+  identity, and a pull request carries a workflow file of its own — so a PR run,
+  or one belonging to a fork, could define a passing job of any name. Evidence
+  now requires a run this repository pushed: `event: push` and
+  `head_repository.full_name` matching the project.
+- A negative result is no longer cached for the full ten minutes: one transient
+  network failure would have frozen a row at `NOT_RUN` for the whole window.
+  Negative results expire in a minute; positive ones keep the long TTL.
+- The cache key records whether the call offered a credential, so an anonymous
+  result produced under a rate limit is not served to a token-bearing call.
+- The deadline and the cache now read the same clock. They previously did not,
+  which made the timeout logic untestable with an injected clock.
+- **The mapping's limit is now written down** where a reader of a green row will
+  meet it. Evidence is resolved from the version number, so it describes the
+  commit the matching tag points at; a payload installed with
+  `update --candidate <dir>` can carry untagged local edits while reporting the
+  same version, and its rows are then green for the tagged commit rather than
+  for the tree that is running. `docs/readiness-matrix.md` and the module
+  comment both say so now, and `evidence_ref` names that commit.
+
 ## 2.1.6 — 2026-09-16
 
 - **The CI rows of the readiness matrix can now be evidenced.** `linux_deterministic`,

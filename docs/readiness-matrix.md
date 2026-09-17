@@ -83,3 +83,22 @@ An evidence record may contain:
 ```
 
 The matrix does not fetch or trust arbitrary remote data by itself. Loading and authenticating an evidence source is the responsibility of the higher layer that calls the builder.
+
+`src/ci-evidence.mjs` is that layer for the `ci` rows. It resolves the running
+version's tag to the commit it was cut from, reads that commit's CI run, and
+evidences each platform row from its own job. Three things have to hold before a
+row may go green, because each is a way to look validated without being
+validated: the job's runner labels must name the platform the row claims (a job
+*name* is not a platform), the run must be one this repository pushed (a pull
+request carries its own workflow file, so its runs are not evidence), and the
+job itself must have concluded successfully. The commit is recorded in
+`evidence_ref` so `version → tag → commit` stays auditable. Nothing is read from
+or written to credentials: the public API is used anonymously.
+
+One limit belongs where a reader of a green row will meet it. The mapping starts
+from the version number, so the evidence describes the commit the matching tag
+points at. A payload installed with `update --candidate <dir>` can carry local
+edits that were never tagged while reporting the same version, and the row is
+then green for the tagged commit rather than for the tree that is running.
+`evidence_ref` names that commit, which is as much as this can honestly say
+until the payload records its own revision.
