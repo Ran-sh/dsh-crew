@@ -2,7 +2,24 @@
 
 ## Unreleased
 
-Future changes go here.
+- **The CI rows of the readiness matrix can now be evidenced.** `linux_deterministic`,
+  `windows_regressions` and `macos_smoke` were `NOT_RUN` on every machine, always:
+  the matrix is deliberately inert — it never reads files, GitHub or the network —
+  and nothing supplied the platform evidence it accepts. It reads as "unvalidated"
+  when the truth was "nobody wired it up". `src/ci-evidence.mjs` is that missing
+  higher layer: it resolves the running version's tag to its commit, reads that
+  commit's CI run, and evidences each platform row from *its own* job. It fails
+  closed everywhere — an untagged version, a missing run, a missing job, a job
+  that did not pass, a timeout, an HTTP error all produce no evidence and leave
+  the rows `NOT_RUN` — because promoting a row on anything less than a green run
+  at the exact commit being validated is the failure it exists to prevent. The
+  commit is recorded in each row's `evidence_ref` so the mapping is auditable,
+  and the anonymous API is used: no credential is read, required, or logged.
+- Rows are judged per job rather than by the run's overall conclusion, so one
+  platform's red job cannot withdraw another platform's evidence.
+- **`macos-smoke` joins CI.** A platform row with no job behind it can never be
+  evidenced, which is why `macos_smoke` had no path to `PASS`. The new job runs
+  the portable core plus the client build on macOS.
 
 ## 2.1.5 — 2026-09-16
 

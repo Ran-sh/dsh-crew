@@ -26,6 +26,7 @@ import { normalizeReviewVerdict } from '../workflow-runtime.mjs';
 import { boundedMachineCodeFromError } from '../structured-error-code.mjs';
 import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.mjs';
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
+import { loadCiEvidence } from '../ci-evidence.mjs';
 import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
 import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
@@ -1619,6 +1620,10 @@ export async function apply(ctx) {
           currentSelections,
           hubJobsChecked: true,
           hubJobsBody: { ok: true, jobs: boundedJobs },
+          // Platform validation this release actually passed. Resolved from the
+          // running version's tag commit, so a row can only go green for a
+          // commit CI really validated; anything unresolved stays NOT_RUN.
+          ciEvidence: await loadCiEvidence({ version: runtime.runtime_version }),
         });
         const readinessSnapshot = buildRuntimeReadinessSnapshot({
           runtime,

@@ -10,6 +10,7 @@ import { RUNTIME_VERSION, getHubRuntimeIdentity } from './runtime-identity.mjs';
 import { resolveWorkerModel } from './model-routing.mjs';
 import { runtimeActivationMetadata } from './runtime-controls.mjs';
 import { buildConfigReadinessMatrix } from './config-readiness.mjs';
+import { loadCiEvidence } from './ci-evidence.mjs';
 import { buildRuntimeReadinessSnapshot, reprojectRuntimeModelCallability } from './runtime-readiness-snapshot.mjs';
 import { classifyFailure, classifyFailureCode } from './failure-classification.mjs';
 import {
@@ -402,6 +403,9 @@ async function buildConfigReport() {
     workerProviderMode,
     providerCatalogChecked,
     providerCatalogBody,
+    // The same platform evidence the hub route merges, so the MCP surface does
+    // not report the CI rows differently when it has to build the matrix itself.
+    ciEvidence: await loadCiEvidence({ version: RUNTIME_VERSION }),
   });
   const readinessMatrix = hubReadinessSnapshot?.readiness_matrix ?? fallbackReadinessMatrix;
   const roleProfiles = loadRoleProfiles();

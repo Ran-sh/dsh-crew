@@ -57,3 +57,28 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Windows path and Git resolver regressions
         run: node --test test/hub-windows.test.mjs test/workspace-audit.test.mjs test/workspace-isolation.test.mjs test/windows-supervisor-ownership.test.mjs test/maintenance-transaction.test.mjs test/windows-maintenance-session.test.mjs
+
+  # A smoke, not the suite: the readiness matrix has a platform row for macOS,
+  # and a row with no job behind it can never be evidenced no matter what the
+  # machine does. This covers the portable core — the delivery contract, the
+  # workflow state machine, the review hand-off, and the git-workspace paths —
+  # and the client bundle, so a macOS-specific break shows up somewhere.
+  macos-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Portable core smoke
+        run: node --test test/delivery.test.mjs test/workflow.test.mjs test/workflow-runtime.test.mjs test/information-flow.test.mjs test/job-contracts.test.mjs test/readiness-matrix.test.mjs test/ci-evidence.test.mjs test/workspace-isolation.test.mjs
+      - name: Build client
+        run: pnpm run build:client

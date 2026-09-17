@@ -191,6 +191,7 @@ export function buildConfigReadinessMatrix({
   hubJobsChecked = false,
   hubJobsBody = null,
   currentSelections = null,
+  ciEvidence = null,
 } = {}) {
   const warnings = warningCodes(providerCatalogBody);
   const catalogResponseOk = !!providerCatalogBody
@@ -198,7 +199,13 @@ export function buildConfigReadinessMatrix({
     && providerCatalogBody.ok !== false;
   const catalogOk = providerCatalogChecked && catalogResponseOk && warnings.length === 0;
 
-  const evidence = {};
+  // Platform validation a higher layer actually loaded. `buildReadinessMatrix`
+  // drops any record whose status is outside the vocabulary, so this is merged
+  // as-is: an empty or malformed map leaves those rows NOT_RUN rather than
+  // widening what a row can mean.
+  const evidence = ciEvidence && typeof ciEvidence === 'object' && !Array.isArray(ciEvidence)
+    ? { ...ciEvidence }
+    : {};
   const hubJobs = hubCompatibility?.compatible === true
     && hubJobsChecked
     && hubJobsBody?.ok !== false
