@@ -877,16 +877,30 @@ export class WorkerRegistry {  constructor(ctx) {
     // shared by every job that uses it, so naming jobs after it would give them
     // all one title and leave an operator unable to tell them apart. The
     // workspace groups; the job name distinguishes.
-    const jobName = isCrewWorktreeName(basename(executionCwd))
-      ? basename(executionCwd)
-      : jobDisplayName({ purpose: jobRole });
-    const workerPrompt = appendDeliveryInstructions(prependJobIdentity(task, { name: jobName, role: jobRole }), { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
+    let jobName;
+    let workerPrompt;
+    let sessionId;
+    try {
+      jobName = isCrewWorktreeName(basename(executionCwd))
+        ? basename(executionCwd)
+        : jobDisplayName({ purpose: jobRole });
+      workerPrompt = appendDeliveryInstructions(prependJobIdentity(task, { name: jobName, role: jobRole }), { tier: effTier, role: jobRole, isReview: delivery === 'review' || jobRole === 'reviewer' });
 
-    const sessionId = `session-${randomUUID()}`;
-    // Record provenance while it is still knowable: a session header carries no
-    // field naming who asked for the session, so a later Crew-scoped cleanup can
-    // only tell Crew's own work apart from the operator's by this ledger.
-    appendSessionOrigin({ sessionId, role: jobRole, jobId: id });
+      sessionId = `session-${randomUUID()}`;
+      // Record provenance while it is still knowable: a session header carries no
+      // field naming who asked for the session, so a later Crew-scoped cleanup can
+      // only tell Crew's own work apart from the operator's by this ledger.
+      appendSessionOrigin({ sessionId, role: jobRole, jobId: id });
+    } catch (error) {
+      // Everything below this point runs inside the job's own lifecycle, whose
+      // `finally` releases the workspace lock. A throw here happens before that
+      // job exists, so nothing would release a lock already taken — and it would
+      // then block the workspace until the age backstop, which is hours. The
+      // window is small (`appendSessionOrigin` writes a file) but the cost of
+      // missing it is a workspace no job can use.
+      releaseCrewWorkspace(isolatedWorkspace);
+      throw error;
+    }
     const job = {
       id, client_job_id: client_job_id ?? null, sessionId, role: jobRole, attempt, tier: effTier, provider: selection.provider, model: selection.model,
       selection_source: selection.source, selection_trace: selection.selection_trace ?? null,
