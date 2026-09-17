@@ -32,7 +32,7 @@ import { acquireWorkspaceLock, DEFAULT_LOCK_WAIT_MS } from './workspace-lock.mjs
 
 export const CREW_WORKSPACE_WORKER = 'dsh-crew-worker';
 export const CREW_WORKSPACE_REVIEW = 'dsh-crew-review';
-export const CREW_WORKSPACE_NAMES = Object.freeze([CREW_WORKSPACE_WORKER, CREW_WORKSPACE_REVIEW]);
+const CREW_WORKSPACE_NAMES = Object.freeze([CREW_WORKSPACE_WORKER, CREW_WORKSPACE_REVIEW]);
 export const WORKSPACE_CONFLICT = 'WORKSPACE_CONFLICT';
 
 /** The workspace a role runs in. Only the reviewer is separated out. */

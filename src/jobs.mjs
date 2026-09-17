@@ -28,7 +28,6 @@ import { readGlobalConfig } from './install/install.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREW_DSH_HOME = join(homedir(), '.config', 'dsh-crew', 'harness');
-const STATUS_FILE = join(CONFIG_DIR, 'status.json');
 const CORDIS = join(ROOT, 'worker.cordis.yml');
 
 // Read the operator's schedule once per dispatch. An unreadable config must not
@@ -38,7 +37,7 @@ function readModelSchedule() {
   try { return normalizeModelSchedule(readGlobalConfig().model_schedule); } catch { return normalizeModelSchedule(undefined); }
 }
 
-export const TIERS = {
+const TIERS = {
   flash: { model: 'deepseek-v4-flash', label: 'V4 Flash' },
   pro: { model: 'deepseek-v4-pro', label: 'V4 Pro' },
 };

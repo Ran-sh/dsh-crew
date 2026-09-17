@@ -11,7 +11,7 @@
 
 export const DELIVERY_SECTIONS = ['Diff', 'Tests', 'Risks'];
 export const OPTIONAL_DELIVERY_SECTIONS = ['Unverified'];
-export const ALL_DELIVERY_SECTIONS = [...DELIVERY_SECTIONS, ...OPTIONAL_DELIVERY_SECTIONS];
+const ALL_DELIVERY_SECTIONS = [...DELIVERY_SECTIONS, ...OPTIONAL_DELIVERY_SECTIONS];
 
 export const REVIEW_SECTIONS = ['Review Findings', 'Evidence', 'Risks', 'Verdict'];
 
@@ -129,7 +129,7 @@ export function appendDeliveryInstructions(task, { tier, isReview } = {}) {
  * visible evidence. Two parsers gave two answers about one section; there is now
  * one, and it lives here.
  */
-export function parseTestRow(line) {
+function parseTestRow(line) {
   const normalized = String(line ?? '')
     .replace(/^\s*[-*+]\s+/, '')
     .replace(/^\|/, '')

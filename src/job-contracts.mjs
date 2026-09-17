@@ -5,7 +5,7 @@
 // internal details remain available only through an explicit detail=full
 // request at the MCP boundary.
 
-export const JOB_CONTRACT_SCHEMA_VERSION = 1;
+const JOB_CONTRACT_SCHEMA_VERSION = 1;
 
 export const JOB_EVENT_TYPES = Object.freeze([
   'job.created',

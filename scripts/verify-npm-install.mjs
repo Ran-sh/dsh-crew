@@ -24,7 +24,7 @@ const DSH_PACKAGE = '@deepseek-ai/dsh';
 const DSH_PREFIX = '@deepseek-ai/dsh-';
 const MAX_DIRECT_PEERS = 64;
 
-export function resolveNpmInvocation({
+function resolveNpmInvocation({
   platform = process.platform,
   nodePath = process.execPath,
   fileExists = existsSync,
@@ -144,7 +144,7 @@ function manifestUrl(registryUrl, name, version) {
   return `${registryUrl.replace(/\/+$/, '')}/${encodedName}/${encodeURIComponent(version)}`;
 }
 
-export async function fetchPublicManifest(name, version, {
+async function fetchPublicManifest(name, version, {
   registryUrl = registry,
   fetchImpl = globalThis.fetch,
 } = {}) {

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
-export const ROLE_PROFILE_SCHEMA_VERSION = 1;
+const ROLE_PROFILE_SCHEMA_VERSION = 1;
 export const DEFAULT_ROLE_PROFILES = Object.freeze({
   'worker-default': Object.freeze({
     role: 'worker', routing: 'auto', isolation: 'worktree', fallback: true,
@@ -45,7 +45,7 @@ function normalizeProfile(id, raw) {
   };
 }
 
-export function roleProfilesFile({ home = homedir() } = {}) {
+function roleProfilesFile({ home = homedir() } = {}) {
   return join(home, '.config', 'dsh-crew', 'profiles.json');
 }
 

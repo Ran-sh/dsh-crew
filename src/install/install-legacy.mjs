@@ -57,7 +57,7 @@ const REGEX_MAY_FOLLOW = new Set([
  * from the raw text, so a keyword inside a comment or a string is not a
  * declaration and a quote inside a regex is not a string.
  */
-export function tokenizeModuleSource(source) {
+function tokenizeModuleSource(source) {
   const tokens = [];
   const text = String(source ?? '');
   let i = 0;
@@ -748,7 +748,7 @@ export function pickClaudeCommand(candidates, { platform = process.platform } = 
     ?? list[0];
 }
 
-export function resolveClaudeCommand({ platform = process.platform } = {}) {
+function resolveClaudeCommand({ platform = process.platform } = {}) {
   const probe = spawnSync(platform === 'win32' ? 'where' : 'which', ['claude'], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -1019,7 +1019,7 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
 }
 
 // Keep CLI transaction ordering testable without changing the operator's home.
-export async function refreshClaudePlugin({ home, root, actions = [], claudeCommand, runStep = runClaudeStep }) {
+async function refreshClaudePlugin({ home, root, actions = [], claudeCommand, runStep = runClaudeStep }) {
   // Each step runs to completion — including ending the whole process tree on a
   // timeout — before the next one starts, and the settle window is the widest any
   // step asks for. Two things this replaces: an `uninstall` left running past its

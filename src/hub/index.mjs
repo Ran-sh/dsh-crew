@@ -119,7 +119,6 @@ export const QUICK_CONFIG_KEYS = Object.freeze([
 const LEGACY_TIER_MODELS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' };
 // Local copy (the hub must not import jobs.mjs, which pulls the DSH SDK into
 // the profile realm): a valid dispatch role set.
-const ROLES = { worker: true, reviewer: true };
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const CREDENTIAL_PURGE_STATE_FILE = join(CONFIG_DIR, 'credential-purge-lifecycle.json');
 const RECOVERY_ACTION_PATTERN = /^[a-f0-9]{32}$/u;

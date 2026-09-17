@@ -36,7 +36,7 @@ export function markCredentialPurged(input, plan) {
   };
 }
 
-export function markCredentialPurgeUnverified(input, plan) {
+function markCredentialPurgeUnverified(input, plan) {
   const state = normalizeCredentialPurgeState(input);
   if (!validId(plan?.reference_id) || !validId(plan?.plan_id)) return state;
   const purged = { ...state.purged };
@@ -52,8 +52,4 @@ export function recordCredentialPurgeOutcome(input, plan, result) {
   if (result?.state === 'VERIFIED') return markCredentialPurged(input, plan);
   if (result?.state === 'PURGED') return markCredentialPurgeUnverified(input, plan);
   return normalizeCredentialPurgeState(input);
-}
-
-export function isCredentialPurged(input, referenceId) {
-  return Object.prototype.hasOwnProperty.call(normalizeCredentialPurgeState(input).purged, referenceId);
 }

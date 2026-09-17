@@ -35,7 +35,7 @@ import {
 // Re-exported so existing importers keep working while the cohort value now
 // lives in exactly one place (src/dsh-cohort.mjs).
 export { DSH_CLI_PACKAGE, TARGET_DSH_VERSION, TARGET_DSH_SPEC };
-export const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
+const CREW_DSH_RUNTIME_DIRNAME = 'runtime';
 const CREW_PROFILE_DEFAULT_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
 const PROFILE_PATCH_TEMPLATE = '[]\n';
 const PROFILE_PNPM_WORKSPACE = 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n';
@@ -71,11 +71,6 @@ export function crewDshRuntimeRoot({ home = homedir() } = {}) {
 
 export function crewDshRuntimeVersionDir({ home = homedir(), version = TARGET_DSH_VERSION } = {}) {
   return join(crewDshHome({ home }), `runtime-${version}`);
-}
-
-export function crewDshRuntimeEntry({ home = homedir(), platform = process.platform } = {}) {
-  const suffix = platform === 'win32' ? '.cmd' : '';
-  return join(crewDshRuntimeRoot({ home }), 'node_modules', '.bin', `dsh${suffix}`);
 }
 
 export function crewDshRuntimeModule({ home = homedir() } = {}) {
@@ -736,25 +731,26 @@ export async function restoreRetainedRuntime({
 }
 
 // GC retained runtimes that no release pins. A retained cohort is needed only
-// while some managed release (current or retained) declares it as its exact
-// @deepseek-ai/dsh dependency. Best-effort; never throws.
-export function gcRetainedRuntimes({ home = homedir(), releases = [], log = () => {} } = {}) {
+// while some managed release resolves to it, so the caller passes the resolved
+// cohort versions (see resolveReleaseCohort: manifest pin, then the
+// release-cohort.json sidecar). Best-effort; never throws — a root that is
+// missing, unreadable or not a directory prunes nothing rather than failing
+// the update that just committed.
+export function gcRetainedRuntimes({ home = homedir(), cohorts = [], log = () => {} } = {}) {
   const root = retainedRuntimesRoot({ home });
-  if (!existsSync(root)) return [];
-  const needed = new Set();
-  for (const release of releases) {
-    const spec = payloadDshSpec(release);
-    if (spec && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(spec)) needed.add(spec);
-  }
+  const needed = new Set(cohorts.filter((spec) => typeof spec === 'string' && EXACT_COHORT_RE.test(spec)));
+  let names;
+  try { names = readdirSync(root); } catch { return []; }
   const removed = [];
-  for (const name of readdirSync(root)) {
+  for (const name of names) {
+    if (needed.has(name)) continue;
     const dir = join(root, name);
-    if (!needed.has(name)) {
-      try { rmSync(dir, { recursive: true, force: true }); removed.push(name); } catch { /* best effort */ }
-    }
+    try { rmSync(dir, { recursive: true, force: true }); removed.push(name); } catch { /* best effort */ }
   }
   return removed;
 }
+
+const EXACT_COHORT_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 // Read the exact @deepseek-ai/dsh pin from a payload manifest (dependencies
 // first, then peerDependencies). Exact pins only: a range or absence yields
@@ -762,9 +758,9 @@ export function gcRetainedRuntimes({ home = homedir(), releases = [], log = () =
 function payloadDshSpec(manifest) {
   if (!manifest || typeof manifest !== 'object') return null;
   const direct = manifest.dependencies?.['@deepseek-ai/dsh'];
-  if (typeof direct === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(direct)) return direct;
+  if (typeof direct === 'string' && EXACT_COHORT_RE.test(direct)) return direct;
   const peer = manifest.peerDependencies?.['@deepseek-ai/dsh'];
-  if (typeof peer === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(peer)) return peer;
+  if (typeof peer === 'string' && EXACT_COHORT_RE.test(peer)) return peer;
   return null;
 }
 
@@ -964,7 +960,7 @@ function ensureDirectoryLink(linkPath, targetRoot) {
  * command. The profile manifest and one loader-visible directory link are the
  * only state changed; no dependency resolution or policy bypass is attempted.
  */
-export function ensurePluginRegistration({
+function ensurePluginRegistration({
   profileRoot,
   root,
   name,

@@ -13,7 +13,5 @@ export function setLang(lang) {
   return LANG;
 }
 
-export function getLang() { return LANG; }
-
 /** Pick the string for the active locale. Both branches are cheap literals. */
 export function tr(zh, en) { return LANG === 'zh' ? zh : en; }

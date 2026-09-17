@@ -21,8 +21,8 @@ import { normalizeModelPriority } from './model-routing.mjs';
 
 export const TIER_STATES = ['disabled', 'manual', 'auto'];
 export const COLLABORATION_MODES = ['flash-only', 'pro-only', 'balanced', 'review-pipeline', 'custom'];
-export const MAIN_AGENT_MODES = ['direct-allowed', 'coordinator-first', 'dispatcher-only'];
-export const ROLE_IDS = [
+const MAIN_AGENT_MODES = ['direct-allowed', 'coordinator-first', 'dispatcher-only'];
+const ROLE_IDS = [
   'implementation',
   'simple_fix',
   'tests',
@@ -52,7 +52,7 @@ export const POLICY_ERROR_CODES = {
   ROLE_TIER_CONFLICT: 'ROLE_TIER_CONFLICT',
 };
 
-export const POLICY_ERROR_MESSAGES = {
+const POLICY_ERROR_MESSAGES = {
   [POLICY_ERROR_CODES.SUBAGENTS_DISABLED]:
     'DSH Crew worker dispatch is disabled.',
   [POLICY_ERROR_CODES.TIER_DISABLED]:
@@ -89,18 +89,16 @@ export const POLICY_ERROR_MESSAGES = {
 // Everything new here reads a canonical config shape produced by
 // migrateLegacyConfig; the legacy collab/tier functions stay for compatibility.
 
-export const DISPATCH_ROLES = ['worker', 'reviewer'];
-export const ROLE_STATES = TIER_STATES; // disabled | manual | auto
 export const ROLE_MODEL_STRATEGIES = ['economy', 'balanced', 'quality', 'strong'];
-export const DEFAULT_WORKER_STRATEGY = 'balanced';
-export const DEFAULT_REVIEWER_STRATEGY = 'strong';
+const DEFAULT_WORKER_STRATEGY = 'balanced';
+const DEFAULT_REVIEWER_STRATEGY = 'strong';
 export const DEFAULT_MAX_PARALLEL = 3;
 
-export function normalizeRoleState(raw) {
+function normalizeRoleState(raw) {
   return normalizeState(raw);
 }
 
-export function normalizeIsolation(raw) {
+function normalizeIsolation(raw) {
   return raw === 'worktree' || raw === 'shared' ? raw : 'worktree';
 }
 
@@ -117,7 +115,7 @@ function normalizeMaxParallel(raw) {
  *   escalation_priority_configured, fallback, escalation: { enabled, max_attempts } }.
  * Pure; unknown fields drop, empty priority falls back to the role default.
  */
-export function normalizeModelPolicy(raw = {}) {
+function normalizeModelPolicy(raw = {}) {
   return {
     role: raw.role === 'reviewer' ? 'reviewer' : 'worker',
     strategy: ROLE_MODEL_STRATEGIES.includes(raw.strategy)
@@ -444,7 +442,7 @@ export function resolveHubWorkerProvider({ worker_provider_mode, getCurrentSelec
 }
 
 /** Structured policy error; `code` is machine-readable, `message` user-facing. */
-export function policyError(code, extra = {}) {
+function policyError(code, extra = {}) {
   const base = POLICY_ERROR_MESSAGES[code] ?? code;
   return Object.assign(new Error(base.replace('{tier}', extra.tier ?? 'pro')), { policyCode: code });
 }
@@ -677,7 +675,7 @@ export function shouldRunProReview(config, session = {}) {
 }
 
 /** Roles for a tier (host guidance for who does what, not a hard classifier). */
-export function getTierRoles(config, tier) {
+function getTierRoles(config, tier) {
   const roles = tier === 'flash' ? config.flash_roles : config.pro_roles;
   return normalizeRoles(roles, tier === 'flash' ? DEFAULT_FLASH_ROLES : DEFAULT_PRO_ROLES);
 }

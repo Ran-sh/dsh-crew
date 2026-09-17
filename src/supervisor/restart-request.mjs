@@ -18,18 +18,18 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export const RESTART_REQUEST_SCHEMA = 1;
-export const RESTART_REQUEST_TTL_MS = 60_000;
+const RESTART_REQUEST_SCHEMA = 1;
+const RESTART_REQUEST_TTL_MS = 60_000;
 
 export function supervisorStateRoot(appRoot) {
   return join(appRoot, 'supervisor');
 }
 
-export function restartRequestsDir(appRoot) {
+function restartRequestsDir(appRoot) {
   return join(supervisorStateRoot(appRoot), 'restart-requests');
 }
 
-export function restartResultsDir(appRoot) {
+function restartResultsDir(appRoot) {
   return join(supervisorStateRoot(appRoot), 'restart-results');
 }
 

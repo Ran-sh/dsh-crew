@@ -19,8 +19,8 @@
 // give them all one title. There the workspace groups the sessions and this name
 // tells them apart.
 
-export const JOB_NAME_PREFIX = 'Crew_';
-export const JOB_PURPOSE_MAX = 32;
+const JOB_NAME_PREFIX = 'Crew_';
+const JOB_PURPOSE_MAX = 32;
 
 export const JOB_NAME_RE = /^Crew_\d{8}_\d{6}_[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:-\d+)?$/;
 

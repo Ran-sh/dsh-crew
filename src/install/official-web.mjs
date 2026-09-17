@@ -10,7 +10,7 @@ import { join } from 'node:path';
 export const OFFICIAL_BRIDGE_PACKAGE = '@ran-sh/dsh-crew-web-bridge';
 const STATE_FILENAME = 'official-web.json';
 
-export function officialWebProfileDir({ home = homedir() } = {}) {
+function officialWebProfileDir({ home = homedir() } = {}) {
   return join(home, '.dsh', 'profiles', 'web');
 }
 

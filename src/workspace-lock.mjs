@@ -23,11 +23,10 @@ import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 export const WORKSPACE_BUSY = 'WORKSPACE_BUSY';
-export const WORKSPACE_LOCK_FILE = 'workspace.lock';
-export const WORKSPACE_LOCK_SCHEMA = 1;
+const WORKSPACE_LOCK_SCHEMA = 1;
 
 export const DEFAULT_LOCK_WAIT_MS = 120_000;
-export const DEFAULT_LOCK_POLL_MS = 500;
+const DEFAULT_LOCK_POLL_MS = 500;
 // The two reasons a lock outlives its job are not the same, and they are covered
 // by different things. A holder whose process died is caught immediately by the
 // pid check below. This bound covers the other case — the process is alive but

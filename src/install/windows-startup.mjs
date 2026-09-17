@@ -12,11 +12,11 @@ import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { installOfficialFrontendAssets, officialFrontendAssetsReady } from './official-frontend-assets.mjs';
 
-export const WINDOWS_STARTUP_FILENAME = 'DSH Crew.vbs';
-export const WINDOWS_LAUNCHER_FILENAME = 'start-dsh-crew.cmd';
-export const WINDOWS_HELPER_FILENAME = 'start-dsh-crew.ps1';
-export const WINDOWS_CONTROL_FILENAME = 'supervisor-control.ps1';
-export const WINDOWS_SUPERVISOR_ASSET_MANIFEST = 'supervisor-assets.json';
+const WINDOWS_STARTUP_FILENAME = 'DSH Crew.vbs';
+const WINDOWS_LAUNCHER_FILENAME = 'start-dsh-crew.cmd';
+const WINDOWS_HELPER_FILENAME = 'start-dsh-crew.ps1';
+const WINDOWS_CONTROL_FILENAME = 'supervisor-control.ps1';
+const WINDOWS_SUPERVISOR_ASSET_MANIFEST = 'supervisor-assets.json';
 
 function defaultStartupDir({ home, env }) {
   if (home === homedir() && env.APPDATA) {

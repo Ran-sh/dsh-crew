@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-export const WORKSPACE_CONTEXT_SCHEMA_VERSION = 1;
+const WORKSPACE_CONTEXT_SCHEMA_VERSION = 1;
 const ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export function isSafeBranchName(value) {
@@ -51,7 +51,7 @@ function normalizeContext(id, raw) {
   };
 }
 
-export function workspaceContextsFile({ home = homedir() } = {}) {
+function workspaceContextsFile({ home = homedir() } = {}) {
   return join(home, '.config', 'dsh-crew', 'workspaces.json');
 }
 

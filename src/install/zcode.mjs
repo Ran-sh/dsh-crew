@@ -395,5 +395,3 @@ export function uninstallZCode({ home = homedir(), env = process.env } = {}) {
   }
   return { ok: true, actions };
 }
-
-export function zcodeOwnershipFile({ home = homedir() } = {}) { return OWNERSHIP_FILE({ home }); }

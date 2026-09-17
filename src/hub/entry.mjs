@@ -68,7 +68,7 @@ export function recordAdaptiveJobOutcome(job, store = getProcessAdaptiveHealthSt
  * a chained promise preserves all legacy completion/waiter behavior and runs
  * this observer only after the Hub's own finalizer populated endedAt/status.
  */
-export function installAdaptiveHealthObserver() {
+function installAdaptiveHealthObserver() {
   if (WorkerRegistry.prototype[ADAPTIVE_OBSERVER_INSTALLED] === true) return false;
   const originalSpawn = WorkerRegistry.prototype.spawn;
   Object.defineProperty(WorkerRegistry.prototype, ADAPTIVE_OBSERVER_INSTALLED, {

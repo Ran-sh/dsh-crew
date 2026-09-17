@@ -4,9 +4,6 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
-export const CREDENTIAL_PURGE_STATES = Object.freeze([
-  'PLANNED', 'REFERENCE_RECHECKED', 'PURGE_PENDING_CONFIRMATION', 'PURGED', 'VERIFIED', 'FAILED',
-]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
 const REVISION_PATTERN = /^[a-f0-9]{64}$/;
 

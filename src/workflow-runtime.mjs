@@ -31,7 +31,6 @@ export const WORKFLOW_ERROR_CODES = {
   REVIEWER_MUTATED_CANDIDATE: 'REVIEWER_MUTATED_CANDIDATE',
 };
 
-const TERMINAL = new Set([JOB_PHASES.COMPLETED, JOB_PHASES.FAILED, JOB_PHASES.CANCELLED, JOB_PHASES.INTERRUPTED]);
 
 function lines(value) {
   if (typeof value !== 'string' || value.trim() === '') return [];
@@ -817,4 +816,4 @@ export function createWorkflowRuntime(adapters, {
   return { start, wait, get, list, cancel, runtimeState, setMaxParallel, refreshRuntimeControls };
 }
 
-export { JOB_PHASES, TERMINAL };
+export { JOB_PHASES };

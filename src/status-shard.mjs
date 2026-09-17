@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 
 const CONFIG_DIR = join(homedir(), '.config', 'dsh-crew');
 const SHARD_DIR = join(CONFIG_DIR, 'status.d');
-export const SHARD_FRESH_MS = 30 * 60 * 1000;
+const SHARD_FRESH_MS = 30 * 60 * 1000;
 
 export function createShardWriter(kind) {
   const writer = `${kind}-${process.pid}`;

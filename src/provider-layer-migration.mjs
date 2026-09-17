@@ -120,8 +120,6 @@ export function hasProviderLayerMigration(plan) {
   return Array.isArray(plan?.providers) && plan.providers.length > 0;
 }
 
-const MIGRATION_STATES = Object.freeze(['PLANNED', 'APPLIED', 'RESTART_PENDING', 'VERIFYING', 'VERIFIED', 'FAILED']);
-
 function migrationCode(error, fallback = 'PROVIDER_MIGRATION_FAILED') {
   const code = text(error?.code);
   return code && /^[A-Z][A-Z0-9_]{1,63}$/u.test(code) ? code : fallback;

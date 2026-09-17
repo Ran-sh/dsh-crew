@@ -28,9 +28,9 @@ export const GIT_ERROR = 'GIT_ERROR';
 /** A valid repository whose HEAD does not resolve because nothing is committed. */
 export const REPOSITORY_HAS_NO_COMMITS = 'REPOSITORY_HAS_NO_COMMITS';
 export const WORKTREE_LOCKED = 'WORKTREE_LOCKED';
-export const WORKTREE_RESERVE_FAILED = 'WORKTREE_RESERVE_FAILED';
+const WORKTREE_RESERVE_FAILED = 'WORKTREE_RESERVE_FAILED';
 export const CANDIDATE_CAPTURE_FAILED = 'CANDIDATE_CAPTURE_FAILED';
-export const MAX_PARALLEL_CAP = 16;
+const MAX_PARALLEL_CAP = 16;
 export const DEFAULT_MAX_PARALLEL = 3;
 // Worktree names read `Crew_YYYYMMDD_HHMMSS_<purpose>` so an operator can tell
 // from the directory alone when a job ran and what it was for. Worktrees from
@@ -642,8 +642,8 @@ async function ownershipDrift(run, worktreePath, expect) {
  * the registration is gone and no directory remains — success is never claimed
  * while a worktree stays registered or on disk.
  */
-export const WORKTREE_CLEANUP_RETRIES = 3;
-export const WORKTREE_CLEANUP_BACKOFF_MS = 150;
+const WORKTREE_CLEANUP_RETRIES = 3;
+const WORKTREE_CLEANUP_BACKOFF_MS = 150;
 
 /**
  * Is `worktreePath` a worktree Crew created, for this repository?

@@ -27,7 +27,6 @@ export const DEFAULT_PEAK_WINDOWS = Object.freeze([
 
 export const DEFAULT_TIMEZONE_OFFSET_MINUTES = 8 * 60;
 export const DEFAULT_PEAK_WEEKDAYS = Object.freeze([1, 2, 3, 4, 5]);
-export const MINUTES_PER_DAY = 24 * 60;
 // A fixed offset is bounded by the real-world range of UTC offsets; anything
 // wider is a typo, not a timezone.
 const MAX_OFFSET_MINUTES = 14 * 60;

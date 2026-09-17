@@ -10,8 +10,8 @@ import {
 import { dirname, join } from 'node:path';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
 
-export const WINDOWS_SUPERVISOR_HANDOFF_SCHEMA = 1;
-export const WINDOWS_SUPERVISOR_HANDOFF_PHASES = Object.freeze([
+const WINDOWS_SUPERVISOR_HANDOFF_SCHEMA = 1;
+const WINDOWS_SUPERVISOR_HANDOFF_PHASES = Object.freeze([
   'planned',
   'backend-stopped',
   'old-watcher-stopped',

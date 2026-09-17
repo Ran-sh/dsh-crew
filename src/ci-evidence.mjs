@@ -29,7 +29,7 @@
 // one; nothing here reads credentials from disk, and the value is never logged,
 // returned, or included in an evidence record.
 
-export const CI_EVIDENCE_REPO = 'Ran-sh/dsh-crew';
+const CI_EVIDENCE_REPO = 'Ran-sh/dsh-crew';
 
 // The row each CI job validates. A platform with no job in the workflow cannot
 // be evidenced by any run, so `macos_smoke` is deliberately absent rather than

@@ -22,7 +22,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const IN_USE_DIRNAME = 'in-use';
+const IN_USE_DIRNAME = 'in-use';
 
 // A claim file is `<pid>.json` or `<pid>-<nonce>.json`. The PID alone is not
 // enough to identify a claim: two mounts inside one process would publish to the

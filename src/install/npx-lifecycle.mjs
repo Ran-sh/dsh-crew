@@ -44,9 +44,10 @@ import { samePayloadContent, capturePayloadContent } from './payload-content.mjs
 import { crewDshHome, crewProfileDir, claudeIntegrationLine } from './install.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
+import { RELEASE_COHORT_FILENAME } from '../dsh-cohort.mjs';
 import { renameTree } from './tree-move.mjs';
 import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted } from './runtime-lifecycle.mjs';
-import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, gcRetainedRuntimes, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -61,15 +62,15 @@ import {
 } from './windows-supervisor-adapter.mjs';
 
 export const CREW_APP_DIRNAME = 'app';
-export const RELEASES_DIRNAME = 'releases';
-export const CURRENT_POINTER_FILENAME = 'current.json';
-export const KEEP_RELEASES = 2;
+const RELEASES_DIRNAME = 'releases';
+const CURRENT_POINTER_FILENAME = 'current.json';
+const KEEP_RELEASES = 2;
 export const INCOMPLETE_MARKER = '.dsh-crew-incomplete';
 const CREW_ROUTE_BASE = '/_dsh/dsh-crew';
 // Exact DSH cohort version: dotted numeric with optional -prerelease suffix.
 // Anything else (ranges, "../..", paths) is NOT an authorized cohort value
 // and must never reach rename/rmSync authority via retained-runtimes keys.
-export const EXACT_DSH_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const EXACT_DSH_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 export function npmCliInvocation(args, {
   platform = process.platform,
@@ -242,8 +243,8 @@ function writeCurrentPointer({ home, name, version, path }) {
   return pointer;
 }
 
-export const UPDATE_JOURNAL_FILENAME = 'update-journal.json';
-export const UPDATE_LOCK_FILENAME = 'update-in-progress.lock';
+const UPDATE_JOURNAL_FILENAME = 'update-journal.json';
+const UPDATE_LOCK_FILENAME = 'update-in-progress.lock';
 
 export function updateJournalFile({ home = homedir() } = {}) {
   return join(crewAppRoot({ home }), UPDATE_JOURNAL_FILENAME);
@@ -453,7 +454,7 @@ function writeUpdateJournal({ home, stage, prior = null, candidate = null, verif
 // identity matches the expected stage/prior/candidate. A crash between
 // verification success and this write leaves the journal unverified, so
 // reconcile refuses to finalize it.
-export function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null, runtime = null } = {}) {
+function markJournalVerified({ home = homedir(), stage, prior = null, candidate = null, runtime = null } = {}) {
   const current = readUpdateJournal({ home });
   if (!current || current.malformed) return { ok: false, code: 'JOURNAL_NOT_FOUND' };
   const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -479,82 +480,6 @@ function compensateActivationSync({ home, prior, manifest, log, installer }) {
   const registration = ensureCrewPluginRegistration({ home, root: prior.path, name: manifest.name });
   if (!registration.ok) return { ok: false, code: registration.code ?? 'PRIOR_REGISTRATION_FAILED' };
   return { ok: true, version: manifest.version, path: prior.path };
-}
-
-// Undo a first-install candidate's activation surfaces: remove its profile
-// registration (dependency + bundle + junction) ONLY when each surface
-// still references THIS journal's candidate. The dependency must resolve
-// to exactly link:<candidateRealPath> (normalized slashes); a later
-// legitimate registration pointing elsewhere is never removed. Mixed or
-// unjudgeable state fails closed with the journal retained. When the
-// profile manifest is missing/unreadable the junction is still handled
-// independently so a "junction created, manifest never written" crash
-// cannot leave a dangling junction.
-function undoCandidateActivationSync({ home, candidateDir, candidateName }) {
-  if (!candidateDir || !candidateName) return { ok: true, undone: false };
-  const profileRoot = crewProfileDir({ home });
-  const profileFile = join(profileRoot, 'package.json');
-  let manifest = null;
-  let manifestReadable = true;
-  try { manifest = JSON.parse(readFileSync(profileFile, 'utf8')); } catch { manifest = null; manifestReadable = false; }
-  const linkPath = join(profileRoot, 'node_modules', ...candidateName.split('/'));
-  let linked = null;
-  try {
-    if (lstatSync(linkPath).isSymbolicLink()) linked = realpathSync(linkPath);
-  } catch { linked = null; }
-  let candidateReal = null;
-  try { candidateReal = realpathSync(candidateDir); } catch { candidateReal = candidateDir; }
-  const expectedDep = `link:${String(candidateReal).replace(/\\/g, '/')}`;
-  const rawDep = manifest?.dependencies?.[candidateName];
-  const depPointsAtCandidate = typeof rawDep === 'string'
-    && rawDep.replace(/\\/g, '/') === expectedDep;
-  const bundleNamesCandidate = Array.isArray(manifest?.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes(candidateName);
-  const linkPointsAtCandidate = linked !== null && linked === candidateReal;
-  // Bundle carries no path: it NEVER grants deletion authority by itself.
-  // It is removed only when dependency or junction proves THIS journal's
-  // candidate still owns the registration. A re-pointed dep/junction with
-  // a leftover same-name bundle fails closed (journal retained).
-  const identityEvidence = depPointsAtCandidate || linkPointsAtCandidate;
-  const bundlePointsAtCandidate = bundleNamesCandidate && identityEvidence;
-  // Manifest unreadable but junction dangles at candidate: remove junction.
-  if (!manifestReadable) {
-    if (!linkPointsAtCandidate) return { ok: true, undone: false };
-    try { rmSync(linkPath, { force: true }); } catch (error) {
-      return { ok: false, code: 'CANDIDATE_UNDO_FAILED', error: String(error?.message ?? error) };
-    }
-    return { ok: true, undone: true };
-  }
-  if (!manifest) return { ok: true, undone: false };
-  // Same-name package re-pointed elsewhere (dep or junction references a
-  // different target) while the bundle still names it: mixed state that
-  // cannot prove THIS candidate owns the registration. Fail closed,
-  // retain the journal for operator inspection.
-  const depPointsElsewhere = typeof rawDep === 'string' && !depPointsAtCandidate;
-  const linkPointsElsewhere = linked !== null && !linkPointsAtCandidate;
-  if ((depPointsElsewhere || linkPointsElsewhere) && bundleNamesCandidate) {
-    return { ok: false, code: 'CANDIDATE_UNDO_AMBIGUOUS', error: 'same-name package re-pointed elsewhere; refusing bundle removal' };
-  }
-  if (!depPointsAtCandidate && !bundlePointsAtCandidate && !linkPointsAtCandidate) {
-    return { ok: true, undone: false };
-  }
-  // Partial registration: only undo the surfaces that reference THIS
-  // candidate; leave anything already re-pointed elsewhere untouched.
-  try {
-    const next = { ...manifest };
-    if (depPointsAtCandidate) {
-      next.dependencies = { ...manifest.dependencies };
-      delete next.dependencies[candidateName];
-      if (Object.keys(next.dependencies).length === 0) delete next.dependencies;
-    }
-    if (bundlePointsAtCandidate) {
-      next.dsh = { ...manifest.dsh, profile: { ...manifest.dsh.profile, bundles: manifest.dsh.profile.bundles.filter((b) => b !== candidateName) } };
-    }
-    writeFileAtomic(profileFile, JSON.stringify(next, null, 2) + '\n');
-    if (linkPointsAtCandidate) rmSync(linkPath, { force: true });
-  } catch (error) {
-    return { ok: false, code: 'CANDIDATE_UNDO_FAILED', error: String(error?.message ?? error) };
-  }
-  return { ok: true, undone: true };
 }
 
 // Canonical containment validation for a journal's runtime segment. Recovery
@@ -760,6 +685,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     }
     clearUpdateJournal({ home });
     gcOldReleases({ home, protect: journal.prior?.path ?? null });
+    gcRetainedCohorts({ home });
     log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} already committed, finalized`);
     return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
@@ -803,6 +729,7 @@ export async function reconcileUpdateJournal({ home = homedir(), log = () => {},
     writeCurrentPointer({ home, name: candidateIdent.name, version: candidateIdent.version, path: candidateDir });
     clearUpdateJournal({ home });
     gcOldReleases({ home, protect: journal.prior?.path ?? null });
+    gcRetainedCohorts({ home });
     log(`- recovered update journal at stage ${journal.stage}: candidate ${candidateIdent.version} was verified and started, so the commit was completed`);
     return { ok: true, reconciled: true, stage: journal.stage, committed: true };
   }
@@ -1304,14 +1231,47 @@ export function commitActivatedRelease({ stageDir, manifest, home, prior = null 
   writeCurrentPointer({ home, name: manifest.name, version: manifest.version, path: stageDir });
   clearUpdateJournal({ home });
   gcOldReleases({ home, protect: prior?.path ?? null });
+  gcRetainedCohorts({ home });
   return stageDir;
 }
 
-function commitStagedRelease({ stageDir, manifest, home, prior = null }) {
-  return commitActivatedRelease({ stageDir, manifest, home, prior });
-}
-
 const STALE_INCOMPLETE_MS = 24 * 60 * 60 * 1000;
+
+// A retained runtime cohort is needed only while some surviving release
+// resolves to it, so this runs next to release pruning at the commit points
+// that call gcOldReleases: dropping a release is what stops its cohort being
+// pinned. Resolution goes through resolveReleaseCohort, the same chain every
+// other caller uses (manifest pin, then the release-cohort.json sidecar), so a
+// release that names its cohort only in the sidecar keeps its runtime.
+//
+// Fail closed: the cohort set is trusted only when EVERY directory under
+// releases/ resolved, because "nothing pins it" and "could not tell" must not
+// prune the same way. Pruning is best-effort on top of that — it must never
+// turn an update that already committed its pointer into a failed one.
+//
+// performCoordinatedCohortUpdate commits without gcOldReleases and is
+// deliberately not covered here either; its prior tree is still the rollback
+// target at that point.
+function gcRetainedCohorts({ home }) {
+  try {
+    const releasesDir = crewReleasesDir({ home });
+    if (!existsSync(releasesDir)) return [];
+    const entries = readdirSync(releasesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    const cohorts = [];
+    for (const entry of entries) {
+      const resolved = resolveReleaseCohort({ releaseDir: join(releasesDir, entry.name) });
+      if (!resolved.ok) {
+        process.emitWarning(`dsh-crew: release "${entry.name}" does not resolve to an exact cohort (${resolved.code ?? 'unknown'}); skipping retained-runtime pruning this pass`);
+        return [];
+      }
+      cohorts.push(resolved.dshVersion);
+    }
+    return gcRetainedRuntimes({ home, cohorts });
+  } catch (error) {
+    process.emitWarning(`dsh-crew: retained-runtime pruning skipped: ${error?.message ?? error}`);
+    return [];
+  }
+}
 
 function gcOldReleases({ home, keep = KEEP_RELEASES, protect = null }) {
   const pointer = readCurrentPointer({ home });
@@ -1362,7 +1322,7 @@ function gcOldReleases({ home, keep = KEEP_RELEASES, protect = null }) {
   return removed;
 }
 
-export function listManagedReleases({ home = homedir() } = {}) {
+function listManagedReleases({ home = homedir() } = {}) {
   const pointer = readCurrentPointer({ home });
   const root = crewReleasesDir({ home });
   if (!existsSync(root)) return [];
@@ -1390,7 +1350,7 @@ export function listManagedReleases({ home = homedir() } = {}) {
 // Windows supervisor executes it and writes a VERIFIED result. This polls
 // until the result arrives (or the timeout elapses). NEVER talks to the
 // legacy 3080 supervisor endpoint.
-export async function requestCrewRuntimeRestart({
+async function requestCrewRuntimeRestart({
   reason = null,
   fetchImpl = globalThis.fetch,
   pollIntervalMs = 1_000,
@@ -1440,18 +1400,6 @@ export async function requestCrewRuntimeRestart({
       log(`- restart poll transient error: ${String(error?.message ?? error)}`);
     }
   }
-}
-
-async function restartOwnedRuntime(fetchImpl = globalThis.fetch) {
-  return requestCrewRuntimeRestart({ fetchImpl, reason: 'lifecycle restart' });
-}
-
-async function verifyRuntimeVersion(version, fetchImpl = globalThis.fetch) {
-  const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/runtime', { headers: { accept: 'application/json' } });
-  const body = await response.json();
-  return response.ok && body?.ok === true && body.runtime_version === version
-    ? { ok: true, runtime_version: body.runtime_version }
-    : { ok: false, code: 'RUNTIME_VERSION_MISMATCH' };
 }
 
 // Cohort verifier: compares the TARGET DSH cohort against the Hub's
@@ -1509,7 +1457,7 @@ export async function verifyCrewRuntimeIdentity(version, fetchImpl = globalThis.
 // AND the expected DSH cohort (dsh_version domain), alongside full 3210
 // identity. A stale old-Crew process on the right cohort (or vice versa)
 // fails closed instead of reporting rollback success.
-export async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl = globalThis.fetch } = {}) {
+async function verifyRollbackTarget({ crewVersion, dshVersion, fetchImpl = globalThis.fetch } = {}) {
   let body = null;
   try {
     const response = await fetchImpl('http://127.0.0.1:3210/_dsh/dsh-crew/extension', { headers: { accept: 'application/json' } });
@@ -1910,10 +1858,10 @@ async function finishLifecycleAfterUpdateLock({
 // Lifecycle-owned cohort sidecar for a managed release directory. Historical
 // releases (pre-1.0.4) do not pin @deepseek-ai/dsh in their immutable
 // manifest; this records the cohort fact the lifecycle observed for them.
-const cohortFile = (releaseDir) => join(releaseDir, 'release-cohort.json');
+const cohortFile = (releaseDir) => join(releaseDir, RELEASE_COHORT_FILENAME);
 
 // Exact DSH cohort version helper: delegates to the module-level regex.
-export function isExactDshVersion(value) {
+function isExactDshVersion(value) {
   return typeof value === 'string' && EXACT_DSH_VERSION_RE.test(value);
 }
 
@@ -2242,7 +2190,7 @@ function registrationHealthy({ home, name, releaseDir }) {
  * config resolution. Package-manager children must see the user's real
  * environment, not our execution context.
  */
-export function sanitizedPackageManagerEnv(baseEnv = process.env) {
+function sanitizedPackageManagerEnv(baseEnv = process.env) {
   const env = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (/^npm_(config_|lifecycle|package_|execpath$|node_execpath$)/i.test(key)) continue;
@@ -2818,15 +2766,15 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
   return { ok: true, version: manifest.version, path: releaseDir };
 }
 
-export const UPDATE_PACKAGE_NAME = '@ran-sh/dsh-crew';
-export const UPDATE_DEFAULT_SPEC = `${UPDATE_PACKAGE_NAME}@latest`;
+const UPDATE_PACKAGE_NAME = '@ran-sh/dsh-crew';
+const UPDATE_DEFAULT_SPEC = `${UPDATE_PACKAGE_NAME}@latest`;
 
 /**
  * Extract a packed npm tarball with the platform `tar` binary (bsdtar ships
  * with Windows 10+, macOS, and Linux) into destDir; npm tarballs always root
  * at `package/`.
  */
-export function extractPackageTarball(tgzPath, destDir, { runner = spawnSync } = {}) {
+function extractPackageTarball(tgzPath, destDir, { runner = spawnSync } = {}) {
   mkdirSync(destDir, { recursive: true });
   // GNU tar interprets a `C:\...` argument as a remote rsh host ("Cannot
   // connect to C:"), so anchor the invocation inside destDir and pass the
@@ -3449,9 +3397,9 @@ const CREDENTIAL_CAPABILITY_REQUIREMENTS = Object.freeze({
   'purge-plan': Object.freeze(['credential-reference-inventory-v1', 'credential-purge-v1']),
   purge: Object.freeze(['credential-reference-inventory-v1', 'credential-purge-v1']),
 });
-export const PRODUCTION_HUB_URL = 'http://127.0.0.1:3210';
+const PRODUCTION_HUB_URL = 'http://127.0.0.1:3210';
 
-export async function assertProductionHub({ hubUrl, requiredCapabilities = [], purpose = 'command', fetchImpl = globalThis.fetch } = {}) {
+async function assertProductionHub({ hubUrl, requiredCapabilities = [], purpose = 'command', fetchImpl = globalThis.fetch } = {}) {
   if (hubUrl !== PRODUCTION_HUB_URL) throw new Error(`${purpose} requires the isolated 3210 Crew Hub`);
   const response = await fetchImpl(`${hubUrl}${CREW_ROUTE_BASE}/runtime`, { headers: { accept: 'application/json' } });
   let body;
@@ -3474,7 +3422,7 @@ export async function assertProductionHub({ hubUrl, requiredCapabilities = [], p
  * surface before sending a provider request. This prevents a same-port stale
  * Hub from turning a later 404 into an ambiguous destructive failure.
  */
-export async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl = globalThis.fetch } = {}) {
+async function assertProviderHubCapabilities({ hubUrl, action, fetchImpl = globalThis.fetch } = {}) {
   return assertProductionHub({
     hubUrl,
     requiredCapabilities: PROVIDER_CAPABILITY_REQUIREMENTS[action] ?? PROVIDER_CAPABILITY_REQUIREMENTS.list,

@@ -7,7 +7,7 @@
 import { rankAdaptiveCandidates } from './adaptive-routing.mjs';
 import { scheduleAdmission } from './model-schedule.mjs';
 
-export const DEFAULT_TIER_MODEL_PREFERENCES = Object.freeze({
+const DEFAULT_TIER_MODEL_PREFERENCES = Object.freeze({
   flash: 'deepseek-v4-flash',
   pro: 'deepseek-v4-pro',
 });
@@ -20,9 +20,8 @@ export const DEFAULT_ROLE_MODEL_PREFERENCES = Object.freeze({
   reviewer: 'deepseek-v4-pro',
 });
 
-export const MODEL_FALLBACKS = ['harness-default'];
 export const NO_WORKER_MODEL_AVAILABLE = 'NO_WORKER_MODEL_AVAILABLE';
-export const MODEL_SELECTION_TRACE_VERSION = 1;
+const MODEL_SELECTION_TRACE_VERSION = 1;
 export const MODEL_SELECTION_REASON_CODES = Object.freeze({
   PROVIDER_UNAVAILABLE: 'PROVIDER_UNAVAILABLE',
   PREFERRED_MODEL_UNAVAILABLE: 'PREFERRED_MODEL_UNAVAILABLE',
@@ -61,7 +60,7 @@ const BLOCKED_MODEL_CODES = Object.freeze({
   [MODEL_SELECTION_REASON_CODES.PEAK_RESTRICTED]: 'MODEL_BLOCKED_PEAK',
 });
 
-export function normalizeModelRef(raw) {
+function normalizeModelRef(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const provider = typeof raw.provider === 'string' ? raw.provider.trim() : '';
   const model = typeof raw.model === 'string' ? raw.model.trim() : '';

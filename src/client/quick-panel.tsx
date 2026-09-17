@@ -9,7 +9,6 @@ import { PanelHeader, PanelStyles } from './panel-chrome';
 // (/_dsh/dsh-crew/quick-config, /quick-status). Runtime maintenance stays on 3210.
 
 const API = '/_dsh/dsh-crew';
-const CREW_CONTROL_PLANE_URL = 'http://127.0.0.1:3210/';
 const FULL = 'http://127.0.0.1:3210/';
 
 type ModelEntry = { provider: string; model: string };

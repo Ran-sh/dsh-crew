@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, win32 } from 'node:path';
 import { homedir } from 'node:os';
 
+import { RELEASE_COHORT_FILENAME } from '../dsh-cohort.mjs';
 import {
   readMaintenanceSession,
   readSupervisorHeartbeat,
@@ -47,7 +48,7 @@ export function hashSupervisorHelper(file) {
   try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; }
 }
 
-export function canonicalWindowsPowerShellPath({
+function canonicalWindowsPowerShellPath({
   environment = process.env,
   exists = existsSync,
 } = {}) {
@@ -344,7 +345,7 @@ function prepareWindowsSupervisorConvergence({ home, root, platform }) {
   let expectedDshVersion = text(manifest?.dependencies?.['@deepseek-ai/dsh'] ?? manifest?.peerDependencies?.['@deepseek-ai/dsh']);
   if (!EXACT_VERSION_RE.test(expectedDshVersion ?? '')) {
     try {
-      const cohort = JSON.parse(readFileSync(join(root, 'release-cohort.json'), 'utf8'));
+      const cohort = JSON.parse(readFileSync(join(root, RELEASE_COHORT_FILENAME), 'utf8'));
       expectedDshVersion = text(cohort?.dsh_version);
     } catch { expectedDshVersion = null; }
   }

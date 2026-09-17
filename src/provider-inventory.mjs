@@ -9,7 +9,7 @@ import { classifyCredentialReference } from './credential-reference.mjs';
 const LIFECYCLE_ORIGINS = new Set(['builtin', 'profile-managed', 'dynamic', 'unknown']);
 const OWNERSHIPS = new Set(['harness', 'crew-managed-profile', 'user-managed-profile', 'dynamic-user', 'unknown']);
 const MUTABLE_AUTHORITY_KINDS = new Set(['crew-profile', 'harness-settings']);
-export const IMMUTABLE_HARNESS_PROVIDER_IDS = Object.freeze(['deepseek-official']);
+const IMMUTABLE_HARNESS_PROVIDER_IDS = Object.freeze(['deepseek-official']);
 
 function text(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;

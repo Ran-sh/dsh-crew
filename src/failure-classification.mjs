@@ -3,16 +3,6 @@
 // Classification consumes structured status/codes/outcomes only. It never
 // parses raw exception text, provider responses, credentials, quotas or logs.
 
-export const FAILURE_CATEGORIES = Object.freeze([
-  'none',
-  'policy',
-  'compatibility',
-  'provider',
-  'runtime',
-  'verification',
-  'cancelled',
-]);
-
 export const FAILURE_REASON_CODES = Object.freeze({
   NONE: 'NONE',
   CANCELLED: 'CANCELLED',

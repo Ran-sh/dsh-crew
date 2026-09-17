@@ -22,7 +22,7 @@ const R = ACTIVATION_BOUNDARY.RESTART_REQUIRED;
  * running MCP process. `session: null` means the setting is not a session
  * override surface.
  */
-export const RUNTIME_SETTING_ACTIVATION = Object.freeze({
+const RUNTIME_SETTING_ACTIVATION = Object.freeze({
   max_parallel: Object.freeze({ global: L, session: null, note: 'Admission limit refreshes before new workflow starts and when slots release; lowering never cancels active work.' }),
 
   subagents_enabled: Object.freeze({ global: N, session: N }),

@@ -5,7 +5,7 @@
 // (Hub handshake / catalog read) are intentionally separate from execution
 // verification (real worker, reviewer, cancellation, timeout, etc.).
 
-export const READINESS_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_RUN']);
+const READINESS_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_RUN']);
 
 export const READINESS_REASON_CODES = Object.freeze({
   LIVE_CHECK_PASSED: 'LIVE_CHECK_PASSED',

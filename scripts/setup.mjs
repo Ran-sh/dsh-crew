@@ -16,7 +16,6 @@ import {
   ensureCrewDshRuntime,
   ensureCrewPluginRegistration,
   resolveDshCli,
-  runResolvedDsh,
   describeDshCli,
   removeCrewPluginRegistration,
   TARGET_DSH_VERSION,
@@ -81,11 +80,12 @@ function run(cmd, args, opts = {}) {
  * may use `npx -y` to fetch DSH, while status/uninstall probes never trigger a
  * network download merely by checking availability.
  *
- * The returned descriptor is the CLI base only; every invocation is built by
- * `runDsh` with the dedicated dsh-crew profile and the Crew DSH_HOME in the
- * child process environment. The official ``web`` profile is never a target.
+ * The returned descriptor is the CLI base only, reported to the operator as
+ * `description`; the dedicated dsh-crew profile and the Crew-owned DSH_HOME
+ * are supplied by the install flow. The official ``web`` profile is never a
+ * target.
  */
-export function detectDsh({ allowDownload = false, home = homedir(), includeCompatibility = true } = {}) {
+function detectDsh({ allowDownload = false, home = homedir(), includeCompatibility = true } = {}) {
   const resolved = resolveDshCli({
     home,
     allowDownload,
@@ -93,18 +93,6 @@ export function detectDsh({ allowDownload = false, home = homedir(), includeComp
   });
   if (!resolved) return null;
   return { ...resolved, cli: resolved.command, description: describeDshCli(resolved) };
-}
-
-/**
- * Run a DSH plugin command against the dedicated Crew profile under the
- * Crew-owned DSH_HOME. `home` is the "user home" base used to derive that
- * isolated home, so tests can point it at a disposable root.
- */
-export function runDsh(dsh, args, { home = homedir() } = {}) {
-  const resolved = dsh?.command
-    ? dsh
-    : { kind: dsh?.kind ?? 'legacy', command: dsh?.cli ?? dsh, args: [] };
-  return runResolvedDsh(resolved, ['plugin', '--profile', CREW_PROFILE_NAME, ...args], { home });
 }
 
 export function readPackageName(root = ROOT) {
@@ -117,18 +105,9 @@ export function checkRoot(root = ROOT) {
     && existsSync(join(root, 'cordis.patch.yml'));
 }
 
-export function depsPresent(root = ROOT) {
+function depsPresent(root = ROOT) {
   return existsSync(join(root, 'node_modules', '@modelcontextprotocol', 'sdk'))
     && existsSync(join(root, 'node_modules', '.bin', 'tsdown'));
-}
-
-export function profileHasPackage(home, name, profileRoot = crewProfileDir({ home })) {
-  const pkgFile = join(profileRoot, 'package.json');
-  if (!existsSync(pkgFile)) return false;
-  try {
-    const pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
-    return Boolean(pkg.dependencies?.[name]) || Boolean((pkg.dsh?.profile?.bundles ?? []).includes(name));
-  } catch { return false; }
 }
 
 function mark(log, ok, text) {

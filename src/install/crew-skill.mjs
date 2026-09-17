@@ -42,7 +42,7 @@ export function crewSkillFiles({ home = homedir(), env = process.env } = {}) {
 }
 
 /** The skill template shipped in the payload. */
-export function crewSkillSource({ root }) {
+function crewSkillSource({ root }) {
   return join(root, 'skills', CREW_SKILL_NAME, 'SKILL.md');
 }
 

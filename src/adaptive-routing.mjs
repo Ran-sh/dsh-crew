@@ -5,8 +5,8 @@
 // caller may record only outcomes Crew already observed, and routing decisions
 // expose bounded evidence suitable for model-selection trace metadata.
 
-export const ADAPTIVE_ROUTING_VERSION = 1;
-export const ADAPTIVE_ROUTING_DEFAULTS = Object.freeze({
+const ADAPTIVE_ROUTING_VERSION = 1;
+const ADAPTIVE_ROUTING_DEFAULTS = Object.freeze({
   enabled: false,
   window_size: 8,
   min_samples: 2,

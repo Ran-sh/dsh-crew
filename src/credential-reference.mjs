@@ -28,11 +28,3 @@ export function classifyCredentialReference(value, { kind = 'env' } = {}) {
     : HANDLE_REFERENCE.test(raw) && !SECRET_LIKE.test(raw) && !EMBEDDED_SECRET.test(raw);
   return { present: true, value: valid ? raw : null, redacted: !valid };
 }
-
-export function sanitizeCredentialReference(value, options = {}) {
-  return classifyCredentialReference(value, options).value;
-}
-
-export function hasCredentialReference(value, options = {}) {
-  return classifyCredentialReference(value, options).present;
-}

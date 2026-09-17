@@ -4,7 +4,7 @@
 
 import { validateModelCallabilityV2 } from './model-callability-contract.mjs';
 
-export const EXTENSION_CONTRACT_SCHEMA_VERSION = 1;
+const EXTENSION_CONTRACT_SCHEMA_VERSION = 1;
 
 function row(matrix, id) {
   return Array.isArray(matrix?.rows) ? matrix.rows.find((entry) => entry?.id === id) : undefined;
