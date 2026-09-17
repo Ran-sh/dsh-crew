@@ -482,6 +482,59 @@ test('cancelling a running workflow cancels the active attempt and never escalat
   assert.equal(full.canonical_events.at(-1).type, 'job.cancelled');
 });
 
+// A cancel that lands while an attempt is still being dispatched has nothing to
+// name: `current_attempt_id` is the workflow-scoped placeholder, which the
+// transport does not recognise as a runnable attempt, so the cancel stopped
+// nothing — and the job the transport started a moment later ran to completion
+// while the workflow reported itself cancelled. Re-cancelling after the attempt
+// returns does not help, because cancelWorkflow returns the promise it already
+// made. onAttemptStarted is the one moment the real id becomes known.
+test('a cancel arriving during dispatch still stops the attempt the transport started', async () => {
+  const a = makeAdapter({});
+  let releaseSpawn;
+  const spawnGate = new Promise((res) => { releaseSpawn = res; });
+  a.executeAttempt = async (spec) => {
+    await spawnGate;                       // the transport is still starting it
+    spec.onAttemptStarted?.('hub-9-abc');  // ...and only now is it nameable
+    return { id: 'hub-9-abc', role: 'worker', attempt: 0, provider: 'p', model: 'm-cheap', selection_source: 'policy', status: 'done', result: WORKER_RESULT, stopReason: 'completed' };
+  };
+
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 's' });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const cancelled = await rt.cancel(job.id);   // lands inside the dispatch window
+  assert.equal(cancelled.status, 'cancelled');
+  // It does ask, but only for the workflow-scoped placeholder — an id the
+  // transport cannot resolve to a running attempt, so this call stops nothing.
+  assert.equal(a.cancelled.includes('hub-9-abc'), false,
+    'precondition: the real attempt id was not known when the cancel landed');
+
+  releaseSpawn();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(a.cancelled.includes('hub-9-abc'),
+    'the attempt the transport started must be cancelled once it is named');
+});
+
+test('a cancel arriving after the attempt is named is unchanged', async () => {
+  const a = makeAdapter({});
+  let releaseWork;
+  const workGate = new Promise((res) => { releaseWork = res; });
+  a.executeAttempt = async (spec) => {
+    spec.onAttemptStarted?.('hub-7-early');   // named before the cancel
+    await workGate;
+    return { id: 'hub-7-early', role: 'worker', attempt: 0, provider: 'p', model: 'm-cheap', selection_source: 'policy', status: 'done', result: WORKER_RESULT, stopReason: 'completed' };
+  };
+
+  const rt = createWorkflowRuntime(a, { maxParallel: 1, idFactory });
+  const job = rt.start({ role: 'worker', task: 't', cwd: '/repo', source: 's' });
+  await new Promise((r) => setTimeout(r, 20));
+  await rt.cancel(job.id);
+  releaseWork();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(a.cancelled, ['hub-7-early'], 'exactly one cancel, for the named attempt');
+});
+
 test('cancelling a queued workflow removes it without running', async () => {
   let release;
   const gate = new Promise((res) => { release = res; });

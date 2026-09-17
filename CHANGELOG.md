@@ -4,6 +4,33 @@
 
 Future changes go here.
 
+## 2.1.8 — 2026-09-16
+
+- **Cancelling a workflow reported success while the job it had just started ran
+  on.** An attempt is dispatched in two steps: `current_attempt_id` is set to the
+  workflow-scoped placeholder (`wf-…-aN`) before the transport is asked to start
+  anything, and only replaced with the real id (`hub-…`) once the transport names
+  what it started. `cancelWorkflow` can only stop what that field names, and the
+  transport resolves a `hub-` id but sends anything else down the standalone
+  path — so a cancel landing inside that window cancelled nothing, and the job
+  that appeared a moment later ran to completion and kept billing while the
+  workflow already reported `cancelled`. Re-cancelling after the attempt returned
+  did not help, because `cancelWorkflow` returns the promise it already made.
+  The one moment the real id becomes known is `onAttemptStarted`, so a cancel
+  that already happened is now applied there, for the worker and the reviewer
+  alike. Found by watching two of them: the first was still running when its
+  workflow had already reported itself stopped.
+
+  Known limitation, recorded rather than papered over: this leans on the
+  transport's `onAttemptStarted` callback, which the attempt interface declares
+  optional, and the runtime keeps no handle on an in-flight dispatch. A transport
+  that never calls it would still leak. Closing that properly means having
+  `cancelWorkflow` wait for the dispatch to settle before cancelling what it
+  adopted — a change to the cancellation path's timing, deliberately not made
+  here. Two smaller consequences are also unchanged: the `job.cancelled` event
+  records the placeholder id, and the redirected cancel emits no canonical event
+  of its own.
+
 ## 2.1.7 — 2026-09-16
 
 - **The CI evidence layer accepted a job by name, so a name could stand in for a

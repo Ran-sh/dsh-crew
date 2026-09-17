@@ -408,9 +408,7 @@ export function createWorkflowRuntime(adapters, {
           source: job.source,
           model_class_hint: job.model_class_hint,
           escalation_reason: escalationReason,
-          onAttemptStarted: (actualId) => {
-            if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
-          },
+          onAttemptStarted: (actualId) => adoptAttemptId(job, actualId),
         });
         job.current_attempt_id = null;
         if (job.cancelling) { await cancelWorkflow(job); return; }
@@ -602,9 +600,7 @@ export function createWorkflowRuntime(adapters, {
       source: job.source,
       model_class_hint: 'pro',
       escalation_reason: null,
-      onAttemptStarted: (actualId) => {
-        if (typeof actualId === 'string' && actualId) job.current_attempt_id = actualId;
-      },
+      onAttemptStarted: (actualId) => adoptAttemptId(job, actualId),
     });
     job.current_attempt_id = null;
     const attemptView = { ...attemptRecord(ar, 0), phase: 'review' };
@@ -663,6 +659,31 @@ export function createWorkflowRuntime(adapters, {
     return typeof adapters.attemptId === 'function'
       ? adapters.attemptId(workflowId, suffix)
       : `${workflowId}-a${suffix || '0'}`;
+  }
+
+  /**
+   * Record the id the executor actually started, and honour a cancel that
+   * arrived while it was still being dispatched.
+   *
+   * `cancelWorkflow` can only stop what `current_attempt_id` names. During
+   * dispatch that is the workflow-scoped placeholder, which the transport does
+   * not recognise as a runnable attempt, so a cancel landing in that window
+   * stops nothing — and the job the executor starts a moment later runs to
+   * completion while the workflow reports itself cancelled. Re-cancelling after
+   * the attempt returns does not help: `cancelWorkflow` returns the promise it
+   * already made. This is the one moment the real id becomes known, so the
+   * cancel that already happened is applied here.
+   */
+  function adoptAttemptId(job, actualId) {
+    if (typeof actualId !== 'string' || actualId === '') return;
+    job.current_attempt_id = actualId;
+    if (!job.cancelling) return;
+    try {
+      Promise.resolve(adapters.cancelAttempt?.(actualId)).catch(() => {});
+    } catch {
+      // A transport that throws synchronously is still a cancel that did not
+      // land; the workflow's own terminal state is unchanged by it.
+    }
   }
 
   function cancelWorkflow(job) {
