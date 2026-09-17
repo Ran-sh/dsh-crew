@@ -28,7 +28,7 @@ import {
   isCrewWorkspaceName,
   releaseCrewWorkspace,
 } from '../src/crew-workspaces.mjs';
-import { WORKSPACE_BUSY, acquireWorkspaceLock } from '../src/workspace-lock.mjs';
+import { DEFAULT_LOCK_MAX_HOLD_MS, WORKSPACE_BUSY, acquireWorkspaceLock } from '../src/workspace-lock.mjs';
 
 function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -148,11 +148,20 @@ test('a lock held past any plausible job is reclaimed even if the pid looks aliv
   writeFileSync(lockPath, `${JSON.stringify({ schemaVersion: 1, pid: process.pid, purpose: 'zombie', nonce: 'x', startedAt })}\n`);
 
   const taken = await acquireWorkspaceLock({
-    lockPath, isAlive: () => true, now: () => startedAt + 7 * 60 * 60 * 1000,
+    lockPath, isAlive: () => true, now: () => startedAt + DEFAULT_LOCK_MAX_HOLD_MS + 1,
   });
   assert.equal(taken.ok, true);
   taken.release();
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('the backstop outlives the longest permitted job, and not by much', () => {
+  // Too short and a live job loses its own workspace; too long and a lock left by
+  // a job that ended without releasing stalls it for hours. timeout_seconds is
+  // capped at two hours, so the bound belongs just above that.
+  const MAX_ATTEMPT_MS = 7200 * 1000;
+  assert.ok(DEFAULT_LOCK_MAX_HOLD_MS > MAX_ATTEMPT_MS, 'a live job must never lose its workspace');
+  assert.ok(DEFAULT_LOCK_MAX_HOLD_MS <= MAX_ATTEMPT_MS * 2, 'and a leaked lock must not stall for half a day');
 });
 
 test('release only drops the lock this call created', async () => {

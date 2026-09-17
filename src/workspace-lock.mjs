@@ -28,9 +28,17 @@ export const WORKSPACE_LOCK_SCHEMA = 1;
 
 export const DEFAULT_LOCK_WAIT_MS = 120_000;
 export const DEFAULT_LOCK_POLL_MS = 500;
-// Longer than the largest permitted attempt timeout (2h), so a live holder is
-// never reclaimed out from under a job that is legitimately still running.
-export const DEFAULT_LOCK_MAX_HOLD_MS = 6 * 60 * 60 * 1000;
+// The two reasons a lock outlives its job are not the same, and they are covered
+// by different things. A holder whose process died is caught immediately by the
+// pid check below. This bound covers the other case — the process is alive but
+// the job is gone, which is what a job that ended without releasing looks like —
+// and it is only a backstop, so it wants to be as short as it can safely be.
+//
+// It must still exceed the longest a job may legitimately run, or a live job
+// would lose its own workspace: `timeout_seconds` is capped at 2h, so this is
+// that plus half an hour of margin. Six hours, the first value here, would have
+// stalled a workspace for four hours longer than any job can last.
+export const DEFAULT_LOCK_MAX_HOLD_MS = (2 * 60 + 30) * 60 * 1000;
 
 const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
