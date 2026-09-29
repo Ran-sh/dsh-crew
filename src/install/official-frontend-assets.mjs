@@ -14,6 +14,15 @@ function plan(home, root) {
     ['official-web-bridge/lib/client.js', readFileSync(join(bridge, 'lib', 'client.js'))],
     ['src/local-request-guard.mjs', readFileSync(join(root, 'src', 'local-request-guard.mjs'))],
   ]);
+  // The snapshot is a canonical artifact: these sources are text that either line
+  // ending serves, so its bytes and its revision both normalize to LF. Otherwise a
+  // `core.autocrlf=true` checkout hashes to a different revision than the npm
+  // payload it installs, which made readiness look for a snapshot that does not
+  // exist and reported "needs repair" on a correct install (and made every payload
+  // update look like a stale desktop revision).
+  const canonicalBytes = (bytes) => (bytes.includes(0) ? bytes
+    : Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'), 'utf8'));
+  for (const [name, bytes] of files) files.set(name, canonicalBytes(bytes));
   const hash = createHash('sha256').update(JSON.stringify(metadata));
   for (const [name, bytes] of files) hash.update(name).update(bytes);
   const revision = hash.digest('hex');
@@ -30,17 +39,29 @@ function plan(home, root) {
   return { frontendRoot, snapshotRoot, revision, overlayFile, overlay, files };
 }
 
+// Git checks a `core.autocrlf=true` Windows tree out as CRLF while the installed
+// snapshot was written from the npm payload (LF). The bridge sources are text that
+// either line ending serves, so a CRLF checkout must not read as a drifted snapshot;
+// bytes are still compared first, and the tolerant path only applies to text.
+function sameTextContent(installed, expected) {
+  if (installed.equals(expected)) return true;
+  if (installed.includes(0) || expected.includes(0)) return false;
+  const normalize = (buffer) => buffer.toString('utf8').replace(/\r\n/g, '\n');
+  return normalize(installed) === normalize(expected);
+}
+
 function matches(p) {
   try { return [...p.files].every(([name, bytes]) => {
     const file = join(p.snapshotRoot, name);
-    return lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink() && readFileSync(file).equals(bytes);
+    return lstatSync(file).isFile() && !lstatSync(file).isSymbolicLink() && sameTextContent(readFileSync(file), bytes);
   }); } catch { return false; }
 }
 
 export function officialFrontendAssetsReady({ home = homedir(), root } = {}) {
   try {
     const p = plan(home, root);
-    return matches(p) && readFileSync(p.overlayFile, 'utf8') === p.overlay;
+    const overlay = readFileSync(p.overlayFile, 'utf8');
+    return matches(p) && (overlay === p.overlay || overlay.replace(/\r\n/g, '\n') === p.overlay.replace(/\r\n/g, '\n'));
   } catch { return false; }
 }
 

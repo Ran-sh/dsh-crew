@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 2.2.5 — 2026-09-29
+
+- **The frontend snapshot hashes and installs as a canonical artifact.** The 2.2.4
+  fix covered the launcher files, but the bridge snapshot's *revision* was still
+  computed over raw bytes: a `core.autocrlf=true` checkout therefore hashed to a
+  different revision than the npm payload it installed, readiness looked for a
+  snapshot that did not exist, and `Windows login startup` still read as
+  `needs repair` (the same cause made every payload update look like a stale
+  desktop-app bridge revision). The snapshot's three text sources now normalize to
+  LF for both the hash and the installed bytes, so the same content means the same
+  revision on every checkout; binary inputs are still compared byte for byte.
+
 ## 2.2.4 — 2026-09-29
 
 - **A CRLF checkout is no longer a repair target.** Git hands a
