@@ -359,7 +359,10 @@ export async function setupUninstall({
 export async function setupStatus({ log = console.log, root = ROOT, home = homedir(), installer = realInstaller } = {}) {
   const st = installer.installStatus ? installer.installStatus({ home, root }) : realInstaller.installStatus({ home, root });
   const integrationLabel = (entry) => !entry?.installed ? 'not installed' : entry.ready === true ? 'installed' : 'needs repair';
-  const claude = integrationLabel(st?.claude);
+  // A host without the Claude CLI has no install to repair: the settings are
+  // registered best-effort and the CLI step that creates the plugin snapshot is
+  // skipped, so the footprint can never be ready there.
+  const claude = st?.claude?.host_detected === false ? 'not installed' : integrationLabel(st?.claude);
   const codex = integrationLabel(st?.codex);
   const zcode = integrationLabel(st?.zcode);
   const startupState = installer.windowsStartupStatus

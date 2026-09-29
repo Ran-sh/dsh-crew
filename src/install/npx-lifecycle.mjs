@@ -3284,7 +3284,13 @@ export function npxStatus({
   const integrationLabel = (entry) => !entry?.installed ? 'not installed' : entry.ready === true ? 'installed' : 'needs repair';
   const codex = integrationLabel(st?.codex);
   const zcode = integrationLabel(st?.zcode);
-  const claude = integrationLabel(st?.claude);
+  // Claude Code installs best-effort: on a host without the CLI the settings are
+  // registered and the CLI step — the only one that can create the plugin snapshot
+  // — is skipped, so such a machine carries a footprint that can never be ready.
+  // Nothing there is repairable, and "needs repair" told operators to fix an
+  // integration they never installed. A host whose CLI IS present with an
+  // unfinished install still reads as needing repair.
+  const claude = st?.claude?.host_detected === false ? 'not installed' : integrationLabel(st?.claude);
   const official = officialWebIntegrationStatus({ home, releaseDir: pointer?.path });
   const officialWeb = !official.legacy_present ? 'not present (native 3210 control plane)' : official.healthy ? 'legacy full bridge present (deprecated; manual cleanup available)' : 'legacy full bridge record present but unhealthy (deprecated)';
   const startupState = installer.windowsStartupStatus?.({ home, root: runningPackageRoot() });

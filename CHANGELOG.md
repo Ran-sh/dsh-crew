@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 2.2.3 — 2026-09-29
+
+- **A machine without Claude Code is not a repair target.** The Claude integration
+  installs best-effort: the settings are registered and the CLI step — the only one
+  that can create the plugin snapshot — is skipped, so the recorded footprint could
+  never become ready. Readiness already kept "the settings name our plugin"
+  separate from "the plugin is callable", but both status entries rendered any
+  footprint-without-readiness as "needs repair", sending operators to repair an
+  integration they never installed. The install status now carries the host's own
+  presence, and both entries read a host with no `claude` CLI as "not installed";
+  a host whose CLI is present with an unfinished install still says "needs repair".
+
 ## 2.2.2 — 2026-09-29
 
 - **Crew can run the operator's own configuration instead of a blank home.**

@@ -233,11 +233,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.2.2', async () => {
+test('package, runtime identity, and changelog identify candidate 2.2.3', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.2.2');
+  assert.equal(manifest.version, '2.2.3');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.2.2');
+  assert.equal(RUNTIME_VERSION, '2.2.3');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -728,6 +728,34 @@ test('status checks host integrations against payload root and supervisor assets
     assert.match(logs.join('\n'), /Codex Desktop integration: needs repair/);
     assert.match(logs.join('\n'), /ZCode integration: needs repair/);
     assert.match(logs.join('\n'), /Claude Code integration: needs repair/);
+  } finally { t.cleanup(); }
+});
+
+// A host with no Claude Code carries the best-effort settings but nothing that can
+// run there: every such machine used to be printed as a repair target, which sent
+// the operator to fix an integration they never installed.
+test('status reports Claude as not installed when the host has no Claude CLI', () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    rec.installer.installStatus = () => ({
+      codex: { installed: false },
+      zcode: { installed: false },
+      claude: { installed: true, ready: false, host_detected: false },
+    });
+    const logs = [];
+    const status = npxStatus({ home: t.dir, installer: rec.installer, log: (message) => logs.push(message) });
+    assert.equal(status.claude, 'not installed');
+    assert.match(logs.join('\n'), /Claude Code integration: not installed/);
+
+    // The same footprint on a host that HAS the CLI is the repairable case.
+    rec.installer.installStatus = () => ({
+      codex: { installed: false },
+      zcode: { installed: false },
+      claude: { installed: true, ready: false, host_detected: true },
+    });
+    const second = npxStatus({ home: t.dir, installer: rec.installer, log: () => {} });
+    assert.equal(second.claude, 'needs repair');
   } finally { t.cleanup(); }
 });
 

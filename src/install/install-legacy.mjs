@@ -497,7 +497,7 @@ export function writeGlobalConfig(patch) {
 }
 
 /** What is currently installed where — drives the settings-page buttons. */
-export function installStatus({ home = homedir(), root = ROOT, env = process.env } = {}) {
+export function installStatus({ home = homedir(), root = ROOT, env = process.env, claudeDetected = undefined } = {}) {
   // Host integrations are installed from the profile's loader link, not from the
   // release directory, so an upgrade re-points one link instead of rewriting four
   // host configurations. Readiness has to judge them against the path they were
@@ -549,9 +549,16 @@ export function installStatus({ home = homedir(), root = ROOT, env = process.env
     || existsSync(join(codexRoot, 'agents', 'ds-flash.toml'))
     || existsSync(join(codexRoot, 'agents', 'ds-pro.toml'));
   const missing = Object.entries(components).filter(([, present]) => !present).map(([key]) => key);
+  // `installed` stays the footprint: the settings name our plugin, which is a
+  // deliberate distinction from `ready` (an enabled setting is not a callable
+  // plugin). `host_detected` records the other half a renderer needs — a machine
+  // with no Claude Code has nothing installed and nothing to repair, even though
+  // the best-effort settings are there.
+  const claudeHostDetected = claudeDetected === undefined ? resolveClaudeCommand() !== null : claudeDetected === true;
   return {
     claude: {
       installed: claudeFootprint,
+      host_detected: claudeHostDetected,
       ready: claudeMissing.length === 0,
       hud: hudWired,
       components: claudeComponents,

@@ -439,3 +439,23 @@ test('setupStatus reports drifted integrations as needing repair and passes its 
     assert.match(logs.join('\n'), /Claude Code integration: needs repair/);
   } finally { t.cleanup(); }
 });
+
+// A checkout installer run on a machine with no Claude Code registers the
+// best-effort settings and skips the CLI step, so the footprint can never be
+// ready there — but nothing is repairable either.
+test('setupStatus reports Claude as not installed when the host has no Claude CLI', async () => {
+  const t = makeTemp();
+  const calls = [];
+  try {
+    const installer = fakeInstaller(calls);
+    installer.installStatus = () => ({
+      codex: { installed: false },
+      zcode: { installed: false },
+      claude: { installed: true, ready: false, host_detected: false },
+    });
+    const logs = [];
+    const status = await setupStatus({ log: (message) => logs.push(message), root: t.dir, home: t.dir, installer });
+    assert.equal(status.claude, 'not installed');
+    assert.match(logs.join('\n'), /Claude Code integration: not installed/);
+  } finally { t.cleanup(); }
+});

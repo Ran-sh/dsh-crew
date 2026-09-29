@@ -332,6 +332,34 @@ test('the snapshot comparison covers files the plugin loads, not just its manife
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+// A missing `claude` CLI is a supported install: the installer registers settings
+// best-effort and skips the CLI step, which is the only step that can create the
+// plugin snapshot. `installed` therefore stays the footprint (the settings name
+// our plugin) — the renderers need the host's own presence to tell a machine that
+// never had Claude Code from one whose install is unfinished.
+test('the Claude footprint is reported with the host presence the renderers need', () => {
+  const home = makeHome();
+  try {
+    const root = join(home, 'payload');
+    makeClaudePluginRoot(root, 'same');
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      enabledPlugins: { 'dsh-crew@dsh-crew': true },
+      extraKnownMarketplaces: { 'dsh-crew': { source: { path: root } } },
+    }));
+
+    const absent = installStatus({ home, root, env: {}, claudeDetected: false }).claude;
+    assert.equal(absent.installed, true, 'the best-effort settings are a footprint, not an install');
+    assert.equal(absent.host_detected, false, 'and the host says whether anything could ever run');
+    assert.equal(absent.ready, false, 'the settings alone never satisfy readiness');
+
+    const present = installStatus({ home, root, env: {}, claudeDetected: true }).claude;
+    assert.equal(present.host_detected, true);
+    assert.equal(present.installed, true);
+    assert.equal(present.ready, false, 'a present CLI with an unfinished install still needs repair');
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 function makeHome() {
