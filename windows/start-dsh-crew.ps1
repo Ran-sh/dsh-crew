@@ -127,6 +127,24 @@ function Write-LaunchLog {
   }
 }
 
+# Every launch appends to one file for the life of the machine, so it grows without
+# bound while only its tail is ever read. Rotation runs once per launch before the
+# first line is written and keeps two generations: a post-mortem needs the current
+# run and the one before it. Deliberately best-effort — a locked, unreadable or
+# huge log is a reason to leave it alone, never a reason to fail the launch.
+$launcherLogMaxBytes = 5MB
+function Rotate-LaunchLog {
+  try {
+    if (-not (Test-Path -LiteralPath $launcherLog -PathType Leaf)) { return }
+    if ((Get-Item -LiteralPath $launcherLog -ErrorAction Stop).Length -lt $launcherLogMaxBytes) { return }
+    $oldest = "$launcherLog.2"
+    $previous = "$launcherLog.1"
+    if (Test-Path -LiteralPath $oldest) { Remove-Item -LiteralPath $oldest -Force -ErrorAction Stop }
+    if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination $oldest -Force -ErrorAction Stop }
+    Move-Item -LiteralPath $launcherLog -Destination $previous -Force -ErrorAction Stop
+  } catch { }
+}
+
 function Resolve-OfficialHarnessCommand {
   $shim = Get-Command dsh.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1
   $root = Join-Path (Split-Path -Parent $shim.Source) 'node_modules\@deepseek-ai\dsh'
@@ -1528,6 +1546,7 @@ if ($env:DSH_CREW_LAUNCHER_TEST_IMPORT -eq '1') { return }
 
 try {
   New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+  Rotate-LaunchLog
   Write-LaunchLog ('Launcher started; mode={0}; user={1}' -f $Mode, $env:USERNAME)
   if (-not (Test-Path -LiteralPath $dshCli -PathType Leaf)) {
     throw "DSH CLI was not found at $dshCli. Configure DSH_CREW_DSH_CLI to a Crew-owned official CLI entry, or run: npm install -g @ran-sh/dsh-crew@latest; dsh-crew update"

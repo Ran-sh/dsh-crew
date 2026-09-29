@@ -13,6 +13,12 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CODEX_LEGACY_POLICY_HASHES, MCP_TOOLS, claudeCliInvocation, claudeIntegrationLine, claudeSnapshotSettleMs, codexHomeDir, codexLegacyPolicyDigest, installClaudeCode, installCodex, installStatus, managedClaudeFileManifest, pickClaudeCommand, runClaudeStep, stripKnownLegacyCodexPolicy, uninstallCodex, writeGlobalCodexMcpServer } from '../src/install/install.mjs';
 
+// The Claude integration is gated on the host actually having the `claude` CLI —
+// a machine without it must not have its `~/.claude` written to at all. Fixtures
+// below exercise what the installer writes, so they declare that precondition;
+// the absent-CLI behavior is asserted in installer.test.mjs.
+const claudePresent = () => 'claude.cmd';
+
 // Paths must arrive as arguments. `JSON.stringify` quotes for JSON, not for a
 // command processor, so a path containing `%NAME%` was expanded by the shell
 // before the CLI ever saw it — the install reported success and acted on a
@@ -50,7 +56,7 @@ test('a corrupt settings file is reported and left alone, not rebuilt empty', as
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(settingsFile, '{ "enabledPlugins": ');
     const before = readFileSync(settingsFile, 'utf8');
-    const r = await installClaudeCode({ home, root });
+    const r = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'CLAUDE_SETTINGS_UNREADABLE');
     assert.equal(readFileSync(settingsFile, 'utf8'), before, 'the operator\'s file is untouched');
@@ -223,7 +229,7 @@ test('the already-current fast path requires the snapshot to resolve too', async
     writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
       'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
     } }));
-    const r = await installClaudeCode({ home, root });
+    const r = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(!r.actions.includes('cli: skipped (registered marketplace and snapshot already current)'),
       'a snapshot the status surface reads as not ready is not "already current"');
     assert.equal(installStatus({ home, root, env: {} }).claude.components.snapshot, false);
@@ -279,7 +285,7 @@ test('a project-scope plugin record does not stand in for the user-scope install
     const status = installStatus({ home, root, env: {} }).claude;
     assert.equal(status.components.snapshot, false, 'a project-scope record is not this installer\'s install');
     assert.equal(status.ready, false);
-    const r = await installClaudeCode({ home, root });
+    const r = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(!r.actions.includes('cli: skipped (registered marketplace and snapshot already current)'),
       'the installer must not treat a project-scope record as an install it can skip');
   } finally { rmSync(home, { recursive: true, force: true }); }
@@ -295,7 +301,7 @@ test('an unwritable settings path fails the integration instead of throwing', as
     makeClaudePluginRoot(root, 'same');
     // `.claude` exists as a FILE, so the settings path under it cannot be created
     writeFileSync(join(home, '.claude'), 'not a directory\n');
-    const r = await installClaudeCode({ home, root });
+    const r = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'CLAUDE_SETTINGS_UNWRITABLE');
     assert.match(claudeIntegrationLine(r), /^✗ /, 'and the entries render it as the failure it is');
@@ -418,25 +424,25 @@ test('Claude reinstall skips CLI only for matching registered marketplace and sn
     writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
       'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
     } }));
-    const ready = await installClaudeCode({ home, root });
+    const ready = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(ready.actions.includes('cli: skipped (registered marketplace and snapshot already current)'));
     writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
       'dsh-crew@dsh-crew': [{ scope: 'project', installPath: snapshot }],
     } }));
-    const projectOnly = await installClaudeCode({ home, root });
+    const projectOnly = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(projectOnly.actions.includes('cli: skipped (non-default home; test mode)'));
     writeFileSync(join(plugins, 'installed_plugins.json'), JSON.stringify({ plugins: {
       'dsh-crew@dsh-crew': [{ scope: 'user', installPath: snapshot }],
     } }));
     writeRegistry(join(home, 'other'));
-    const staleRegistry = await installClaudeCode({ home, root });
+    const staleRegistry = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(staleRegistry.actions.includes('cli: skipped (non-default home; test mode)'));
     writeRegistry(root);
     writeFileSync(join(snapshot, 'src', 'server.mjs'), 'changed');
-    const staleSnapshot = await installClaudeCode({ home, root });
+    const staleSnapshot = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(staleSnapshot.actions.includes('cli: skipped (non-default home; test mode)'));
     rmSync(registry);
-    const missing = await installClaudeCode({ home, root });
+    const missing = await installClaudeCode({ home, root, resolveClaude: claudePresent });
     assert.ok(missing.actions.includes('cli: skipped (non-default home; test mode)'));
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

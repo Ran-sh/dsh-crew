@@ -4,6 +4,51 @@
 
 Future changes go here.
 
+## 2.2.7 — 2026-09-29
+
+- **Claude Code is registered only on a host that has the CLI.** The integration
+  exists to make Crew callable *from* Claude Code, so writing it on a machine
+  without the `claude` CLI left Crew's marketplace, plugin entry and permission
+  rules in a file Crew could never exercise — a footprint that read back as an
+  integration wanting something the machine does not have. `installClaudeCode`
+  now probes once, up front, and writes nothing when the CLI is absent, returning
+  the "not installed" result instead. Uninstall gained the other half of the
+  contract: a Crew-scoped cleanup that removes Crew's settings entries, the
+  pre-rename `dsh-workers` identity, a Crew-installed status line and the CLI's
+  own `known_marketplaces.json` / `installed_plugins.json` records, while every
+  unrelated key, plugin and file survives.
+- **The launcher log is bounded.** Every launch appended to
+  `%TEMP%\dsh-crew-launcher.log` for the life of the machine while only its tail
+  was ever read. It now rotates at launch once it passes 5 MiB, keeping two
+  generations (`dsh-crew-launcher.log`, `.1`, `.2`); the rotation is best-effort,
+  so a locked or unreadable log can never stop a launch. The hub-start diagnostic
+  pairs keep the newest **10** runs (down from 20) plus the existing 14-day bound,
+  which is the post-mortem window an operator actually reads.
+- **The built-in DeepSeek rows read `NOT_APPLICABLE` when another route is
+  selected.** Under `follow-dsh` with a known, other provider they can never gather
+  evidence, and 2.2.4's `SKIP`/`ROUTE_NOT_SELECTED` still read as a check that had
+  been passed over. They are now `NOT_APPLICABLE` / `WORKER_PROVIDER_FOLLOWS_DSH`:
+  kept in the matrix so the question stays visibly answered, counted in the
+  summary, and unable to lower the readiness aggregate — a status the extension
+  contract reports as itself rather than folding into "degraded". An unknown
+  selection stays `NOT_RUN`.
+- **`status` says where the frontend stands.** 3210 is the service and 3080 is
+  started on demand, so the row reads `available on demand (dsh-crew open)` — or
+  `auto-started at login` when `frontend_autostart` is set — instead of leaving the
+  operator to guess whether 3080's absence means something is missing. Whether 3080
+  happens to be listening is not a readiness component and never degrades one.
+- **Aging model evidence reads as aging, not as invalid.** The validator's success
+  code `MODEL_CALLABILITY_VALID` was rendered beside `DEGRADED`, which read as a
+  contradiction; an unproven route now reports `MODEL_CALLABILITY_UNKNOWN` and a
+  stale one `MODEL_EVIDENCE_STALE`. The execution window itself is unchanged:
+  it is renewed by real successful jobs (T+4m59s carries validity to T+9m59s),
+  scoped to the current hub runtime, and a failed, cancelled or foreign-runtime run
+  never renews it — now pinned by tests.
+- **Lone CR is a line ending too.** The launcher and frontend-snapshot content
+  checks normalized CRLF only, so a file saved with classic-Mac endings read as
+  drifted content and asked for a repair. Both now normalize `\r\n` and lone `\r`;
+  binary inputs are still compared byte for byte.
+
 ## 2.2.6 — 2026-09-29
 
 - **The login-path frontend autostart is a panel toggle.** `frontend_autostart` was

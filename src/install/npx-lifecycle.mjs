@@ -3327,6 +3327,15 @@ export function npxStatus({
   }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile on 3210)`);
   log(`Official 3080 UI bridge: ${officialWeb}`);
+  // The frontend is not an install that can be missing: 3210 is the service, and
+  // 3080 is started on demand. Saying so is the difference between "this machine is
+  // incomplete" and "run `dsh-crew open` when you want the browser surface" — and
+  // whether 3080 happens to be up right now does not change either answer.
+  const frontendConfig = (installer.readGlobalConfig ?? realInstaller.readGlobalConfig)({ configFile: join(home, '.config', 'dsh-crew', 'config.json') });
+  const frontend = frontendConfig?.frontend_autostart === true
+    ? 'auto-started at login (dsh-crew open for a session URL)'
+    : 'available on demand (dsh-crew open)';
+  log(`Frontend (3080): ${frontend}`);
   // The desktop app carries its own bridge entry, which pins a revision: after a
   // payload update that entry is stale until it is re-pointed, so say which of the
   // three states the machine is in instead of leaving the panel silently old.
@@ -3349,6 +3358,7 @@ export function npxStatus({
     installedPath: pointer?.path ?? null,
     dshPlugin,
     officialWeb,
+    frontend,
     codex,
     zcode,
     claude,

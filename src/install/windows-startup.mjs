@@ -129,9 +129,12 @@ function sha256File(file) {
 // Git checks these scripts out as CRLF on a `core.autocrlf=true` machine and
 // PowerShell accepts either, so a line-ending difference is not a difference this
 // check may report: comparing raw bytes made every Windows dev checkout read as
-// "needs repair" while the npm payload (LF) was installed correctly.
+// "needs repair" while the npm payload (LF) was installed correctly. Lone CR is
+// collapsed too — an editor that saved one of these files with classic-Mac
+// endings is still the same script, and only a real character difference should
+// send the operator to a repair step.
 function normalizeEol(text) {
-  return String(text).replace(/\r\n/g, '\n');
+  return String(text).replace(/\r\n?/g, '\n');
 }
 
 function samePath(left, right) {

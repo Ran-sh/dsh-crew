@@ -5,7 +5,7 @@
 // (Hub handshake / catalog read) are intentionally separate from execution
 // verification (real worker, reviewer, cancellation, timeout, etc.).
 
-const READINESS_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_RUN']);
+const READINESS_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_APPLICABLE', 'NOT_RUN']);
 
 export const READINESS_REASON_CODES = Object.freeze({
   LIVE_CHECK_PASSED: 'LIVE_CHECK_PASSED',
@@ -22,7 +22,7 @@ export const READINESS_REASON_CODES = Object.freeze({
   NO_CI_EVIDENCE: 'NO_CI_EVIDENCE',
   NO_EXECUTION_EVIDENCE: 'NO_EXECUTION_EVIDENCE',
   CREDENTIAL_STATUS_NOT_PROBED: 'CREDENTIAL_STATUS_NOT_PROBED',
-  ROUTE_NOT_SELECTED: 'ROUTE_NOT_SELECTED',
+  WORKER_PROVIDER_FOLLOWS_DSH: 'WORKER_PROVIDER_FOLLOWS_DSH',
   EVIDENCE_REPORTED: 'EVIDENCE_REPORTED',
 });
 
@@ -166,15 +166,18 @@ export function buildReadinessMatrix({
   // The two built-in DeepSeek rows describe a route only when the operator runs
   // it. Under follow-dsh with a KNOWN, other selected provider they can never
   // gather evidence, and NOT_RUN reads like a check that should have run rather
-  // than a route that was never chosen. An unknown selection stays NOT_RUN: this
-  // matrix is conservative, and "we could not tell" must not read as "not
-  // applicable". Reported evidence still wins, because it is applied below.
+  // than a route that was never chosen. They are reported NOT_APPLICABLE: the rows
+  // stay in the matrix (dropping them would hide that the question was asked and
+  // answered), and neither status can move the aggregate — only a FAIL, an
+  // UNPROVEN row or an UNAVAILABLE component does. An unknown selection stays
+  // NOT_RUN: this matrix is conservative, and "we could not tell" must not read as
+  // "not applicable". Reported evidence still wins, because it is applied below.
   const selectionKnown = typeof workerSelection?.provider === 'string' && workerSelection.provider.length > 0;
   const deepseekRouteSelected = workerProviderMode === 'deepseek-official'
     || workerSelection?.provider === 'deepseek-official';
   if (workerProviderMode !== null && selectionKnown && !deepseekRouteSelected) {
     for (const id of ['deepseek_flash', 'deepseek_pro']) {
-      rows[id] = baseRow(id, 'real-execution', 'SKIP', READINESS_REASON_CODES.ROUTE_NOT_SELECTED, 'runtime-policy');
+      rows[id] = baseRow(id, 'real-execution', 'NOT_APPLICABLE', READINESS_REASON_CODES.WORKER_PROVIDER_FOLLOWS_DSH, 'runtime-policy');
     }
   }
 

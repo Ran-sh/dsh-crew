@@ -10,7 +10,7 @@ import { readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-export const DEFAULT_KEEP_RUNS = 20;
+export const DEFAULT_KEEP_RUNS = 10;
 export const DEFAULT_MAX_AGE_DAYS = 14;
 const RECENT_GUARD_MS = 5 * 60 * 1000;
 

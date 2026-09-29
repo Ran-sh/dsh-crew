@@ -384,11 +384,19 @@ export async function setupStatus({ log = console.log, root = ROOT, home = homed
     } catch { dshPlugin = 'unknown'; }
   }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile; official web profile ignored)`);
+  // The frontend is on-demand by design: 3210 is the service, and 3080 is started
+  // for a browser session. Rendering it as anything else reads as a missing piece
+  // of the installation, which it is not.
+  const frontendConfig = (installer.readGlobalConfig ?? realInstaller.readGlobalConfig)({ configFile: join(home, '.config', 'dsh-crew', 'config.json') });
+  const frontend = frontendConfig?.frontend_autostart === true
+    ? 'auto-started at login (dsh-crew open for a session URL)'
+    : 'available on demand (dsh-crew open)';
+  log(`Frontend (3080): ${frontend}`);
   log(`Codex Desktop integration: ${codex}`);
   log(`ZCode integration: ${zcode}`);
   log(`Claude Code integration: ${claude}`);
   log(`Windows login startup: ${windowsStartup}`);
-  return { ok: true, dshPlugin, codex, zcode, claude, windowsStartup };
+  return { ok: true, dshPlugin, frontend, codex, zcode, claude, windowsStartup };
 }
 
 export async function runSetupCli({ argv = process.argv.slice(2), run: actions = {}, log = console.log } = {}) {

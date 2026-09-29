@@ -17,6 +17,14 @@ import { integrationRoot } from './crew-paths.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MARKETPLACE_NAME = 'dsh-crew';
 const PLUGIN_KEY = `dsh-crew@${MARKETPLACE_NAME}`;
+// Every name this installer has ever registered Crew under in a Claude host, and
+// the only names its uninstall may remove. `dsh-workers` is the pre-rename
+// identity: an operator who upgraded keeps that marketplace, plugin entry and its
+// permission rules until the same uninstall cleans them, and nothing else in the
+// file is Crew's to touch.
+const CREW_CLAUDE_MARKETPLACES = [MARKETPLACE_NAME, 'dsh-workers'];
+const CREW_CLAUDE_PLUGIN_KEYS = [PLUGIN_KEY, 'dsh-workers@dsh-workers'];
+const CREW_CLAUDE_PERMISSION_PREFIXES = ['mcp__plugin_dsh-crew_', 'mcp__plugin_dsh-workers_'];
 // A Claude Code plugin refresh is a real copy of the plugin tree, and its cost
 // tracks machine load: 163s measured idle, ~6 minutes measured during an
 // activation. The install is the step that copies, so it gets the ceiling that
@@ -645,7 +653,7 @@ export function uninstallCodex({ home = homedir(), env = process.env } = {}) {
 export function claudeIntegrationLine(result) {
   if (result?.ok === false) return '✗ Claude Code integration failed';
   if (result?.detected === false) {
-    return '- Claude Code not detected; settings registered, CLI step skipped';
+    return '- Claude Code not installed (claude CLI not found); nothing written';
   }
   if (result?.degraded === true) {
     return `- Claude Code integration registered, but not loaded: ${result.reason ?? 'plugin snapshot not refreshed'}`;
@@ -906,8 +914,21 @@ export async function runClaudeStep(args, { timeoutMs = CLAUDE_STEP_TIMEOUT_MS, 
   };
 }
 
-export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT } = {}) {
+export async function installClaudeCode({ home = homedir(), statusline = false, root = ROOT, resolveClaude = resolveClaudeCommand } = {}) {
   const actions = [];
+
+  // This registration exists only to make Crew callable FROM Claude Code, so a
+  // host without the `claude` CLI has nothing for it to serve. Writing it anyway
+  // left Crew's marketplace, plugin entry and permission rules in a file Crew
+  // could never exercise, next to a footprint that read back as an integration
+  // wanting a CLI the machine does not have. Detect once, up front, and write
+  // nothing when the host cannot use it: `host_detected` then reports the truth
+  // with no stale registration to explain away.
+  const claudeCommand = resolveClaude();
+  if (!claudeCommand) {
+    actions.push('claude CLI not found; no Claude configuration written');
+    return { ok: true, detected: false, actions };
+  }
 
   // The repository carries its own marketplace manifest (.claude-plugin/
   // marketplace.json with source "."), so the marketplace root IS the plugin
@@ -999,7 +1020,8 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
   // Materialize the install through the claude CLI: registers the marketplace
   // in the plugin cache (settings alone leave a stale/absent cache entry) and
   // pulls the plugin so the next session loads it. Best-effort: settings are
-  // already correct, so a missing CLI just means one manual `plugin install`.
+  // already correct, so a CLI that fails on its own terms leaves the operator one
+  // manual `plugin install` short rather than an unregistered host.
   const registered = readJson(join(home, '.claude', 'plugins', 'known_marketplaces.json'), {})?.[MARKETPLACE_NAME];
   const installedRecord = readJson(join(home, '.claude', 'plugins', 'installed_plugins.json'), {})?.plugins?.[PLUGIN_KEY];
   const installedEntries = Array.isArray(installedRecord) ? installedRecord : [installedRecord];
@@ -1019,14 +1041,9 @@ export async function installClaudeCode({ home = homedir(), statusline = false, 
     actions.push('cli: skipped (non-default home; test mode)');
     return { ok: true, actions };
   }
-  // The CLI is best-effort, but a host that does not have it must not be told to
-  // run it. The checkout entry already gates on this; doing it here too keeps the
-  // two entries describing the same machine the same way.
-  const claudeCommand = resolveClaudeCommand();
-  if (!claudeCommand) {
-    actions.push('cli: skipped (claude not found)');
-    return { ok: true, detected: false, actions };
-  }
+  // `claudeCommand` was resolved before anything was written: reaching this line
+  // already proves the CLI is there, so the step is best-effort rather than
+  // possibly-pointless.
   return refreshClaudePlugin({ home, root, actions, claudeCommand });
 }
 
@@ -1230,25 +1247,76 @@ export function installHudSegment({ home = homedir() } = {}) {
   return { ok: true, actions: [...(bak ? [`backup: ${bak}`] : []), 'statusLine: claude-hud now runs worker-segment.sh via --extra-cmd'] };
 }
 
+// Only the status line `--statusline` installs is Crew's to remove: it points at
+// Crew's own script. Any other status line in the file belongs to whoever
+// configured it, even when it happens to name this checkout.
+function crewOwnedStatusLine(value) {
+  const command = typeof value?.command === 'string' ? value.command : '';
+  return command.includes('statusline.sh') && command.includes('dsh-crew');
+}
+
+// The claude CLI records, per marketplace and plugin, what it materialized, in
+// files of its own. Unregistering the settings and leaving those records behind
+// hands the next install a snapshot with no owner, so an explicit uninstall
+// clears them too. Crew-scoped and best-effort: a file that is absent, unreadable
+// or shaped differently than expected is left exactly as it is found.
+function removeCrewClaudeCacheRecords({ home, actions }) {
+  const dir = join(home, '.claude', 'plugins');
+  const marketsFile = join(dir, 'known_marketplaces.json');
+  const markets = readJson(marketsFile, null);
+  if (markets && typeof markets === 'object' && !Array.isArray(markets)) {
+    const owned = CREW_CLAUDE_MARKETPLACES.filter((name) => Object.hasOwn(markets, name));
+    if (owned.length) {
+      backup(marketsFile);
+      for (const name of owned) delete markets[name];
+      writeFileSync(marketsFile, JSON.stringify(markets, null, 2) + '\n');
+      actions.push(`marketplace cache: removed ${owned.join(', ')}`);
+    }
+  }
+  const pluginsFile = join(dir, 'installed_plugins.json');
+  const installed = readJson(pluginsFile, null);
+  if (installed && typeof installed === 'object' && !Array.isArray(installed)
+    && installed.plugins && typeof installed.plugins === 'object' && !Array.isArray(installed.plugins)) {
+    const owned = CREW_CLAUDE_PLUGIN_KEYS.filter((key) => Object.hasOwn(installed.plugins, key));
+    if (owned.length) {
+      backup(pluginsFile);
+      for (const key of owned) delete installed.plugins[key];
+      writeFileSync(pluginsFile, JSON.stringify(installed, null, 2) + '\n');
+      actions.push(`plugin cache: removed ${owned.join(', ')}`);
+    }
+  }
+}
+
 export function uninstallClaudeCode({ home = homedir() } = {}) {
+  const actions = [];
   const settingsFile = join(home, '.claude', 'settings.json');
   const settings = readJson(settingsFile, null);
-  if (!settings) return { ok: true, actions: ['settings.json not found'] };
-  backup(settingsFile);
-  const mpDir = join(home, '.config', 'dsh-crew', 'marketplace');
-  if (Array.isArray(settings.extraKnownMarketplaces)) {
-    settings.extraKnownMarketplaces = settings.extraKnownMarketplaces.filter((m) => m?.path !== mpDir);
-  } else if (settings.extraKnownMarketplaces) {
-    delete settings.extraKnownMarketplaces[MARKETPLACE_NAME];
+  if (settings) {
+    backup(settingsFile);
+    const mpDir = join(home, '.config', 'dsh-crew', 'marketplace');
+    if (Array.isArray(settings.extraKnownMarketplaces)) {
+      settings.extraKnownMarketplaces = settings.extraKnownMarketplaces.filter((m) => m?.path !== mpDir);
+    } else if (settings.extraKnownMarketplaces) {
+      for (const name of CREW_CLAUDE_MARKETPLACES) delete settings.extraKnownMarketplaces[name];
+    }
+    if (Array.isArray(settings.enabledPlugins)) {
+      settings.enabledPlugins = settings.enabledPlugins.filter((p) => !CREW_CLAUDE_PLUGIN_KEYS.includes(p));
+    } else if (settings.enabledPlugins) {
+      for (const key of CREW_CLAUDE_PLUGIN_KEYS) delete settings.enabledPlugins[key];
+    }
+    if (settings.permissions?.allow) {
+      settings.permissions.allow = settings.permissions.allow.filter((rule) => typeof rule !== 'string'
+        || !CREW_CLAUDE_PERMISSION_PREFIXES.some((prefix) => rule.startsWith(prefix)));
+    }
+    if (crewOwnedStatusLine(settings.statusLine)) {
+      delete settings.statusLine;
+      actions.push('statusLine: removed (Crew-installed)');
+    }
+    writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    actions.push('unregistered from settings.json (backup kept)');
+  } else {
+    actions.push('settings.json not found');
   }
-  if (Array.isArray(settings.enabledPlugins)) {
-    settings.enabledPlugins = settings.enabledPlugins.filter((p) => p !== PLUGIN_KEY);
-  } else if (settings.enabledPlugins) {
-    delete settings.enabledPlugins[PLUGIN_KEY];
-  }
-  if (settings.permissions?.allow) {
-    settings.permissions.allow = settings.permissions.allow.filter((r) => !r.startsWith('mcp__plugin_dsh-crew_'));
-  }
-  writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
-  return { ok: true, actions: ['unregistered from settings.json (backup kept)'] };
+  removeCrewClaudeCacheRecords({ home, actions });
+  return { ok: true, actions };
 }

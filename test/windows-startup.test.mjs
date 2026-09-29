@@ -212,6 +212,14 @@ test('a CRLF checkout is not a repair target when the installed files are LF', (
     const afterCheckout = ready();
     assert.equal(afterCheckout.ready, true, `line endings are not a repairable difference: ${afterCheckout.missing.join(', ')}`);
 
+    // A save with classic-Mac endings (lone CR, no LF) is the same script too.
+    for (const name of ['start-dsh-crew.cmd', 'start-dsh-crew.ps1', 'supervisor-control.ps1']) {
+      const file = join(f.root, 'windows', name);
+      writeFileSync(file, readFileSync(file, 'utf8').replace(/\r\n/g, '\r'));
+    }
+    const afterCrSave = ready();
+    assert.equal(afterCrSave.ready, true, `lone CR is a line ending, not a content difference: ${afterCrSave.missing.join(', ')}`);
+
     // A real content change still fails closed.
     writeFileSync(join(f.root, 'windows', 'start-dsh-crew.ps1'), '# tampered\n');
     assert.equal(ready().ready, false);

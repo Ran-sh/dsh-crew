@@ -129,16 +129,19 @@ test('invalid evidence status is ignored rather than broadening the matrix contr
 
 // The built-in DeepSeek rows describe a route only when the operator runs it.
 // Under follow-dsh with a KNOWN other provider they can never gather evidence, and
-// NOT_RUN reads like a check that should have run rather than a route never chosen;
-// an unknown selection stays conservative.
-test('built-in DeepSeek rows are skipped for another known route and kept otherwise', () => {
+// NOT_RUN reads like a check that should have run rather than a route never chosen.
+// They stay in the matrix as NOT_APPLICABLE — answered, not forgotten — and an
+// unknown selection stays conservative.
+test('built-in DeepSeek rows are not applicable for another known route and kept otherwise', () => {
   const skipped = buildReadinessMatrix({
     workerProviderMode: 'follow-dsh',
     workerSelection: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
   });
-  assert.equal(row(skipped, 'deepseek_flash').status, 'SKIP');
-  assert.equal(row(skipped, 'deepseek_flash').reason_code, READINESS_REASON_CODES.ROUTE_NOT_SELECTED);
-  assert.equal(row(skipped, 'deepseek_pro').status, 'SKIP');
+  assert.equal(row(skipped, 'deepseek_flash').status, 'NOT_APPLICABLE');
+  assert.equal(row(skipped, 'deepseek_flash').reason_code, READINESS_REASON_CODES.WORKER_PROVIDER_FOLLOWS_DSH);
+  assert.equal(row(skipped, 'deepseek_pro').status, 'NOT_APPLICABLE');
+  assert.equal(skipped.summary.NOT_APPLICABLE, 2, 'the rows are counted, not dropped');
+  assert.equal(skipped.summary.FAIL, 0, 'and nothing about them fails');
 
   const deepseek = buildReadinessMatrix({
     workerProviderMode: 'follow-dsh',

@@ -32,6 +32,10 @@ function workspaceComponent(workspace) {
 function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
   if (!entry) return component('UNAVAILABLE', 'NO_EVIDENCE');
   if (entry.status === 'PASS') return component(pass, entry.reason_code ?? 'CHECK_PASSED');
+  // A row that does not apply to this machine is reported as such, not as a check
+  // that has not run: NOT_APPLICABLE says the question was answered, and it cannot
+  // pull the aggregate down (see the readiness roll-up below).
+  if (entry.status === 'NOT_APPLICABLE') return component('NOT_APPLICABLE', entry.reason_code ?? 'CHECK_NOT_APPLICABLE');
   if (entry.status === 'NOT_RUN' || entry.status === 'SKIP') return component(notRun, entry.reason_code ?? 'CHECK_NOT_RUN');
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }
@@ -50,7 +54,12 @@ function modelReadinessFromSnapshot(readinessSnapshot, matrix, runtime, expected
     });
     if (validation.ok && validation.state === 'CALLABLE') return component('READY', 'CURRENT_MODEL_CALLABLE', { captured_at: callability.captured_at, expires_at: callability.expires_at, runtime_id: callability.current_runtime_id });
     if (validation.ok && validation.state === 'NOT_CALLABLE') return component('UNAVAILABLE', callability.roles.worker?.state === 'NOT_CALLABLE' ? callability.roles.worker.reason_code : callability.roles.reviewer.reason_code ?? 'CURRENT_MODEL_NOT_CALLABLE');
+    // Aging evidence is reported as aging, not as a fault, and "nothing has proven
+    // this route yet" is reported as unknown. The validator's own success code is
+    // `MODEL_CALLABILITY_VALID`, and rendering that next to DEGRADED read as a
+    // contradiction: the projection was valid, the evidence was simply not current.
     if (validation.ok && validation.state === 'STALE') return component('DEGRADED', 'MODEL_EVIDENCE_STALE');
+    if (validation.ok) return component('DEGRADED', 'MODEL_CALLABILITY_UNKNOWN');
     return component('DEGRADED', validation.reason_code ?? 'MODEL_CALLABILITY_UNKNOWN');
   }
   if (providerHealthEvidence?.status === 'FAIL') return readinessFromRow(providerHealthEvidence);

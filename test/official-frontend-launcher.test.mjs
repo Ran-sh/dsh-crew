@@ -310,3 +310,39 @@ maybe('the frontend autostart flag is opt-in and fails closed', () => {
   const source = readFileSync(helper, 'utf8');
   assert.match(source, /if \(\$Mode -ne 'open' -and \(Test-CrewFrontendAutostart\)\) \{ Start-CrewFrontendFromLogin \}/);
 });
+
+// Every launch appends to one file for the life of the machine, so it grows without
+// bound while only its tail is ever read. Rotation keeps the generation being
+// written and the one before it, and is best-effort: it must never stop a launch.
+maybe('the launcher log rotates at 5 MiB and keeps two generations', () => {
+  const env = launcherSandboxEnv();
+  const log = join(env.TEMP, 'dsh-crew-launcher.log');
+  const oversized = 'x'.repeat(5 * 1024 * 1024 + 1);
+  writeFileSync(log, oversized);
+  writeFileSync(`${log}.1`, 'previous generation\n');
+  writeFileSync(`${log}.2`, 'oldest generation\n');
+
+  const result = frontendScenario([
+    'Rotate-LaunchLog',
+    // `Get-Content` output carries provider note properties, which ConvertTo-Json
+    // would serialize as a wrapper object instead of the string.
+    `@{current=[IO.File]::Exists('${log}'); rotatedBytes=[IO.File]::ReadAllBytes('${log}.1').Length; oldest=[IO.File]::ReadAllText('${log}.2')} | ConvertTo-Json -Compress`,
+  ].join('\n'), env);
+  assert.equal(result.current, false, 'the oversized log is moved aside, not appended to');
+  assert.equal(result.rotatedBytes, oversized.length, 'and it is moved whole');
+  assert.equal(result.oldest, 'previous generation\n', 'the older generation moved down and the one before it is dropped');
+});
+
+maybe('a launcher log under the cap is appended to, not rotated', () => {
+  const env = launcherSandboxEnv();
+  const log = join(env.TEMP, 'dsh-crew-launcher.log');
+  writeFileSync(log, 'small\n');
+
+  const result = frontendScenario([
+    'Rotate-LaunchLog',
+    `@{kept=[IO.File]::Exists('${log}'); content=[IO.File]::ReadAllText('${log}'); previous=[IO.File]::Exists('${log}.1')} | ConvertTo-Json -Compress`,
+  ].join('\n'), env);
+  assert.equal(result.kept, true, 'a log that fits is left in place — rotation is deterministic, not per launch');
+  assert.equal(result.content, 'small\n');
+  assert.equal(result.previous, false, 'and nothing is created beside it');
+});

@@ -96,3 +96,59 @@ test('future-dated provider health is never callable', () => {
   assert.equal(result.roles.worker.state, 'STALE');
   assert.equal(result.roles.worker.reason_code, 'PROVIDER_HEALTH_STALE_OR_INVALID');
 });
+
+// The execution window is refreshed by real work, not by a clock. A probe at T0
+// is one second from expiry at T+4m59s; a job that actually ran the route at
+// T+4m59s carries validity to T+9m59s. Without this, a hub that is working reads
+// as stale five minutes after its last probe — and a longer fixed TTL would only
+// postpone the same false degradation.
+test('a completed job renews the execution window, and work that did not run does not', () => {
+  const ttl = 300_000;
+  const job = (id, endedMs, extra = {}) => ({ id, role: 'worker', provider: 'p', model: 'm',
+    status: 'done', task_status: 'success', endedAt: new Date(endedMs).toISOString(), execution_context: runtime, ...extra });
+  const project = (now, jobs) => projectModelCallability({ ...base, now, jobs, execution_evidence_ttl_ms: ttl });
+
+  const spanned = project(0, [job('job-1', 0)]);
+  assert.equal(spanned.roles.worker.state, 'CALLABLE');
+  assert.equal(spanned.roles.worker.expires_at, 300_000);
+  assert.equal(project(299_000, [job('job-1', 0)]).roles.worker.state, 'CALLABLE');
+
+  const renewed = project(299_000, [job('job-1', 0), job('job-2', 299_000)]);
+  assert.equal(renewed.roles.worker.state, 'CALLABLE');
+  assert.equal(renewed.roles.worker.expires_at, 599_000, 'a success at T+4m59s is valid until T+9m59s');
+  assert.equal(renewed.roles.worker.last_success.job_id, 'job-2');
+  assert.equal(renewed.roles.worker.observed_at, 299_000);
+
+  // A run that did not execute the route is not evidence that it works: it neither
+  // renews the window nor becomes the last success.
+  const notEvidence = [
+    job('job-failed', 299_000, { task_status: 'failed' }),
+    job('job-cancelled', 299_000, { status: 'cancelled' }),
+    job('job-running', 299_000, { status: 'running', task_status: null }),
+    job('job-reviewer', 299_000, { role: 'reviewer' }),
+    job('job-other-model', 299_000, { model: 'm2' }),
+  ];
+  const withNoise = project(299_000, [job('job-1', 0), ...notEvidence]);
+  assert.equal(withNoise.roles.worker.state, 'CALLABLE', 'the earlier success still governs');
+  assert.equal(withNoise.roles.worker.last_success.job_id, 'job-1');
+  assert.equal(withNoise.roles.worker.expires_at, 300_000);
+
+  const pastWindow = project(300_001, [job('job-1', 0), ...notEvidence]);
+  assert.equal(pastWindow.roles.worker.state, 'STALE', 'no success beyond the TTL means stale, not renewed');
+  assert.equal(pastWindow.roles.worker.reason_code, 'EXECUTION_EVIDENCE_EXPIRED');
+});
+
+// The window belongs to the runtime that earned it. A job from the hub this one
+// replaced says nothing about this hub, so it must not renew it — a restart would
+// otherwise inherit callability from a process that no longer exists.
+test('a previous hub runtime cannot renew the current execution window', () => {
+  const ttl = 300_000;
+  const job = (id, endedMs, executionContext) => ({ id, role: 'worker', provider: 'p', model: 'm',
+    status: 'done', task_status: 'success', endedAt: new Date(endedMs).toISOString(), execution_context: executionContext });
+  const result = projectModelCallability({ ...base, now: 299_000, execution_evidence_ttl_ms: ttl,
+    jobs: [job('job-1', 0, runtime), job('job-old-hub', 299_000, { ...runtime, runtime_id: 'old' })],
+  });
+  assert.equal(result.roles.worker.state, 'CALLABLE');
+  assert.equal(result.roles.worker.last_success.job_id, 'job-1', 'the old hub\'s success is not this hub\'s');
+  assert.equal(result.roles.worker.expires_at, 300_000, 'and it does not extend this hub\'s window');
+});

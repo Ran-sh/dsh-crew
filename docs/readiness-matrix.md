@@ -12,9 +12,16 @@ The matrix is emitted by `hubStatus()` and is therefore visible inside the exist
 - `FAIL` — a check actually ran and produced an incompatible or failed result.
 - `BLOCKED` — the check could not run because required infrastructure or authorization was unavailable.
 - `SKIP` — the row is intentionally not applicable for the active policy/path.
+- `NOT_APPLICABLE` — the row asks about a route this machine does not use, and the
+  matrix says so instead of omitting it. The two built-in DeepSeek rows are the live
+  case: they read `NOT_APPLICABLE` / `WORKER_PROVIDER_FOLLOWS_DSH` whenever a known,
+  other provider is selected, and keep `NOT_RUN` when the selection is unknown.
 - `NOT_RUN` — no trusted evidence has been supplied for the row.
 
-`BLOCKED` and `SKIP` are not failures. `NOT_RUN` is not success.
+`BLOCKED` and `SKIP` are not failures. `NOT_RUN` is not success, and `NOT_APPLICABLE`
+is an answer: it is reported as itself on any component that consumes the row, and it
+cannot lower the readiness aggregate — only a `FAIL`, an unproven row or an
+`UNAVAILABLE` component does.
 
 ## Evidence classes
 
@@ -61,7 +68,7 @@ actually run" — `provider_health`, `reviewer_health`, `model_execution`,
 `worker_primary_callable`, `reviewer_primary_callable`, `reviewer_pipeline` — is
 filtered to whatever route is currently selected, so an operator on other
 providers is covered by those and loses nothing by the two DeepSeek rows
-reading `NOT_RUN`. A static row per provider was tried and replaced by these
+reading `NOT_APPLICABLE` under `follow-dsh`. A static row per provider was tried and replaced by these
 dynamic signals; `opencode_go_mimo_qwen` was that attempt's last trace in this
 document.
 

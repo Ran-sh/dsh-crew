@@ -48,7 +48,8 @@ test('a CRLF checkout is not a drifted snapshot, but changed bytes still are', (
     writeFileSync(join(bridge, 'lib', 'client.js'), 'client v1\n');
     writeFileSync(join(bridge, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew-web-bridge', version: '1', exports: { './client': './lib/client.js' } }));
     writeFileSync(join(root, 'src', 'local-request-guard.mjs'), 'export {};\n');
-    assert.equal(frontend.installOfficialFrontendAssets({ home, root }).ok, true);
+    const lfRevision = frontend.installOfficialFrontendAssets({ home, root }).revision;
+    assert.equal(lfRevision, frontend.installOfficialFrontendAssets({ home, root }).revision);
     assert.equal(frontend.officialFrontendAssetsReady({ home, root }), true);
 
     // A fresh clone rewrites the checkout with CRLF.
@@ -57,6 +58,17 @@ test('a CRLF checkout is not a drifted snapshot, but changed bytes still are', (
       writeFileSync(file, readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
     }
     assert.equal(frontend.officialFrontendAssetsReady({ home, root }), true, 'line endings are not drift');
+    assert.equal(frontend.installOfficialFrontendAssets({ home, root }).revision, lfRevision, 'a CRLF checkout canonicalizes to the same revision');
+
+    // A save with classic-Mac endings (lone CR, no LF) is the same source too, and
+    // it must land on the same canonical revision: a second revisions/ directory
+    // per line ending is exactly the drift this normalization exists to prevent.
+    for (const rel of ['official-web-bridge/overlay-entry.mjs', 'official-web-bridge/lib/client.js', 'src/local-request-guard.mjs']) {
+      const file = join(root, ...rel.split('/'));
+      writeFileSync(file, readFileSync(file, 'utf8').replace(/\r\n/g, '\r'));
+    }
+    assert.equal(frontend.officialFrontendAssetsReady({ home, root }), true, 'lone CR is not drift');
+    assert.equal(frontend.installOfficialFrontendAssets({ home, root }).revision, lfRevision, 'lone CR canonicalizes to the same revision');
 
     // A real content change is still drift, and so is a snapshot with extra bytes.
     writeFileSync(join(bridge, 'lib', 'client.js'), 'client v2\n');

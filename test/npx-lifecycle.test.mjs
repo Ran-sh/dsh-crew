@@ -233,11 +233,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.2.6', async () => {
+test('package, runtime identity, and changelog identify candidate 2.2.7', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.2.6');
+  assert.equal(manifest.version, '2.2.7');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.2.6');
+  assert.equal(RUNTIME_VERSION, '2.2.7');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -756,6 +756,35 @@ test('status reports Claude as not installed when the host has no Claude CLI', (
     });
     const second = npxStatus({ home: t.dir, installer: rec.installer, log: () => {} });
     assert.equal(second.claude, 'needs repair');
+  } finally { t.cleanup(); }
+});
+
+// 3210 is the service and 3080 is started on demand, so status says which of the two
+// it is — on demand, or started at login when the operator opted in — instead of
+// implying a missing piece of the installation. The flag fails closed: only a real
+// boolean is an opt-in.
+test('status reports the frontend as on demand, or auto-started when opted in', () => {
+  const t = tempHome();
+  try {
+    const rec = recordingInstaller();
+    rec.installer.installStatus = () => ({ codex: {}, zcode: {}, claude: {} });
+    const read = () => {
+      const logs = [];
+      const status = npxStatus({ home: t.dir, installer: rec.installer, log: (message) => logs.push(message) });
+      return { status, logs: logs.join('\n') };
+    };
+    const configFile = join(t.dir, '.config', 'dsh-crew', 'config.json');
+    mkdirSync(dirname(configFile), { recursive: true });
+
+    const onDemand = read();
+    assert.equal(onDemand.status.frontend, 'available on demand (dsh-crew open)');
+    assert.match(onDemand.logs, /Frontend \(3080\): available on demand \(dsh-crew open\)/);
+
+    writeFileSync(configFile, JSON.stringify({ frontend_autostart: true }));
+    assert.equal(read().status.frontend, 'auto-started at login (dsh-crew open for a session URL)');
+
+    writeFileSync(configFile, JSON.stringify({ frontend_autostart: 'yes' }));
+    assert.equal(read().status.frontend, 'available on demand (dsh-crew open)', 'only a real boolean counts as opted in');
   } finally { t.cleanup(); }
 });
 

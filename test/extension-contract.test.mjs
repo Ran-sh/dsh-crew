@@ -162,6 +162,34 @@ test('disabled reviewer is not part of the extension readiness aggregate', () =>
   });
   assert.equal(contract.readiness.components.reviewer.status, 'NOT_APPLICABLE');
   assert.equal(contract.readiness.status, 'READY');
+  // The managed frontend is on demand, not a component: whether 3080 happens to be
+  // listening must not make a machine that serves 3210 read as degraded.
+  assert.equal(Object.keys(contract.readiness.components).some((key) => /frontend/i.test(key)), false);
+  assert.equal(JSON.stringify(contract).includes('3080'), false, 'and no 3080 surface leaks into the contract');
+});
+
+// A row that does not apply is an answer, not a fault: NOT_APPLICABLE must be
+// reported as itself and must not pull the aggregate down. The live case is the two
+// built-in DeepSeek rows, which are NOT_APPLICABLE whenever workers follow the DSH
+// provider instead of the built-in route.
+test('not-applicable rows are reported as such and never lower readiness', () => {
+  const contract = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
+    readinessMatrix: { rows: [
+      { id: 'hub_compatibility', status: 'NOT_APPLICABLE', reason_code: 'CHECK_NOT_APPLICABLE' },
+      { id: 'provider_lifecycle_consistent', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+      { id: 'deepseek_flash', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+      { id: 'deepseek_pro', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+    ] },
+    readinessSnapshot: callableSnapshot(),
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(contract.readiness.components.harness.status, 'NOT_APPLICABLE');
+  assert.equal(contract.readiness.components.provider_lifecycle.status, 'NOT_APPLICABLE');
+  assert.equal(contract.readiness.components.provider_lifecycle.reason_code, 'WORKER_PROVIDER_FOLLOWS_DSH');
+  assert.equal(contract.readiness.status, 'READY', 'nothing is missing or broken, so nothing is degraded');
+  assert.equal(Object.values(contract.readiness.components).some((entry) => entry.status === 'UNAVAILABLE' || entry.status === 'DEGRADED'), false);
 });
 
 test('validated canonical projection is the single model readiness answer', () => {
@@ -177,6 +205,41 @@ test('validated canonical projection is the single model readiness answer', () =
   });
   assert.equal(contract.readiness.components.model.status, 'READY');
   assert.equal(contract.readiness.components.model.reason_code, 'CURRENT_MODEL_CALLABLE');
+});
+
+// Aging or unproven evidence is named as such. The validator's own success code is
+// MODEL_CALLABILITY_VALID, and rendering that beside DEGRADED read as a
+// contradiction: the projection was valid, the evidence simply was not current.
+test('model readiness names aging or unknown evidence instead of calling it valid', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const build = (mutate) => {
+    const readinessSnapshot = callableSnapshot();
+    mutate(readinessSnapshot.model_callability);
+    return buildExtensionContract({
+      config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+      runtime,
+      readinessMatrix: { rows: [{ id: 'hub_compatibility', status: 'PASS' }, { id: 'provider_catalog', status: 'PASS' }] },
+      readinessSnapshot,
+      workspace: { ok: true, context: null },
+    }).readiness.components.model;
+  };
+  const now = Date.now();
+  const unknown = build((projection) => {
+    projection.overall = 'UNKNOWN';
+    projection.expires_at = null;
+    projection.roles.worker = { state: 'UNKNOWN', reason_code: 'NO_CURRENT_MODEL_EVIDENCE', selected: { provider: 'p', model: 'worker' }, last_success: null };
+  });
+  assert.equal(unknown.status, 'DEGRADED');
+  assert.equal(unknown.reason_code, 'MODEL_CALLABILITY_UNKNOWN');
+
+  const stale = build((projection) => {
+    const last = { observed_at: now - 600_000, expires_at: now - 300_000, job_id: 'job-worker' };
+    projection.overall = 'STALE';
+    projection.expires_at = last.expires_at;
+    projection.roles.worker = { state: 'STALE', reason_code: 'EXECUTION_EVIDENCE_EXPIRED', selected: { provider: 'p', model: 'worker' }, source: 'execution', observed_at: last.observed_at, expires_at: last.expires_at, last_success: last };
+  });
+  assert.equal(stale.status, 'DEGRADED');
+  assert.equal(stale.reason_code, 'MODEL_EVIDENCE_STALE');
 });
 
 test('incomplete, expired, and contradictory callability projections never become READY', () => {
