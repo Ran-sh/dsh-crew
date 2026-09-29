@@ -22,6 +22,7 @@ export const READINESS_REASON_CODES = Object.freeze({
   NO_CI_EVIDENCE: 'NO_CI_EVIDENCE',
   NO_EXECUTION_EVIDENCE: 'NO_EXECUTION_EVIDENCE',
   CREDENTIAL_STATUS_NOT_PROBED: 'CREDENTIAL_STATUS_NOT_PROBED',
+  ROUTE_NOT_SELECTED: 'ROUTE_NOT_SELECTED',
   EVIDENCE_REPORTED: 'EVIDENCE_REPORTED',
 });
 
@@ -101,6 +102,7 @@ export function buildReadinessMatrix({
   platform = process.platform,
   hubCompatibility = null,
   workerProviderMode = null,
+  workerSelection = null,
   providerCatalogChecked = false,
   providerCatalogOk = false,
   evidence = {},
@@ -159,6 +161,21 @@ export function buildReadinessMatrix({
       'provider_catalog', 'live-runtime', 'FAIL',
       READINESS_REASON_CODES.PROVIDER_CATALOG_UNAVAILABLE, 'harness-catalog',
     );
+  }
+
+  // The two built-in DeepSeek rows describe a route only when the operator runs
+  // it. Under follow-dsh with a KNOWN, other selected provider they can never
+  // gather evidence, and NOT_RUN reads like a check that should have run rather
+  // than a route that was never chosen. An unknown selection stays NOT_RUN: this
+  // matrix is conservative, and "we could not tell" must not read as "not
+  // applicable". Reported evidence still wins, because it is applied below.
+  const selectionKnown = typeof workerSelection?.provider === 'string' && workerSelection.provider.length > 0;
+  const deepseekRouteSelected = workerProviderMode === 'deepseek-official'
+    || workerSelection?.provider === 'deepseek-official';
+  if (workerProviderMode !== null && selectionKnown && !deepseekRouteSelected) {
+    for (const id of ['deepseek_flash', 'deepseek_pro']) {
+      rows[id] = baseRow(id, 'real-execution', 'SKIP', READINESS_REASON_CODES.ROUTE_NOT_SELECTED, 'runtime-policy');
+    }
   }
 
   for (const [id] of TARGET_ROWS) {

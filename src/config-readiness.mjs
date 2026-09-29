@@ -256,6 +256,7 @@ export function buildConfigReadinessMatrix({
     platform,
     hubCompatibility,
     workerProviderMode,
+    workerSelection: currentSelections?.worker ?? null,
     providerCatalogChecked,
     providerCatalogOk: catalogOk,
     evidence,

@@ -43,6 +43,7 @@ import { inspectProviderProfile, readProviderDeclarations, readProviderMateriali
 import { hasHarnessDefaultBlock, inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations, readProviderSettingsMaterialization } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
+import { pruneCrewTempLogs } from '../log-prune.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
 import { createProviderDeleteFileHooks, isRecoverableProviderDeleteBackup, readProviderDeleteManifestFile } from '../provider-delete-adapters.mjs';
 import { buildCredentialReferenceInventory } from '../credential-reference-inventory.mjs';
@@ -2808,6 +2809,13 @@ export async function apply(ctx) {
 
     return () => { for (const d of disposers.reverse()) d(); };
   });
+
+  // Each hub start writes another diagnostics pair into %TEMP%; bound them here,
+  // on the machine that owns them, keeping the newest runs (see log-prune.mjs).
+  try {
+    const pruned = pruneCrewTempLogs();
+    if (pruned.removed.length > 0) ctx.logger?.info?.(`dsh-crew diagnostics pruned: ${pruned.removed.length} file(s)`);
+  } catch { /* pruning is best-effort and must never block a boot */ }
 
   ctx.logger?.info?.('dsh-crew hub mounted (jobs API + installer endpoints)');
   return async () => {

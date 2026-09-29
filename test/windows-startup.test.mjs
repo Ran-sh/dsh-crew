@@ -192,3 +192,28 @@ test('Windows startup uninstall still removes legacy DSH Crew VBS/CMD launcher c
     assert.equal(existsSync(keep), true);
   } finally { f.cleanup(); }
 });
+
+// Git hands a Windows checkout CRLF while the npm payload it installs is LF, and
+// PowerShell accepts either. Comparing raw bytes made every `core.autocrlf=true`
+// dev machine report "Windows login startup: needs repair" for a correct install,
+// while the payload-side view said installed.
+test('a CRLF checkout is not a repair target when the installed files are LF', () => {
+  const f = fixture();
+  try {
+    installWindowsStartup({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    const ready = () => windowsStartupStatus({ home: f.home, root: f.root, startupDir: f.startupDir, platform: 'win32' });
+    assert.equal(ready().ready, true);
+
+    // The checkout is rewritten with CRLF, as git would after a fresh clone.
+    for (const name of ['start-dsh-crew.cmd', 'start-dsh-crew.ps1', 'supervisor-control.ps1', 'start-dsh-crew.vbs']) {
+      const file = join(f.root, 'windows', name);
+      writeFileSync(file, readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
+    }
+    const afterCheckout = ready();
+    assert.equal(afterCheckout.ready, true, `line endings are not a repairable difference: ${afterCheckout.missing.join(', ')}`);
+
+    // A real content change still fails closed.
+    writeFileSync(join(f.root, 'windows', 'start-dsh-crew.ps1'), '# tampered\n');
+    assert.equal(ready().ready, false);
+  } finally { f.cleanup(); }
+});

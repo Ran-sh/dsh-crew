@@ -73,7 +73,10 @@ function boundedTimestamp(value, fallback) {
 function view(entry, now) {
   if (!entry) return { state: 'unprobed', reason_code: null, observed_at: null, expires_at: null, fresh: false };
   const fresh = now < entry.expires_at;
-  if (!fresh) return { state: 'unprobed', reason_code: null, observed_at: entry.observed_at, expires_at: entry.expires_at, fresh: false };
+  // An aged-out record keeps its identity (provider/model) and timestamps: the
+  // readiness projection matches it against the selected route to report STALE
+  // instead of "never probed". Only the verdict is reset to `unprobed`.
+  if (!fresh) return { ...entry, state: 'unprobed', reason_code: null, fresh: false };
   return { ...entry, fresh: true };
 }
 
@@ -124,7 +127,12 @@ export function createProviderHealthStore({ clock = () => Date.now(), ttls = {},
     return get(provider, model);
   };
 
-  const list = () => [...records.values()].map((entry) => view(entry, clock())).filter((entry) => entry.fresh).slice(0, boundedMax);
+  // Expired records are included, as `fresh: false` with their timestamps: "this
+  // route was probed and the evidence has aged out" is knowledge the readiness
+  // projection needs (it renders STALE), and dropping it made an aged-out probe
+  // read as never-probed. Consumers that need live evidence filter on `fresh`
+  // themselves (currentRouteHealthEvidence does exactly that).
+  const list = () => [...records.values()].map((entry) => view(entry, clock())).slice(0, boundedMax);
 
   return { get, record, list, ttls: { ...limits }, maxEntries: boundedMax };
 }

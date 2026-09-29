@@ -107,14 +107,15 @@ export function windowsStartupStatus({
       const sourceControl = readFileSync(join(root, 'windows', WINDOWS_CONTROL_FILENAME), 'utf8');
       const sourceVbs = readFileSync(join(root, 'windows', 'start-dsh-crew.vbs'), 'utf8');
       const startup = readFileSync(resolved.startupFile, 'utf16le').replace(/^\uFEFF/, '');
-      components.startup_entry_content = startup === renderVbs(sourceVbs, resolved.launcherFile);
-      components.launcher_content = readFileSync(resolved.launcherFile, 'utf8') === sourceLauncher;
-      components.helper_content = readFileSync(resolved.helperFile, 'utf8') === sourceHelper;
-      components.control_content = readFileSync(resolved.controlFile, 'utf8') === sourceControl;
+      components.startup_entry_content = normalizeEol(startup) === normalizeEol(renderVbs(sourceVbs, resolved.launcherFile));
+      components.launcher_content = normalizeEol(readFileSync(resolved.launcherFile, 'utf8')) === normalizeEol(sourceLauncher);
+      components.helper_content = normalizeEol(readFileSync(resolved.helperFile, 'utf8')) === normalizeEol(sourceHelper);
+      components.control_content = normalizeEol(readFileSync(resolved.controlFile, 'utf8')) === normalizeEol(sourceControl);
+      // The manifest is written from the INSTALLED bytes, so it is checked against
+      // them (inside readWindowsSupervisorAssets); what ties the installation to the
+      // shipped payload is the *_content* comparison above, which is EOL-tolerant.
       const assets = readWindowsSupervisorAssets({ home });
-      components.supervisor_manifest = assets.ok
-        && assets.helper_hash === sha256File(join(root, 'windows', WINDOWS_HELPER_FILENAME))
-        && assets.control_hash === sha256File(join(root, 'windows', WINDOWS_CONTROL_FILENAME));
+      components.supervisor_manifest = assets.ok;
     } catch { /* missing or unreadable content remains false */ }
   }
   const missing = Object.entries(components).filter(([, ready]) => !ready).map(([key]) => key);
@@ -123,6 +124,14 @@ export function windowsStartupStatus({
 
 function sha256File(file) {
   try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; }
+}
+
+// Git checks these scripts out as CRLF on a `core.autocrlf=true` machine and
+// PowerShell accepts either, so a line-ending difference is not a difference this
+// check may report: comparing raw bytes made every Windows dev checkout read as
+// "needs repair" while the npm payload (LF) was installed correctly.
+function normalizeEol(text) {
+  return String(text).replace(/\r\n/g, '\n');
 }
 
 function samePath(left, right) {

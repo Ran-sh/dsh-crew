@@ -161,3 +161,41 @@ test('session re-projection does not transplant or renew execution evidence', ()
   const invalidHealthProjection = reprojectRuntimeModelCallability(invalidWithHealth, { enabled_roles: { worker: true, reviewer: false }, now: 10_000 });
   assert.equal(invalidHealthProjection.roles.worker.state, 'UNKNOWN');
 });
+
+// A probe that aged out used to vanish from the health list, so readiness read the
+// route as never-probed (UNKNOWN — the state that looks like a fault) minutes after
+// a call had proved it callable. The store now keeps the aged-out record, and a
+// real successful execution still outranks it.
+test('an aged-out probe reads STALE, and a recent execution still outranks it', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1', capabilities: ['jobs'] };
+  const selections = { worker: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', source: 'priority' } };
+  let clock = 9_000;
+  const store = createProviderHealthStore({ clock: () => clock });
+  store.record('commandcode', 'deepseek/deepseek-v4.1-flash', { ok: true, observed_at: 9_000 });
+  const later = 9_000 + store.ttls.callable + 1_000;
+  clock = later; // the probe ages out
+  const health = store.list();
+  assert.deepEqual(health.map((entry) => entry.fresh), [false], 'an aged-out probe stays visible to readiness');
+  const expired = buildRuntimeReadinessSnapshot({ runtime, readinessMatrix: matrix, selections, health, jobs: [], now: later });
+  assert.equal(expired.model_callability.roles.worker.state, 'STALE');
+  assert.equal(expired.model_callability.roles.worker.reason_code, 'PROVIDER_HEALTH_STALE_OR_INVALID');
+
+  const withJob = buildRuntimeReadinessSnapshot({
+    runtime,
+    readinessMatrix: matrix,
+    selections,
+    health,
+    jobs: [{
+      id: 'job-1',
+      role: 'worker',
+      provider: 'commandcode',
+      model: 'deepseek/deepseek-v4.1-flash',
+      status: 'done',
+      task_status: 'success',
+      endedAt: new Date(later - 1_000).toISOString(),
+      execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
+    }],
+    now: later,
+  });
+  assert.equal(withJob.model_callability.roles.worker.state, 'CALLABLE', 'a real execution outranks an aged-out probe');
+});

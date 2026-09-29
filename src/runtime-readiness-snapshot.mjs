@@ -95,13 +95,13 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
     })[0];
   const expiresAt = Number.isFinite(matchingHealth?.expires_at) ? matchingHealth.expires_at : null;
   const observedAt = Number.isFinite(matchingHealth?.observed_at) ? matchingHealth.observed_at : null;
-  if (matchingHealth) {
-    if (observedAt === null || observedAt > now || expiresAt === null || expiresAt <= now
-      || expiresAt - observedAt > MAX_EXECUTION_EVIDENCE_TTL_MS) {
-      return { state: 'STALE', reason_code: 'PROVIDER_HEALTH_STALE_OR_INVALID', selected, observed_at: observedAt, expires_at: expiresAt, source: 'provider_health', last_success: null };
-    }
-  }
-  const healthCurrent = matchingHealth && matchingHealth.fresh === true;
+  // An aged-out probe is remembered, not forgotten: it is reported as STALE below,
+  // but only after the job evidence is consulted — a real successful execution is
+  // stronger than "a probe aged out", and letting the stale record decide first
+  // would downgrade a route that just ran.
+  const healthExpired = Boolean(matchingHealth) && (observedAt === null || observedAt > now || expiresAt === null
+    || expiresAt <= now || expiresAt - observedAt > MAX_EXECUTION_EVIDENCE_TTL_MS);
+  const healthCurrent = matchingHealth && matchingHealth.fresh === true && !healthExpired;
   if (healthCurrent && matchingHealth.state !== 'callable') {
     return { state: 'NOT_CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_ROUTE_UNCALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
@@ -121,6 +121,9 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
     if (completed.endedAt > now) return { state: 'STALE', reason_code: 'EXECUTION_EVIDENCE_FUTURE_DATED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
     if (expires > now) return { state: 'CALLABLE', reason_code: 'RECENT_EXECUTION_PASSED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
     return { state: 'STALE', reason_code: 'EXECUTION_EVIDENCE_EXPIRED', selected, observed_at: completed.endedAt, expires_at: expires, source: 'execution', last_success: lastSuccess };
+  }
+  if (healthExpired) {
+    return { state: 'STALE', reason_code: 'PROVIDER_HEALTH_STALE_OR_INVALID', selected, observed_at: observedAt, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
   return { state: 'UNKNOWN', reason_code: 'NO_CURRENT_MODEL_EVIDENCE', selected, last_success: null };
 }

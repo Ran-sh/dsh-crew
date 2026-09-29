@@ -383,6 +383,11 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // Automatic Pro review after a successful Flash run (review-pipeline forces
   // this on; balanced/custom only when this flag is set).
   pro_reviews_flash: false,
+  // Opt-in: the login/background launcher also starts the Crew-managed 3080
+  // frontend — without opening a browser, logging the session URL instead. Off by
+  // default: the interactive desktop entry is what opens a session, and an extra
+  // always-on harness process is the operator's choice to make.
+  frontend_autostart: false,
   // Worker provider routing for HUB workers: which DSH provider backs each
   // worker session. Fresh installs stay on the built-in DeepSeek provider;
   // follow-dsh is an explicit opt-in that uses the provider selected in DSH

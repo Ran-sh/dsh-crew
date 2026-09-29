@@ -4,6 +4,37 @@
 
 Future changes go here.
 
+## 2.2.4 — 2026-09-29
+
+- **A CRLF checkout is no longer a repair target.** Git hands a
+  `core.autocrlf=true` Windows checkout CRLF while the npm payload it installs is
+  LF, and PowerShell accepts either — comparing raw bytes made every dev checkout
+  report `Windows login startup: needs repair` for a correct install (the payload
+  side said `installed`). The content checks compare EOL-normalized text now, and
+  the supervisor manifest is validated against the installed bytes it was written
+  from instead of the checkout's.
+- **An aged-out probe reads STALE, not "unknown".** The provider health store
+  dropped expired records from its list and rebuilt the expired view without the
+  provider/model it was keyed by, so a route probed minutes earlier read as never
+  probed — the state operators read as a fault. Expired records stay visible with
+  their identity and timestamps, `readiness.model` reports the designed
+  `MODEL_EVIDENCE_STALE` state, and a real successful execution still outranks an
+  aged-out probe.
+- **The temp diagnostics are bounded.** Every hub start wrote another
+  `dsh-crew-*-<stamp>.out/.err.log` pair and nothing ever pruned them. The hub
+  prunes on boot and `dsh-crew logs prune [keep]` does it on demand: the newest 20
+  runs per family survive, anything older than 14 days goes, and files written in
+  the last five minutes are never touched — the crash-before-readiness evidence
+  stays available.
+- **The 3080 frontend can start with the login launch.** `frontend_autostart: true`
+  (off by default) makes the background/watch launcher serve 3080 without opening a
+  browser, logging its session URL instead; `-Mode open` is unchanged.
+- **The built-in DeepSeek rows say "not applicable" when another route is
+  selected.** Under `follow-dsh` with a known other provider, `deepseek_flash` and
+  `deepseek_pro` can never gather evidence; they now read
+  SKIP/`ROUTE_NOT_SELECTED`, while a DeepSeek selection — or an unknown one — keeps
+  them as NOT_RUN.
+
 ## 2.2.3 — 2026-09-29
 
 - **A machine without Claude Code is not a repair target.** The Claude integration

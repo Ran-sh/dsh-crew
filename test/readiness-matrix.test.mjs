@@ -126,3 +126,29 @@ test('invalid evidence status is ignored rather than broadening the matrix contr
   assert.equal(row(matrix, 'linux_deterministic').status, 'NOT_RUN');
   assert.equal(row(matrix, 'linux_deterministic').reason_code, READINESS_REASON_CODES.NO_CI_EVIDENCE);
 });
+
+// The built-in DeepSeek rows describe a route only when the operator runs it.
+// Under follow-dsh with a KNOWN other provider they can never gather evidence, and
+// NOT_RUN reads like a check that should have run rather than a route never chosen;
+// an unknown selection stays conservative.
+test('built-in DeepSeek rows are skipped for another known route and kept otherwise', () => {
+  const skipped = buildReadinessMatrix({
+    workerProviderMode: 'follow-dsh',
+    workerSelection: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
+  });
+  assert.equal(row(skipped, 'deepseek_flash').status, 'SKIP');
+  assert.equal(row(skipped, 'deepseek_flash').reason_code, READINESS_REASON_CODES.ROUTE_NOT_SELECTED);
+  assert.equal(row(skipped, 'deepseek_pro').status, 'SKIP');
+
+  const deepseek = buildReadinessMatrix({
+    workerProviderMode: 'follow-dsh',
+    workerSelection: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+  });
+  assert.equal(row(deepseek, 'deepseek_flash').status, 'NOT_RUN', 'a DeepSeek selection keeps the rows meaningful');
+
+  const official = buildReadinessMatrix({ workerProviderMode: 'deepseek-official' });
+  assert.equal(row(official, 'deepseek_flash').status, 'NOT_RUN');
+
+  const unknown = buildReadinessMatrix({ workerProviderMode: 'follow-dsh' });
+  assert.equal(row(unknown, 'deepseek_flash').status, 'NOT_RUN', 'an unknown selection stays conservative');
+});

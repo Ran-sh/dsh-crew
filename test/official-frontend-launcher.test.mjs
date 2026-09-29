@@ -165,7 +165,7 @@ maybe('the interactive entry is wired to the start-only wait', () => {
 // maintenance stops it for the same window. Which listener may be stopped is
 // the question these pin: the launcher's own proof, then the Crew bridge as the
 // fallback for a Crew-patched server it did not start.
-function frontendScenario(body) {
+function frontendScenario(body, env = launcherSandboxEnv()) {
   const script = [
     `. '${helper.replaceAll("'", "''")}'`,
     '$script:stopped = @()',
@@ -184,7 +184,7 @@ function frontendScenario(body) {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8', windowsHide: true, timeout: 60_000,
-    env: launcherSandboxEnv(),
+    env,
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.trim());
@@ -277,4 +277,36 @@ maybe('Windows PowerShell 5.1 parses the root-array frontend overlay', () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// The login/background launch has never started 3080 — only the interactive desktop
+// entry does, with a browser — so operators who expect the browser surface after a
+// reboot found nothing there. It is opt-in through the Crew config now, and the
+// flag fails closed: absent, malformed or non-boolean config means "do not start".
+maybe('the frontend autostart flag is opt-in and fails closed', () => {
+  // The sandbox env carries its own USERPROFILE (= the sandbox directory) and its
+  // directory is removed when this test process exits.
+  const env = launcherSandboxEnv();
+  const configDir = join(env.USERPROFILE, '.config', 'dsh-crew');
+  mkdirSync(configDir, { recursive: true });
+  const configFile = join(configDir, 'config.json');
+  const readFlag = () => frontendScenario(
+    "@{flag=(Test-CrewFrontendAutostart)} | ConvertTo-Json -Compress",
+    env,
+  );
+
+  assert.equal(readFlag().flag, false, 'no config file means not opted in');
+
+  writeFileSync(configFile, JSON.stringify({ frontend_autostart: true }));
+  assert.equal(readFlag().flag, true);
+
+  writeFileSync(configFile, JSON.stringify({ frontend_autostart: 'yes' }));
+  assert.equal(readFlag().flag, false, 'only a real boolean opts in');
+
+  writeFileSync(configFile, '{not json');
+  assert.equal(readFlag().flag, false, 'a malformed config fails closed');
+
+  // The launch path consults it only outside -Mode open, which still opens a browser.
+  const source = readFileSync(helper, 'utf8');
+  assert.match(source, /if \(\$Mode -ne 'open' -and \(Test-CrewFrontendAutostart\)\) \{ Start-CrewFrontendFromLogin \}/);
 });

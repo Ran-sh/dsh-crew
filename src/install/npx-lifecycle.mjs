@@ -51,6 +51,7 @@ import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted 
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, ensureCrewWebProfile, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, gcRetainedRuntimes, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
 import { desktopAttach, desktopDetach, desktopStatus } from './desktop-profile.mjs';
 import { mirrorOfficialHarnessConfig, officialConfigMirrorStatus } from './harness-config-import.mjs';
+import { pruneCrewTempLogs } from '../log-prune.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -2772,6 +2773,21 @@ export async function npxDesktop({ home = homedir(), args = [], dryRun = false, 
   return result;
 }
 
+// Bound the diagnostics that accumulate in the temp directory. The hub does this
+// on every boot too; the command exists so an operator can reclaim space without
+// waiting for a restart or guessing which files are safe to delete.
+export async function npxLogs({ args = [], log = console.log } = {}) {
+  const action = args[0] ?? 'prune';
+  if (action !== 'prune') {
+    log(`✗ unknown logs action: ${action}`);
+    return { ok: false, error: 'usage: dsh-crew logs prune [keep]' };
+  }
+  const keep = Number(args[1]);
+  const result = pruneCrewTempLogs(Number.isInteger(keep) && keep > 0 ? { keepRuns: keep } : {});
+  log(`✓ Crew diagnostics pruned: removed ${result.removed.length} file(s); kept ${result.kept.length} run(s)`);
+  return { ok: true, ...result };
+}
+
 // Bring the operator's user-level DSH configuration across from the official home
 // into Crew's home: the Crew hub then runs the same models, providers, policy and
 // MCP servers as the desktop app. Read-only on ~/.dsh, no secrets copied (provider
@@ -3426,6 +3442,7 @@ Commands:
               home, so the Crew hub matches the desktop app. Read-only on ~/.dsh; no
               secrets are copied (provider entries keep their apiKeyEnv references);
               entries naming packages absent from Crew's runtime cohort are skipped
+  logs        prune the Crew diagnostics in the temp directory: prune [keep]
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
@@ -3830,7 +3847,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'desktop', 'config', 'status', 'inspect', 'jobs', 'providers', 'credentials', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'desktop', 'config', 'logs', 'status', 'inspect', 'jobs', 'providers', 'credentials', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -3841,6 +3858,7 @@ export async function runNpxCli({
       detach: commands.detach ?? npxDetach,
       desktop: commands.desktop ?? npxDesktop,
       config: commands.config ?? npxConfig,
+      logs: commands.logs ?? npxLogs,
       status: commands.status ?? npxStatus,
       inspect: commands.inspect ?? npxInspect,
       jobs: commands.jobs ?? npxJobs,
@@ -3856,6 +3874,7 @@ export async function runNpxCli({
     else if (command === 'update') result = await actions.update({ candidate, log });
     else if (command === 'desktop') result = await actions.desktop({ args, dryRun, log });
     else if (command === 'config') result = await actions.config({ args, dryRun, log });
+    else if (command === 'logs') result = await actions.logs({ args, log });
     else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
     else if (command === 'providers') result = await actions.providers({ args, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, log });
     else if (command === 'credentials') result = await actions.credentials({ args, planId, expectedRevision, confirm, log });

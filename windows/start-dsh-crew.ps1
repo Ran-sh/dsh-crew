@@ -372,6 +372,33 @@ function Start-CrewManagedFrontendQuietly {
   }
 }
 
+function Test-CrewFrontendAutostart {
+  # Opt-in only. The login/background launch has never started 3080 — the desktop
+  # entry does that, with a browser — which left operators who expect the browser
+  # surface after a reboot with nothing on 3080. Any unreadable config reads as off.
+  try {
+    $configFile = Join-Path $env:USERPROFILE '.config\dsh-crew\config.json'
+    if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) { return $false }
+    $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
+    return $config.frontend_autostart -eq $true
+  } catch { return $false }
+}
+
+function Start-CrewFrontendFromLogin {
+  # Never fatal: this runs before the supervisor starts, so a failure must not stop
+  # the backend. The session URL goes to the log instead of a browser window.
+  try {
+    if (Open-CrewManagedFrontend -Quiet) {
+      $url = Get-CrewWebSessionUrl
+      Write-LaunchLog ('Crew-managed frontend on 3080 is serving{0}' -f $(if ($url) { '; session: ' + $url } else { '' }))
+    } else {
+      Write-LaunchLog 'Crew-managed frontend on 3080 was not started (no Crew-managed CLI entry).' 'WARN'
+    }
+  } catch {
+    Write-LaunchLog ('Crew-managed frontend on 3080 could not be started: {0}' -f $_.Exception.Message) 'WARN'
+  }
+}
+
 function Get-OfficialFrontendOverlay {
   $frontendRoot = Join-Path $env:USERPROFILE '.config\dsh-crew\frontend'
   $path = Join-Path $frontendRoot 'official-web.patch.json'
@@ -1510,7 +1537,9 @@ try {
     throw "The isolated dsh-crew profile is missing under $crewHome. Run: dsh-crew update"
   }
   if ($Mode -eq 'open') { Open-OfficialFrontend }
-  # Background/watch modes remain independent of the official frontend.
+  # Background/watch modes remain independent of the official frontend, unless the
+  # operator opted in: then the login launch also serves 3080, without a browser.
+  if ($Mode -ne 'open' -and (Test-CrewFrontendAutostart)) { Start-CrewFrontendFromLogin }
 
   if ($Mode -eq 'watch') {
     Start-ServiceSupervisor
