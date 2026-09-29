@@ -4,6 +4,15 @@
 
 Future changes go here.
 
+## 2.2.6 — 2026-09-29
+
+- **The login-path frontend autostart is a panel toggle.** `frontend_autostart` was
+  only reachable by editing `config.json`; the 3080 quick-controls panel now shows
+  it beside the sub-agent master switch (the quick-config surface exposes and writes
+  it, and the shipped bundle carries the control), so the choice between "the desktop
+  entry starts 3080 with a browser" and "the login launch serves it quietly" is one
+  checkbox.
+
 ## 2.2.5 — 2026-09-29
 
 - **The frontend snapshot hashes and installs as a canonical artifact.** The 2.2.4

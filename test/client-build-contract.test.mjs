@@ -23,6 +23,16 @@ test('shipped client modules never require discarded relative shared chunks', as
 // The panel's "open the control plane" links must go through the hub's session
 // redirect: the bare port asks for a session the panel's own process cannot mint,
 // which is what made the button land on "dsh web authentication required".
+// The panel is the only place an operator can reach the login-path frontend
+// autostart without editing config.json, so the toggle has to ship in the built
+// bundle, not only in the source.
+test('the shipped quick panel carries the frontend autostart toggle', async () => {
+  const quickPanelSource = await readFile(new URL('../src/client/quick-panel.tsx', import.meta.url), 'utf8');
+  assert.match(quickPanelSource, /toggle\('frontend_autostart', e\.target\.checked\)/);
+  const bridgeClient = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
+  assert.match(bridgeClient, /frontend_autostart/);
+});
+
 test('the shipped quick panel links into the control plane through the hub redirect', async () => {
   const bridgeClient = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
   assert.match(bridgeClient, /127\.0\.0\.1:3210\/_dsh\/dsh-crew\/control-plane/);

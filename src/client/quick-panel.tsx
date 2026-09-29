@@ -19,6 +19,7 @@ const FULL = 'http://127.0.0.1:3210/_dsh/dsh-crew/control-plane';
 type ModelEntry = { provider: string; model: string };
 type QuickConfig = {
   subagents_enabled?: boolean;
+  frontend_autostart?: boolean;
   flash_model_priority?: ModelEntry[];
   pro_model_priority?: ModelEntry[];
 };
@@ -41,6 +42,7 @@ const T = {
     openDiag: '打开诊断',
     crew: 'Crew',
     enabled: '启用子 Agent',
+    frontendAutostart: '登录时启动 3080 前端（不打开浏览器）',
     flash: 'Worker / Flash',
     pro: 'Reviewer / Pro',
     addModel: '+ 添加模型',
@@ -66,6 +68,7 @@ const T = {
     openDiag: 'Open diagnostics',
     crew: 'Crew',
     enabled: 'Enable sub-agents',
+    frontendAutostart: 'Start the 3080 frontend at login (no browser)',
     flash: 'Worker / Flash',
     pro: 'Reviewer / Pro',
     addModel: '+ Add model',
@@ -157,7 +160,7 @@ export function QuickPanel({ ctx }: { ctx: any }) {
     } finally { setBusy(false); }
   }, [t]);
 
-  const toggle = (key: 'subagents_enabled', value: boolean) => {
+  const toggle = (key: 'subagents_enabled' | 'frontend_autostart', value: boolean) => {
     setConfig((c) => ({ ...(c ?? {}), [key]: value }));
     void patch({ [key]: value } as QuickConfig);
   };
@@ -251,6 +254,8 @@ export function QuickPanel({ ctx }: { ctx: any }) {
         <span className="crew-quick-section">{t.crew}</span>
         <label><input type="checkbox" disabled={busy} checked={config.subagents_enabled !== false}
           onChange={(e) => toggle('subagents_enabled', e.target.checked)} /> {t.enabled}</label>
+        <label><input type="checkbox" disabled={busy} checked={config.frontend_autostart === true}
+          onChange={(e) => toggle('frontend_autostart', e.target.checked)} /> {t.frontendAutostart}</label>
       </div>
       {modelList('flash_model_priority', t.flash)}
       {modelList('pro_model_priority', t.pro)}

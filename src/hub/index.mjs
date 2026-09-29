@@ -114,6 +114,7 @@ const ROUTE_BASE = '/_dsh/dsh-crew';
 // canonical authority; quick-config is a projection, never a second store.
 export const QUICK_CONFIG_KEYS = Object.freeze([
   'subagents_enabled',
+  'frontend_autostart',
   'flash_model_priority',
   'pro_model_priority',
 ]);

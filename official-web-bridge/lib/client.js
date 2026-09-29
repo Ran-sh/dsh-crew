@@ -80,6 +80,7 @@ const T = {
 		openDiag: "打开诊断",
 		crew: "Crew",
 		enabled: "启用子 Agent",
+		frontendAutostart: "登录时启动 3080 前端（不打开浏览器）",
 		flash: "Worker / Flash",
 		pro: "Reviewer / Pro",
 		addModel: "+ 添加模型",
@@ -107,6 +108,7 @@ const T = {
 		openDiag: "Open diagnostics",
 		crew: "Crew",
 		enabled: "Enable sub-agents",
+		frontendAutostart: "Start the 3080 frontend at login (no browser)",
 		flash: "Worker / Flash",
 		pro: "Reviewer / Pro",
 		addModel: "+ Add model",
@@ -439,19 +441,32 @@ function QuickPanel({ ctx }) {
 			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "crew-quick-row crew-quick-master",
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-					className: "crew-quick-section",
-					children: t.crew
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						disabled: busy,
-						checked: config.subagents_enabled !== false,
-						onChange: (e) => toggle("subagents_enabled", e.target.checked)
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: "crew-quick-section",
+						children: t.crew
 					}),
-					" ",
-					t.enabled
-				] })]
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							disabled: busy,
+							checked: config.subagents_enabled !== false,
+							onChange: (e) => toggle("subagents_enabled", e.target.checked)
+						}),
+						" ",
+						t.enabled
+					] }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							disabled: busy,
+							checked: config.frontend_autostart === true,
+							onChange: (e) => toggle("frontend_autostart", e.target.checked)
+						}),
+						" ",
+						t.frontendAutostart
+					] })
+				]
 			}),
 			modelList("flash_model_priority", t.flash),
 			modelList("pro_model_priority", t.pro),
