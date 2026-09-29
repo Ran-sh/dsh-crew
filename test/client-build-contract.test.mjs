@@ -20,6 +20,16 @@ test('shipped client modules never require discarded relative shared chunks', as
   }
 });
 
+// The panel's "open the control plane" links must go through the hub's session
+// redirect: the bare port asks for a session the panel's own process cannot mint,
+// which is what made the button land on "dsh web authentication required".
+test('the shipped quick panel links into the control plane through the hub redirect', async () => {
+  const bridgeClient = await readFile(new URL('../official-web-bridge/lib/client.js', import.meta.url), 'utf8');
+  assert.match(bridgeClient, /127\.0\.0\.1:3210\/_dsh\/dsh-crew\/control-plane/);
+  const quickPanel = await readFile(new URL('../src/client/quick-panel.tsx', import.meta.url), 'utf8');
+  assert.match(quickPanel, /const FULL = 'http:\/\/127\.0\.0\.1:3210\/_dsh\/dsh-crew\/control-plane'/);
+});
+
 test('client build uses the activation wrapper entry', () => {
   assert.match(packageJson.scripts?.['build:client'] ?? '', /tsdown src\/client\/entry\.tsx\b/);
   assert.match(setupSource, /run\(['"]pnpm['"],\s*\[['"]run['"],\s*['"]build:client['"]\]/);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, projectCatalogHealth, projectCurrentProviderHealth, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
+import { buildProviderMigrationDeclarations, createProviderProbe, selectProviderProbeModel, hubCanonicalEvents, hasAvailableProviderLifecycleEvidence, hasCompleteProviderCatalogEvidence, hasCompleteProviderDeclarationEvidence, hasPendingProviderRecoveryTransactions, hasProviderRuntimeRestartEvidence, isLoopbackRequest, projectCatalogHealth, projectCurrentProviderHealth, projectHarnessDefaultEvidence, WorkerRegistry, readProviderRecoveryTransactions } from '../src/hub/index.mjs';
 import { HUB_CAPABILITIES } from '../src/runtime-identity.mjs';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -115,6 +115,42 @@ test('provider lifecycle accepts only a changed 3210 runtime identity as restart
 test('provider lifecycle fails closed when any existing declaration source is malformed', () => {
   assert.equal(hasCompleteProviderDeclarationEvidence({ ok: true, sources: { profile: { present: true }, settings: { present: false } } }), true);
   assert.equal(hasCompleteProviderDeclarationEvidence({ ok: false, sources: { settings: { present: true, code: 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' } } }), false);
+});
+
+// The Crew hub runs a home whose model comes from the profile/base layers, so no
+// settings copy of the default exists and nothing would ever write one: the
+// migration that materializes settings was gated on this very evidence. A
+// configuration-declared default is therefore an authority; only a persisted
+// authority that actually contradicts the live default fails closed.
+test('a configuration-declared default is an authority; only a conflicting persisted one fails', () => {
+  const live = { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' };
+  assert.deepEqual(projectHarnessDefaultEvidence({ liveDefault: live }), { ok: true, source: 'harness-config' });
+  assert.deepEqual(
+    projectHarnessDefaultEvidence({ liveDefault: live, persistedDefault: { ...live }, persistedDefaultDeclared: true }),
+    { ok: true, source: 'harness-settings' },
+  );
+  assert.equal(
+    projectHarnessDefaultEvidence({ liveDefault: live, persistedDefault: { provider: 'other', model: 'm' }, persistedDefaultDeclared: true }).code,
+    'PROVIDER_DEFAULT_AUTHORITY_MISMATCH',
+  );
+  assert.equal(
+    projectHarnessDefaultEvidence({ persistedDefault: live, persistedDefaultDeclared: true }).code,
+    'PROVIDER_DEFAULT_AUTHORITY_MISMATCH',
+  );
+  assert.deepEqual(projectHarnessDefaultEvidence({}), { ok: true, source: 'none' });
+});
+
+// The panel links into the full control plane, whose session token belongs to the
+// hub's own process. Only the hub can sign it, so the entry is a loopback-gated
+// redirect instead of a published token.
+test('the hub mints its own control-plane session behind a loopback redirect', () => {
+  const start = hubSource.indexOf('path: `${ROUTE_BASE}/control-plane`');
+  assert.ok(start >= 0, 'the hub must expose the control-plane redirect');
+  const block = hubSource.slice(start, start + 1_600);
+  assert.match(block, /isLoopbackRequest/, 'a Location carrying a session credential must stay loopback-only');
+  assert.match(block, /authenticatedUrl/, 'the redirect must mint the session through the connection service');
+  assert.match(block, /302/, 'the entry must redirect');
+  assert.match(block, /no-store/, 'the redirect must not be cached');
 });
 
 test('provider lifecycle does not treat corrupted lifecycle state as available evidence', () => {

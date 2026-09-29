@@ -45,11 +45,21 @@ test('isolation constants own a dedicated Crew home/profile/hub', () => {
   assert.ok(/profiles[\\/]dsh-crew$/.test(prof), `Crew profile must be profiles/dsh-crew: ${prof}`);
 });
 
+// The guard covers EXECUTABLE paths, not prose: a comment stating the Crew-home
+// requirement (e.g. "<crew DSH_HOME>/profiles/web") documents the rule instead of
+// breaking it, while any real path construction lives on a code line. Full-line
+// comments are dropped before the patterns run so documenting the boundary cannot
+// trip the same check that exists to enforce it.
+const executableSource = (source) => source
+  .split(/\r?\n/)
+  .filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line))
+  .join('\n');
+
 test('executable install/test paths do not reintroduce the official web profile or ~/.dsh reads', () => {
   for (const rel of EXECUTABLE) {
-    const src = readFileSync(join(ROOT, rel), 'utf8');
-    assert.ok(!/--profile web\b/.test(src), `${rel} must not invoke --profile web`);
-    assert.ok(!/profiles[\\/]web/.test(src), `${rel} must not reference profiles/web`);
+    const src = executableSource(readFileSync(join(ROOT, rel), 'utf8'));
+    assert.ok(!/--profile web\b/.test(src), `${rel} must not invoke --profile web in executable code`);
+    assert.ok(!/profiles[\\/]web/.test(src), `${rel} must not reference profiles/web in executable code`);
     assert.ok(!/\.dsh[\\/]\.credentials\.yaml/.test(src), `${rel} must not read ~/.dsh/.credentials.yaml`);
     assert.ok(!/\.dsh[\\/]settings\.yaml/.test(src), `${rel} must not read ~/.dsh/settings.yaml`);
     assert.ok(!/\.credentials\.yaml/.test(src), `${rel} must not read any official credentials file`);

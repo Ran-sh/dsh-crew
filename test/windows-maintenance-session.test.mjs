@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { launcherSandboxEnv } from './launcher-test-env.mjs';
 
 // The launcher under test is a Windows PowerShell script driven through
 // powershell.exe; there is nothing to exercise on other platforms.
@@ -17,7 +18,7 @@ function runPs(snippet) {
   const command = [`. '${quoted}'`, snippet].join('\n');
   return spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });

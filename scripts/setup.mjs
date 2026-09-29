@@ -15,11 +15,13 @@ import { crewDshHome, crewProfileDir, CREW_PROFILE_NAME, claudeIntegrationLine }
 import {
   ensureCrewDshRuntime,
   ensureCrewPluginRegistration,
+  ensureCrewWebProfile,
   resolveDshCli,
   describeDshCli,
   removeCrewPluginRegistration,
   TARGET_DSH_VERSION,
 } from '../src/dsh-cli-runtime.mjs';
+import { integrationRoot } from '../src/install/crew-paths.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -146,6 +148,8 @@ export async function setupInstall({
   home = homedir(),
   installer = realInstaller,
   depRunner = null,
+  ensureRuntime = null,
+  ensureWebProfile = null,
 } = {}) {
   log('DSH Crew installer');
   if (!checkRoot(root)) return { ok: false, error: `not a dsh-crew checkout: ${root}` };
@@ -196,8 +200,15 @@ export async function setupInstall({
       error: `Crew runtime ${dsh.version} does not match ${TARGET_DSH_VERSION}; use the transactional update path (dsh-crew update) to migrate the cohort`,
     };
   }
-  if (!dryRun && (!dsh || dsh.kind === 'npx-local')) {
-    const boot = ensureCrewDshRuntime({ home });
+  if (!dryRun && (!dsh || !dsh.reusable)) {
+    // The Windows launcher only starts a Crew-owned CLI entry: a global
+    // official dsh or a transient npx download cannot pass its preflight, so
+    // the launcher would report "DSH CLI was not found" on a machine that has
+    // a perfectly good global dsh. A machine without a reusable runtime
+    // provisions one here — before the launcher ever runs — and the web
+    // profile scaffold below completes what that preflight and the supervisor
+    // require. Idempotent: a matching reusable runtime is reused as-is.
+    const boot = (ensureRuntime ?? ensureCrewDshRuntime)({ home });
     if (boot.ok) dsh = boot.cli;
     else log(`- reusable Crew DSH runtime unavailable (${boot.code ?? 'unknown'}); trying compatibility fallback`);
   }
@@ -219,11 +230,27 @@ export async function setupInstall({
       return { ok: false, error: 'DSH profile link failed' };
     }
     mark(log, true, `DSH crew profile linked offline (dedicated Crew DSH_HOME, profile dsh-crew; ${registration.changed ? 'updated' : 'already current'})`);
+    // The launcher preflight and the supervisor both require
+    // <crew DSH_HOME>/profiles/web; without it a fresh install deadlocked at
+    // the preflight ("The Harness web profile is missing") and the supervisor
+    // heartbeat timed out. Same idempotent scaffold the runtime step creates
+    // on the npx-managed path.
+    const webProfile = (ensureWebProfile ?? ensureCrewWebProfile)({ home });
+    if (!webProfile.ok) {
+      log(`✗ Crew web profile bootstrap failed (${webProfile.code ?? 'unknown'})`);
+      return { ok: false, error: 'Crew web profile bootstrap failed' };
+    }
+    if (webProfile.created) mark(log, true, 'Crew web profile scaffold created');
   }
+
+  // The host integrations must be written against the same root readiness
+  // derives (integrationRoot) — see activateRelease. After registration the
+  // link resolves to this checkout, so this is the loader link path.
+  const integrationWriteRoot = integrationRoot({ home, root, name });
 
   if (dryRun) mark(log, true, 'Codex Desktop integration (dry-run)');
   else {
-    const r = installer.installCodex ? installer.installCodex({ home, root }) : realInstaller.installCodex({ home, root });
+    const r = installer.installCodex ? installer.installCodex({ home, root: integrationWriteRoot }) : realInstaller.installCodex({ home, root: integrationWriteRoot });
     mark(log, r.ok !== false, r.ok === false ? `Codex Desktop integration failed: ${(r.actions ?? []).join('; ')}` : 'Codex Desktop integration');
     if (r.ok === false) return { ok: false, error: 'Codex integration failed' };
   }
@@ -231,8 +258,8 @@ export async function setupInstall({
   if (dryRun) mark(log, true, 'ZCode integration (dry-run)');
   else {
     const r = installer.installZCode
-      ? installer.installZCode({ home, root })
-      : realInstaller.installZCode({ home, root });
+      ? installer.installZCode({ home, root: integrationWriteRoot })
+      : realInstaller.installZCode({ home, root: integrationWriteRoot });
     if (r.ok === false) {
       mark(log, false, `ZCode integration failed (${r.code ?? 'unknown'})`);
       return { ok: false, error: 'ZCode integration failed' };
@@ -253,7 +280,7 @@ export async function setupInstall({
   }
 
   if (commandExists('claude')) {
-    const r = await runClaudeIntegrationStep({ dryRun, log, root, home, installer });
+    const r = await runClaudeIntegrationStep({ dryRun, log, root: integrationWriteRoot, home, installer });
     if (!r.ok) return r;
   } else log('- Claude Code not detected, skipped');
 

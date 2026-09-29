@@ -9,7 +9,7 @@
 // the check disagreed about what "the installed server" is, and only the
 // installer was right.
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -60,21 +60,26 @@ export function loaderLinkPath({ home = homedir(), name } = {}) {
   return join(crewProfileDir({ home }), 'node_modules', ...name.split('/'));
 }
 
-function sameDirectory(left, right) {
-  try { return realpathSync(left) === realpathSync(right); } catch { return false; }
-}
-
 /**
  * The root the host integrations were installed from.
  *
- * Readiness must judge the integrations against the path they were actually
- * written with. That path is the loader link when it resolves to this release,
- * and the release directory itself otherwise — a machine whose link is missing
- * or points somewhere else is reported against the release, which is exactly
- * the mismatch the operator needs to see.
+ * The integrations embed the loader link path itself, and the link is what the
+ * host loads through: whichever payload it currently resolves to IS the live
+ * one, and an upgrade re-points the link so the same embedded path keeps
+ * resolving to the new release. Readiness therefore judges the integrations
+ * against the link whenever it resolves to a readable payload of this package,
+ * and falls back to the caller's root only when the link is broken or carries
+ * a different package. Gating on whether the link happens to realpath to the
+ * caller's root made the writer (link-rooted) and the validator
+ * (release-rooted) disagree about the same machine, and every clean install
+ * read back as "needs repair".
  */
 export function integrationRoot({ home = homedir(), root, name } = {}) {
   const link = loaderLinkPath({ home, name });
   if (!link || !root || !existsSync(link)) return root;
-  return sameDirectory(link, root) ? link : root;
+  try {
+    const payload = JSON.parse(readFileSync(join(link, 'package.json'), 'utf8'));
+    if (payload?.name === name) return link;
+  } catch { /* broken or foreign link payload */ }
+  return root;
 }

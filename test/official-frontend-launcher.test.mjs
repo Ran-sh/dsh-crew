@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { launcherSandboxEnv } from './launcher-test-env.mjs';
 
 const maybe = process.platform === 'win32' ? test : test.skip;
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
@@ -28,7 +29,7 @@ function launchScenario(initial, trusted = true) {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo','-NoProfile','-NonInteractive','-Command',script], {
     encoding:'utf8', windowsHide:true, timeout:15000,
-    env:{...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT:'1'},
+    env: launcherSandboxEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.trim());
@@ -77,7 +78,7 @@ function supervisorScenario(body) {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8', windowsHide: true, timeout: 60_000,
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.trim());
@@ -183,7 +184,7 @@ function frontendScenario(body) {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8', windowsHide: true, timeout: 60_000,
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.trim());
@@ -267,7 +268,7 @@ maybe('Windows PowerShell 5.1 parses the root-array frontend overlay', () => {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 15_000,
-      env: { ...process.env, USERPROFILE: home, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+      env: launcherSandboxEnv({ USERPROFILE: home }),
     });
     assert.equal(result.status, 0, result.stderr);
     const parsed = JSON.parse(result.stdout.trim());

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { launcherSandboxEnv } from './launcher-test-env.mjs';
 
 const helper = fileURLToPath(new URL('../windows/start-dsh-crew.ps1', import.meta.url));
 test('supervisor checks history recovery state before launching 3210', () => {
@@ -16,7 +17,7 @@ test('supervisor checks history recovery state before launching 3210', () => {
   for (const phase of ['QUEUED', 'STOPPING', 'APPLYING', 'RECOVERY_REQUIRED', 'unknown', 'STARTING', 'VERIFYING', 'DONE', 'FAILED', 'ROLLED_BACK']) {
     writeFileSync(file, JSON.stringify({ schemaVersion: 1, phase }));
     const script = `. '${helper.replaceAll("'", "''")}'; try { Assert-HistoryStartAllowed -StatePath '${file.replaceAll("'", "''")}'; 'allowed' } catch { 'blocked' }`;
-    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' } });
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, env: launcherSandboxEnv() });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stdout.trim(), ['STARTING', 'VERIFYING', 'DONE', 'FAILED', 'ROLLED_BACK'].includes(phase) ? 'allowed' : 'blocked');
   }

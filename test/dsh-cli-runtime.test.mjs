@@ -11,6 +11,8 @@ import {
   crewDshRuntimeRoot,
   resolveDshCli,
   ensureCrewDshRuntime,
+  installDshInto,
+  verifyCrewRuntimeCohort,
   ensureCrewPluginRegistration,
   removeCrewPluginRegistration,
   reconcileProfileBundleCohort,
@@ -125,6 +127,206 @@ test('ensureCrewDshRuntime refuses to reuse a stale-cohort runtime in place', ()
     assert.equal(result.ok, false);
     assert.equal(result.code, 'DSH_RUNTIME_COHORT_MISMATCH');
     assert.equal(ran, false);
+  } finally { t.cleanup(); }
+});
+
+// ---------- the runtime tree is a COHORT, not just its core ----------
+// The install pins @deepseek-ai/dsh exactly, but npm resolves its siblings from
+// the core's own caret ranges. Once the registry publishes a newer prerelease of
+// the family, a fresh install produces core alpha.1 with alpha.2 siblings — a
+// tree that installs cleanly and then dies at boot, because dsh@alpha.1 imports
+// `watchUserPatches`, an export dsh-app-boot@alpha.2 no longer provides. Every
+// gate below therefore judges the whole family, not just the core.
+
+const DRIFTED_SIBLING = '@deepseek-ai/dsh-app-boot';
+const DRIFTED_VERSION = '0.1.6-alpha.2';
+
+// Materialize the shape an npm install leaves on disk: node_modules/@deepseek-ai
+// holding the core entry plus whichever family members were requested.
+function materializeRuntimeAt(root, { core = TARGET_DSH_VERSION, family = {} } = {}) {
+  const scope = join(root, 'node_modules', '@deepseek-ai');
+  const entry = join(scope, 'dsh', 'lib', 'bin.js');
+  mkdirSync(join(entry, '..'), { recursive: true });
+  writeFileSync(entry, '// test entry\n');
+  writeFileSync(join(scope, 'dsh', 'package.json'), JSON.stringify({ name: DSH_CLI_PACKAGE, version: core }));
+  for (const [name, version] of Object.entries(family)) {
+    const dir = join(scope, name.slice(name.indexOf('/') + 1));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }));
+  }
+  return scope;
+}
+
+function materializeRuntime(home, options) {
+  return materializeRuntimeAt(crewDshRuntimeRoot({ home }), options);
+}
+
+test('verifyCrewRuntimeCohort judges every family member against the pin', () => {
+  const t = tempHome();
+  try {
+    const coherentRoot = join(t.dir, 'coherent');
+    materializeRuntimeAt(coherentRoot, { family: { [DRIFTED_SIBLING]: TARGET_DSH_VERSION, '@deepseek-ai/dsh-base': TARGET_DSH_VERSION } });
+    const coherent = verifyCrewRuntimeCohort({ root: coherentRoot, version: TARGET_DSH_VERSION });
+    assert.equal(coherent.ok, true);
+    assert.deepEqual(coherent.drift, []);
+    assert.equal(coherent.entries.length, 3);
+
+    const mixedRoot = join(t.dir, 'mixed');
+    materializeRuntimeAt(mixedRoot, { family: { [DRIFTED_SIBLING]: DRIFTED_VERSION } });
+    const mixed = verifyCrewRuntimeCohort({ root: mixedRoot, version: TARGET_DSH_VERSION });
+    assert.equal(mixed.ok, false);
+    assert.deepEqual(mixed.drift.map((entry) => entry.name), [DRIFTED_SIBLING]);
+    assert.equal(mixed.drift[0].version, DRIFTED_VERSION);
+
+    // The core is a family member too: a core that is not the pin is drift.
+    const wrongCoreRoot = join(t.dir, 'wrong-core');
+    materializeRuntimeAt(wrongCoreRoot, { core: DRIFTED_VERSION });
+    const wrongCore = verifyCrewRuntimeCohort({ root: wrongCoreRoot, version: TARGET_DSH_VERSION });
+    assert.equal(wrongCore.ok, false);
+    assert.deepEqual(wrongCore.drift.map((entry) => entry.name), [DSH_CLI_PACKAGE]);
+
+    // Nothing installed is not a reusable cohort either.
+    assert.equal(verifyCrewRuntimeCohort({ root: join(t.dir, 'absent'), version: TARGET_DSH_VERSION }).ok, false);
+  } finally { t.cleanup(); }
+});
+
+test('a nested family copy at another version is drift, and the gate rejects it', () => {
+  const t = tempHome();
+  try {
+    const root = crewDshRuntimeRoot({ home: t.dir });
+    materializeRuntimeAt(root, { family: { '@deepseek-ai/dsh-web-app': TARGET_DSH_VERSION } });
+    // node resolves a nested sibling before the hoisted one, so a nested copy at
+    // another version breaks its parent exactly like a top-level one would.
+    const nested = join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-chat', version: DRIFTED_VERSION }));
+
+    const cohort = verifyCrewRuntimeCohort({ root, version: TARGET_DSH_VERSION });
+    assert.equal(cohort.ok, false);
+    assert.deepEqual(cohort.drift.map((entry) => entry.name), ['@deepseek-ai/dsh-client-ui-chat']);
+    assert.equal(cohort.drift[0].scope, 'dsh-web-app/node_modules');
+
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: () => { throw new Error('installer must not run for a drifted family'); },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'DSH_RUNTIME_COHORT_MISMATCH');
+    assert.match(result.error, /dsh-client-ui-chat@0\.1\.6-alpha\.2 \(nested in dsh-web-app\/node_modules\)/);
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewDshRuntime refuses to reuse a runtime whose family drifted', () => {
+  const t = tempHome();
+  try {
+    materializeRuntime(t.dir, { family: { [DRIFTED_SIBLING]: DRIFTED_VERSION } });
+    let ran = false;
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: () => { ran = true; return { status: 0, stdout: '', stderr: '' }; },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'DSH_RUNTIME_COHORT_MISMATCH');
+    assert.match(result.error, /dsh-app-boot@0\.1\.6-alpha\.2/);
+    assert.equal(ran, false, 'a live tree is never upgraded in place');
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewDshRuntime reuses a runtime whose whole family matches the pin', () => {
+  const t = tempHome();
+  try {
+    materializeRuntime(t.dir, { family: { [DRIFTED_SIBLING]: TARGET_DSH_VERSION } });
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: () => null,
+      runner: () => { throw new Error('installer must not run for a reusable runtime'); },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.reused, true);
+    assert.equal(result.cli.version, TARGET_DSH_VERSION);
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewDshRuntime locks a drifting family with overrides and reinstalls once', () => {
+  const t = tempHome();
+  try {
+    const root = crewDshRuntimeRoot({ home: t.dir });
+    const manifestFile = join(root, 'package.json');
+    const observed = [];
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: () => {
+        const manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, 'utf8')) : null;
+        observed.push(manifest);
+        // The registry only hands out the newer sibling until the tree locks the
+        // family, exactly as a post-publication install resolved it on Windows.
+        const locked = manifest?.overrides?.[DRIFTED_SIBLING] === TARGET_DSH_VERSION;
+        materializeRuntime(t.dir, { family: { [DRIFTED_SIBLING]: locked ? TARGET_DSH_VERSION : DRIFTED_VERSION } });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(result.ok, true, result.error ?? result.code);
+    assert.equal(observed.length, 2, 'one install, one locked reinstall');
+    assert.equal(observed[0], null, 'the first pass resolves the family freely');
+    assert.equal(observed[1].overrides[DRIFTED_SIBLING], TARGET_DSH_VERSION);
+    assert.equal(observed[1].pnpm.overrides[DRIFTED_SIBLING], TARGET_DSH_VERSION);
+    assert.equal(observed[1].dependencies[DSH_CLI_PACKAGE], TARGET_DSH_VERSION);
+    assert.equal(result.cohortRepaired, true);
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewDshRuntime fails closed when the family still drifts after locking', () => {
+  const t = tempHome();
+  try {
+    let installs = 0;
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: () => {
+        installs += 1;
+        materializeRuntime(t.dir, { family: { [DRIFTED_SIBLING]: DRIFTED_VERSION } });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'DSH_RUNTIME_COHORT_INCONSISTENT');
+    assert.match(result.error, /dsh-app-boot@0\.1\.6-alpha\.2/);
+    assert.equal(installs, 2, 'the repair pass is bounded to one reinstall');
+  } finally { t.cleanup(); }
+});
+
+test('installDshInto reports the mixed cohort instead of handing it to the launcher', () => {
+  const t = tempHome();
+  try {
+    const root = join(t.dir, 'runtime-stage');
+    const lock = installDshInto({
+      root,
+      version: TARGET_DSH_VERSION,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: () => {
+        materializeRuntimeAt(root, { family: { [DRIFTED_SIBLING]: DRIFTED_VERSION } });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(lock.ok, false);
+    assert.equal(lock.code, 'DSH_RUNTIME_COHORT_INCONSISTENT');
+    assert.deepEqual(lock.cohort.drift.map((entry) => entry.name), [DRIFTED_SIBLING]);
+
+    const coherent = installDshInto({
+      root: join(t.dir, 'runtime-coherent'),
+      version: TARGET_DSH_VERSION,
+      findCommand: (name) => (name === 'npm' ? 'npm' : null),
+      runner: (command, args) => {
+        const prefix = args[args.indexOf('--prefix') + 1];
+        materializeRuntimeAt(prefix, { family: { [DRIFTED_SIBLING]: TARGET_DSH_VERSION } });
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(coherent.ok, true, coherent.error ?? coherent.code);
+    assert.equal(coherent.cohortRepaired, undefined);
   } finally { t.cleanup(); }
 });
 

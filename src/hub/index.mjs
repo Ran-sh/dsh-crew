@@ -40,7 +40,7 @@ import { raceWaiters } from '../removable-waiter.mjs';
 import { buildProviderInventory } from '../provider-inventory.mjs';
 import { buildProviderLayerMigrationPlan, executeProviderLayerMigration } from '../provider-layer-migration.mjs';
 import { inspectProviderProfile, readProviderDeclarations, readProviderMaterialization } from '../provider-profile-store.mjs';
-import { inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations, readProviderSettingsMaterialization } from '../provider-settings-store.mjs';
+import { hasHarnessDefaultBlock, inspectProviderSettings, readHarnessDefault, readProviderSettingsDeclarations, readProviderSettingsMaterialization } from '../provider-settings-store.mjs';
 import { normalizeProviderLifecycleState } from '../provider-lifecycle-state.mjs';
 import { createProviderHealthStore } from '../provider-health.mjs';
 import { planProviderDelete } from '../provider-lifecycle.mjs';
@@ -251,6 +251,26 @@ export function hasCompleteProviderDeclarationEvidence(evidence) {
     && Object.values(evidence.sources ?? {}).every((source) => source?.present !== true || !source.code);
 }
 
+/**
+ * Decide what the Harness default authority evidence means. A persisted
+ * `agent-default-model` that disagrees with the live default is a real
+ * inconsistency and fails closed; a live default with nothing persisted is the
+ * normal state of a home whose model comes from configuration (the profile and
+ * base layers) — and the state every settings mutation materializes FROM, so
+ * demanding a persisted copy first deadlocked the very migration that writes one.
+ */
+export function projectHarnessDefaultEvidence({ liveDefault = null, persistedDefault = null, persistedDefaultDeclared = false } = {}) {
+  if (!liveDefault && !persistedDefault) return { ok: true, source: 'none' };
+  if (liveDefault && persistedDefault) {
+    return liveDefault.provider === persistedDefault.provider && liveDefault.model === persistedDefault.model
+      ? { ok: true, source: 'harness-settings' }
+      : { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' };
+  }
+  return persistedDefaultDeclared
+    ? { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' }
+    : { ok: true, source: 'harness-config' };
+}
+
 export function hasAvailableProviderLifecycleEvidence(evidence) {
   return evidence?.ok === true;
 }
@@ -340,6 +360,7 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   } catch { declarationEvidence.ok = false; declarationEvidence.sources.profile = { present: true, code: 'PROVIDER_SOURCE_UNAVAILABLE' }; }
   const settingsFile = join(CONFIG_DIR, 'harness', 'settings.yaml');
   let settingsDefault = null;
+  let persistedDefaultDeclared = false;
   let defaultEvidence = { ok: true, source: 'none' };
   try {
     declarationEvidence.sources.settings = { present: existsSync(settingsFile) };
@@ -352,8 +373,15 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
       }
       else { declarationEvidence.ok = false; declarationEvidence.sources.settings.code = parsed.code; }
       const parsedDefault = readHarnessDefault(source);
-      if (parsedDefault.ok) settingsDefault = parsedDefault;
-      else defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' };
+      if (parsedDefault.ok) {
+        settingsDefault = parsedDefault;
+        persistedDefaultDeclared = true;
+      } else if (hasHarnessDefaultBlock(source)) {
+        // The block exists but cannot be read: fail closed on the mutation
+        // authority rather than treating the layer as absent.
+        defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_UNAVAILABLE' };
+        persistedDefaultDeclared = true;
+      }
     }
   } catch {
     declarationEvidence.ok = false;
@@ -363,9 +391,8 @@ async function readProviderInventorySnapshot(hub, ctx, config) {
   const liveDefault = catalog.harness_default && typeof catalog.harness_default.provider === 'string' && typeof catalog.harness_default.model === 'string'
     ? { provider: catalog.harness_default.provider, model: catalog.harness_default.model } : null;
   const persistedDefault = settingsDefault ? { provider: settingsDefault.provider, model: settingsDefault.model } : null;
-  if (liveDefault || persistedDefault) {
-    if (!liveDefault || !persistedDefault) defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' };
-    else if (liveDefault.provider !== persistedDefault.provider || liveDefault.model !== persistedDefault.model) defaultEvidence = { ok: false, code: 'PROVIDER_DEFAULT_AUTHORITY_MISMATCH' };
+  if (defaultEvidence.ok) {
+    defaultEvidence = projectHarnessDefaultEvidence({ liveDefault, persistedDefault, persistedDefaultDeclared });
   }
   // The persisted agent-default-model is the mutation authority. Keep it in
   // the inventory even when the live selection is stale; the evidence gate
@@ -1436,6 +1463,30 @@ export async function apply(ctx) {
     disposers.push(webServer.register({
       kind: 'exact', path: `${ROUTE_BASE}/ping`,
       handler: (req, res) => sendJson(res, 200, { ok: true, service: 'dsh-crew-hub' }),
+    }));
+
+    // Operator entry into the full control plane. Its session token is minted per
+    // process, and every surface that links here (the desktop app's panel, the
+    // 3080 panel) runs in a different harness process whose connection service
+    // cannot mint one for this port — linking the bare port landed the operator on
+    // "dsh web authentication required". Only the hub itself can sign its own
+    // session, so it redirects; no token is written to a page, a file or a log.
+    // Loopback-only, because the Location carries a session credential.
+    disposers.push(webServer.register({
+      kind: 'exact', path: `${ROUTE_BASE}/control-plane`,
+      handler: (req, res) => {
+        if (!isLoopbackRequest(req)) return sendJson(res, 403, { ok: false, error: 'loopback only' });
+        const runtime = getHubRuntimeIdentity();
+        const base = `http://127.0.0.1:${Number(runtime?.listen_port) > 0 ? runtime.listen_port : 3210}/`;
+        let target = base;
+        try {
+          const connection = webCtx.get?.('connection');
+          const authenticated = connection?.authenticatedUrl?.(base);
+          if (typeof authenticated === 'string' && authenticated.startsWith('http://')) target = authenticated;
+        } catch { /* the bare control plane stays the honest fallback */ }
+        res.writeHead(302, { location: target, 'cache-control': 'no-store' });
+        res.end();
+      },
     }));
 
     disposers.push(webServer.register({

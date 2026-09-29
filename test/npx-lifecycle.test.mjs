@@ -58,10 +58,13 @@ import {
   readCurrentPointerState,
   managedReleasePath,
   collectExternalSpecifiers,
+  exactSpecOverrides,
 } from '../src/install/npx-lifecycle.mjs';
 // Rendered by both install entries, so it lives with the install that produces
 // the result rather than with either caller.
-import { claudeIntegrationLine } from '../src/install/install.mjs';
+import { claudeIntegrationLine, crewDshHome } from '../src/install/install.mjs';
+import { integrationRoot, loaderLinkPath } from '../src/install/crew-paths.mjs';
+import { ensureCrewWebProfile } from '../src/dsh-cli-runtime.mjs';
 import {
   OFFICIAL_BRIDGE_PACKAGE,
   officialWebIntegrationStateFile,
@@ -230,11 +233,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.2.1', async () => {
+test('package, runtime identity, and changelog identify candidate 2.2.2', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.2.1');
+  assert.equal(manifest.version, '2.2.2');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.2.1');
+  assert.equal(RUNTIME_VERSION, '2.2.2');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -1863,5 +1866,116 @@ test('rollback converges the supervisor against the exact retained release after
     assert.equal(result.ok, true);
     assert.equal(pointer.version, '1.2.0');
     assert.deepEqual(converged, [pointer.path]);
+  } finally { t.cleanup(); }
+});
+
+// ---------- fresh-install web profile scaffold (launcher preflight deadlock) ----------
+// A fresh install used to stop at the launcher preflight: the runtime step
+// never created <DSH_HOME>/profiles/web, so the supervisor could not bootstrap
+// 3210, the handoff stayed pending, and every later update was refused.
+
+test('install materializes the launcher-required web profile before supervisor convergence', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const { installer } = recordingInstaller();
+    const options = { home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() };
+    const result = await npxInstall(options);
+    assert.equal(result.ok, true);
+    const webRoot = join(crewDshHome({ home: t.dir }), 'profiles', 'web');
+    const webManifest = join(webRoot, 'package.json');
+    assert.equal(existsSync(webManifest), true, 'launcher preflight requires profiles/web/package.json');
+    const manifest = JSON.parse(readFileSync(webManifest, 'utf8'));
+    assert.equal(manifest.name, 'dsh-profile-web');
+    assert.equal(manifest.private, true);
+    assert.deepEqual(manifest.dependencies, {});
+    assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']);
+    assert.equal(existsSync(join(webRoot, 'cordis.patch.yml')), true);
+    assert.equal(existsSync(join(webRoot, 'pnpm-workspace.yaml')), true);
+    // The same-version reinstall path runs the same step: the scaffold is
+    // idempotent and an existing manifest is never rewritten.
+    const before = readFileSync(webManifest, 'utf8');
+    const next = await npxInstall(options);
+    assert.equal(next.ok, true);
+    assert.equal(readFileSync(webManifest, 'utf8'), before);
+  } finally { t.cleanup(); }
+});
+
+test('ensureCrewWebProfile fails closed on a corrupt existing manifest', () => {
+  const t = tempHome();
+  try {
+    const profileRoot = join(crewDshHome({ home: t.dir }), 'profiles', 'web');
+    mkdirSync(profileRoot, { recursive: true });
+    writeFileSync(join(profileRoot, 'package.json'), '{not json');
+    const result = ensureCrewWebProfile({ home: t.dir });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CREW_PROFILE_METADATA_INVALID');
+    assert.equal(readFileSync(join(profileRoot, 'package.json'), 'utf8'), '{not json');
+  } finally { t.cleanup(); }
+});
+
+// ---------- staged manifest locks the exact cohort (pure-npm ERESOLVE) ----------
+// The npm fallback install has no flag channel, so a transitive package whose
+// peer range disagrees with the payload's exact cohort pin aborted staging
+// with ERESOLVE. The staged manifest must pin the cohort itself via overrides.
+
+test('staging writes npm overrides that pin exact dependencies verbatim', () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const manifestFile = join(sourceRoot, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    manifest.peerDependencies = { '@ran-fake/host-peer': '9.0.0' };
+    manifest.dependencies = { '@ran-fake/sdk': '1.0.0', 'fake-zod': '^3.0.0' };
+    writeFileSync(manifestFile, JSON.stringify(manifest, null, 2));
+    const staged = stageCandidatePayload({ sourceRoot, home: t.dir });
+    assert.equal(staged.ok, true, staged.code ?? 'staging failed');
+    const stagedManifest = JSON.parse(readFileSync(join(staged.stageDir, 'package.json'), 'utf8'));
+    assert.deepEqual(stagedManifest.overrides, {
+      '@ran-fake/sdk': '1.0.0',
+      '@ran-fake/host-peer': '9.0.0',
+    });
+    // npm v11 EOVERRIDE: an override that shares a direct dependency must
+    // repeat that dependency's spec verbatim.
+    for (const [name, spec] of Object.entries(stagedManifest.overrides)) {
+      assert.equal(stagedManifest.dependencies[name], spec);
+    }
+  } finally { t.cleanup(); }
+});
+
+test('exactSpecOverrides pins only exact specs and returns null when nothing is exact', () => {
+  assert.deepEqual(exactSpecOverrides({ a: '1.2.3', b: '^2.0.0' }), { a: '1.2.3' });
+  assert.equal(exactSpecOverrides({ a: '^1.0.0' }), null);
+  assert.equal(exactSpecOverrides({}), null);
+  assert.equal(exactSpecOverrides(undefined), null);
+});
+
+// ---------- host integrations: one root derivation for write and validate ----------
+// The installers used to write against registration.linkPath unconditionally
+// while readiness derived its expectation through integrationRoot(), so any
+// gate disagreement made every clean install read back as "needs repair".
+
+test('host integrations are written against the root the validator derives', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    const base = recordingInstaller();
+    const calls = base.calls;
+    const installer = {
+      ...base.installer,
+      installZCode: (o = {}) => { calls.push(['installZCode', o]); return { ok: true }; },
+    };
+    const result = await npxInstall({ home: t.dir, sourceRoot, installer, log: () => {}, ensureRuntime: okRuntime() });
+    assert.equal(result.ok, true);
+    const link = loaderLinkPath({ home: t.dir, name: PKG_NAME });
+    assert.equal(existsSync(link), true);
+    for (const name of ['installCodex', 'installZCode', 'installClaudeCode']) {
+      const call = calls.find(([n]) => n === name);
+      assert.ok(call, `${name} ran`);
+      assert.equal(call[1].root, link, `${name} must be written against the loader link`);
+    }
+    // Status derives from the pointer root and must land on the same link.
+    const pointer = readCurrentPointer({ home: t.dir });
+    assert.equal(integrationRoot({ home: t.dir, root: pointer.path, name: PKG_NAME }), link);
   } finally { t.cleanup(); }
 });

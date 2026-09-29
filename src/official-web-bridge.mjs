@@ -406,7 +406,9 @@ export function registerOfficialWebBridge(ctx, options = {}) {
           ui_role: 'quick-controls',
           execution_plane: 'hub-3210',
           listen_port: 3210,
-          full_control_plane_url: 'http://127.0.0.1:3210/',
+          // The usable entry: the hub mints its own session and redirects, because
+          // a bare port asks for a token only the hub's own process can sign.
+          full_control_plane_url: 'http://127.0.0.1:3210/_dsh/dsh-crew/control-plane',
         });
       },
     });

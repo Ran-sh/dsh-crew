@@ -4,6 +4,10 @@ import { readFileSync } from 'node:fs';
 
 const PREFIX = '/_dsh/dsh-crew';
 const BACKEND = 'http://127.0.0.1:3210';
+// The control plane's session belongs to the hub's own process, so the only usable
+// entry is the hub's redirect: it mints the session and 302s into it. Advertising
+// the bare port here sent operators to "dsh web authentication required".
+const CONTROL_PLANE = `${BACKEND}${PREFIX}/control-plane`;
 const REVISION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).dshCrewFrontendRevision ?? null;
 
 function trusted(req) {
@@ -21,7 +25,7 @@ export function registerFrontend(ctx, { fetchImpl = globalThis.fetch } = {}) {
     const disposers = [];
     disposers.push(webServer.register({ kind: 'exact', path: `${PREFIX}/bridge-status`, handler(req, res) {
       if (!trusted(req)) return send(res, 403, { ok: false, code: 'LOCAL_SAME_ORIGIN_ONLY' });
-      send(res, 200, { ok: true, surface: 'official-bridge', ui_role: 'quick-controls', frontend_revision: REVISION, full_control_plane_url: `${BACKEND}/` });
+      send(res, 200, { ok: true, surface: 'official-bridge', ui_role: 'quick-controls', frontend_revision: REVISION, full_control_plane_url: CONTROL_PLANE });
     } }));
     for (const suffix of ['/quick-config', '/quick-status']) {
       disposers.push(webServer.register({ kind: 'exact', path: `${PREFIX}${suffix}`, async handler(req, res) {

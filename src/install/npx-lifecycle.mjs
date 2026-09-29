@@ -42,12 +42,15 @@ import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
 import { samePayloadContent, capturePayloadContent } from './payload-content.mjs';
 import { crewDshHome, crewProfileDir, claudeIntegrationLine } from './install.mjs';
+import { integrationRoot } from './crew-paths.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
 import { RELEASE_COHORT_FILENAME } from '../dsh-cohort.mjs';
 import { renameTree } from './tree-move.mjs';
 import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted } from './runtime-lifecycle.mjs';
-import { ensureCrewDshRuntime, ensureCrewPluginRegistration, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, gcRetainedRuntimes, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { ensureCrewDshRuntime, ensureCrewPluginRegistration, ensureCrewWebProfile, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, gcRetainedRuntimes, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
+import { desktopAttach, desktopDetach, desktopStatus } from './desktop-profile.mjs';
+import { mirrorOfficialHarnessConfig, officialConfigMirrorStatus } from './harness-config-import.mjs';
 import {
   ensureOfficialWebIntegration,
   officialWebIntegrationStatus,
@@ -970,6 +973,28 @@ function defaultNpmInstaller(stageRoot, log) {
   return true;
 }
 
+// Exact-version specs only (the pinned-cohort shape). Ranges stay with normal
+// resolution: a range override would both fight the resolver and violate the
+// verbatim-spec rule npm applies when a direct dependency shares the name.
+const EXACT_SPEC_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Lock every exact-pinned dependency to its own version across the whole
+ * staged tree. The npm fallback install has no flag channel (sanitized env,
+ * fixed args), so a drifting transitive peer — e.g. a projection package
+ * peer-requiring a newer cohort than the payload's pin — otherwise aborts
+ * staging with ERESOLVE. npm v11 rejects an override whose spec differs from
+ * the direct dependency, so each override reuses the dependency's exact spec
+ * verbatim.
+ */
+export function exactSpecOverrides(dependencies) {
+  const overrides = {};
+  for (const [name, spec] of Object.entries(dependencies ?? {})) {
+    if (typeof spec === 'string' && EXACT_SPEC_RE.test(spec)) overrides[name] = spec;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : null;
+}
+
 // ---- payload staging ---------------------------------------------------------
 
 /**
@@ -1029,6 +1054,8 @@ export function stageCandidatePayload({
     ...(manifest.peerDependencies ?? {}),
     ...(manifest.dependencies ?? {}),
   };
+  const overrides = exactSpecOverrides(stagedManifest.dependencies);
+  if (overrides) stagedManifest.overrides = overrides;
   writeFileSync(join(stageDir, 'package.json'), JSON.stringify(stagedManifest, null, 2) + '\n');
 
   // Materialize dependencies: prefer replicating the exact bits the candidate
@@ -2217,7 +2244,7 @@ export function buildProductionMigration({ home, log = () => {}, stopOwned, star
   });
 }
 
-async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, stopOwned, startOwned, verifyOwned, supervisorFactory = crewSupervisor }) {  const ensure = ensureRuntime ?? ((opts) => {
+async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, ensureWebProfile, stopOwned, startOwned, verifyOwned, supervisorFactory = crewSupervisor }) {  const ensure = ensureRuntime ?? ((opts) => {
     const r = ensureCrewDshRuntime({ ...opts, env: sanitizedPackageManagerEnv() });
     if (!r.ok && r.stderrTail) {
       log(`  (runtime installer said: ${r.stderrTail})`);
@@ -2225,17 +2252,37 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
     if (!r.ok && r.code === 'DSH_RUNTIME_COHORT_MISMATCH') {
       return { ok: false, code: r.code, error: r.error, installed: r.installed, target: r.target, needsMigration: true };
     }
-    return r.ok ? { ok: true, version: r.cli?.version ?? null } : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
+    return r.ok
+      ? { ok: true, version: r.cli?.version ?? null, cohortRepaired: r.cohortRepaired === true }
+      : { ok: false, error: r.error ?? r.code ?? 'runtime bootstrap failed' };
   });
   // Production migration wiring: ONE supervisor instance per migration,
   // reused by stop/start/verify/rollback so child identity stays coherent.
   // No legacy bridge involved. Missing callbacks fail closed inside
   // migrateCrewDshRuntime.
   const migrate = migrateRuntime ?? buildProductionMigration({ home, log, stopOwned, startOwned, verifyOwned, supervisorFactory });
+  // The runtime alone cannot boot a managed 3210/3080: the launcher preflight
+  // and the supervisor require <DSH_HOME>/profiles/web. Materialize it here —
+  // before any supervisor convergence, on every path that ends in "runtime
+  // ready" — so a fresh install cannot deadlock on a heartbeat that a
+  // profile-less service can never publish.
+  const convergeWebProfile = () => {
+    const profile = (ensureWebProfile ?? ensureCrewWebProfile)({ home });
+    if (!profile.ok) {
+      log(`✗ Crew web profile bootstrap failed (${profile.code ?? 'unknown error'})`);
+      return false;
+    }
+    if (profile.created) log(`✓ Crew web profile scaffold created (${profile.profileRoot})`);
+    return true;
+  };
   const r = await ensure({ home });
   if (r?.ok) {
     log(`✓ reusable Crew DSH runtime${r.version ? ` (@${r.version})` : ''}`);
-    return true;
+    // The install locks the whole family when the registry had published a newer
+    // prerelease than the pinned cohort; say so, because a silent repair is
+    // indistinguishable from a registry that never drifted.
+    if (r.cohortRepaired) log('  the DSH family had drifted from the pinned cohort; installed the pinned family instead');
+    return convergeWebProfile();
   }
   if (r?.needsMigration === true) {
     log(`- runtime cohort stale (${r.installed} -> ${r.target}); migrating via staged transaction`);
@@ -2245,7 +2292,7 @@ async function ensureRuntimeStep({ home, log, ensureRuntime, migrateRuntime, sto
       return false;
     }
     log(`✓ runtime cohort migrated (@${m.version})`);
-    return true;
+    return convergeWebProfile();
   }
   log(`✗ reusable Crew DSH runtime unavailable: ${r?.error ?? 'unknown error'}`);
   return false;
@@ -2624,9 +2671,18 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   // leave four configurations naming a directory that is gone. Writing the
   // release path directly is what made crash recovery unable to delete a
   // candidate without breaking Codex, ZCode and Claude Code.
-  const integrationRoot = registration.linkPath ?? releaseDir;
+  //
+  // The root is derived through the SAME integrationRoot() the readiness
+  // checks use, not blindly from registration.linkPath: write and validate
+  // must be one function of (home, releaseDir, name). In the healthy case the
+  // gate passes right after registration re-pointed the link, so this is
+  // still the link path; when the gate fails, both sides fall back to the
+  // release directory together instead of the writer using the link while the
+  // validator reports the release — the disagreement that made every clean
+  // install read back as "needs repair".
+  const integrationWriteRoot = integrationRoot({ home, root: releaseDir, name: manifest.name });
 
-  const codex = installer.installCodex({ home, root: integrationRoot });
+  const codex = installer.installCodex({ home, root: integrationWriteRoot });
   if (codex.ok === false) {
     log(`✗ Codex Desktop integration failed: ${(codex.actions ?? []).join('; ')}`);
     return false;
@@ -2634,7 +2690,7 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   log('✓ Codex Desktop integration');
 
   if (installer.installZCode) {
-    const zcode = installer.installZCode({ home, root: integrationRoot });
+    const zcode = installer.installZCode({ home, root: integrationWriteRoot });
     if (zcode.ok === false) {
       log(`✗ ZCode integration failed (${zcode.code ?? 'unknown'})`);
       return false;
@@ -2649,7 +2705,7 @@ async function activateRelease({ home, releaseDir, manifest, log, installer, sup
   }
   if (startup?.supported) log('✓ Windows login startup');
 
-  const claude = await installer.installClaudeCode({ home, root: integrationRoot });
+  const claude = await installer.installClaudeCode({ home, root: integrationWriteRoot });
   if (claude.ok === false) {
     log(claudeIntegrationLine(claude));
     return false;
@@ -2686,6 +2742,59 @@ export async function npxIntegrate({ home = homedir(), log = console.log } = {})
 export async function npxDetach({ home = homedir(), log = console.log } = {}) {
   log('✗ official 3080 detach is disabled: the official web profile is read-only');
   return { ok: false, error: 'OFFICIAL_WEB_PROFILE_READ_ONLY' };
+}
+
+// Desktop-client integration. The official desktop app boots its Harness with the
+// app-exclusive `desktop` profile, so the Crew panel can only reach it through
+// that profile's own patch layer — the one official-home write Crew performs, and
+// only because an operator asked for it by name. It never runs during install,
+// update or supervision.
+export async function npxDesktop({ home = homedir(), args = [], dryRun = false, log = console.log } = {}) {
+  const action = args[0] ?? 'status';
+  if (!['attach', 'detach', 'status'].includes(action)) {
+    log(`✗ unknown desktop action: ${action}`);
+    return { ok: false, error: 'usage: dsh-crew desktop <attach|detach|status> [--dry-run]' };
+  }
+  if (action === 'status') {
+    const status = desktopStatus({ home });
+    if (!status.file_present) log(`- desktop patch layer: absent (${status.path})`);
+    else if (!status.attached) log(`- desktop patch layer: present, no Crew bridge (${status.path})`);
+    else if (status.current) log(`✓ desktop patch layer carries the current Crew bridge (revision ${status.bridge?.revision})`);
+    else log(`! desktop patch layer carries a stale Crew bridge (current revision ${status.bridge?.revision ?? 'unavailable'})`);
+    if (!status.bridge) log(`  (${status.bridge_error})`);
+    log(JSON.stringify(status, null, 2));
+    return { ok: true, status };
+  }
+  const result = action === 'attach'
+    ? desktopAttach({ home, dryRun, log })
+    : desktopDetach({ home, dryRun, log });
+  if (!result.ok) log(`✗ desktop ${action} failed: ${result.error ?? result.code}`);
+  return result;
+}
+
+// Bring the operator's user-level DSH configuration across from the official home
+// into Crew's home: the Crew hub then runs the same models, providers, policy and
+// MCP servers as the desktop app. Read-only on ~/.dsh, no secrets copied (provider
+// entries keep their apiKeyEnv references, and those variables are inherited).
+export async function npxConfig({ home = homedir(), args = [], dryRun = false, log = console.log } = {}) {
+  const action = args[0] ?? 'status';
+  if (!['import', 'status'].includes(action)) {
+    log(`✗ unknown config action: ${action}`);
+    return { ok: false, error: 'usage: dsh-crew config <import|status> [--dry-run]' };
+  }
+  if (action === 'status') {
+    const status = officialConfigMirrorStatus({ home });
+    for (const layer of [status.home_layer, status.profile_layer]) {
+      log(`- ${layer.label}: ${!layer.source_present ? `no official source (${layer.source})` : layer.mirrored ? 'mirrored' : 'not imported yet (run: dsh-crew config import)'}`);
+    }
+    log(JSON.stringify(status, null, 2));
+    return { ok: true, status };
+  }
+  const result = mirrorOfficialHarnessConfig({ home, dryRun, log });
+  if (result.ok && result.changed && !dryRun) {
+    log('  the Crew harness hot-watches its patch layers; the hub picks the imported configuration up without a restart');
+  }
+  return result;
 }
 
 export async function npxInstall({
@@ -3196,6 +3305,16 @@ export function npxStatus({
   }
   log(`DSH plugin: ${dshPlugin} (dedicated dsh-crew profile on 3210)`);
   log(`Official 3080 UI bridge: ${officialWeb}`);
+  // The desktop app carries its own bridge entry, which pins a revision: after a
+  // payload update that entry is stale until it is re-pointed, so say which of the
+  // three states the machine is in instead of leaving the panel silently old.
+  const desktop = desktopStatus({ home });
+  log(`Desktop app integration: ${
+    !desktop.file_present ? 'not attached (run: dsh-crew desktop attach)'
+      : desktop.attached && desktop.current ? 'attached'
+        : desktop.attached ? 'attached to a stale bridge revision (run: dsh-crew desktop attach)'
+          : 'not attached (run: dsh-crew desktop attach)'
+  }`);
   log(`Codex Desktop integration: ${codex}`);
   log(`ZCode integration: ${zcode}`);
   log(`Claude Code integration: ${claude}`);
@@ -3291,6 +3410,16 @@ Commands:
   install     persist the candidate package into Crew-owned state and register it
   integrate   disabled: the official web profile is read-only (legacy bridge retired)
   detach      disabled: the official web profile is read-only (legacy bridge retired)
+  desktop     the official DSH desktop app: attach|detach|status the Crew panel in its
+              own patch layer (~/.dsh/profiles/desktop/cordis.patch.yml, hot-watched
+              by the Harness). The only official-home write Crew performs, and only
+              when this command is run; attach is idempotent and follows the current
+              bridge revision, detach removes exactly the block it wrote
+  config      import|status the operator's user-level DSH configuration (models,
+              providers, policy, MCP servers) from the official home into Crew's own
+              home, so the Crew hub matches the desktop app. Read-only on ~/.dsh; no
+              secrets are copied (provider entries keep their apiKeyEnv references);
+              entries naming packages absent from Crew's runtime cohort are skipped
   status      read-only report of launcher/installed versions and integrations
   inspect     print the machine-readable extension capability/readiness contract
   jobs        machine-first job API: list|get|watch|cancel|submit
@@ -3312,6 +3441,7 @@ Options:
   --replacement-default <id>   with providers delete-plan: replacement Harness Default provider
   --confirm           with providers delete: confirm the destructive mutation
   --purge             with uninstall: also remove ~/.config/dsh-crew config/backups (destructive)
+  --dry-run           with desktop attach|detach: report the change without writing
   --help              show this help
 
 Primary install: npm install -g @ran-sh/dsh-crew   (then run: dsh-crew install)
@@ -3622,6 +3752,7 @@ function normalizeCommand(argv) {
   let expectedRevision;
   let replacementDefault;
   let confirm = false;
+  let dryRun = false;
   let purgeOrphanCredentials = false;
   for (let index = 0; index < flags.length; index += 1) {
     if (flags[index] === '--candidate') {
@@ -3661,16 +3792,18 @@ function normalizeCommand(argv) {
       replacementDefault = flags[index].slice('--replacement-default='.length); flags.splice(index, 1); index -= 1;
     } else if (flags[index] === '--confirm') {
       confirm = true; flags.splice(index, 1); index -= 1;
+    } else if (flags[index] === '--dry-run') {
+      dryRun = true; flags.splice(index, 1); index -= 1;
     } else if (flags[index] === '--purge-orphan-credentials') {
       purgeOrphanCredentials = true; flags.splice(index, 1); index -= 1;
     }
   }
-  const knownFlags = new Set(['--purge']);
+  const knownFlags = new Set(['--purge', '--dry-run']);
   const unknown = flags.filter((f) => f.startsWith('--') && !knownFlags.has(f));
   const args = flags.filter((f) => !f.startsWith('--'));
   if (!Number.isInteger(after) || after < 0) unknown.push('--after');
   if (!['compact', 'full'].includes(detail)) unknown.push('--detail');
-  return { command: argv[0], purge: flags.includes('--purge'), candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, args, unknown };
+  return { command: argv[0], purge: flags.includes('--purge'), candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, dryRun, purgeOrphanCredentials, args, unknown };
 }
 
 /**
@@ -3682,7 +3815,7 @@ export async function runNpxCli({
   error = console.error,
   commands = {},
 } = {}) {
-  const { command, purge, candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, args, unknown } = normalizeCommand(argv);
+  const { command, purge, candidate, after, detail, request, planId, expectedRevision, replacementDefault, confirm, dryRun, purgeOrphanCredentials, args, unknown } = normalizeCommand(argv);
   if (command === '--help' || command === '-h' || command === 'help') {
     log(USAGE);
     return 0;
@@ -3691,7 +3824,7 @@ export async function runNpxCli({
     error(USAGE);
     return 1;
   }
-  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'status', 'inspect', 'jobs', 'providers', 'credentials', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
+  if (unknown.length > 0 || !['install', 'integrate', 'detach', 'desktop', 'config', 'status', 'inspect', 'jobs', 'providers', 'credentials', 'releases', 'rollback', 'update', 'uninstall'].includes(command)) {
     error(`unknown command: ${command ?? '<none>'}\n\n${USAGE}`);
     return 1;
   }
@@ -3700,6 +3833,8 @@ export async function runNpxCli({
       install: commands.install ?? npxInstall,
       integrate: commands.integrate ?? npxIntegrate,
       detach: commands.detach ?? npxDetach,
+      desktop: commands.desktop ?? npxDesktop,
+      config: commands.config ?? npxConfig,
       status: commands.status ?? npxStatus,
       inspect: commands.inspect ?? npxInspect,
       jobs: commands.jobs ?? npxJobs,
@@ -3713,6 +3848,8 @@ export async function runNpxCli({
     let result;
     if (command === 'uninstall') result = await actions.uninstall({ purge, log });
     else if (command === 'update') result = await actions.update({ candidate, log });
+    else if (command === 'desktop') result = await actions.desktop({ args, dryRun, log });
+    else if (command === 'config') result = await actions.config({ args, dryRun, log });
     else if (command === 'jobs') result = await actions.jobs({ args, after, detail, request, log });
     else if (command === 'providers') result = await actions.providers({ args, planId, expectedRevision, replacementDefault, confirm, purgeOrphanCredentials, log });
     else if (command === 'credentials') result = await actions.credentials({ args, planId, expectedRevision, confirm, log });

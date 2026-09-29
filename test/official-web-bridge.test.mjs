@@ -378,7 +378,7 @@ test('official bridge registers quick-status and the narrow quick allowlist', ()
     ui_role: 'quick-controls',
     execution_plane: 'hub-3210',
     listen_port: 3210,
-    full_control_plane_url: 'http://127.0.0.1:3210/',
+    full_control_plane_url: 'http://127.0.0.1:3210/_dsh/dsh-crew/control-plane',
   });
 });
 

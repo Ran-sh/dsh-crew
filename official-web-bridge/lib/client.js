@@ -61,7 +61,7 @@ function PanelHeader({ title, eyebrow, description, href, linkText, children }) 
 //#endregion
 //#region src/client/quick-panel.tsx
 const API = "/_dsh/dsh-crew";
-const FULL = "http://127.0.0.1:3210/";
+const FULL = "http://127.0.0.1:3210/_dsh/dsh-crew/control-plane";
 const RESTART_KEYS = /* @__PURE__ */ new Set([]);
 const T = {
 	zh: {

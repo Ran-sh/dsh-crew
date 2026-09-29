@@ -9,7 +9,12 @@ import { PanelHeader, PanelStyles } from './panel-chrome';
 // (/_dsh/dsh-crew/quick-config, /quick-status). Runtime maintenance stays on 3210.
 
 const API = '/_dsh/dsh-crew';
-const FULL = 'http://127.0.0.1:3210/';
+// The control plane needs its own session, and this panel runs in a DIFFERENT
+// harness process (the desktop app, or the 3080 frontend): its connection service
+// cannot mint a token for 3210, so linking the bare port landed the operator on
+// "dsh web authentication required". The hub's own endpoint mints the session and
+// redirects, so no token is ever published to a page or a file.
+const FULL = 'http://127.0.0.1:3210/_dsh/dsh-crew/control-plane';
 
 type ModelEntry = { provider: string; model: string };
 type QuickConfig = {

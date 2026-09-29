@@ -382,9 +382,27 @@ export function inspectProviderSettings(source) {
   return { ok: true, schema: 'harness-settings-llm-pi-ai-v1', providerIds: parsed.entries.map((entry) => entry.id), revision };
 }
 
+/** Whether the settings document carries a Harness provider section at all. */
+export function hasProviderSettingsSection(source) {
+  return typeof source === 'string' && source.split(/\r?\n/u).some((line) => /^llm-pi-ai:\s*$/u.test(line));
+}
+
+/** Whether the settings document declares a Harness default-model authority. */
+export function hasHarnessDefaultBlock(source) {
+  return typeof source === 'string' && source.split(/\r?\n/u).some((line) => /^agent-default-model:\s*$/u.test(line));
+}
+
 export function readProviderSettingsDeclarations(source, { file = 'harness/settings.yaml' } = {}) {
   const parsed = parseProviderMap(source);
-  if (!parsed.ok) return { ok: false, code: parsed.code };
+  // A settings file with no `llm-pi-ai:` section declares no providers. That is
+  // not an unsupported schema — it is the state every home starts in and the
+  // state a provider migration writes into — so only a section that EXISTS but
+  // cannot be parsed is refused.
+  if (!parsed.ok) {
+    return parsed.code === 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED' && !hasProviderSettingsSection(source)
+      ? { ok: true, declarations: [], absent: true, file }
+      : { ok: false, code: parsed.code };
+  }
   return {
     ok: true,
     declarations: parsed.entries.map((entry) => {

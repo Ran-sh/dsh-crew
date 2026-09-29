@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addProviderSettings,
+  hasHarnessDefaultBlock,
   hasInlineProviderCredentials,
+  hasProviderSettingsSection,
   inspectProviderSettings,
   readProviderSettingsDeclarations,
   readProviderSettingsMaterialization,
@@ -279,6 +281,28 @@ test('flow parsing is quote-aware for commas, colons, brackets, and braces', () 
   const result = readProviderSettingsMaterialization(quoted, { providerId: 'opencode-go-muse' });
   assert.equal(result.ok, true);
   assert.equal(result.provider.models[0].name, 'Muse, Spark: [1.3] {Contributor}');
+});
+
+// A home whose model comes from configuration has a settings file that carries
+// no provider section at all. Reading that as an unsupported schema blocked the
+// provider migration that would have written the section, so the two states must
+// be told apart: absent declares nothing, malformed fails closed.
+test('a settings file without a provider section declares nothing instead of an unsupported schema', () => {
+  const bare = 'ui-onboarding:\n  welcomeNoticeVersion: 2026-08-13.1\n';
+  const result = readProviderSettingsDeclarations(bare);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.declarations, []);
+  assert.equal(result.absent, true);
+  assert.equal(hasProviderSettingsSection(bare), false);
+  assert.equal(hasProviderSettingsSection(SETTINGS), true);
+  assert.equal(hasHarnessDefaultBlock(bare), false);
+  assert.equal(hasHarnessDefaultBlock(SETTINGS_WITH_DEFAULT), true);
+
+  // A section that EXISTS but cannot be parsed is still refused.
+  const malformed = FLOW_SETTINGS.replace('    {\n      opencode-go-muse:', '      opencode-go-muse:');
+  const refused = readProviderSettingsDeclarations(malformed);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'PROVIDER_SETTINGS_SCHEMA_UNSUPPORTED');
 });
 
 test('malformed flow collections fail closed without returning provider values', () => {

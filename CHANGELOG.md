@@ -4,6 +4,96 @@
 
 Future changes go here.
 
+## 2.2.2 — 2026-09-29
+
+- **Crew can run the operator's own configuration instead of a blank home.**
+  Crew keeps its own DSH home, so the Crew hub started with none of the models,
+  providers, policy or MCP servers the desktop app has — a second, unconfigured
+  world next to the one the operator actually works in. `dsh-crew config import`
+  now mirrors the official home's user-level layers into Crew's home (home-level
+  MCP servers, and the desktop profile's model/provider/policy entries), and
+  `dsh-crew config status` reports the state. The official home stays read-only
+  and no secret is copied: provider entries keep their `apiKeyEnv` references and
+  those variables come from the operator's user environment. Entries naming a
+  package absent from Crew's runtime cohort are skipped and reported — the
+  desktop app runs a different cohort, and the Harness installs patches
+  fail-loud, so a blind copy would break the hub.
+- **"Open the 3210 backend" no longer lands on an authentication wall.** The
+  panel hard-coded the bare control-plane port, but that page's session token
+  belongs to the hub's own process — the panel runs in the desktop app (or the
+  3080 frontend), whose connection service cannot mint a token for 3210 — so the
+  button sent the operator straight to "dsh web authentication required". Every
+  entry (the panel links, the bridge's `full_control_plane_url`) now points at the
+  hub's own loopback-only `/control-plane` endpoint, which mints the session
+  through the Harness connection service and redirects into it; no token is
+  written to a page, a file or a log, and a non-loopback caller is refused.
+- **A configuration-declared default model is an authority again.** Provider
+  readiness demanded a persisted `agent-default-model` inside the Harness settings
+  and read a live-but-unpersisted default as a mismatch — but a Crew home takes its
+  model from the profile and base layers, so nothing ever writes that copy, and the
+  provider migration that would have written one was gated on this very evidence.
+  Every such home therefore reported `PROVIDER_LIFECYCLE_INCONSISTENT` forever and
+  its provider mutations stayed refused. The mismatch is now reserved for a
+  persisted authority that actually contradicts the live default, and a settings
+  file carrying no provider section at all reads as "nothing declared" rather than
+  an unsupported schema; only a section that exists but cannot be parsed still
+  fails closed.
+- **The official desktop app can carry the Crew panel.** The Electron client
+  boots its own Harness with the app-exclusive `desktop` profile (the CLI refuses
+  to manage that profile), so the Crew panel reached only the launcher's own 3080
+  and never the app the operator actually works in. `dsh-crew desktop attach`
+  appends one managed insert to that profile's own patch layer
+  (`~/.dsh/profiles/desktop/cordis.patch.yml`, hot-watched by the Harness, so no
+  restart is needed) pointing at the same bridge snapshot the launcher loads;
+  `detach` removes exactly that block, and `status` reports attached / stale /
+  absent. It is the one official-home write Crew performs and it never runs
+  during install, update or supervision — only when the operator asks. `status`
+  names the desktop state too, because a payload update leaves the entry pointing
+  at the previous revision until `desktop attach` re-points it.
+- **The Claude plugin manifest shares the 2.2.2 version.** `.claude-plugin/plugin.json`
+  still read 2.2.1 after the release bump, which the distribution contract's
+  single-version-authority check rejects.
+
+- **Fresh installs can no longer deadlock on a missing web profile.** The
+  runtime step supplied the CLI but nothing created `<crew DSH_HOME>/profiles/web`,
+  which both the Windows launcher preflight and the supervisor require, so a
+  first install died at `SUPERVISOR_TARGET_HEARTBEAT_TIMEOUT` with the handoff
+  pending and every later update refused. The runtime step now materializes the
+  profile scaffold (idempotently, via the same registration helpers the
+  dsh-crew profile uses) before any supervisor convergence, on both the reuse
+  and the cohort-migration paths; an existing valid manifest is left untouched
+  and a corrupt one fails closed instead of being overwritten.
+- **Pure-npm staging pins the exact cohort through the manifest.** The npm
+  fallback install has no flag channel (sanitized env, fixed args), so a
+  drifting transitive peer — a package peer-requiring a newer cohort than the
+  payload's exact pin — aborted staging with ERESOLVE. The staged manifest now
+  carries npm `overrides` that repeat every exact-pinned dependency's spec
+  verbatim (the npm v11 rule for overrides that share a direct dependency);
+  range specs are left to normal resolution.
+- **A pinned cohort can no longer be undermined by its own caret ranges.** The
+  runtime install pinned `@deepseek-ai/dsh` exactly but left the
+  `@deepseek-ai/dsh-*` family to npm's resolution of that core's ranges, so once
+  the registry published a newer prerelease of the family a fresh install
+  produced a MIXED tree — core alpha.1 with alpha.2 siblings — that installed
+  cleanly and then died at boot, because the alpha.1 core imports
+  `watchUserPatches`, an export the alpha.2 `dsh-app-boot` no longer provides.
+  That tree is what took the managed 3080 frontend down with "exited before
+  readiness". The install now judges every installed copy of the family (nested
+  copies included — node resolves those first for their parent), locks a tree
+  that drifted with npm/pnpm `overrides`, reinstalls it once, and verifies the
+  result; the reuse gate names the drifting packages instead of reporting a
+  mixed tree as reusable, and a family that still drifts after the lock fails
+  closed as `DSH_RUNTIME_COHORT_INCONSISTENT`.
+- **Host integrations are written against the root readiness derives.**
+  Activation wrote Codex/ZCode/Claude configurations against the registration
+  link unconditionally while status derived its expectation through
+  `integrationRoot()`, so any disagreement between the two derivations made a
+  correctly installed machine read back as "needs repair" — reproducibly, even
+  after a clean reinstall. Both sides now use the same `integrationRoot()`
+  derivation of (home, releaseDir, name): the healthy path still writes the
+  loader link, and when the gate fails both sides fall back to the release
+  directory together.
+
 ## 2.2.1 — 2026-09-17
 
 - **Retained runtime cohorts are pruned again.** `gcRetainedRuntimes` existed to

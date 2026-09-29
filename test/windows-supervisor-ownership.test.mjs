@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { launcherSandboxEnv } from './launcher-test-env.mjs';
 
 // The launcher under test is a Windows PowerShell script driven through
 // powershell.exe; there is nothing to exercise on other platforms.
@@ -24,7 +25,7 @@ maybe('startup health preserves the installed extension contract', () => {
     '@{ good=$good.Ready; bad=$bad.Ready; uri=$script:requestedUri } | ConvertTo-Json -Compress',
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
-    encoding: 'utf8', env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' }, timeout: 30_000, windowsHide: true,
+    encoding: 'utf8', env: launcherSandboxEnv(), timeout: 30_000, windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout.trim()), { good: true, bad: false, uri: 'http://127.0.0.1:3210/_dsh/dsh-crew/extension' });
@@ -60,7 +61,7 @@ function processTree({ rootTicks, listenerTicks }) {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });
@@ -77,7 +78,7 @@ function supervisedServices() {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });
@@ -95,7 +96,7 @@ function supervisorLaunchArguments() {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });
@@ -115,7 +116,7 @@ function untrackedListenerOwnership() {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });
@@ -148,7 +149,7 @@ function heartbeatCompatibility() {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });
@@ -192,7 +193,7 @@ function ownedServiceRecovery() {
   ].join('\n');
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', lines], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_CREW_LAUNCHER_TEST_IMPORT: '1' },
+    env: launcherSandboxEnv(),
     timeout: 60_000,
     windowsHide: true,
   });

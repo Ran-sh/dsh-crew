@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -20,6 +20,8 @@ import {
   spawnNeedsShell,
   spawnInvocation,
 } from '../scripts/setup.mjs';
+import { loaderLinkPath } from '../src/install/crew-paths.mjs';
+import { TARGET_DSH_VERSION } from '../src/dsh-cli-runtime.mjs';
 
 function makeTemp() {
   const d = mkdtempSync(join(tmpdir(), 'dsh-crew-setup-test-'));
@@ -160,6 +162,44 @@ test('install without Claude CLI skips Claude; with Claude detected it installs 
       depRunner: () => ({ ok: true, text: 'deps' }),
     });
     assert.equal(r.ok, true);
+  } finally { t.cleanup(); }
+});
+
+test('a non-dry checkout install provisions the runtime, web profile, and link-rooted integrations', async () => {
+  const t = makeTemp();
+  const calls = [];
+  try {
+    mkdirSync(join(t.dir, 'src'), { recursive: true });
+    writeFileSync(join(t.dir, 'package.json'), JSON.stringify({ name: '@ran-test/dsh-crew', main: './src/server.mjs', scripts: { 'build:client': 'node --version' }, dsh: { bundle: { patch: './cordis.patch.yml' } } }));
+    writeFileSync(join(t.dir, 'src', 'server.mjs'), '');
+    writeFileSync(join(t.dir, 'cordis.patch.yml'), '');
+    let bootstrapped = 0;
+    const logs = [];
+    const r = await setupInstall({
+      log: (m) => logs.push(m),
+      root: t.dir,
+      home: t.dir,
+      installer: fakeInstaller(calls),
+      depRunner: () => ({ ok: true, text: 'deps' }),
+      ensureRuntime: () => {
+        bootstrapped += 1;
+        return { ok: true, cli: { kind: 'crew-runtime', command: 'node', args: [], version: TARGET_DSH_VERSION, reusable: true } };
+      },
+    });
+    assert.equal(r.ok, true, logs.join('\n'));
+    assert.equal(bootstrapped, 1, 'a machine without a reusable crew runtime must provision one (the launcher only starts a crew-owned CLI)');
+    // The launcher preflight and the supervisor both require profiles/web;
+    // a checkout install that skipped it deadlocked at the preflight.
+    const webManifest = join(t.dir, '.config', 'dsh-crew', 'harness', 'profiles', 'web', 'package.json');
+    assert.equal(existsSync(webManifest), true);
+    const web = JSON.parse(readFileSync(webManifest, 'utf8'));
+    assert.equal(web.name, 'dsh-profile-web');
+    // Integrations are written against the same root readiness derives.
+    const link = loaderLinkPath({ home: t.dir, name: '@ran-test/dsh-crew' });
+    assert.equal(calls.find(([n]) => n === 'installCodex')[1].root, link);
+    assert.equal(calls.find(([n]) => n === 'installZCode')[1].root, link);
+    const claudeCall = calls.find(([n]) => n === 'installClaudeCode');
+    if (claudeCall) assert.equal(claudeCall[1].root, link);
   } finally { t.cleanup(); }
 });
 

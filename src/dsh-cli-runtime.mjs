@@ -220,14 +220,29 @@ export function ensureCrewDshRuntime({
   platform = process.platform,
   comspec = process.env.ComSpec ?? 'cmd.exe',
   env = process.env,
+  read = readFileSync,
+  write = writeFileSync,
+  log = () => {},
 } = {}) {
-  const existing = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false });
+  const existing = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false, read });
   // Reuse only when the installed runtime already matches the requested
   // cohort. A stale cohort (e.g. an online 0.1.1-rc.2 runtime) must never be
   // mistaken for the target, and it must never be upgraded in place under a
   // live hub.
   if (existing?.kind === 'crew-runtime' && existing?.version === version) {
-    return { ok: true, cli: existing, reused: true };
+    // The core matching is not enough: a tree whose family drifted boots that
+    // core against siblings from another cohort and dies on the first import
+    // the newer ones dropped. Report it as the cohort mismatch it is so the
+    // caller runs the staged (re)install instead of handing it to the launcher.
+    const cohort = verifyCrewRuntimeCohort({ root: crewDshRuntimeRoot({ home }), version, read });
+    if (cohort.ok) return { ok: true, cli: existing, reused: true };
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_COHORT_MISMATCH',
+      error: `Crew runtime family drifted from ${version}: ${describeCohortDrift(cohort.drift)}`,
+      installed: existing.version ?? null,
+      target: version,
+    };
   }
   if (existing?.kind === 'crew-runtime') {
     return {
@@ -251,13 +266,14 @@ export function ensureCrewDshRuntime({
     ? ['add', '--dir', runtimeRoot, '--ignore-scripts', packageSpec]
     : ['install', '--prefix', runtimeRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
   const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
-  const result = runner(invocation.command, invocation.args, {
+  const runInstall = () => runner(invocation.command, invocation.args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: invocation.shell,
     env: { ...env },
   });
-  const cli = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false });
+  const result = runInstall();
+  const cli = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false, read });
   if (result.status !== 0 || !cli || cli.kind !== 'crew-runtime') {
     return {
       ok: false,
@@ -278,13 +294,134 @@ export function ensureCrewDshRuntime({
       target: version,
     };
   }
-  return { ok: true, cli, reused: false, version: cli.version, runtimeRoot };
+  // The core is pinned by the install spec, but npm resolves its siblings from
+  // the core's caret ranges: a registry that published a newer prerelease of the
+  // family produces a mixed tree here, so lock and re-verify the family before
+  // this runtime can be reported reusable.
+  const locked = enforceCohortLock({ root: runtimeRoot, version, runInstall, read, write, log });
+  if (locked.failed) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_FAILED',
+      error: 'Crew-owned DSH runtime install failed',
+      status: locked.failed.status ?? -1,
+      stderrTail: String(locked.failed.stderr || locked.failed.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  if (!locked.ok) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_COHORT_INCONSISTENT',
+      error: `installed Crew runtime family does not match ${version}: ${describeCohortDrift(locked.drift)}`,
+      cohort: { drift: locked.drift },
+      target: version,
+    };
+  }
+  return { ok: true, cli, reused: false, version: cli.version, runtimeRoot, ...(locked.repairs ? { cohortRepaired: true } : {}) };
 }
 
 export function describeDshCli(cli) {
   if (!cli) return 'unavailable';
   const version = cli.version ? `@${cli.version}` : '';
   return `${cli.kind}${version}`;
+}
+
+// ---- installed cohort identity ---------------------------------------------
+// The runtime tree is a COHORT, not a single package: @deepseek-ai/dsh plus the
+// @deepseek-ai/dsh-* family it loads. The install pins the core exactly, but npm
+// still resolves the family from the core's own caret ranges, so a registry that
+// has published a newer prerelease of the family yields a MIXED tree — core
+// alpha.1 with alpha.2 siblings — that installs cleanly and then dies at boot:
+// the alpha.1 core imports exports the alpha.2 siblings no longer provide. Both
+// the reuse gate and the install therefore judge every family member, and a tree
+// that drifted is locked with overrides and reinstalled once before anything is
+// reported reusable.
+
+// A family package may carry its own nested copy of a sibling, and node
+// resolves that copy FIRST for its parent — so a nested copy at the wrong
+// version breaks the parent exactly like a top-level one. npm does produce
+// these (a reconcile against a mixed tree nested whole subtrees), so the walk
+// follows family packages down through their own node_modules and stops before
+// it can descend into unrelated trees.
+const COHORT_NESTED_DEPTH = 3;
+
+function installedCohortEntries(root, read = readFileSync) {
+  const entries = [];
+  const visit = (scope, prefix, depth) => {
+    let names;
+    try { names = readdirSync(scope); } catch { return; }
+    for (const name of names) {
+      if (name !== 'dsh' && !name.startsWith('dsh-')) continue;
+      const dir = join(scope, name);
+      entries.push({ name: `@deepseek-ai/${name}`, version: readPackageVersionAt(dir, read), scope: prefix || 'node_modules' });
+      if (depth >= COHORT_NESTED_DEPTH) continue;
+      const nested = join(dir, 'node_modules', '@deepseek-ai');
+      if (existsSync(nested)) visit(nested, `${prefix ? `${prefix}/` : ''}${name}/node_modules`, depth + 1);
+    }
+  };
+  visit(join(root, 'node_modules', '@deepseek-ai'), '', 0);
+  return entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+}
+
+/**
+ * Judge every installed copy of the family against the pinned cohort version.
+ * `drift` names each copy whose on-disk version differs (an unreadable manifest
+ * reads as null), so callers can report the exact packages instead of a bare
+ * mismatch.
+ */
+export function verifyCrewRuntimeCohort({ root, version, read = readFileSync } = {}) {
+  const entries = installedCohortEntries(root, read);
+  const drift = entries.filter((entry) => entry.version !== version);
+  return { ok: entries.length > 0 && drift.length === 0, entries, drift };
+}
+
+function describeCohortDrift(drift) {
+  return drift
+    .map((entry) => (entry.scope && entry.scope !== 'node_modules'
+      ? `${entry.name}@${entry.version ?? 'missing'} (nested in ${entry.scope})`
+      : `${entry.name}@${entry.version ?? 'missing'}`))
+    .join(', ');
+}
+
+// Lock the whole family to the cohort version. npm v11 rejects an override that
+// shares a name with a direct dependency unless the spec repeats it verbatim, so
+// the core keeps its own exact dependency entry and is left out of `overrides`;
+// pnpm reads overrides from its own field, so both are written.
+function writeCohortOverrides({ root, version, names, read = readFileSync, write = writeFileSync }) {
+  const overrides = {};
+  for (const name of names) {
+    if (name === DSH_CLI_PACKAGE) continue;
+    overrides[name] = version;
+  }
+  if (Object.keys(overrides).length === 0) return false;
+  const manifestFile = join(root, 'package.json');
+  let manifest = null;
+  try { manifest = JSON.parse(read(manifestFile, 'utf8')); } catch { manifest = null; }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) manifest = {};
+  const next = {
+    ...manifest,
+    dependencies: { ...(manifest.dependencies ?? {}), [DSH_CLI_PACKAGE]: version },
+    overrides,
+    pnpm: { ...(manifest.pnpm ?? {}), overrides },
+  };
+  write(manifestFile, `${JSON.stringify(next, null, 2)}\n`);
+  return true;
+}
+
+// Prove the freshly installed tree is a coherent cohort. A drifting family is
+// locked with overrides and reinstalled exactly ONCE; a tree that still drifts is
+// reported to the caller, never handed to the launcher as reusable.
+function enforceCohortLock({ root, version, runInstall, read = readFileSync, write = writeFileSync, log = () => {} }) {
+  const observed = verifyCrewRuntimeCohort({ root, version, read });
+  if (observed.ok) return { ok: true, repairs: 0 };
+  if (!writeCohortOverrides({ root, version, names: observed.entries.map((entry) => entry.name), read, write })) {
+    return { ok: false, drift: observed.drift };
+  }
+  log(`  DSH cohort drifted (${describeCohortDrift(observed.drift)}); locking the family with overrides`);
+  const result = runInstall();
+  if (result?.status !== 0) return { ok: false, failed: result };
+  const after = verifyCrewRuntimeCohort({ root, version, read });
+  return after.ok ? { ok: true, repairs: 1 } : { ok: false, drift: after.drift };
 }
 
 // Shared pnpm/npm install of the pinned DSH cohort into a specific root
@@ -305,6 +442,9 @@ export function installDshInto({
   platform = process.platform,
   comspec = process.env.ComSpec ?? 'cmd.exe',
   env = process.env,
+  read = readFileSync,
+  write = writeFileSync,
+  log = () => {},
 }) {
   const pnpm = pnpmCommand ?? findCommand('pnpm');
   const npm = npmCommand ?? findCommand('npm');
@@ -317,12 +457,13 @@ export function installDshInto({
     ? ['add', '--dir', root, '--ignore-scripts', packageSpec]
     : ['install', '--prefix', root, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
   const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
-  const result = runner(invocation.command, invocation.args, {
+  const runInstall = () => runner(invocation.command, invocation.args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: invocation.shell,
     env: { ...env },
   });
+  const result = runInstall();
   if (result.status !== 0) {
     return {
       ok: false,
@@ -336,7 +477,7 @@ export function installDshInto({
   if (!exists(moduleEntry)) {
     return { ok: false, code: 'DSH_RUNTIME_INSTALL_INCOMPLETE', error: 'runtime entry missing after install' };
   }
-  const installedVersion = packageVersion(moduleEntry);
+  const installedVersion = packageVersion(moduleEntry, read);
   if (installedVersion !== version) {
     return {
       ok: false,
@@ -346,7 +487,26 @@ export function installDshInto({
       target: version,
     };
   }
-  return { ok: true, root, version: installedVersion };
+  const locked = enforceCohortLock({ root, version, runInstall, read, write, log });
+  if (locked.failed) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_INSTALL_FAILED',
+      error: 'Crew runtime install failed',
+      status: locked.failed.status ?? -1,
+      stderrTail: String(locked.failed.stderr || locked.failed.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 300),
+    };
+  }
+  if (!locked.ok) {
+    return {
+      ok: false,
+      code: 'DSH_RUNTIME_COHORT_INCONSISTENT',
+      error: `installed Crew runtime family does not match ${version}: ${describeCohortDrift(locked.drift)}`,
+      cohort: { drift: locked.drift },
+      target: version,
+    };
+  }
+  return { ok: true, root, version: installedVersion, ...(locked.repairs ? { cohortRepaired: true } : {}) };
 }
 
 // Staged cohort migration: install the target cohort into a versioned
@@ -1083,4 +1243,45 @@ export function removeCrewPluginRegistration({ home = homedir(), name, profileRo
   writeFileSync(packageFile, JSON.stringify(next, null, 2) + '\n');
   if (linkStat) unlinkSync(linkPath);
   return { ok: true, removed: true };
+}
+
+/**
+ * Idempotently materialize the Crew-owned Harness `web` profile scaffold.
+ *
+ * `ensureCrewDshRuntime` supplies the CLI but nothing else a managed 3210/3080
+ * boot needs: the Windows launcher preflight and the supervisor both require
+ * `<crew DSH_HOME>/profiles/web/package.json`, and a fresh install that never
+ * created it deadlocked (supervisor heartbeat timeout -> pending handoff ->
+ * every later update refused). The scaffold is the same shape the plugin
+ * registration writes for the dsh-crew profile: an existing valid manifest is
+ * left untouched, a missing one is created from CREW_PROFILE_DEFAULT_BUNDLES,
+ * and a corrupt one fails closed instead of being overwritten.
+ */
+export function ensureCrewWebProfile({
+  home = homedir(),
+  profileName = 'web',
+  defaultBundles = CREW_PROFILE_DEFAULT_BUNDLES,
+} = {}) {
+  if (typeof profileName !== 'string' || !/^[A-Za-z0-9._-]+$/u.test(profileName)) {
+    return { ok: false, code: 'INVALID_PROFILE_NAME' };
+  }
+  const profileRoot = join(crewDshHome({ home }), 'profiles', profileName);
+  const profile = readProfileManifestForRegistration(profileRoot, { create: true, defaultBundles });
+  if (profile.ok === false) return { ok: false, code: profile.code, profileRoot };
+  let scaffoldChanged = false;
+  try {
+    scaffoldChanged = ensureProfileScaffold(profileRoot);
+    if (profile.created) {
+      writeFileSync(profile.profileManifest, JSON.stringify(profile.manifest, null, 2) + '\n');
+    }
+  } catch (error) {
+    return { ok: false, code: 'CREW_WEB_PROFILE_SCAFFOLD_FAILED', error: String(error?.message ?? error), profileRoot };
+  }
+  return {
+    ok: true,
+    profileRoot,
+    profileManifest: profile.profileManifest,
+    created: profile.created === true,
+    changed: profile.created === true || scaffoldChanged,
+  };
 }
