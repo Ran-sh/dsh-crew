@@ -4,6 +4,22 @@
 
 Future changes go here.
 
+## 2.2.11 — 2026-09-30
+
+- **Dispatch works on repositories another Windows account owns.** A shared checkout
+  owned by a different SID made every worker dispatch fail with `GIT_ERROR`: git
+  refuses even to read a repository whose owner differs, and Crew must never write
+  the global `safe.directory` remedy. The dispatch now carries a request-scoped
+  exception — `-c safe.directory=<requested root>` on the primary-repository git
+  calls, alive for exactly those subprocesses — and fails closed
+  (`WORKSPACE_TRUST_ANCHOR_MISMATCH`) when git resolves any repository other than the
+  one the request named. Global git configuration is untouched (pinned by test), no
+  wildcard is ever issued, and worktree-local operations run with plain git, because
+  the worktree Crew creates is owned by the account Crew runs as. A subdirectory cwd
+  cannot name its repository root, so it still fails closed, with instructions to run
+  at the repository root or register a workspace context. Design and security review
+  by the round-4 external review.
+
 ## 2.2.10 — 2026-09-30
 
 Closing the GitHub-read review of 2.2.9 (the reviewer read the published tree and the

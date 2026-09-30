@@ -34,6 +34,10 @@ function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+function globalSafeDirectory() {
+  try { return git(['config', '--global', '--get-all', 'safe.directory'], process.cwd()); } catch { return ''; }
+}
+
 function gitAvailable() {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
 }
@@ -260,4 +264,56 @@ test('a non-git directory is refused the same way per-job isolation refuses it',
   const res = await ensureCrewWorkspace({ cwd: plain, role: 'worker', root });
   assert.equal(res.ok, false);
   assert.equal(res.reason, 'NOT_GIT_REPOSITORY');
+});
+
+// A shared checkout can be owned by another Windows account, and Git refuses even to
+// read it. Crew must never write a global `safe.directory`, so the exception is
+// scoped to the one root the request named, carried only by the primary-repository
+// git calls, and refused outright when Git resolves any other repository.
+test('the trust exception is scoped to the requested root and fails closed elsewhere', { skip: !gitAvailable() }, async (t) => {
+  const repoRoot = repo(t);
+  const root = worktreeRoot(t);
+  const safeValue = resolve(repoRoot);
+
+  const globalBefore = globalSafeDirectory();
+  const seen = [];
+  const recording = async (args, opts = {}) => {
+    seen.push({ args, cwd: opts.cwd ?? null });
+    const out = execFileSync('git', args, { cwd: opts.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { code: 0, stdout: out ?? '', stderr: '' };
+  };
+
+  const workspace = await ensureCrewWorkspace({ cwd: repoRoot, trustedRepoRoot: repoRoot, role: 'worker', root, git: recording });
+  assert.equal(workspace.ok, true, workspace.error);
+  try {
+    assert.ok(seen.length > 0);
+    // The only trusted path anywhere is the requested root. Some ownership probes run
+    // from the worktree path but still name the primary repository — that is the repo
+    // this request already trust-scoped, not a widening. Never --global, never a
+    // wildcard, never the worktree path.
+    for (const call of seen) {
+      for (let index = 0; index < call.args.length; index += 1) {
+        if (call.args[index] === '-c' && String(call.args[index + 1] ?? '').startsWith('safe.directory=')) {
+          assert.equal(call.args[index + 1], `safe.directory=${safeValue}`, 'the only trusted path is the requested root');
+        }
+      }
+      assert.equal(call.args.includes('--global'), false);
+      assert.equal(call.args.includes('*'), false);
+      assert.equal(call.args.some((a) => String(a).startsWith('safe.directory=') && a !== `safe.directory=${safeValue}`), false);
+    }
+    assert.ok(seen.some((call) => call.args.includes(`safe.directory=${safeValue}`)), 'the exception is actually used for the primary repository');
+    assert.deepEqual(globalSafeDirectory(), globalBefore, 'no global git configuration was written');
+    assert.equal(git(['status', '--porcelain'], workspace.worktreePath) !== undefined, true, 'the created worktree works with plain git');
+  } finally { releaseCrewWorkspace(workspace); }
+});
+
+test('a trust anchor that Git does not resolve to is refused, not widened', { skip: !gitAvailable() }, async (t) => {
+  const repoRoot = repo(t);
+  const root = worktreeRoot(t);
+
+  // A subdirectory cwd cannot name the repository root it does not know, so the
+  // request fails closed instead of trusting a guess.
+  const res = await ensureCrewWorkspace({ cwd: repoRoot, trustedRepoRoot: join(repoRoot, 'sub', 'dir'), role: 'worker', root });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'WORKSPACE_TRUST_ANCHOR_MISMATCH');
 });

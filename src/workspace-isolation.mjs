@@ -77,6 +77,33 @@ async function runGit(runner, args, opts) {
   }
 }
 
+function repoPathKey(value) {
+  try {
+    const p = resolve(String(value ?? ''));
+    return process.platform === 'win32' ? p.toLowerCase() : p;
+  } catch { return String(value ?? ''); }
+}
+
+/** Whether two paths name the same repository root on this platform. */
+export function sameRepoPath(left, right) {
+  const a = repoPathKey(left);
+  const b = repoPathKey(right);
+  return a.length > 0 && a === b;
+}
+
+// A shared checkout can be owned by another Windows account, and Git refuses even to
+// read it ("dubious ownership"); the operator's usual remedy, a global
+// `safe.directory` entry, is one Crew must never write. `-c safe.directory=<root>` is
+// the scoped form: it lives and dies with the subprocess, persists nothing, and names
+// exactly one repository rather than a wildcard. Callers pass the root the request
+// itself named, and the workspace entry fails closed when Git resolves any other
+// repository.
+export function withSafeDirectory(git, trustedRepoRoot) {
+  const run = git ?? defaultRunner;
+  const safe = resolve(String(trustedRepoRoot ?? ''));
+  return (args, opts) => run(['-c', `safe.directory=${safe}`, ...args], opts);
+}
+
 const PURPOSE_MAX = 32;
 
 /** Local wall-clock stamp: readable, and what an operator expects to see. */

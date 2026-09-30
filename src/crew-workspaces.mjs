@@ -27,6 +27,8 @@ import {
   defaultWorktreeRoot,
   inspectRepository,
   resetWorktreeTo,
+  sameRepoPath,
+  withSafeDirectory,
 } from './workspace-isolation.mjs';
 import { acquireWorkspaceLock, DEFAULT_LOCK_WAIT_MS } from './workspace-lock.mjs';
 
@@ -81,6 +83,14 @@ export function crewWorkspaceLockPath({ repoRoot, role, root = defaultWorktreeRo
  */
 export async function ensureCrewWorkspace({
   cwd,
+  // The repository root the REQUEST named, when Crew may trust it for this job's git
+  // subprocesses. A shared checkout can be owned by another account, and Git refuses
+  // to read it without a `safe.directory` exception; the exception is scoped to this
+  // one root, and the repository Git resolves must be exactly that root — anything
+  // else (a subdirectory cwd, a different repo) fails closed rather than widening the
+  // trust. Worktree-local operations do not get the exception: the worktree Crew
+  // creates is owned by the account Crew runs as.
+  trustedRepoRoot = null,
   role,
   baseRevision,
   at,
@@ -92,8 +102,16 @@ export async function ensureCrewWorkspace({
   isAlive,
   pid,
 } = {}) {
-  const repo = await inspectRepository({ cwd, git });
+  const run = trustedRepoRoot ? withSafeDirectory(git, trustedRepoRoot) : git;
+  const repo = await inspectRepository({ cwd, git: run });
   if (!repo.ok) return { ok: false, reason: repo.reason, error: repo.error };
+  if (trustedRepoRoot && !sameRepoPath(repo.repoRoot, trustedRepoRoot)) {
+    return {
+      ok: false,
+      reason: 'WORKSPACE_TRUST_ANCHOR_MISMATCH',
+      error: `git resolved ${repo.repoRoot}, not the trusted root ${trustedRepoRoot}; run the job at the repository root or register a workspace context`,
+    };
+  }
   const repoRoot = repo.repoRoot;
   const revision = baseRevision ?? repo.baseRevision;
   const name = crewWorkspaceName(role);
@@ -109,7 +127,7 @@ export async function ensureCrewWorkspace({
     return { ok: false, reason, error };
   };
 
-  const reused = await crewOwnsWorktree({ worktreePath, repoRoot, git });
+  const reused = await crewOwnsWorktree({ worktreePath, repoRoot, git: run });
   if (!reused) {
     if (existsSync(worktreePath)) {
       // Something is there that Crew did not create. Deleting it would be a
@@ -117,7 +135,7 @@ export async function ensureCrewWorkspace({
       // say which path is in the way.
       return fail(WORKSPACE_CONFLICT, `workspace path exists but is not a Crew worktree of this repository: ${worktreePath}`);
     }
-    const created = await createWorktreeAt({ dir: worktreePath, repoRoot, revision, purpose: name, at, git });
+    const created = await createWorktreeAt({ dir: worktreePath, repoRoot, revision, purpose: name, at, git: run });
     if (!created.ok) return fail(created.reason, created.error);
   }
 

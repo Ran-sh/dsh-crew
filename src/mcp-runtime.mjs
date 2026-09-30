@@ -14,6 +14,7 @@ import {
   cleanupIsolatedWorkspace,
   inspectRepository,
   captureCandidate as captureIsolationCandidate,
+  withSafeDirectory,
 } from './workspace-isolation.mjs';
 import { startJob, waitJob, jobView, cancelJob } from './jobs.mjs';
 import { hub } from './hub-client.mjs';
@@ -297,7 +298,13 @@ export function buildMcpWorkflowRuntime(deps) {
     }
     // Isolated roles fail closed when the workspace
     // is not a git repo — never silently fall back to sharing the working tree.
-    const repo = await inspectRepository({ cwd: job.requested_cwd });
+    // The pre-check and the workspace entry share one scoped exception: the
+    // requested cwd is the only root this dispatch may trust, and only when Git
+    // resolves it as the repository root (a shared checkout owned by another
+    // account is the case this exists for).
+    const trustedRoot = job.requested_cwd;
+    const scopedGit = withSafeDirectory(null, trustedRoot);
+    const repo = await inspectRepository({ cwd: job.requested_cwd, git: scopedGit });
     if (!repo.ok) {
       return { ok: false, reason: repo.reason ?? 'ISOLATION_UNAVAILABLE', error: `${job.role ?? 'worker'} needs an isolated git worktree: ${repo.error ?? repo.reason}` };
     }
@@ -309,6 +316,7 @@ export function buildMcpWorkflowRuntime(deps) {
     // cannot share it.
     const workspace = await ensureCrewWorkspace({
       cwd: job.requested_cwd,
+      trustedRepoRoot: trustedRoot,
       role: job.role ?? 'worker',
       baseRevision: job.workspace_branch ?? repo.baseRevision,
     });
