@@ -108,9 +108,15 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
   if (healthCurrent && matchingHealth.state === 'callable') {
     return { state: 'CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_CALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
+  // What proves the route ran is a provider response, not a passing task contract:
+  // a job that reached `done` with its execution completed has demonstrably called
+  // the selected model even when the task itself came back `partial`. Failed and
+  // cancelled work never reaches this predicate, and neither does a job that errored
+  // before the model answered (its execution_status is `failed`, not `completed`).
+  const responded = (job) => job?.task_status === 'success' || job?.execution_status === 'completed';
   const completed = (Array.isArray(jobs) ? jobs : [])
     .filter((job) => job?.role === role && job?.provider === selected.provider && job?.model === selected.model
-      && job?.status === 'done' && job?.task_status === 'success'
+      && job?.status === 'done' && responded(job)
       && sameCompleteRuntimeIdentity(job.execution_context, runtime))
     .map((job) => ({ job, endedAt: Date.parse(job.endedAt ?? '') }))
     .filter(({ endedAt }) => Number.isFinite(endedAt))

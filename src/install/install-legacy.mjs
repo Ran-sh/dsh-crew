@@ -1247,12 +1247,26 @@ export function installHudSegment({ home = homedir() } = {}) {
   return { ok: true, actions: [...(bak ? [`backup: ${bak}`] : []), 'statusLine: claude-hud now runs worker-segment.sh via --extra-cmd'] };
 }
 
+// Crew-owned directories, identified by path SEGMENT rather than by substring: the
+// payload tree lives under `.../dsh-crew/...` and the pre-rename identity used
+// `dsh-workers`. A user path that merely contains those words (`my-dsh-crew-notes`)
+// is not Crew's, and nothing here may treat it as if it were.
+function crewOwnedDirectory(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  return value.split(/[\\/]+/).filter(Boolean).some((segment) => {
+    const lower = segment.toLowerCase();
+    return lower === 'dsh-crew' || lower === 'dsh-workers';
+  });
+}
+
 // Only the status line `--statusline` installs is Crew's to remove: it points at
-// Crew's own script. Any other status line in the file belongs to whoever
-// configured it, even when it happens to name this checkout.
+// Crew's own script, in Crew's own directory, in the exact shape the installer
+// writes (`bash <root>/statusline/statusline.sh`). A command that merely mentions
+// these words belongs to whoever wrote it.
 function crewOwnedStatusLine(value) {
-  const command = typeof value?.command === 'string' ? value.command : '';
-  return command.includes('statusline.sh') && command.includes('dsh-crew');
+  const command = typeof value?.command === 'string' ? value.command.trim() : '';
+  const match = /^bash\s+(.+[\\/])statusline[\\/]statusline\.sh$/i.exec(command);
+  return match ? crewOwnedDirectory(match[1]) : false;
 }
 
 // The claude CLI records, per marketplace and plugin, what it materialized, in
@@ -1295,7 +1309,11 @@ export function uninstallClaudeCode({ home = homedir() } = {}) {
     backup(settingsFile);
     const mpDir = join(home, '.config', 'dsh-crew', 'marketplace');
     if (Array.isArray(settings.extraKnownMarketplaces)) {
-      settings.extraKnownMarketplaces = settings.extraKnownMarketplaces.filter((m) => m?.path !== mpDir);
+      // Legacy array shape: entries are `{ path }` records this installer wrote under
+      // one of its own names, including the pre-rename one. Anything else in that
+      // array belongs to another plugin and stays.
+      settings.extraKnownMarketplaces = settings.extraKnownMarketplaces
+        .filter((entry) => !crewOwnedDirectory(entry?.path) && entry?.path !== mpDir);
     } else if (settings.extraKnownMarketplaces) {
       for (const name of CREW_CLAUDE_MARKETPLACES) delete settings.extraKnownMarketplaces[name];
     }

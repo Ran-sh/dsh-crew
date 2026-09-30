@@ -13,15 +13,27 @@ The matrix is emitted by `hubStatus()` and is therefore visible inside the exist
 - `BLOCKED` — the check could not run because required infrastructure or authorization was unavailable.
 - `SKIP` — the row is intentionally not applicable for the active policy/path.
 - `NOT_APPLICABLE` — the row asks about a route this machine does not use, and the
-  matrix says so instead of omitting it. The two built-in DeepSeek rows are the live
-  case: they read `NOT_APPLICABLE` / `WORKER_PROVIDER_FOLLOWS_DSH` whenever a known,
-  other provider is selected, and keep `NOT_RUN` when the selection is unknown.
+  matrix says so instead of omitting it. The two built-in DeepSeek rows are the only
+  rows a policy may mark this way: they read `NOT_APPLICABLE` /
+  `WORKER_PROVIDER_FOLLOWS_DSH` whenever a known, other provider is selected, and keep
+  `NOT_RUN` when the selection is unknown.
 - `NOT_RUN` — no trusted evidence has been supplied for the row.
 
-`BLOCKED` and `SKIP` are not failures. `NOT_RUN` is not success, and `NOT_APPLICABLE`
-is an answer: it is reported as itself on any component that consumes the row, and it
-cannot lower the readiness aggregate — only a `FAIL`, an unproven row or an
-`UNAVAILABLE` component does.
+`BLOCKED` and `SKIP` are not failures. `NOT_RUN` is not success.
+
+Applicability is decided when the row is built and it is final for that row:
+
+- Supplied evidence can neither create nor clear it. `NOT_APPLICABLE` is not part of
+  the evidence vocabulary (`PASS`, `FAIL`, `BLOCKED`, `SKIP`, `NOT_RUN`), so no
+  evidence source can make a required row disappear from readiness, and evidence
+  reported against a not-applicable row is kept as `reported_evidence` metadata
+  instead of flipping the status back.
+- A required row that arrives as `NOT_APPLICABLE` anyway is a contradiction, not a
+  pass: consumers that project such a row into readiness report
+  `UNAVAILABLE` / `CHECK_NOT_APPLICABLE_ON_REQUIRED_ROW`, which cannot leave the
+  aggregate READY.
+- The matrix declares `schema_version: 2`: a row may legally be `NOT_APPLICABLE` and
+  the summary carries a matching key, which is what a strict consumer needs to know.
 
 ## Evidence classes
 

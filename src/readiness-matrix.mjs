@@ -6,6 +6,17 @@
 // verification (real worker, reviewer, cancellation, timeout, etc.).
 
 const READINESS_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_APPLICABLE', 'NOT_RUN']);
+// Statuses a trusted evidence source may report. `NOT_APPLICABLE` is deliberately
+// absent: applicability is a fact about this machine's policy, decided when the row
+// is built, and letting evidence declare a required row "not applicable" would be a
+// way to make a check disappear while the matrix still reads healthy. Evidence can
+// neither create nor clear it.
+const EVIDENCE_STATUSES = Object.freeze(['PASS', 'FAIL', 'BLOCKED', 'SKIP', 'NOT_RUN']);
+// The rows this release may decide are not applicable, and only when the reason is
+// policy rather than observation: the two built-in DeepSeek routes exist to name a
+// provider the operator may not be using. Every other row asks a question that is
+// always applicable to a Crew machine.
+const POLICY_NOT_APPLICABLE_ROWS = Object.freeze(['deepseek_flash', 'deepseek_pro']);
 
 export const READINESS_REASON_CODES = Object.freeze({
   LIVE_CHECK_PASSED: 'LIVE_CHECK_PASSED',
@@ -59,7 +70,15 @@ function baseRow(id, category, status, reasonCode, evidenceSource = 'none', extr
 
 function normalizeEvidence(row, evidence) {
   if (!evidence || typeof evidence !== 'object') return row;
-  if (!READINESS_STATUSES.includes(evidence.status)) return row;
+  if (!EVIDENCE_STATUSES.includes(evidence.status)) return row;
+  // A row the policy marked not applicable keeps that status: reported evidence says
+  // something happened, not that the current worker route changed, and letting it
+  // flip the row is how "this route is unused" would turn into "this route passed".
+  // What was reported is kept as metadata rather than thrown away.
+  if (row.status === 'NOT_APPLICABLE') {
+    if (typeof evidence.status !== 'string') return row;
+    return { ...row, reported_evidence: { status: evidence.status, ...(typeof evidence.reason_code === 'string' && evidence.reason_code.trim() ? { reason_code: evidence.reason_code.trim() } : {}), ...(typeof evidence.evidence_source === 'string' && evidence.evidence_source.trim() ? { evidence_source: evidence.evidence_source.trim() } : {}) } };
+  }
   const reason = typeof evidence.reason_code === 'string' && evidence.reason_code.trim()
     ? evidence.reason_code.trim()
     : READINESS_REASON_CODES.EVIDENCE_REPORTED;
@@ -171,12 +190,13 @@ export function buildReadinessMatrix({
   // answered), and neither status can move the aggregate — only a FAIL, an
   // UNPROVEN row or an UNAVAILABLE component does. An unknown selection stays
   // NOT_RUN: this matrix is conservative, and "we could not tell" must not read as
-  // "not applicable". Reported evidence still wins, because it is applied below.
+  // "not applicable". This policy decision is also final for the row: evidence
+  // applied below records what it saw without changing the status back.
   const selectionKnown = typeof workerSelection?.provider === 'string' && workerSelection.provider.length > 0;
   const deepseekRouteSelected = workerProviderMode === 'deepseek-official'
     || workerSelection?.provider === 'deepseek-official';
   if (workerProviderMode !== null && selectionKnown && !deepseekRouteSelected) {
-    for (const id of ['deepseek_flash', 'deepseek_pro']) {
+    for (const id of POLICY_NOT_APPLICABLE_ROWS) {
       rows[id] = baseRow(id, 'real-execution', 'NOT_APPLICABLE', READINESS_REASON_CODES.WORKER_PROVIDER_FOLLOWS_DSH, 'runtime-policy');
     }
   }
@@ -192,7 +212,10 @@ export function buildReadinessMatrix({
   ]));
 
   return {
-    schema_version: 1,
+    // A row can now legally be NOT_APPLICABLE and the summary carries a matching key,
+    // so the vocabulary a strict consumer must accept changed: that is what the
+    // version means here, not a change in the rules that produce PASS.
+    schema_version: 2,
     platform,
     conservative: true,
     summary: counts,

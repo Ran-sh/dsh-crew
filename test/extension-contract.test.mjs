@@ -162,34 +162,47 @@ test('disabled reviewer is not part of the extension readiness aggregate', () =>
   });
   assert.equal(contract.readiness.components.reviewer.status, 'NOT_APPLICABLE');
   assert.equal(contract.readiness.status, 'READY');
-  // The managed frontend is on demand, not a component: whether 3080 happens to be
-  // listening must not make a machine that serves 3210 read as degraded.
-  assert.equal(Object.keys(contract.readiness.components).some((key) => /frontend/i.test(key)), false);
-  assert.equal(JSON.stringify(contract).includes('3080'), false, 'and no 3080 surface leaks into the contract');
 });
 
-// A row that does not apply is an answer, not a fault: NOT_APPLICABLE must be
-// reported as itself and must not pull the aggregate down. The live case is the two
-// built-in DeepSeek rows, which are NOT_APPLICABLE whenever workers follow the DSH
-// provider instead of the built-in route.
-test('not-applicable rows are reported as such and never lower readiness', () => {
+// Every row the contract consumes asks a question that applies to any Crew machine,
+// so "not applicable" on one of them is a contradiction rather than a pass: it is
+// reported as missing evidence and it must not leave the aggregate READY. The two
+// DeepSeek rows are the only ones a policy may mark N/A, and they are not consumed
+// here.
+test('a not-applicable required row fails closed instead of reading as answered', () => {
+  const rows = [
+    { id: 'hub_compatibility', status: 'NOT_APPLICABLE', reason_code: 'CHECK_NOT_APPLICABLE' },
+    { id: 'provider_lifecycle_consistent', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+    { id: 'deepseek_flash', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+    { id: 'deepseek_pro', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
+  ];
   const contract = buildExtensionContract({
     config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
     runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
-    readinessMatrix: { rows: [
-      { id: 'hub_compatibility', status: 'NOT_APPLICABLE', reason_code: 'CHECK_NOT_APPLICABLE' },
-      { id: 'provider_lifecycle_consistent', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
-      { id: 'deepseek_flash', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
-      { id: 'deepseek_pro', status: 'NOT_APPLICABLE', reason_code: 'WORKER_PROVIDER_FOLLOWS_DSH' },
-    ] },
+    readinessMatrix: { rows },
     readinessSnapshot: callableSnapshot(),
     workspace: { ok: true, context: null },
   });
-  assert.equal(contract.readiness.components.harness.status, 'NOT_APPLICABLE');
-  assert.equal(contract.readiness.components.provider_lifecycle.status, 'NOT_APPLICABLE');
-  assert.equal(contract.readiness.components.provider_lifecycle.reason_code, 'WORKER_PROVIDER_FOLLOWS_DSH');
-  assert.equal(contract.readiness.status, 'READY', 'nothing is missing or broken, so nothing is degraded');
-  assert.equal(Object.values(contract.readiness.components).some((entry) => entry.status === 'UNAVAILABLE' || entry.status === 'DEGRADED'), false);
+  assert.equal(contract.readiness.components.harness.status, 'UNAVAILABLE');
+  assert.equal(contract.readiness.components.harness.reason_code, 'CHECK_NOT_APPLICABLE_ON_REQUIRED_ROW');
+  assert.equal(contract.readiness.components.provider_lifecycle.status, 'UNAVAILABLE');
+  assert.notEqual(contract.readiness.status, 'READY', 'a matrix that cannot say whether the hub works is not ready');
+  // The two DeepSeek rows are not components, so their status cannot reach readiness
+  // at all — which is what makes them safe to mark N/A.
+  assert.equal(Object.keys(contract.readiness.components).some((key) => /deepseek/i.test(key)), false);
+
+  // The on-demand frontend is not a component either: whether 3080 happens to be
+  // listening must not make a machine that serves 3210 read as degraded.
+  const fine = buildExtensionContract({
+    config: { subagents_enabled: true, worker_state: 'auto', review_state: 'disabled' },
+    runtime: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
+    readinessMatrix: { rows: [{ id: 'hub_compatibility', status: 'PASS' }, { id: 'provider_lifecycle_consistent', status: 'PASS' }] },
+    readinessSnapshot: callableSnapshot(),
+    workspace: { ok: true, context: null },
+  });
+  assert.equal(fine.readiness.status, 'READY');
+  assert.equal(Object.keys(fine.readiness.components).some((key) => /frontend/i.test(key)), false);
+  assert.equal(JSON.stringify(fine).includes('3080'), false, 'and no 3080 surface leaks into the contract');
 });
 
 test('validated canonical projection is the single model readiness answer', () => {

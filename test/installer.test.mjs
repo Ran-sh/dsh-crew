@@ -195,6 +195,62 @@ test('uninstall removes only dsh-crew rules, keeps other allow entries', async (
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+// Ownership is a path Crew wrote, not a phrase it mentions: the words `dsh-crew` and
+// `statusline.sh` in a command someone else wrote are not a reason to delete it.
+test('a status line is Crew\'s only when it is the one Crew installed', async () => {
+  const userHome = makeHome();
+  const crewHome = makeHome();
+  try {
+    // A user status line that happens to name both words survives.
+    const userSettings = join(userHome, '.claude', 'settings.json');
+    mkdirSync(join(userHome, '.claude'), { recursive: true });
+    const userCommand = 'node C:/tools/my-dsh-crew-notes/statusline/statusline.sh';
+    writeFileSync(userSettings, JSON.stringify({
+      statusLine: { type: 'command', command: userCommand }, enabledPlugins: {}, extraKnownMarketplaces: {},
+    }, null, 2) + '\n');
+    uninstallClaudeCode({ home: userHome });
+    assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command, userCommand, 'a user status line is not Crew\'s to remove');
+
+    // The exact command `--statusline` writes, in Crew's own directory, is removed.
+    const root = join(crewHome, 'payload', 'dsh-crew');
+    mkdirSync(join(root, 'statusline'), { recursive: true });
+    writeFileSync(join(root, 'statusline', 'statusline.sh'), '#!/bin/sh\n');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@ran-sh/dsh-crew', version: '1' }));
+    const installed = await installClaudeCode({ home: crewHome, root, statusline: true, resolveClaude: claudePresent });
+    assert.equal(installed.ok, true);
+    const crewSettings = join(crewHome, '.claude', 'settings.json');
+    assert.equal(JSON.parse(readFileSync(crewSettings, 'utf8')).statusLine.command, `bash ${join(root, 'statusline', 'statusline.sh')}`);
+    uninstallClaudeCode({ home: crewHome });
+    assert.equal(JSON.parse(readFileSync(crewSettings, 'utf8')).statusLine, undefined, 'and it is Crew\'s to remove');
+  } finally {
+    rmSync(userHome, { recursive: true, force: true });
+    rmSync(crewHome, { recursive: true, force: true });
+  }
+});
+
+// The legacy array shape lists marketplaces as `{ path }` records. Crew wrote its own
+// under `dsh-crew` (and, before the rename, `dsh-workers`); everything else in that
+// array belongs to another plugin.
+test('the legacy array-shaped marketplace list drops only Crew\'s own entries', async () => {
+  const home = makeHome();
+  try {
+    const settingsFile = join(home, '.claude', 'settings.json');
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(settingsFile, JSON.stringify({
+      extraKnownMarketplaces: [
+        { path: 'C:/Users/x/.config/dsh-crew/app/releases/20260929T140611Z-36312-1-2.2.7' },
+        { path: 'C:/Users/x/.config/dsh-workers/marketplace' },
+        { path: 'C:/tools/other-market' },
+      ],
+      enabledPlugins: [],
+      permissions: { allow: [] },
+    }, null, 2) + '\n');
+    const r = uninstallClaudeCode({ home });
+    assert.equal(r.ok, true);
+    assert.deepEqual(JSON.parse(readFileSync(settingsFile, 'utf8')).extraKnownMarketplaces, [{ path: 'C:/tools/other-market' }]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 test('uninstall is idempotent and does not throw on missing settings', async () => {
   const home = makeHome();
   try {

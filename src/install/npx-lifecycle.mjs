@@ -3333,7 +3333,7 @@ export function npxStatus({
   // whether 3080 happens to be up right now does not change either answer.
   const frontendConfig = (installer.readGlobalConfig ?? realInstaller.readGlobalConfig)({ configFile: join(home, '.config', 'dsh-crew', 'config.json') });
   const frontend = frontendConfig?.frontend_autostart === true
-    ? 'auto-started at login (dsh-crew open for a session URL)'
+    ? 'configured to auto-start at login (dsh-crew open for a session URL)'
     : 'available on demand (dsh-crew open)';
   log(`Frontend (3080): ${frontend}`);
   // The desktop app carries its own bridge entry, which pins a revision: after a

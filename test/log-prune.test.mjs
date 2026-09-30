@@ -63,6 +63,34 @@ test('an old run is removed even when it is within the newest N, and a live one 
   } finally { f.cleanup(); }
 });
 
+// Retention is per family. The hub-start pairs are the crash-before-readiness
+// evidence and keep the policy's ten; the frontend families are launched far less
+// often and keep the twenty they already had, so one family's bound is not silently
+// imposed on the others. An explicit `keepRuns` is an operator override and applies
+// to every family.
+test('each family keeps its own bound unless the operator overrides them all', () => {
+  const f = fixture();
+  try {
+    const now = Date.now();
+    const minute = 60 * 1000;
+    for (let index = 0; index < 12; index += 1) {
+      const stamp = String(index).padStart(2, '0');
+      writeRun(f.dir, 'dsh-crew-dsh-crew-3210-', `hub-${stamp}`, (index + 1) * 10 * minute, now);
+      writeRun(f.dir, 'dsh-crew-web-', `web-${stamp}`, (index + 1) * 10 * minute, now);
+    }
+
+    const result = pruneCrewTempLogs({ tempDir: f.dir, now });
+    assert.equal(result.kept.filter((stamp) => stamp.startsWith('hub-')).length, 10, 'the hub family keeps ten pairs');
+    assert.equal(result.kept.filter((stamp) => stamp.startsWith('web-')).length, 12, 'the frontend family keeps all twelve, under its own bound of twenty');
+    assert.equal(existsSync(join(f.dir, 'dsh-crew-dsh-crew-3210-hub-11.out.log')), false, 'the oldest hub pair is gone');
+    assert.equal(existsSync(join(f.dir, 'dsh-crew-web-web-11.out.log')), true, 'while the same-aged frontend pair stays');
+
+    const overridden = pruneCrewTempLogs({ tempDir: f.dir, keepRuns: 2, now });
+    assert.equal(overridden.kept.filter((stamp) => stamp.startsWith('hub-')).length, 2);
+    assert.equal(overridden.kept.filter((stamp) => stamp.startsWith('web-')).length, 2, 'an explicit keepRuns applies to every family');
+  } finally { f.cleanup(); }
+});
+
 test('an unrelated temp file is never a candidate, and a missing directory is not an error', () => {
   const f = fixture();
   try {

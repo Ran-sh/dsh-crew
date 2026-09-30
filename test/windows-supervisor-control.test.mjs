@@ -36,7 +36,19 @@ function fixture() {
     first: helper('first'),
     second: helper('second'),
     other: helper('other'),
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      // A watcher the test just stopped can hold its fixture directory for a moment
+      // after its process exits, and a Windows rm of a directory with a closing
+      // handle fails with EPERM. Bounded retries keep that timing out of the
+      // results; a directory that is genuinely stuck still fails.
+      for (let attempt = 0; ; attempt += 1) {
+        try { rmSync(root, { recursive: true, force: true }); return; }
+        catch (error) {
+          if (attempt >= 10) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+        }
+      }
+    },
   };
 }
 

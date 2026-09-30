@@ -152,3 +152,32 @@ test('a previous hub runtime cannot renew the current execution window', () => {
   assert.equal(result.roles.worker.last_success.job_id, 'job-1', 'the old hub\'s success is not this hub\'s');
   assert.equal(result.roles.worker.expires_at, 300_000, 'and it does not extend this hub\'s window');
 });
+
+// Callability asks whether the selected route answered, not whether the whole task
+// passed. A worker whose execution completed has a provider response even when the
+// task contract came back `partial` — the live case that produced this test: a real
+// run on commandcode/deepseek-v4.1-flash returned a correct answer with 2415 input
+// and 2188 output tokens and was still marked partial by its own self-report.
+test('a completed execution is callability evidence even when the task is partial', () => {
+  const ttl = 300_000;
+  const at = new Date(299_000).toISOString();
+  const job = (id, extra = {}) => ({ id, role: 'worker', provider: 'p', model: 'm', status: 'done', endedAt: at, execution_context: runtime, ...extra });
+  const project = (jobs) => projectModelCallability({ ...base, now: 299_000, jobs, execution_evidence_ttl_ms: ttl });
+
+  const partial = project([job('job-partial', { task_status: 'partial', execution_status: 'completed' })]);
+  assert.equal(partial.roles.worker.state, 'CALLABLE');
+  assert.equal(partial.roles.worker.last_success.job_id, 'job-partial');
+  assert.equal(partial.roles.worker.expires_at, 599_000);
+
+  // What must not count: an execution that failed, a job with no execution verdict at
+  // all, and one whose execution never ran. None of them proves a response arrived.
+  for (const [label, extra] of [
+    ['failed execution', { task_status: 'partial', execution_status: 'failed' }],
+    ['no execution verdict', { task_status: null, execution_status: null }],
+    ['execution never started', { task_status: 'blocked', execution_status: null }],
+  ]) {
+    const result = project([job('job-1', extra)]);
+    assert.equal(result.roles.worker.state, 'UNKNOWN', `${label} is not callability evidence`);
+    assert.equal(result.roles.worker.last_success, null);
+  }
+});

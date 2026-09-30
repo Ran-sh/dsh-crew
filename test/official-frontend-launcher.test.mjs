@@ -346,3 +346,29 @@ maybe('a launcher log under the cap is appended to, not rotated', () => {
   assert.equal(result.content, 'small\n');
   assert.equal(result.previous, false, 'and nothing is created beside it');
 });
+
+// A bounded log cannot depend on the PowerShell helper whose ABSENCE is one of the
+// failures the log exists to diagnose: when start-dsh-crew.ps1 is missing, the batch
+// wrapper is the writer, so it applies the same cap and keeps the same two
+// generations.
+maybe('the batch wrapper bounds the log when the PowerShell helper is missing', () => {
+  const env = launcherSandboxEnv();
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-crew-cmd-wrapper-'));
+  try {
+    const wrapper = join(dir, 'start-dsh-crew.cmd');
+    // Copied without its PowerShell helper beside it, which is the emergency path.
+    writeFileSync(wrapper, readFileSync(helper.replace(/\.ps1$/, '.cmd'), 'utf8'));
+    const log = join(env.TEMP, 'dsh-crew-launcher.log');
+    const oversized = 'x'.repeat(5 * 1024 * 1024 + 1);
+    writeFileSync(log, oversized);
+    writeFileSync(`${log}.1`, 'previous generation\n');
+
+    const result = spawnSync('cmd.exe', ['/c', wrapper, '--background'], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env });
+    assert.equal(result.status, 1, 'the missing helper is still a reported failure');
+    assert.equal(readFileSync(`${log}.1`, 'utf8'), oversized, 'the oversized log moved aside whole');
+    assert.equal(readFileSync(`${log}.2`, 'utf8'), 'previous generation\n', 'and the older generation moved down');
+    const fresh = readFileSync(log, 'utf8');
+    assert.match(fresh, /Managed launcher helper is missing/, 'the failure line is written into the new log');
+    assert.ok(fresh.length < 1024, 'so the emergency path cannot grow an unbounded log either');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

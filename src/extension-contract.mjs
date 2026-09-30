@@ -29,13 +29,19 @@ function workspaceComponent(workspace) {
     : { ...component('UNAVAILABLE', workspace?.code ?? 'WORKSPACE_NOT_CHECKED'), state: 'UNAVAILABLE' };
 }
 
-function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED' } = {}) {
+function readinessFromRow(entry, { pass = 'READY', notRun = 'DEGRADED', allowNotApplicable = false } = {}) {
   if (!entry) return component('UNAVAILABLE', 'NO_EVIDENCE');
   if (entry.status === 'PASS') return component(pass, entry.reason_code ?? 'CHECK_PASSED');
-  // A row that does not apply to this machine is reported as such, not as a check
-  // that has not run: NOT_APPLICABLE says the question was answered, and it cannot
-  // pull the aggregate down (see the readiness roll-up below).
-  if (entry.status === 'NOT_APPLICABLE') return component('NOT_APPLICABLE', entry.reason_code ?? 'CHECK_NOT_APPLICABLE');
+  // Every row this function is called with asks a question that applies to any Crew
+  // machine (a reachable hub, a consistent provider lifecycle, a runnable route), so
+  // "not applicable" is a contradiction here, not a pass: it is reported as missing
+  // evidence and it cannot leave the aggregate READY. Only a caller that names a row
+  // which may legitimately not apply opts in.
+  if (entry.status === 'NOT_APPLICABLE') {
+    return allowNotApplicable
+      ? component('NOT_APPLICABLE', entry.reason_code ?? 'CHECK_NOT_APPLICABLE')
+      : component('UNAVAILABLE', 'CHECK_NOT_APPLICABLE_ON_REQUIRED_ROW');
+  }
   if (entry.status === 'NOT_RUN' || entry.status === 'SKIP') return component(notRun, entry.reason_code ?? 'CHECK_NOT_RUN');
   return component('UNAVAILABLE', entry.reason_code ?? 'CHECK_FAILED');
 }

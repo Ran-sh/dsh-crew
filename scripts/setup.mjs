@@ -389,7 +389,7 @@ export async function setupStatus({ log = console.log, root = ROOT, home = homed
   // of the installation, which it is not.
   const frontendConfig = (installer.readGlobalConfig ?? realInstaller.readGlobalConfig)({ configFile: join(home, '.config', 'dsh-crew', 'config.json') });
   const frontend = frontendConfig?.frontend_autostart === true
-    ? 'auto-started at login (dsh-crew open for a session URL)'
+    ? 'configured to auto-start at login (dsh-crew open for a session URL)'
     : 'available on demand (dsh-crew open)';
   log(`Frontend (3080): ${frontend}`);
   log(`Codex Desktop integration: ${codex}`);

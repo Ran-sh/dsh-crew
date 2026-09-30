@@ -22,7 +22,7 @@ test('compatible Hub is PASS while execution and CI rows remain NOT_RUN without 
     workerProviderMode: 'deepseek-official',
   });
 
-  assert.equal(matrix.schema_version, 1);
+  assert.equal(matrix.schema_version, 2);
   assert.equal(matrix.conservative, true);
   assert.equal(row(matrix, 'hub_compatibility').status, 'PASS');
   assert.equal(row(matrix, 'provider_catalog').status, 'SKIP');
@@ -154,4 +154,36 @@ test('built-in DeepSeek rows are not applicable for another known route and kept
 
   const unknown = buildReadinessMatrix({ workerProviderMode: 'follow-dsh' });
   assert.equal(row(unknown, 'deepseek_flash').status, 'NOT_RUN', 'an unknown selection stays conservative');
+});
+
+// Applicability is decided when the row is built, never by evidence. Evidence that
+// could declare a required row not applicable would be a way to make a check vanish
+// while the matrix still looks healthy, and evidence that could flip an unused route
+// to PASS would report a check the machine never ran.
+test('evidence can neither create nor clear a not-applicable row', () => {
+  const skipped = buildReadinessMatrix({
+    workerProviderMode: 'follow-dsh',
+    workerSelection: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash' },
+    // A stale DeepSeek PASS arriving from a previous route selection.
+    evidence: { deepseek_flash: { status: 'PASS', reason_code: 'DEEPSEEK_FLASH_EXECUTED', evidence_source: 'hub-jobs' } },
+  });
+  const flash = row(skipped, 'deepseek_flash');
+  assert.equal(flash.status, 'NOT_APPLICABLE', 'the policy decision outranks reported evidence');
+  assert.equal(flash.reason_code, READINESS_REASON_CODES.WORKER_PROVIDER_FOLLOWS_DSH);
+  assert.deepEqual(flash.reported_evidence, { status: 'PASS', reason_code: 'DEEPSEEK_FLASH_EXECUTED', evidence_source: 'hub-jobs' }, 'and what was reported is kept rather than dropped');
+
+  // The other direction: no row may be talked out of applicability by evidence.
+  for (const id of ['hub_compatibility', 'provider_lifecycle_consistent', 'model_execution', 'linux_deterministic']) {
+    const matrix = buildReadinessMatrix({ evidence: { [id]: { status: 'NOT_APPLICABLE', evidence_source: 'reported-evidence' } } });
+    assert.notEqual(row(matrix, id).status, 'NOT_APPLICABLE', `${id} cannot be made not-applicable by evidence`);
+  }
+
+  // Only the policy rows can carry the status, and a DeepSeek selection keeps them real.
+  assert.equal(skipped.summary.NOT_APPLICABLE, 2);
+  const deepseek = buildReadinessMatrix({
+    workerProviderMode: 'follow-dsh',
+    workerSelection: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    evidence: { deepseek_flash: { status: 'PASS', reason_code: 'DEEPSEEK_FLASH_EXECUTED', evidence_source: 'hub-jobs' } },
+  });
+  assert.equal(row(deepseek, 'deepseek_flash').status, 'PASS', 'a selected route still consumes its real evidence');
 });

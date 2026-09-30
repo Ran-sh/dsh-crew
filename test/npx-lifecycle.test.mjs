@@ -233,11 +233,11 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.2.7', async () => {
+test('package, runtime identity, and changelog identify candidate 2.2.8', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.2.7');
+  assert.equal(manifest.version, '2.2.8');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
-  assert.equal(RUNTIME_VERSION, '2.2.7');
+  assert.equal(RUNTIME_VERSION, '2.2.8');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });
@@ -781,7 +781,7 @@ test('status reports the frontend as on demand, or auto-started when opted in', 
     assert.match(onDemand.logs, /Frontend \(3080\): available on demand \(dsh-crew open\)/);
 
     writeFileSync(configFile, JSON.stringify({ frontend_autostart: true }));
-    assert.equal(read().status.frontend, 'auto-started at login (dsh-crew open for a session URL)');
+    assert.equal(read().status.frontend, 'configured to auto-start at login (dsh-crew open for a session URL)');
 
     writeFileSync(configFile, JSON.stringify({ frontend_autostart: 'yes' }));
     assert.equal(read().status.frontend, 'available on demand (dsh-crew open)', 'only a real boolean counts as opted in');

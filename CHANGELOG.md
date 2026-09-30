@@ -4,6 +4,44 @@
 
 Future changes go here.
 
+## 2.2.8 — 2026-09-30
+
+A corrective release from a second review of 2.2.7. The six fixes were sound; these
+are the places where the implementation went past the judgment, or claimed more than
+it had evidence for.
+
+- **`NOT_APPLICABLE` is a policy decision, not evidence.** 2.2.7 added the status to
+  the row vocabulary and let supplied evidence carry the whole enum, so any row —
+  including a required one — could be declared "not applicable", and that release's
+  own test blessed a READY aggregate with the harness row marked N/A. Applicability
+  now has exactly one producer (the two built-in DeepSeek routes under `follow-dsh`),
+  evidence can neither create nor clear it (reported evidence is kept as
+  `reported_evidence` metadata instead), and a required row that arrives
+  `NOT_APPLICABLE` fails closed as `UNAVAILABLE` /
+  `CHECK_NOT_APPLICABLE_ON_REQUIRED_ROW`. The matrix declares `schema_version: 2`,
+  because the vocabulary a strict consumer must accept changed.
+- **Callability counts a provider response, not a passing task contract.** A real job
+  on the reviewed machine returned a correct answer (2415 input / 2188 output tokens)
+  and was marked `partial` by its own self-report — which left the route with no
+  execution evidence under 2.2.7's predicate. A job that reached `done` with its
+  execution completed now refreshes the window; failed executions, jobs that never
+  ran and jobs with no execution verdict still do not. The hub's flattened job view
+  carries `execution_status` so the two verdicts stay distinct.
+- **Claude ownership is a path Crew wrote, not a phrase it mentions.** The uninstall's
+  status-line check deleted any command containing `dsh-crew` and `statusline.sh`;
+  it now requires the exact command `--statusline` writes, inside a directory Crew
+  owns by path segment, and the legacy array-shaped marketplace list drops the
+  pre-rename `dsh-workers` entry too.
+- **The log bound no longer depends on the helper it diagnoses.** The batch wrapper
+  rotates the launcher log at the same 5 MiB cap before writing its own emergency
+  line, so a missing `start-dsh-crew.ps1` cannot grow the log without bound.
+  Retention is per family as well: the hub-start pairs keep ten, the frontend families
+  keep the twenty they already had, and an explicit `dsh-crew logs prune <keep>` still
+  overrides every family.
+- **Status says configured, not started.** `Frontend (3080): configured to auto-start
+  at login …`. Configuration is what the renderer can observe; "auto-started" claimed
+  a runtime outcome it never verified.
+
 ## 2.2.7 — 2026-09-29
 
 - **Claude Code is registered only on a host that has the CLI.** The integration

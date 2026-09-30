@@ -642,6 +642,10 @@ export class WorkerRegistry {  constructor(ctx) {
       delivery_complete: !!job.delivery_complete,
       allow_no_changes: job.allow_no_changes === true,
       task_status: job.outcome?.task_status ?? null,
+      // Whether the worker's execution itself completed, kept beside the task-level
+      // verdict: a `partial` task still had a provider response, and that is what
+      // model callability asks about.
+      execution_status: job.outcome?.execution_status ?? null,
       workspace_evidence_ok: job.outcome?.workspace_evidence_ok ?? null,
       review_verdict: job.review?.verdict ?? null,
       workspace_diff_available: !!job.workspaceDiff && ['git', 'filesystem-empty'].includes(job.workspaceDiff.kind),
