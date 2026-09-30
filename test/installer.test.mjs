@@ -209,9 +209,20 @@ test('a status line is Crew\'s only when it is the one Crew installed', async ()
       statusLine: { type: 'command', command: userCommand }, enabledPlugins: {}, extraKnownMarketplaces: {},
     }, null, 2) + '\n');
     uninstallClaudeCode({ home: userHome });
-    assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command, userCommand, 'a user status line is not Crew\'s to remove');
 
-    // The exact command `--statusline` writes, in Crew's own directory, is removed.
+    // Even a directory spelled exactly `dsh-crew` is someone else's when Crew never
+    // recorded it as one of its own roots: ownership is what Crew wrote down, not how
+    // a path is spelled.
+    const lookalike = `bash ${join(userHome, 'tools', 'dsh-crew', 'statusline', 'statusline.sh')}`;
+    writeFileSync(userSettings, JSON.stringify({
+      statusLine: { type: 'command', command: lookalike }, enabledPlugins: {}, extraKnownMarketplaces: {},
+    }, null, 2) + '\n');
+    uninstallClaudeCode({ home: userHome });
+    assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command, lookalike, 'a lookalike path is still not Crew\'s');
+    assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command === userCommand, false);
+
+    // The exact command `--statusline` writes, against the root Crew recorded in this
+    // host's own settings, is removed — wherever the operator installed it from.
     const root = join(crewHome, 'payload', 'dsh-crew');
     mkdirSync(join(root, 'statusline'), { recursive: true });
     writeFileSync(join(root, 'statusline', 'statusline.sh'), '#!/bin/sh\n');
@@ -228,26 +239,51 @@ test('a status line is Crew\'s only when it is the one Crew installed', async ()
   }
 });
 
-// The legacy array shape lists marketplaces as `{ path }` records. Crew wrote its own
-// under `dsh-crew` (and, before the rename, `dsh-workers`); everything else in that
-// array belongs to another plugin.
-test('the legacy array-shaped marketplace list drops only Crew\'s own entries', async () => {
+// The legacy array shape lists marketplaces as `{ path }` records. Crew removes an
+// entry only when the path IS one it recorded as its own (in this host's settings or
+// in the CLI's cache), or the constant an older installer used; an entry it cannot
+// identify stays, however it is spelled.
+test('the legacy array-shaped marketplace list drops only the paths Crew recorded', async () => {
   const home = makeHome();
   try {
     const settingsFile = join(home, '.claude', 'settings.json');
-    mkdirSync(join(home, '.claude'), { recursive: true });
+    const cacheDir = join(home, '.claude', 'plugins');
+    const crewRelease = 'C:/Users/x/.config/dsh-crew/app/releases/20260929T140611Z-36312-1-2.2.7';
+    const legacyDir = join(home, '.config', 'dsh-crew', 'marketplace');
+    mkdirSync(cacheDir, { recursive: true });
     writeFileSync(settingsFile, JSON.stringify({
       extraKnownMarketplaces: [
-        { path: 'C:/Users/x/.config/dsh-crew/app/releases/20260929T140611Z-36312-1-2.2.7' },
-        { path: 'C:/Users/x/.config/dsh-workers/marketplace' },
+        { path: crewRelease },
+        { path: legacyDir },
+        { path: 'C:/Users/x/unrecorded/dsh-crew/marketplace' },
         { path: 'C:/tools/other-market' },
       ],
       enabledPlugins: [],
       permissions: { allow: [] },
     }, null, 2) + '\n');
+
+    // With the CLI's cache naming the crew release, that path is identifiable and goes;
+    // the historic constant goes with it; the lookalike and the other plugin stay.
+    writeFileSync(join(cacheDir, 'known_marketplaces.json'), JSON.stringify({
+      'dsh-crew': { source: { source: 'directory', path: crewRelease }, installLocation: crewRelease },
+      'other-market': { source: { source: 'directory', path: 'C:/tools/other-market' } },
+    }, null, 2) + '\n');
     const r = uninstallClaudeCode({ home });
     assert.equal(r.ok, true);
-    assert.deepEqual(JSON.parse(readFileSync(settingsFile, 'utf8')).extraKnownMarketplaces, [{ path: 'C:/tools/other-market' }]);
+    assert.deepEqual(JSON.parse(readFileSync(settingsFile, 'utf8')).extraKnownMarketplaces,
+      [{ path: 'C:/Users/x/unrecorded/dsh-crew/marketplace' }, { path: 'C:/tools/other-market' }]);
+
+    // Without any record, a path Crew cannot identify is left alone rather than guessed
+    // at from its name.
+    writeFileSync(settingsFile, JSON.stringify({
+      extraKnownMarketplaces: [{ path: 'C:/Users/x/unrecorded/dsh-workers/marketplace' }, { path: 'C:/tools/other-market' }],
+      enabledPlugins: [],
+      permissions: { allow: [] },
+    }, null, 2) + '\n');
+    rmSync(join(cacheDir, 'known_marketplaces.json'), { force: true });
+    uninstallClaudeCode({ home });
+    assert.deepEqual(JSON.parse(readFileSync(settingsFile, 'utf8')).extraKnownMarketplaces,
+      [{ path: 'C:/Users/x/unrecorded/dsh-workers/marketplace' }, { path: 'C:/tools/other-market' }]);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

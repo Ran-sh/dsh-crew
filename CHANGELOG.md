@@ -4,6 +4,32 @@
 
 Future changes go here.
 
+## 2.2.9 — 2026-09-30
+
+Closing the confirmation pass on 2.2.8. Three of its corrections were still incomplete.
+
+- **Claude ownership is the path Crew recorded, not the path's spelling.** 2.2.8
+  matched any path segment named `dsh-crew`, which still deleted a user's own
+  `…/dsh-crew/statusline/statusline.sh` and still missed a Crew install whose root
+  carried no such segment. Removal now requires the status-line command to equal
+  `bash <root>/statusline/statusline.sh` for a root **recorded in this host's own
+  records** — the marketplace entries in settings or in the CLI's cache, plus the
+  historic constant — and the legacy array-shaped list drops an entry only when its
+  path is one of those. A path that cannot be identified is left alone.
+- **Callability requires positive proof that the provider answered.** The predicate is
+  now `status === 'done' && execution_status === 'completed'`, the ledger fact that
+  says the execution ended normally. The task-level verdict is no longer consulted, so
+  a record marking a task successful while its execution failed (or was never recorded)
+  cannot renew the window — the branch 2.2.8's `||` left open — and a `partial` task
+  whose execution did finish still counts.
+- **`NOT_APPLICABLE` has exactly one producer.** The guard is the exact
+  `workerProviderMode === 'follow-dsh'`; any other or unknown mode leaves the built-in
+  DeepSeek rows as real, conservative checks rather than "not applicable".
+- **`reported_evidence` keeps every field an applied record keeps**, `evidence_ref` and
+  `detail_code` included, and the pruning header now states the rule the code
+  implements: a run survives when it is both within its family's newest N and inside
+  the age bound.
+
 ## 2.2.8 — 2026-09-30
 
 A corrective release from a second review of 2.2.7. The six fixes were sound; these

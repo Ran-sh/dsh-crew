@@ -2,9 +2,12 @@
 // new dsh-crew-dsh-crew-3210-<stamp>.out/.err.log pair, every desktop launch a
 // dsh-crew-web-*, every official launch a dsh-official-web-*, and the launcher
 // appends to dsh-crew-launcher.log forever. They are the only post-mortem evidence
-// for a crash-before-readiness, so the rule keeps the most recent runs instead of
-// deleting everything: per family, the newest `keep` runs survive, plus anything
-// written within the recency guard (a running process owns its own log files).
+// for a crash-before-readiness, so the rule bounds them instead of deleting them all.
+// A run survives when it is BOTH within its family's newest `keep` AND younger than
+// the age bound; exceeding either one removes it, unless it was written within the
+// recency guard (a running process owns its own log files). The newest `keep` runs
+// therefore do not survive unconditionally — only a run that is also inside the age
+// bound does, which is what keeps a burst of starts from filling the directory.
 
 import { readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';

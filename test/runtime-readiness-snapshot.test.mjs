@@ -45,7 +45,7 @@ test('missing health collection status fails closed over historical success', ()
   const snapshot = buildRuntimeReadinessSnapshot({
     runtime,
     selections: { worker: { provider: 'p', model: 'm' } },
-    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     now: 10_000,
   });
   assert.equal(snapshot.health_status, 'UNKNOWN');
@@ -86,7 +86,7 @@ test('session re-projection preserves bounded same-runtime execution evidence', 
     runtime,
     selections: { worker: { provider: 'p', model: 'worker' } },
     health_status: 'AVAILABLE',
-    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'worker', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'worker', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     enabled_roles: { worker: true, reviewer: false },
     now: 10_000,
   });
@@ -105,7 +105,7 @@ test('health store equal-time failure remains authoritative in the canonical sna
     selections: { worker: { provider: 'p', model: 'm' } },
     health: store.list(),
     health_status: 'AVAILABLE',
-    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     enabled_roles: { worker: true, reviewer: false },
     now: 10_000,
   });
@@ -121,7 +121,7 @@ test('selected-route health survives the bounded diagnostics list before callabi
     selections: { worker: { provider: 'p', model: 'm' } },
     health: [...unrelated, selectedFailure],
     health_status: 'AVAILABLE',
-    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     enabled_roles: { worker: true, reviewer: false },
     now: 10_000,
   });
@@ -135,7 +135,7 @@ test('session re-projection does not transplant or renew execution evidence', ()
     runtime,
     selections: { worker: { provider: 'p1', model: 'm1' } },
     health_status: 'AVAILABLE',
-    jobs: [{ id: 'job-1', role: 'worker', provider: 'p1', model: 'm1', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ id: 'job-1', role: 'worker', provider: 'p1', model: 'm1', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     enabled_roles: { worker: true, reviewer: false },
     now: 10_000,
   });
@@ -191,7 +191,7 @@ test('an aged-out probe reads STALE, and a recent execution still outranks it', 
       provider: 'commandcode',
       model: 'deepseek/deepseek-v4.1-flash',
       status: 'done',
-      task_status: 'success',
+      task_status: 'success', execution_status: 'completed',
       endedAt: new Date(later - 1_000).toISOString(),
       execution_context: { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' },
     }],

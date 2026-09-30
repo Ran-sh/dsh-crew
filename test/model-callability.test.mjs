@@ -9,7 +9,7 @@ const base = { runtime, selections, now: 10_000 };
 test('fresh current route health failure wins over historical success', () => {
   const result = projectModelCallability({ ...base,
     health: [{ provider: 'p', model: 'm', state: 'quota-exhausted', fresh: true, expires_at: 20_000, observed_at: 9_000 }],
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
   });
   assert.equal(result.roles.worker.state, 'NOT_CALLABLE');
   assert.equal(result.overall, 'NOT_CALLABLE');
@@ -17,20 +17,20 @@ test('fresh current route health failure wins over historical success', () => {
 
 test('historical success is callable only with matching route/runtime and TTL', () => {
   const valid = projectModelCallability({ ...base,
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
     execution_evidence_ttl_ms: 2_000,
   });
   assert.equal(valid.roles.worker.state, 'CALLABLE');
   const stale = projectModelCallability({ ...base, execution_evidence_ttl_ms: 1_000,
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
   });
   assert.equal(stale.roles.worker.state, 'STALE');
   const foreign = projectModelCallability({ ...base,
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: { ...runtime, runtime_id: 'old' } }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: { ...runtime, runtime_id: 'old' } }],
   });
   assert.equal(foreign.roles.worker.state, 'UNKNOWN');
   const foreignPlane = projectModelCallability({ ...base,
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: { ...runtime, execution_plane: 'standalone' } }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: { ...runtime, execution_plane: 'standalone' } }],
   });
   assert.equal(foreignPlane.roles.worker.state, 'UNKNOWN');
 });
@@ -64,7 +64,7 @@ test('malformed health expiry and invalid execution TTL are conservative', () =>
 test('health collection failure blocks historical fallback', () => {
   const result = projectModelCallability({ ...base,
     health_status: 'UNAVAILABLE',
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:09.000Z', execution_context: runtime }],
   });
   assert.equal(result.roles.worker.state, 'UNKNOWN');
   assert.equal(result.roles.worker.reason_code, 'PROVIDER_HEALTH_UNAVAILABLE');
@@ -83,7 +83,7 @@ test('current route observations are order independent and newer failure wins', 
 
 test('future-dated execution evidence is not callable', () => {
   const result = projectModelCallability({ ...base,
-    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', endedAt: '1970-01-01T00:00:20.000Z', execution_context: runtime }],
+    jobs: [{ role: 'worker', provider: 'p', model: 'm', status: 'done', task_status: 'success', execution_status: 'completed', endedAt: '1970-01-01T00:00:20.000Z', execution_context: runtime }],
   });
   assert.equal(result.roles.worker.state, 'STALE');
   assert.equal(result.roles.worker.reason_code, 'EXECUTION_EVIDENCE_FUTURE_DATED');
@@ -105,7 +105,7 @@ test('future-dated provider health is never callable', () => {
 test('a completed job renews the execution window, and work that did not run does not', () => {
   const ttl = 300_000;
   const job = (id, endedMs, extra = {}) => ({ id, role: 'worker', provider: 'p', model: 'm',
-    status: 'done', task_status: 'success', endedAt: new Date(endedMs).toISOString(), execution_context: runtime, ...extra });
+    status: 'done', task_status: 'success', execution_status: 'completed', endedAt: new Date(endedMs).toISOString(), execution_context: runtime, ...extra });
   const project = (now, jobs) => projectModelCallability({ ...base, now, jobs, execution_evidence_ttl_ms: ttl });
 
   const spanned = project(0, [job('job-1', 0)]);
@@ -120,9 +120,13 @@ test('a completed job renews the execution window, and work that did not run doe
   assert.equal(renewed.roles.worker.observed_at, 299_000);
 
   // A run that did not execute the route is not evidence that it works: it neither
-  // renews the window nor becomes the last success.
+  // renews the window nor becomes the last success. The positive fact is the execution
+  // ending normally, so a contradictory record — a task marked successful whose
+  // execution failed or was never recorded — is not evidence either.
   const notEvidence = [
-    job('job-failed', 299_000, { task_status: 'failed' }),
+    job('job-execution-failed', 299_000, { execution_status: 'failed' }),
+    job('job-no-execution-verdict', 299_000, { execution_status: null, task_status: 'success' }),
+    job('job-contradictory', 299_000, { execution_status: 'failed', task_status: 'success' }),
     job('job-cancelled', 299_000, { status: 'cancelled' }),
     job('job-running', 299_000, { status: 'running', task_status: null }),
     job('job-reviewer', 299_000, { role: 'reviewer' }),
@@ -144,7 +148,7 @@ test('a completed job renews the execution window, and work that did not run doe
 test('a previous hub runtime cannot renew the current execution window', () => {
   const ttl = 300_000;
   const job = (id, endedMs, executionContext) => ({ id, role: 'worker', provider: 'p', model: 'm',
-    status: 'done', task_status: 'success', endedAt: new Date(endedMs).toISOString(), execution_context: executionContext });
+    status: 'done', task_status: 'success', execution_status: 'completed', endedAt: new Date(endedMs).toISOString(), execution_context: executionContext });
   const result = projectModelCallability({ ...base, now: 299_000, execution_evidence_ttl_ms: ttl,
     jobs: [job('job-1', 0, runtime), job('job-old-hub', 299_000, { ...runtime, runtime_id: 'old' })],
   });

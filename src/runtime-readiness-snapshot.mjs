@@ -108,12 +108,14 @@ function projectModelRole({ role, selected, health, jobs, runtime, now, executio
   if (healthCurrent && matchingHealth.state === 'callable') {
     return { state: 'CALLABLE', reason_code: matchingHealth.reason_code ?? 'PROVIDER_CALLABLE', selected, observed_at: matchingHealth.observed_at ?? null, expires_at: expiresAt, source: 'provider_health', last_success: null };
   }
-  // What proves the route ran is a provider response, not a passing task contract:
-  // a job that reached `done` with its execution completed has demonstrably called
-  // the selected model even when the task itself came back `partial`. Failed and
-  // cancelled work never reaches this predicate, and neither does a job that errored
-  // before the model answered (its execution_status is `failed`, not `completed`).
-  const responded = (job) => job?.task_status === 'success' || job?.execution_status === 'completed';
+  // Callability asks for positive proof that the provider answered, so the ledger
+  // fact that proves it is the one that says the execution ended normally: a job the
+  // worker recorded as `done` whose `execution_status` is `completed`. The task-level
+  // verdict is deliberately NOT part of this — a `partial` task still had a provider
+  // response — and a job whose execution failed or was never recorded is not evidence
+  // of a response, however its task was later classified. A recovery probe or a real
+  // run is what a route without such a job needs.
+  const responded = (job) => job?.execution_status === 'completed';
   const completed = (Array.isArray(jobs) ? jobs : [])
     .filter((job) => job?.role === role && job?.provider === selected.provider && job?.model === selected.model
       && job?.status === 'done' && responded(job)

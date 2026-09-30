@@ -1247,26 +1247,35 @@ export function installHudSegment({ home = homedir() } = {}) {
   return { ok: true, actions: [...(bak ? [`backup: ${bak}`] : []), 'statusLine: claude-hud now runs worker-segment.sh via --extra-cmd'] };
 }
 
-// Crew-owned directories, identified by path SEGMENT rather than by substring: the
-// payload tree lives under `.../dsh-crew/...` and the pre-rename identity used
-// `dsh-workers`. A user path that merely contains those words (`my-dsh-crew-notes`)
-// is not Crew's, and nothing here may treat it as if it were.
-function crewOwnedDirectory(value) {
-  if (typeof value !== 'string' || !value.trim()) return false;
-  return value.split(/[\\/]+/).filter(Boolean).some((segment) => {
-    const lower = segment.toLowerCase();
-    return lower === 'dsh-crew' || lower === 'dsh-workers';
-  });
+// The paths Crew has recorded as its own in this Claude host: the marketplace records
+// it wrote (under the current and pre-rename names, in settings and in the CLI's own
+// cache), the constant an older installer used, and the checkout this module runs
+// from. Only these are grounds for removing anything: a directory that merely happens
+// to be named `dsh-crew` belongs to whoever made it, and a path that is not recorded
+// here cannot be identified as Crew's, so it is left alone.
+function crewOwnedRoots({ home, settings, markets, installed }) {
+  const roots = [];
+  const push = (value) => { if (typeof value === 'string' && value.trim() && !roots.includes(value.trim())) roots.push(value.trim()); };
+  for (const name of CREW_CLAUDE_MARKETPLACES) {
+    push(settings?.extraKnownMarketplaces?.[name]?.source?.path);
+    push(markets?.[name]?.source?.path);
+    push(markets?.[name]?.installLocation);
+  }
+  for (const key of CREW_CLAUDE_PLUGIN_KEYS) {
+    const entries = Array.isArray(installed?.plugins?.[key]) ? installed.plugins[key] : [installed?.plugins?.[key]];
+    for (const entry of entries) push(entry?.installPath);
+  }
+  push(join(home, '.config', 'dsh-crew', 'marketplace'));
+  push(ROOT);
+  return roots;
 }
 
-// Only the status line `--statusline` installs is Crew's to remove: it points at
-// Crew's own script, in Crew's own directory, in the exact shape the installer
-// writes (`bash <root>/statusline/statusline.sh`). A command that merely mentions
-// these words belongs to whoever wrote it.
-function crewOwnedStatusLine(value) {
+function crewOwnedStatusLine(value, roots) {
   const command = typeof value?.command === 'string' ? value.command.trim() : '';
-  const match = /^bash\s+(.+[\\/])statusline[\\/]statusline\.sh$/i.exec(command);
-  return match ? crewOwnedDirectory(match[1]) : false;
+  const match = /^bash\s+(.+)$/i.exec(command);
+  if (!match) return false;
+  const path = normalizedPath(match[1].trim());
+  return path !== null && roots.some((root) => normalizedPath(join(root, 'statusline', 'statusline.sh')) === path);
 }
 
 // The claude CLI records, per marketplace and plugin, what it materialized, in
@@ -1304,16 +1313,19 @@ function removeCrewClaudeCacheRecords({ home, actions }) {
 export function uninstallClaudeCode({ home = homedir() } = {}) {
   const actions = [];
   const settingsFile = join(home, '.claude', 'settings.json');
+  const cacheDir = join(home, '.claude', 'plugins');
   const settings = readJson(settingsFile, null);
+  const markets = readJson(join(cacheDir, 'known_marketplaces.json'), null);
+  const installed = readJson(join(cacheDir, 'installed_plugins.json'), null);
+  const roots = crewOwnedRoots({ home, settings, markets, installed });
   if (settings) {
     backup(settingsFile);
-    const mpDir = join(home, '.config', 'dsh-crew', 'marketplace');
     if (Array.isArray(settings.extraKnownMarketplaces)) {
-      // Legacy array shape: entries are `{ path }` records this installer wrote under
-      // one of its own names, including the pre-rename one. Anything else in that
-      // array belongs to another plugin and stays.
+      // Legacy array shape: an entry is removed only when it IS one of the paths Crew
+      // recorded as its own. What the path is spelled with is not evidence — a
+      // marketplace under someone else's `dsh-crew` directory stays.
       settings.extraKnownMarketplaces = settings.extraKnownMarketplaces
-        .filter((entry) => !crewOwnedDirectory(entry?.path) && entry?.path !== mpDir);
+        .filter((entry) => !roots.some((root) => normalizedPath(entry?.path) === normalizedPath(root)));
     } else if (settings.extraKnownMarketplaces) {
       for (const name of CREW_CLAUDE_MARKETPLACES) delete settings.extraKnownMarketplaces[name];
     }
@@ -1326,7 +1338,7 @@ export function uninstallClaudeCode({ home = homedir() } = {}) {
       settings.permissions.allow = settings.permissions.allow.filter((rule) => typeof rule !== 'string'
         || !CREW_CLAUDE_PERMISSION_PREFIXES.some((prefix) => rule.startsWith(prefix)));
     }
-    if (crewOwnedStatusLine(settings.statusLine)) {
+    if (crewOwnedStatusLine(settings.statusLine, roots)) {
       delete settings.statusLine;
       actions.push('statusLine: removed (Crew-installed)');
     }

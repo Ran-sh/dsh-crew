@@ -52,6 +52,19 @@ function fixture() {
   };
 }
 
+// A running watcher can still hold its own script open for a moment, and a loaded
+// machine widens that window. The upgrade write retries: this test is about what
+// inspect and stop do afterwards, not about Windows releasing a handle instantly.
+function writeRetrying(file, content, attempts = 10) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { writeFileSync(file, content, 'utf8'); return; }
+    catch (error) {
+      if (attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+  }
+}
+
 function runControl(request, timeout = 60_000) {
   const result = spawnSync('powershell.exe', [
     '-NoLogo',
@@ -202,13 +215,13 @@ maybe('a fully attested stale watcher remains stoppable after its stable helper 
   try {
     watcher = startManaged(f.first);
     const oldHash = watcher.helper_hash;
-    writeFileSync(f.first, [
+    writeRetrying(f.first, [
       '[CmdletBinding()]',
       'param([string] $Mode = "open")',
       'Set-StrictMode -Version Latest',
       'while ($true) { Start-Sleep -Milliseconds 250 }',
       '',
-    ].join('\r\n'), 'utf8');
+    ].join('\r\n'));
     assert.notEqual(hashOf(f.first), oldHash);
 
     const expected = {

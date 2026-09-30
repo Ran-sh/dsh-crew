@@ -76,8 +76,17 @@ function normalizeEvidence(row, evidence) {
   // flip the row is how "this route is unused" would turn into "this route passed".
   // What was reported is kept as metadata rather than thrown away.
   if (row.status === 'NOT_APPLICABLE') {
-    if (typeof evidence.status !== 'string') return row;
-    return { ...row, reported_evidence: { status: evidence.status, ...(typeof evidence.reason_code === 'string' && evidence.reason_code.trim() ? { reason_code: evidence.reason_code.trim() } : {}), ...(typeof evidence.evidence_source === 'string' && evidence.evidence_source.trim() ? { evidence_source: evidence.evidence_source.trim() } : {}) } };
+    // The same sanitized fields an applied record keeps, so "the observation is not
+    // lost" is a statement the code supports rather than a claim about three of five.
+    const source = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+    const reported = {
+      status: evidence.status,
+      ...(source(evidence.reason_code) ? { reason_code: source(evidence.reason_code) } : {}),
+      ...(source(evidence.evidence_source) ? { evidence_source: source(evidence.evidence_source) } : {}),
+      ...(source(evidence.evidence_ref) ? { evidence_ref: source(evidence.evidence_ref) } : {}),
+      ...(source(evidence.detail_code) && /^[A-Z][A-Z0-9_]{0,127}$/u.test(evidence.detail_code) ? { detail_code: evidence.detail_code } : {}),
+    };
+    return { ...row, reported_evidence: reported };
   }
   const reason = typeof evidence.reason_code === 'string' && evidence.reason_code.trim()
     ? evidence.reason_code.trim()
@@ -195,7 +204,7 @@ export function buildReadinessMatrix({
   const selectionKnown = typeof workerSelection?.provider === 'string' && workerSelection.provider.length > 0;
   const deepseekRouteSelected = workerProviderMode === 'deepseek-official'
     || workerSelection?.provider === 'deepseek-official';
-  if (workerProviderMode !== null && selectionKnown && !deepseekRouteSelected) {
+  if (workerProviderMode === 'follow-dsh' && selectionKnown && !deepseekRouteSelected) {
     for (const id of POLICY_NOT_APPLICABLE_ROWS) {
       rows[id] = baseRow(id, 'real-execution', 'NOT_APPLICABLE', READINESS_REASON_CODES.WORKER_PROVIDER_FOLLOWS_DSH, 'runtime-policy');
     }

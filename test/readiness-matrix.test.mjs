@@ -178,12 +178,35 @@ test('evidence can neither create nor clear a not-applicable row', () => {
     assert.notEqual(row(matrix, id).status, 'NOT_APPLICABLE', `${id} cannot be made not-applicable by evidence`);
   }
 
-  // Only the policy rows can carry the status, and a DeepSeek selection keeps them real.
+  // Only the policy rows can carry the status, and only the follow-dsh policy produces
+  // it: an unknown or future mode is not a licence to mark the built-in routes unused,
+  // so those rows stay real and conservative.
   assert.equal(skipped.summary.NOT_APPLICABLE, 2);
+  for (const mode of ['follow-someone', 'deepseek-official']) {
+    const other = buildReadinessMatrix({ workerProviderMode: mode, workerSelection: { provider: 'commandcode', model: 'x' } });
+    assert.equal(row(other, 'deepseek_flash').status, 'NOT_RUN', `${mode} does not produce a not-applicable row`);
+  }
   const deepseek = buildReadinessMatrix({
     workerProviderMode: 'follow-dsh',
     workerSelection: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
     evidence: { deepseek_flash: { status: 'PASS', reason_code: 'DEEPSEEK_FLASH_EXECUTED', evidence_source: 'hub-jobs' } },
   });
   assert.equal(row(deepseek, 'deepseek_flash').status, 'PASS', 'a selected route still consumes its real evidence');
+});
+
+// The observation is not lost when applicability wins: the same sanitized fields an
+// applied record keeps are kept here too.
+test('a not-applicable row keeps the full reported evidence as metadata', () => {
+  const matrix = buildReadinessMatrix({
+    workerProviderMode: 'follow-dsh',
+    workerSelection: { provider: 'commandcode', model: 'x' },
+    evidence: { deepseek_pro: {
+      status: 'FAIL', reason_code: 'DEEPSEEK_PRO_ROUTE_UNCALLABLE', evidence_source: 'hub-jobs',
+      evidence_ref: 'job-42', detail_code: 'QUOTA_EXHAUSTED', ignored: 'not a field the matrix accepts',
+    } },
+  });
+  assert.deepEqual(row(matrix, 'deepseek_pro').reported_evidence, {
+    status: 'FAIL', reason_code: 'DEEPSEEK_PRO_ROUTE_UNCALLABLE', evidence_source: 'hub-jobs',
+    evidence_ref: 'job-42', detail_code: 'QUOTA_EXHAUSTED',
+  });
 });
