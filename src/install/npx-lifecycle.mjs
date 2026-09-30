@@ -2785,6 +2785,9 @@ export async function npxLogs({ args = [], log = console.log } = {}) {
   const keep = Number(args[1]);
   const result = pruneCrewTempLogs(Number.isInteger(keep) && keep > 0 ? { keepRuns: keep } : {});
   log(`✓ Crew diagnostics pruned: removed ${result.removed.length} file(s); kept ${result.kept.length} run(s)`);
+  if (result.failed?.length) {
+    log(`- ${result.failed.length} file(s) could not be deleted (a running process may hold them); they are counted in neither number and the next prune retries`);
+  }
   return { ok: true, ...result };
 }
 

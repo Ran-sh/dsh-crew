@@ -106,3 +106,30 @@ test('an unrelated temp file is never a candidate, and a missing directory is no
     assert.deepEqual(missing.removed, []);
   } finally { f.cleanup(); }
 });
+
+// An orphan `.err.log` (its `.out.log` sibling already gone) is still a Crew
+// diagnostic, and a file the OS would not let go of is reported as failed rather
+// than counted as removed.
+test('orphan err logs are pruned on their own stamp and locked files are reported as failed', () => {
+  const f = fixture();
+  try {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    writeFileSync(join(f.dir, 'dsh-crew-dsh-crew-3210-orphan-1.err.log'), 'err only\n');
+    writeFileSync(join(f.dir, 'dsh-crew-dsh-crew-3210-orphan-2.err.log'), 'recent err\n');
+    const aged = (now - 20 * day) / 1000;
+    utimesSync(join(f.dir, 'dsh-crew-dsh-crew-3210-orphan-1.err.log'), aged, aged);
+    // A directory wearing a candidate's name: rmSync cannot delete it, which is the
+    // deterministic stand-in for a log a live process still holds open. It is aged
+    // past every bound so the recency guard does not protect it.
+    mkdirSync(join(f.dir, 'dsh-crew-dsh-crew-3210-locked-1.out.log'));
+    utimesSync(join(f.dir, 'dsh-crew-dsh-crew-3210-locked-1.out.log'), aged, aged);
+
+    const result = pruneCrewTempLogs({ tempDir: f.dir, now });
+    assert.equal(existsSync(join(f.dir, 'dsh-crew-dsh-crew-3210-orphan-1.err.log')), false, 'the aged orphan err log is pruned');
+    assert.equal(existsSync(join(f.dir, 'dsh-crew-dsh-crew-3210-orphan-2.err.log')), true, 'the recent one is inside its bounds');
+    assert.deepEqual(result.failed, ['dsh-crew-dsh-crew-3210-locked-1.out.log'], 'the undeletable candidate is reported, not counted as removed');
+    assert.equal(result.removed.includes('dsh-crew-dsh-crew-3210-locked-1.out.log'), false);
+    assert.equal(result.ok, 'partial');
+  } finally { f.cleanup(); }
+});

@@ -251,7 +251,12 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
   const roles = {};
   for (const role of ['worker', 'reviewer']) {
     if (enabled_roles?.[role] === false) {
-      roles[role] = { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED', selected: null, last_success: null };
+      // The hub may still record a selected route for a role this session disables;
+      // keeping that route here (rather than nulling it) is what lets the canonical
+      // validation below accept the reprojection. Nulling it manufactured a
+      // selection mismatch against the unchanged outer snapshot and read the whole
+      // contract as DEGRADED for an intentionally disabled role.
+      roles[role] = { state: 'NOT_APPLICABLE', reason_code: 'ROLE_DISABLED', selected: snapshot[role]?.selected ?? null, last_success: null };
     } else if (sourceProjection.enabled_roles?.[role] === true) {
       roles[role] = structuredClone(sourceProjection.roles[role]);
     } else {
@@ -275,9 +280,14 @@ export function reprojectRuntimeModelCallability(snapshot, { enabled_roles = {},
     projection: projected,
     runtime: snapshot.runtime,
     expectedEnabledRoles: projected.enabled_roles,
+    // Expected selections are the routes the snapshot RECORDED, for disabled roles
+    // too: the canonical rule is "a disabled role keeps its route", and expecting
+    // null here would contradict the very projection this function just built — the
+    // mismatch then discarded a healthy worker's evidence and read the session as
+    // degraded for a role that was intentionally switched off.
     expectedSelections: {
-      worker: enabled_roles.worker === true ? snapshot.worker?.selected ?? null : null,
-      reviewer: enabled_roles.reviewer === true ? snapshot.reviewer?.selected ?? null : null,
+      worker: snapshot.worker?.selected ?? null,
+      reviewer: snapshot.reviewer?.selected ?? null,
     },
     now,
   });

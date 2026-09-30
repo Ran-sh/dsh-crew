@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildExtensionContract } from '../src/extension-contract.mjs';
-import { buildRuntimeReadinessSnapshot } from '../src/runtime-readiness-snapshot.mjs';
+import { buildRuntimeReadinessSnapshot, reprojectRuntimeModelCallability } from '../src/runtime-readiness-snapshot.mjs';
+import { validateModelCallabilityV2 } from '../src/model-callability-contract.mjs';
 
 function callableSnapshot({ reviewer = false } = {}) {
   const now = Date.now();
@@ -253,6 +254,27 @@ test('model readiness names aging or unknown evidence instead of calling it vali
   });
   assert.equal(stale.status, 'DEGRADED');
   assert.equal(stale.reason_code, 'MODEL_EVIDENCE_STALE');
+});
+
+// A hub snapshot can carry a selected route for a role the session disables: the
+// canonical snapshot keeps `reviewer.selected` even when `review_state: 'disabled'`.
+// The session reprojection used to null that selection out, which made the canonical
+// validator report a selection mismatch against the unchanged outer snapshot and read
+// the whole contract as DEGRADED for an intentionally disabled role.
+test('disabling a role does not manufacture a selection mismatch', () => {
+  const runtime = { execution_plane: 'hub-3210', profile: 'dsh-crew', listen_port: 3210, runtime_id: 'runtime-1' };
+  const snapshot = callableSnapshot({ reviewer: true });
+  snapshot.runtime = runtime;
+  const reprojected = reprojectRuntimeModelCallability(snapshot, { enabled_roles: { worker: true, reviewer: false } });
+  assert.equal(reprojected.roles.reviewer.state, 'NOT_APPLICABLE');
+  assert.deepEqual(reprojected.roles.reviewer.selected, snapshot.reviewer.selected, 'the recorded route survives the disablement');
+  const validation = validateModelCallabilityV2({
+    projection: reprojected,
+    runtime,
+    expectedSelections: { worker: snapshot.worker.selected, reviewer: snapshot.reviewer.selected },
+  });
+  assert.equal(validation.ok, true, validation.reason_code);
+  assert.equal(validation.state, 'CALLABLE');
 });
 
 test('incomplete, expired, and contradictory callability projections never become READY', () => {

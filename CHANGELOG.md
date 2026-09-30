@@ -4,6 +4,32 @@
 
 Future changes go here.
 
+## 2.2.10 — 2026-09-30
+
+Closing the GitHub-read review of 2.2.9 (the reviewer read the published tree and the
+compare ranges directly). No Critical/High findings; two Medium and one Low closed
+here.
+
+- **Disabling a role no longer degrades the whole contract.** The Hub records a
+  selected route even for a role a session disables, but the session reprojection
+  nulled that route — first in the projection, then in its own validator's
+  expectation — so the canonical check reported a selection mismatch, threw away a
+  healthy worker's evidence and read the session as DEGRADED for a role that was
+  intentionally switched off. A disabled role now keeps its recorded route in both
+  places, and the reprojection returns the healthy projection instead of falling back
+  to "nothing is known".
+- **Claude ownership no longer accepts the running module's own root.** 2.2.9 said
+  ownership comes from what the host recorded, but the uninstall also trusted the
+  checkout the uninstalling module happens to run from — a status line pointing there
+  would be deleted without any record naming it. Only recorded roots (settings,
+  the CLI's cache, the historic marketplace constant) count now; an uninstall from an
+  unrecorded checkout leaves a matching status line alone.
+- **`dsh-crew logs prune` reports what it actually did.** A file Windows would not
+  release was counted as removed while it stayed on disk; deletions that fail are now
+  listed in `failed` (and `ok: 'partial'`) instead, the CLI prints them, and the next
+  prune retries. An orphan `.err.log` whose `.out.log` sibling is already gone is also
+  pruned on its own stamp now, so a half-written run cannot outlive every bound.
+
 ## 2.2.9 — 2026-09-30
 
 Closing the confirmation pass on 2.2.8. Three of its corrections were still incomplete.

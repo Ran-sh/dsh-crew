@@ -26,7 +26,14 @@ const LOG_FAMILIES = [
   { prefix: 'dsh-crew-dsh-crew-3210-', suffix: '.out.log', keep: 10 },
   { prefix: 'dsh-crew-web-', suffix: '.out.log', keep: 20 },
   { prefix: 'dsh-official-web-', suffix: '.out.log', keep: 20 },
-];
+].map((family) => ({
+  ...family,
+  // An `.err.log` whose `.out.log` sibling is gone (or was never written) is still a
+  // Crew diagnostic, so each family recognizes its error files as prunable runs too.
+  errStamp: (name) => name.startsWith(family.prefix) && name.endsWith('.err.log')
+    ? name.slice(family.prefix.length, name.length - '.err.log'.length) || null
+    : null,
+}));
 
 // `dsh-crew-<profile>-<port>-<stamp>.out.log` -> the stamp identifies one run, and
 // its .err.log sibling must live or die with it.
@@ -51,14 +58,28 @@ export function pruneCrewTempLogs({ tempDir = tmpdir(), keepRuns = null, maxAgeD
     const runs = new Map();
     for (const name of names) {
       const stamp = runStamp(name, family);
-      if (!stamp) continue;
+      if (stamp) {
+        const file = join(tempDir, name);
+        let mtimeMs = 0;
+        try { mtimeMs = statSync(file).mtimeMs; } catch { continue; }
+        const run = runs.get(stamp) ?? { stamp, files: [], newest: 0 };
+        run.files.push(name);
+        run.newest = Math.max(run.newest, mtimeMs);
+        runs.set(stamp, run);
+        continue;
+      }
+      // An orphan `.err.log` (its `.out.log` sibling already pruned or never written)
+      // is still a Crew diagnostic: prune it on its own stamp so a half-written run
+      // cannot outlive every bound.
+      const errStamp = family.errStamp(name);
+      if (!errStamp) continue;
       const file = join(tempDir, name);
       let mtimeMs = 0;
       try { mtimeMs = statSync(file).mtimeMs; } catch { continue; }
-      const run = runs.get(stamp) ?? { stamp, files: [], newest: 0 };
+      const run = runs.get(errStamp) ?? { stamp: errStamp, files: [], newest: 0 };
       run.files.push(name);
       run.newest = Math.max(run.newest, mtimeMs);
-      runs.set(stamp, run);
+      runs.set(errStamp, run);
     }
     const ordered = [...runs.values()].sort((left, right) => right.newest - left.newest);
     const keep = keepOverride ?? family.keep;
@@ -73,15 +94,23 @@ export function pruneCrewTempLogs({ tempDir = tmpdir(), keepRuns = null, maxAgeD
       // bound exists to stop. A burst of eleven young runs still keeps ten.
       if ((tooOld || tooMany) && !tooRecentToTouch) {
         for (const name of run.files) removed.push(name);
-        const errName = run.files[0].replace(/\.out\.log$/, '.err.log');
-        if (names.includes(errName)) removed.push(errName);
       } else {
         kept.push(run.stamp);
       }
     });
   }
-  for (const name of removed) {
-    try { rmSync(join(tempDir, name), { force: true }); } catch { /* a locked file stays until the next pass */ }
+  // `removed` lists what is actually gone. A locked file (Windows holds a log open
+  // while its process runs) is reported in `failed` instead of pretending a deletion
+  // happened: the next pass tries again, and the operator is not told a number that
+  // is not true.
+  const failed = [];
+  for (const name of [...new Set(removed)]) {
+    try { rmSync(join(tempDir, name), { force: true }); } catch { failed.push(name); }
   }
-  return { ok: true, removed: [...new Set(removed)].sort(), kept: kept.sort() };
+  return {
+    ok: failed.length === 0 ? true : 'partial',
+    removed: removed.filter((name) => !failed.includes(name)).sort(),
+    kept: kept.sort(),
+    ...(failed.length ? { failed: failed.sort() } : {}),
+  };
 }

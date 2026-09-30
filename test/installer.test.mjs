@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { installClaudeCode, uninstallClaudeCode, claudeIntegrationLine, installStatus, MCP_TOOLS } from '../src/install/install.mjs';
 
@@ -220,6 +221,17 @@ test('a status line is Crew\'s only when it is the one Crew installed', async ()
     uninstallClaudeCode({ home: userHome });
     assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command, lookalike, 'a lookalike path is still not Crew\'s');
     assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command === userCommand, false);
+
+    // Even a path pointing at THIS module's own checkout is left alone when the host
+    // never recorded it: an uninstall may run from a checkout this Claude host has no
+    // record of, and "the module is running from there" is not ownership.
+    const selfRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]+$/, '');
+    const selfPointing = `bash ${join(selfRoot, 'statusline', 'statusline.sh')}`;
+    writeFileSync(userSettings, JSON.stringify({
+      statusLine: { type: 'command', command: selfPointing }, enabledPlugins: {}, extraKnownMarketplaces: {},
+    }, null, 2) + '\n');
+    uninstallClaudeCode({ home: userHome });
+    assert.equal(JSON.parse(readFileSync(userSettings, 'utf8')).statusLine.command, selfPointing, 'an unrecorded root — even this module\'s own — is not Crew\'s here');
 
     // The exact command `--statusline` writes, against the root Crew recorded in this
     // host's own settings, is removed — wherever the operator installed it from.

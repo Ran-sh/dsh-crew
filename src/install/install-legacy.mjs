@@ -1249,10 +1249,11 @@ export function installHudSegment({ home = homedir() } = {}) {
 
 // The paths Crew has recorded as its own in this Claude host: the marketplace records
 // it wrote (under the current and pre-rename names, in settings and in the CLI's own
-// cache), the constant an older installer used, and the checkout this module runs
-// from. Only these are grounds for removing anything: a directory that merely happens
-// to be named `dsh-crew` belongs to whoever made it, and a path that is not recorded
-// here cannot be identified as Crew's, so it is left alone.
+// cache) and the constant an older installer used. Only these are grounds for removing
+// anything: a directory that merely happens to be named `dsh-crew` belongs to whoever
+// made it, the module's own checkout is not evidence (an uninstall may run from a
+// checkout this host never recorded), and a path that is not recorded here is left
+// alone.
 function crewOwnedRoots({ home, settings, markets, installed }) {
   const roots = [];
   const push = (value) => { if (typeof value === 'string' && value.trim() && !roots.includes(value.trim())) roots.push(value.trim()); };
@@ -1266,7 +1267,6 @@ function crewOwnedRoots({ home, settings, markets, installed }) {
     for (const entry of entries) push(entry?.installPath);
   }
   push(join(home, '.config', 'dsh-crew', 'marketplace'));
-  push(ROOT);
   return roots;
 }
 
