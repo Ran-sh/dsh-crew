@@ -13,6 +13,7 @@ import {
   createIsolatedWorkspace,
   captureCandidate,
   cleanupIsolatedWorkspace,
+  withSafeDirectory,
   staleWorktrees,
   pruneWorktrees,
   clampMaxParallel,
@@ -1243,4 +1244,34 @@ maybe('prune removes only what Crew recorded creating', async () => {
     try { rmSync(repo, { recursive: true, force: true }); } catch {}
     try { rmSync(root, { recursive: true, force: true }); } catch {}
   }
+});
+
+// A shared checkout owned by another Windows account makes Git refuse even to read
+// it. That condition has a name of its own: "the worktree looks unowned" and a
+// generic GIT_ERROR both misdescribe a repository the operator deliberately shares.
+test('dubious ownership is named as an ownership condition, not a broken repository', async (t) => {
+  const repo = mkdtempSync(join(tmpdir(), 'crew-ws-own-'));
+  const root = mkdtempSync(join(tmpdir(), 'crew-ws-own-root-'));
+  t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch {} try { rmSync(root, { recursive: true, force: true }); } catch {} });
+
+  const refusing = async (args, opts = {}) => ({
+    code: 128,
+    stdout: '',
+    stderr: `fatal: detected dubious ownership in repository at '${opts.cwd ?? repo}'\nTo add an exception for this directory, call:\n\tgit config --global --add safe.directory ${opts.cwd ?? repo}`,
+  });
+  const inspected = await inspectRepository({ cwd: repo, git: refusing });
+  assert.equal(inspected.ok, false);
+  assert.equal(inspected.reason, 'WORKTREE_GIT_OWNERSHIP_UNSAFE');
+  assert.match(inspected.error, /dubious ownership/);
+});
+
+// The anchor is one exact path: Git would read a trailing `/*` as a prefix wildcard,
+// so a wildcard-bearing value is refused by Crew instead of trusted by Git.
+test('a wildcard-bearing trust anchor is refused by Crew, never handed to Git', async () => {
+  const seen = [];
+  const captured = withSafeDirectory(async (args) => { seen.push(args); return { code: 0, stdout: '', stderr: '' }; }, 'D:/shared/prefix/*');
+  const result = await captured(['status'], { cwd: 'D:/shared/prefix/x' });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /one exact path without wildcards/);
+  assert.equal(seen.length, 0, 'no git call was made with a wildcard trust anchor');
 });

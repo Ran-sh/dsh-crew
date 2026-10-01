@@ -4,6 +4,30 @@
 
 Future changes go here.
 
+## 2.2.12 — 2026-10-01
+
+Closing the round-5 review of 2.2.11 (read from GitHub). It confirmed no diff
+regression, and drew a line this release deliberately does not cross.
+
+- **The scoped trust exception applies to the MCP workflow path only, by decision.**
+  2.2.11's release note over-claimed: direct `POST /jobs` dispatch on 3210 does not
+  carry the `safe.directory` anchor. That is deliberate. The hub authenticates a
+  loopback socket, not a Windows account, so any local process can call it; wiring the
+  anchor there would turn "run a job in a foreign-owned repository" into a privilege
+  any local process could invoke. Granting it is gated on per-user authentication for
+  3210 or on restricting job paths to an operator-approved workspace registry — an
+  operator decision, not a patch.
+- **A wildcard-bearing trust anchor is refused by Crew.** Git reads a trailing `/*` as
+  a prefix wildcard (and on POSIX `*` is a legal filename), so `withSafeDirectory`
+  now refuses any anchor that could outlive "exactly one repository" before a single
+  git call runs.
+- **Dubious ownership is named as its own condition.** Git's ownership refusal no
+  longer surfaces as a generic `GIT_ERROR` (or as "the worktree looks unowned"):
+  it reports `WORKTREE_GIT_OWNERSHIP_UNSAFE`, keeping the behavior fail-closed while
+  saying that the remedy is an operator trust decision. Worktree-local failures keep
+  plain git by design; candidate-capture failures degrade to
+  `candidate_capture_failed`, they do not fail the run.
+
 ## 2.2.11 — 2026-09-30
 
 - **Dispatch works on repositories another Windows account owns.** A shared checkout

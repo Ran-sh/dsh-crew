@@ -25,6 +25,8 @@ export const NOT_GIT_REPOSITORY = 'NOT_GIT_REPOSITORY';
 export const GIT_NOT_FOUND = 'GIT_NOT_FOUND';
 export const GIT_TIMEOUT = 'GIT_TIMEOUT';
 export const GIT_ERROR = 'GIT_ERROR';
+/** Git refused to read a repository owned by another account; the trust decision is the operator's. */
+export const WORKTREE_GIT_OWNERSHIP_UNSAFE = 'WORKTREE_GIT_OWNERSHIP_UNSAFE';
 /** A valid repository whose HEAD does not resolve because nothing is committed. */
 export const REPOSITORY_HAS_NO_COMMITS = 'REPOSITORY_HAS_NO_COMMITS';
 export const WORKTREE_LOCKED = 'WORKTREE_LOCKED';
@@ -67,6 +69,12 @@ async function runGit(runner, args, opts) {
     const r = await runner(args, opts);
     const stderr = r.stderr ?? '';
     if (/not a git repository/i.test(stderr)) return { ok: false, reason: NOT_GIT_REPOSITORY, error: stderr.trim() };
+    // Git's ownership refusal is its own condition, distinct from a broken
+    // repository: the tree exists, Crew can see it, and the remedy is a trust
+    // decision that belongs to the operator, not a repair step. Naming it keeps
+    // "the worktree looks unowned" (WORKSPACE_CONFLICT) and generic GIT_ERROR
+    // from misdescribing a shared checkout.
+    if (/dubious ownership/i.test(stderr)) return { ok: false, reason: WORKTREE_GIT_OWNERSHIP_UNSAFE, code: r.code, error: stderr.trim() };
     if (r.code != null && r.code !== 0) return { ok: false, reason: r.code === -1 ? GIT_NOT_FOUND : GIT_ERROR, code: r.code, error: stderr.trim() || 'git exited non-zero' };
     return { ok: true, code: r.code, stdout: r.stdout ?? '', stderr };
   } catch (err) {
@@ -101,6 +109,13 @@ export function sameRepoPath(left, right) {
 export function withSafeDirectory(git, trustedRepoRoot) {
   const run = git ?? defaultRunner;
   const safe = resolve(String(trustedRepoRoot ?? ''));
+  // Git reads a trailing `/*` as a prefix wildcard, and on POSIX `*` is a legal
+  // filename, so a value that could outlive "exactly one repository" is refused
+  // here rather than handed to Git and discovered later.
+  if (safe.includes('*')) {
+    const error = `Crew trust refusal: the safe.directory anchor must be one exact path without wildcards, got ${safe}`;
+    return async () => ({ code: 1, stdout: '', stderr: error });
+  }
   return (args, opts) => run(['-c', `safe.directory=${safe}`, ...args], opts);
 }
 
