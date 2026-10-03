@@ -4,6 +4,18 @@
 
 Future changes go here.
 
+## 2.2.13 — 2026-10-01
+
+- **Cross-SID dispatch reaches the direct hub API, gated by the operator's config.**
+  2.2.11 granted the scoped git `safe.directory` exception only on the MCP workflow
+  path; direct `POST /jobs` dispatch still failed on a foreign-owned checkout. The
+  hub now reads `trusted_workspace_roots` from the operator's own Crew config
+  (`~/.config/dsh-crew/config.json`) and grants the request-scoped anchor only for a
+  root listed there, matched exactly. The hub API authenticates a loopback socket,
+  not a Windows account, so an API caller's path can never grant itself the trust —
+  approval flows through the file the operator edits, no authentication added.
+  Defaults to an empty list: nothing is trusted until the operator writes it.
+
 ## 2.2.12 — 2026-10-01
 
 Closing the round-5 review of 2.2.11 (read from GitHub). It confirmed no diff

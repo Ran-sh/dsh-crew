@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { installClaudeCode, uninstallClaudeCode, claudeIntegrationLine, installStatus, MCP_TOOLS } from '../src/install/install.mjs';
+import { installClaudeCode, uninstallClaudeCode, claudeIntegrationLine, installStatus, readGlobalConfig, MCP_TOOLS } from '../src/install/install.mjs';
 
 const CREW_PREFIX = 'mcp__plugin_dsh-crew_dsh-crew__';
 const rule = (t) => `${CREW_PREFIX}${t}`;
@@ -304,5 +304,19 @@ test('uninstall is idempotent and does not throw on missing settings', async () 
   try {
     const r = await uninstallClaudeCode({ home });
     assert.equal(r.ok, true);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// `trusted_workspace_roots` is the operator's list of foreign-owned repository roots
+// the hub may carry a scoped git exception for. It defaults to nothing trusted and
+// survives a config round-trip untouched.
+test('trusted_workspace_roots defaults to empty and round-trips', () => {
+  const home = makeHome();
+  try {
+    const configFile = join(home, '.config', 'dsh-crew', 'config.json');
+    mkdirSync(join(home, '.config', 'dsh-crew'), { recursive: true });
+    assert.deepEqual(readGlobalConfig({ configFile }).trusted_workspace_roots, []);
+    writeFileSync(configFile, JSON.stringify({ trusted_workspace_roots: ['D:/Shared/dsh-crew'] }));
+    assert.deepEqual(readGlobalConfig({ configFile }).trusted_workspace_roots, ['D:/Shared/dsh-crew']);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

@@ -396,6 +396,13 @@ export const GLOBAL_CONFIG_DEFAULTS = {
   // default: the interactive desktop entry is what opens a session, and an extra
   // always-on harness process is the operator's choice to make.
   frontend_autostart: false,
+  // Opt-in trust: repository roots whose ownership differs from this account's, for
+  // which the hub's worktree dispatch may carry a request-scoped git
+  // `safe.directory` exception. The hub API authenticates a loopback socket, not a
+  // Windows account, so this file — edited by the operator, not by an API caller —
+  // is what turns a foreign-owned checkout into a legal dispatch target. Exact
+  // roots only; wildcards are refused.
+  trusted_workspace_roots: [],
   // Worker provider routing for HUB workers: which DSH provider backs each
   // worker session. Fresh installs stay on the built-in DeepSeek provider;
   // follow-dsh is an explicit opt-in that uses the provider selected in DSH

@@ -28,6 +28,7 @@ import { createCanonicalJobEvent, projectWorkflowView } from '../job-contracts.m
 import { getHubRuntimeIdentity } from '../runtime-identity.mjs';
 import { loadCiEvidence } from '../ci-evidence.mjs';
 import { ensureCrewWorkspace, releaseCrewWorkspace } from '../crew-workspaces.mjs';
+import { sameRepoPath } from '../workspace-isolation.mjs';
 import { loadRoleProfiles, resolveRoleProfile, saveRoleProfiles } from '../role-profiles.mjs';
 import { addContextReferences, buildWorkspaceTask, isSafeBranchName, loadWorkspaceContexts, resolveWorkspaceContext, saveWorkspaceContexts } from '../workspace-context.mjs';
 import { buildExtensionContract } from '../extension-contract.mjs';
@@ -897,7 +898,12 @@ export class WorkerRegistry {  constructor(ctx) {
       // This project's stable worker/reviewer workspace, reset to the job's base
       // revision and held for the job's duration, so the Harness groups these
       // sessions into two entries instead of one per job.
-      const created = await ensureCrewWorkspace({ cwd, role: jobRole, baseRevision: workspace_branch });
+      // The cross-SID git exception is granted only for a root the OPERATOR listed
+      // in `trusted_workspace_roots`: this API authenticates a loopback socket, not
+      // a Windows account, so an API caller's path can never grant itself the trust.
+      const approvedRoots = Array.isArray(cfg.trusted_workspace_roots) ? cfg.trusted_workspace_roots : [];
+      const trustedRepoRoot = approvedRoots.find((root) => typeof root === 'string' && sameRepoPath(root, cwd)) ?? null;
+      const created = await ensureCrewWorkspace({ cwd, trustedRepoRoot, role: jobRole, baseRevision: workspace_branch });
       if (!created.ok) throw Object.assign(new Error(created.error ?? created.reason), { code: created.reason });
       executionCwd = created.worktreePath;
       isolatedWorkspace = { worktreePath: created.worktreePath, repoRoot: created.repoRoot, stable: true, release: created.release };
