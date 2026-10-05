@@ -4,6 +4,28 @@
 
 Future changes go here.
 
+## 2.2.15 — 2026-10-06
+
+- **The payload's DSH cohort is pinned from the cohort source of truth again.**
+  Widening the peer ranges in 2.2.14 removed the payload's cohort pin as a side
+  effect: staging read the cohort straight out of `peerDependencies`, and exact
+  specs are the only ones `exactSpecOverrides` can lock, so a release staged by
+  npx materialized the newest matching cohort (`0.2.0-rc.2`, 289 packages)
+  instead of the `0.1.6-alpha.1` the embedded runtime runs — which left
+  standalone jobs loading a 0.2 SDK client against a 0.1.6-alpha.1 home. It also
+  shipped no `release-cohort.json` and left `payloadDshVersion` failing closed on
+  the range, which skipped retained-runtime pruning. The vendored cohort now
+  comes from `DSH_COHORT_PACKAGES` in `src/dsh-cohort.mjs`: every declared
+  `@deepseek-ai/dsh*` peer is pinned to `TARGET_DSH_VERSION`, and a scoped peer
+  outside that cohort — the Cordis framework, or a later-cohort rename — stays a
+  host-gate declaration that the running host supplies. The host gate keeps
+  `^0.1.0 || ^0.2.0-rc.1`, so every host from 0.1.6-alpha.1 through 0.2.x still
+  mounts the plugin.
+
+- **Corrects the 2.2.14 note.** Its "vendored payload cohort" line was true of the
+  repository but not of an installed payload; the paragraph above is what
+  actually happened.
+
 ## 2.2.14 — 2026-10-06
 
 - **Every DSH host from 0.1.6-alpha.1 through 0.2.x now mounts the plugin.**
@@ -20,7 +42,7 @@ Future changes go here.
   The dead `@deepseek-ai/dsh-agent-presets` key is removed: that name stopped
   publishing at `0.1.6-alpha.2`, so it could never resolve on a later host.
 
-- **Dependency resolution, the lockfile, and the vendored payload cohort are untouched.**
+- **Dependency resolution, the lockfile, and the repository graph are untouched.**
   `devDependencies`, `dependencies`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` are
   byte-identical to 2.2.13, `pnpm install --frozen-lockfile` passes, and the built
   client artifacts are unchanged.

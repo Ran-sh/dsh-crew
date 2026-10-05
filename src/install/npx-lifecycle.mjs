@@ -45,7 +45,7 @@ import { crewDshHome, crewProfileDir, claudeIntegrationLine } from './install.mj
 import { integrationRoot } from './crew-paths.mjs';
 import { releaseClaimsState } from '../release-in-use.mjs';
 import { compareProcessToken, processStartToken } from '../process-identity.mjs';
-import { RELEASE_COHORT_FILENAME } from '../dsh-cohort.mjs';
+import { DSH_SCOPE, RELEASE_COHORT_FILENAME, dshCohortPins } from '../dsh-cohort.mjs';
 import { renameTree } from './tree-move.mjs';
 import { checkRuntimeAdvance, normalizeRuntimeState, runtimeStateMayHaveStarted } from './runtime-lifecycle.mjs';
 import { ensureCrewDshRuntime, ensureCrewPluginRegistration, ensureCrewWebProfile, removeCrewPluginRegistration, migrateCrewDshRuntime, installDshInto, restoreRetainedRuntime, crewDshRuntimeRoot, payloadDshVersion, gcRetainedRuntimes, TARGET_DSH_VERSION } from '../dsh-cli-runtime.mjs';
@@ -1042,19 +1042,38 @@ export function stageCandidatePayload({
     writeFileSync(destination, bytes, { mode: content.modes.get(entry) });
   }
 
-  // Persist an adjusted manifest: identity/runtime fields stay; production
-  // dependencies gain the exact-pinned peer cohort so the payload runs
-  // standalone (src/server.mjs statically imports DSH peers). Optional
-  // dependencies keep their own section so npm reconciles them per-platform.
+  // Persist an adjusted manifest: identity/runtime fields stay; declared DSH
+  // peers are re-pinned to the cohort in src/dsh-cohort.mjs so the standalone
+  // payload resolves exactly one cohort; optional dependencies keep their own
+  // section so npm reconciles them per-platform.
+  //
+  // The peer VALUES are deliberately not the payload's cohort. A peer key declares
+  // which hosts will load the plugin, so it carries a range; a released payload
+  // has to resolve one exact cohort, and exact specs are the only ones
+  // `exactSpecOverrides` can pin. A scoped peer outside TARGET_DSH_VERSION — a
+  // later-cohort rename, or the Cordis framework — is therefore a host-gate
+  // declaration only: the running host supplies it, as it supplies every other
+  // shared module. Without this pin the payload stops carrying a resolvable
+  // cohort at all, and `payloadDshVersion` fails closed on the range.
   const stagedManifest = { ...manifest };
   delete stagedManifest.devDependencies;
   delete stagedManifest.peerDependencies;
   delete stagedManifest.peerDependenciesMeta;
   const optionalNames = new Set(Object.keys(manifest.optionalDependencies ?? {}));
-  stagedManifest.dependencies = {
-    ...(manifest.peerDependencies ?? {}),
-    ...(manifest.dependencies ?? {}),
-  };
+  const cohortPins = dshCohortPins();
+  const explicitDependencies = new Set(Object.keys(manifest.dependencies ?? {}));
+  const stagedDependencies = { ...(manifest.dependencies ?? {}) };
+  for (const [name, spec] of Object.entries(manifest.peerDependencies ?? {})) {
+    if (!name.startsWith(DSH_SCOPE)) {
+      if (!(name in stagedDependencies)) stagedDependencies[name] = spec;
+      continue;
+    }
+    // An explicit runtime dependency wins over the peer shorthand.
+    if (explicitDependencies.has(name)) continue;
+    if (!Object.hasOwn(cohortPins, name)) continue;
+    stagedDependencies[name] = cohortPins[name];
+  }
+  stagedManifest.dependencies = stagedDependencies;
   const overrides = exactSpecOverrides(stagedManifest.dependencies);
   if (overrides) stagedManifest.overrides = overrides;
   writeFileSync(join(stageDir, 'package.json'), JSON.stringify(stagedManifest, null, 2) + '\n');
