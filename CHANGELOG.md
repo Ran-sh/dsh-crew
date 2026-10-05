@@ -4,6 +4,34 @@
 
 Future changes go here.
 
+## 2.2.14 — 2026-10-06
+
+- **Every DSH host from 0.1.6-alpha.1 through 0.2.x now mounts the plugin.**
+  The host enforces each `@deepseek-ai/dsh*` peer range at install and again at
+  startup, and a range that refuses the running version silently disables the row:
+  the profile files are left untouched and the row still appears in `--dump-config`,
+  so the only symptom is a plugin that stopped mounting. All 24 peers were the
+  literal `0.1.6-alpha.1`, which meant the plugin mounted on exactly one host build
+  and was disabled on every other release, including the current `0.1.7-rc.2`.
+  The 23 surviving peers now carry `^0.1.0 || ^0.2.0-rc.1`, which admits the whole
+  0.1.x line and the 0.2 window while still refusing a 0.3.0 prerelease. Measured
+  with the host own `semver` 7.8.5 and the checker exact loop: only 0.1.6-alpha.1
+  mounted before; now every host from 0.1.6-alpha.1 to 0.2.1-alpha.1 mounts.
+  The dead `@deepseek-ai/dsh-agent-presets` key is removed: that name stopped
+  publishing at `0.1.6-alpha.2`, so it could never resolve on a later host.
+
+- **Dependency resolution, the lockfile, and the vendored payload cohort are untouched.**
+  `devDependencies`, `dependencies`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` are
+  byte-identical to 2.2.13, `pnpm install --frozen-lockfile` passes, and the built
+  client artifacts are unchanged.
+
+- **Known gap, deferred deliberately.** No `@deepseek-ai/cordis` peer is declared
+  and the `agentPresets` provider rename (`dsh-agent-preset-registry`) is not
+  reflected, so the official plugin lint still reports `FIX-REQUIRED`. Adding either
+  key forces a full re-resolution that drops 24 optional-peer packages and un-hoists
+  `@deepseek-ai/dsh-settings`, which breaks payload staging; both need
+  `TARGET_DSH_VERSION` and the embedded worker runtime to move to 0.2.0-rc.1 together.
+
 ## 2.2.13 — 2026-10-01
 
 - **Cross-SID dispatch reaches the direct hub API, gated by the operator's config.**
