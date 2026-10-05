@@ -14,12 +14,12 @@ const insertSection = workerSource.slice(workerSource.indexOf('- insert:'));
 const insertIds = [...insertSection.matchAll(/^ + *- id: ([A-Za-z0-9_/-]+)/gm)].map((m) => m[1]);
 const overrideIds = workerIds.filter((id) => !insertIds.includes(id));
 
-// Fixed 0.1.6-alpha.1 sdk-minimal base rows (from the published cordis.patch.yml).
+// Fixed sdk-minimal base rows (from the published cordis.patch.yml). The id set is
 // Any non-insert overlay row must hit one of these, otherwise the patch would
 // silently add a second row instead of overriding the base config.
-// The cohort dropped both `fs-local` and `str-replace-editor`; fs-local is now a
-// Crew-owned insert row instead (see the overlay's own comment). 0.1.6 added
-// `mcp-resources` for shared MCP resources and removed nothing Crew names.
+// identical at 0.2.0-rc.2 and at the 0.1.6-alpha.1 cohort this snapshot was taken
+// from; only the package behind `llm-deepseek` moved (to dsh-llm-deepseek-api-key),
+// which the overlay reaches by id and never by name.
 const SDK_MINIMAL_BASE_IDS = new Set([
   'sdk-app-startup',
   'sdk-jsonrpc-server',

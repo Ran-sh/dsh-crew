@@ -9,7 +9,7 @@
 //
 // Two hazards shape the rules:
 //   1. The desktop app runs a DIFFERENT cohort than Crew pins (0.1.7-rc.2 vs
-//      0.1.6-alpha.1), so an entry may name a package Crew's runtime does not
+//      0.2.0-rc.2), so an entry may name a package Crew's runtime does not
 //      have. The Harness installs patches fail-loud, so such an entry would break
 //      the hub: it is skipped and reported instead.
 //   2. Crew's own managed blocks (the desktop bridge insert) are not user

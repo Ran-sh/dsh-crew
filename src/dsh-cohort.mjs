@@ -4,7 +4,7 @@
 // resolve to this exact version. All other modules re-export from here so a
 // cohort bump touches exactly one file (plus package.json's 48 DSH pins).
 export const DSH_CLI_PACKAGE = '@deepseek-ai/dsh';
-export const TARGET_DSH_VERSION = '0.1.6-alpha.1';
+export const TARGET_DSH_VERSION = '0.2.0-rc.2';
 export const TARGET_DSH_SPEC = `${DSH_CLI_PACKAGE}@${TARGET_DSH_VERSION}`;
 
 export const DSH_SCOPE = '@deepseek-ai/';
@@ -31,12 +31,12 @@ export function isDshCohortPackage(name) {
 //     named by CREW_PROFILE_DEFAULT_BUNDLES in src/dsh-cli-runtime.mjs. They
 //     belong to the runtime tree the profile composes, not to this plugin's
 //     peer set, so they are correctly absent here. A payload never vendors them.
-//   * @deepseek-ai/dsh-agent-presets is listed but currently inert: nothing in
-//     package.json declares it, and only a declared name is pinned. It stays
-//     because it is the 0.1.6-alpha.1 provider of the `agentPresets` service this
-//     plugin resolves, and because its name dies at 0.1.7 — a host that needs the
-//     provider must not get it from the peer block, so the only way it can ever
-//     be pinned to the runtime cohort is from this list.
+//   * @deepseek-ai/dsh-agent-preset-registry is the provider of the
+//     `agentPresets` service this plugin resolves, and it is declared, so it is
+//     both pinned here and carried as a peer. Its predecessor
+//     `@deepseek-ai/dsh-agent-presets` stopped publishing at 0.1.6-alpha.2 and is
+//     named nowhere — a cohort that still listed it would be describing a package
+//     no registry can serve.
 //
 // The list is authoritative wherever a member is declared: a peer range and an
 // explicit dependency both resolve to TARGET_DSH_VERSION in the staged payload.
@@ -47,7 +47,7 @@ export const DSH_COHORT_PACKAGES = Object.freeze([
   DSH_CLI_PACKAGE,
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-agent-loop',
-  '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-bash-local',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-renderer',

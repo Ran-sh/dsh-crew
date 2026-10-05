@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { crewDshHome } from '../src/install/install.mjs';
 import { crewDshRuntimeRoot } from '../src/dsh-cli-runtime.mjs';
+import { TARGET_DSH_VERSION } from '../src/dsh-cohort.mjs';
 import { configMirrorTargets, mirrorOfficialHarnessConfig, officialConfigMirrorStatus } from '../src/install/harness-config-import.mjs';
 import { DESKTOP_BRIDGE_ID, DESKTOP_BRIDGE_MARKER } from '../src/install/desktop-profile.mjs';
 
@@ -62,7 +63,7 @@ function materializeCohort(home, packages) {
   for (const name of packages) {
     const dir = join(crewDshRuntimeRoot({ home }), 'node_modules', ...name.split('/'));
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: '0.1.6-alpha.1' }));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: TARGET_DSH_VERSION }));
   }
   const dsh = join(crewDshRuntimeRoot({ home }), 'node_modules', '@deepseek-ai', 'dsh', 'lib');
   mkdirSync(dsh, { recursive: true });

@@ -60,6 +60,7 @@ import {
   collectExternalSpecifiers,
   exactSpecOverrides,
 } from '../src/install/npx-lifecycle.mjs';
+import { TARGET_DSH_VERSION } from '../src/dsh-cohort.mjs';
 import { samePayloadContent } from '../src/install/payload-content.mjs';
 // Rendered by both install entries, so it lives with the install that produces
 // the result rather than with either caller.
@@ -389,7 +390,7 @@ test('staging records which form a manifest is and where the candidate came from
     assert.equal(record.source.spec, '@ran-sh/dsh-crew@latest');
     assert.equal(record.source.integrity, 'sha512-test-integrity');
     assert.equal(record.source.file, 'ran-sh-dsh-crew-0.3.3.tgz');
-    assert.equal(record.targetDshVersion, '0.1.6-alpha.1');
+    assert.equal(record.targetDshVersion, TARGET_DSH_VERSION);
     assert.match(record.rewrittenAt, /^\d{4}-\d{2}-\d{2}T/, 'the rewrite time is recorded');
     // A digest is a property of the shipped files, not of install bookkeeping,
     // so the rewrite record must not move `samePayloadContent`.
@@ -423,7 +424,7 @@ test('staged payload keeps the host peer declaration, strips dev declarations, s
     assert.equal(stageManifest.dshCrew.payloadSchema, 2);
     assert.equal(stageManifest.dshCrew.windowsSupervisorHandoff, 1);
     assert.equal(stageManifest.dshCrew.payloadRewrite.rewritten, true);
-    assert.equal(stageManifest.dshCrew.payloadRewrite.targetDshVersion, '0.1.6-alpha.1');
+    assert.equal(stageManifest.dshCrew.payloadRewrite.targetDshVersion, TARGET_DSH_VERSION);
     assert.equal(stageManifest.dshCrew.payloadRewrite.source.kind, 'unknown', 'a caller that names no source is recorded as unknown, never guessed');
     for (const rel of ['cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'codex/agents/ds-worker.toml', '.claude-plugin/marketplace.json']) {
       assert.equal(existsSync(join(staged.stageDir, rel)), true, `${rel} must be staged`);

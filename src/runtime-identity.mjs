@@ -5,7 +5,7 @@
 // - HUB_PROTOCOL_VERSION changes only when Hub <-> MCP wire semantics become
 //   incompatible.
 //
-// The Harness/DSH cohort version (e.g. 0.1.6-alpha.1) is a THIRD, independent
+// The Harness/DSH cohort version (e.g. 0.2.0-rc.2) is a THIRD, independent
 // domain: it identifies the installed @deepseek-ai/dsh package generation,
 // never the Crew release. Verifiers must compare the cohort against
 // dsh_version, never against runtime_version.
