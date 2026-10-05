@@ -4,6 +4,31 @@
 
 Future changes go here.
 
+### manifest consistency: the staged payload keeps its host peer declaration
+
+- **The CLI-written manifest no longer drops `peerDependencies`.** The host gate
+  opens with `if (!Object.hasOwn(fields, "peerDependencies")) return void 0`, so an
+  installed payload without the key stops being checked at all: it mounts on any
+  runtime, and a genuinely incompatible host would fail silently at run time
+  instead of being refused at boot. Staging keeps `peerDependencies` and
+  `peerDependenciesMeta` now — only `devDependencies` is stripped — which leaves
+  the exact cohort pin where it belongs, in `dependencies` plus `overrides`.
+- **`dshCrew.payloadRewrite` distinguishes the two manifest forms.** The published
+  form records `rewritten: false`; the staged form records `rewritten: true` with
+  the candidate source (`registry` plus npm integrity, `candidate`, `launcher` or
+  `running`), the target DSH cohort, and the rewrite time. A version number alone
+  cannot tell the forms apart, and they do not behave alike.
+- **The payload digest ignores the rewrite record**, so a rewritten payload still
+  compares content-equal to its source and the same-version repair path stays
+  reachable.
+- **`src/dsh-cohort.mjs` now states what its list is and is not.** It is the
+  payload's pin authority, not an inventory of the runtime tree:
+  `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-web-app` are profile bundles and
+  correctly absent, and `@deepseek-ai/dsh-agent-presets` is retained as the
+  0.1.6-alpha.1 provider whose name cannot come from the peer block. A declared
+  cohort member is pinned whether it appears as a peer or as an explicit
+  dependency.
+
 ## 2.2.15 — 2026-10-06
 
 - **The payload's DSH cohort is pinned from the cohort source of truth again.**

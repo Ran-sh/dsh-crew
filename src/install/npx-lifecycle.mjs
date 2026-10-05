@@ -36,7 +36,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import * as realInstaller from './install.mjs';
@@ -998,6 +998,22 @@ export function exactSpecOverrides(dependencies) {
 
 // ---- payload staging ---------------------------------------------------------
 
+// Which manifest form a file is: absent or `rewritten: false` is the shape npm
+// published, `rewritten: true` is the shape the CLI staged. A version number alone
+// cannot tell the two apart, and they do not behave alike (`npm ls`, the dependency
+// tree, and any future integrity check all see different content), so a bug report
+// has to be able to name its form without guessing.
+export function payloadRewriteRecord({ source, dshVersion, now = new Date() } = {}) {
+  const kind = typeof source?.kind === 'string' && source.kind ? source.kind : 'unknown';
+  const record = { schema: 1, rewritten: true, source: { kind }, targetDshVersion: dshVersion ?? null };
+  for (const key of ['spec', 'integrity', 'file', 'path', 'version']) {
+    const value = source?.[key];
+    if (typeof value === 'string' && value) record.source[key] = value;
+  }
+  if (now instanceof Date && !Number.isNaN(now.valueOf())) record.rewrittenAt = now.toISOString();
+  return record;
+}
+
 /**
  * Stage the candidate into its FINAL release directory, guarded by an
  * incompleteness marker. Committing = removing the marker (a single-file
@@ -1005,13 +1021,15 @@ export function exactSpecOverrides(dependencies) {
  * pointer last. This avoids directory renames, which Windows can refuse with
  * transient EPERM while a freshly written tree is being scanned.
  *
- * The persisted manifest merges the exact-pinned DSH peer cohort into
- * `dependencies` (peer declarations are dropped): the installed payload runs
- * standalone — `src/server.mjs` statically imports DSH peers — so those
- * packages must exist inside the release, not be assumed from a host.
+ * The persisted manifest re-pins every declared DSH peer to the cohort in
+ * `dependencies`, with matching `overrides`, so a released payload resolves
+ * exactly one cohort, and it keeps the `peerDependencies` declaration so the
+ * host compatibility gate still has something to check. Only `devDependencies`
+ * is dropped — it is not a runtime input.
  */
 export function stageCandidatePayload({
   sourceRoot = runningPackageRoot(),
+  source = null,
   home = homedir(),
   log = () => {},
   now = new Date(),
@@ -1055,27 +1073,50 @@ export function stageCandidatePayload({
   // declaration only: the running host supplies it, as it supplies every other
   // shared module. Without this pin the payload stops carrying a resolvable
   // cohort at all, and `payloadDshVersion` fails closed on the range.
+  //
+  // `peerDependencies` STAYS in the payload. The host gate opens with
+  // `if (!Object.hasOwn(fields, "peerDependencies")) return void 0`, so a payload
+  // that dropped the key stops being checked at all: the installed form would
+  // trade the host's compatibility protection for nothing, and a future runtime
+  // that genuinely mismatched would fail silently at run time instead of being
+  // refused at boot. Keeping the declaration costs nothing — the exact cohort pin
+  // lives in `dependencies` plus `overrides`, which answers a different question
+  // than the range a host gate compares — and `peerDependenciesMeta.optional`
+  // keeps npm from treating the pinned copies as unsatisfied required peers.
+  // `devDependencies` is removed: it is not a runtime input and must never be
+  // materialized into the payload.
   const stagedManifest = { ...manifest };
   delete stagedManifest.devDependencies;
-  delete stagedManifest.peerDependencies;
-  delete stagedManifest.peerDependenciesMeta;
   const optionalNames = new Set(Object.keys(manifest.optionalDependencies ?? {}));
   const cohortPins = dshCohortPins();
-  const explicitDependencies = new Set(Object.keys(manifest.dependencies ?? {}));
   const stagedDependencies = { ...(manifest.dependencies ?? {}) };
   for (const [name, spec] of Object.entries(manifest.peerDependencies ?? {})) {
     if (!name.startsWith(DSH_SCOPE)) {
       if (!(name in stagedDependencies)) stagedDependencies[name] = spec;
       continue;
     }
-    // An explicit runtime dependency wins over the peer shorthand.
-    if (explicitDependencies.has(name)) continue;
+    // A scoped peer outside the cohort is a host-gate declaration only.
     if (!Object.hasOwn(cohortPins, name)) continue;
+    stagedDependencies[name] = cohortPins[name];
+  }
+  // The cohort list is authoritative wherever a member is declared, including a
+  // member an author promoted into `dependencies`. Pinning there too keeps one
+  // exact cohort; the alternative silently floats that package and re-opens
+  // exactly the drift the payload pin exists to prevent.
+  for (const [name, spec] of Object.entries(stagedDependencies)) {
+    if (!Object.hasOwn(cohortPins, name)) continue;
+    if (spec !== cohortPins[name]) {
+      log(`- pinning ${name} ${spec} -> ${cohortPins[name]} (the payload resolves one cohort)`);
+    }
     stagedDependencies[name] = cohortPins[name];
   }
   stagedManifest.dependencies = stagedDependencies;
   const overrides = exactSpecOverrides(stagedManifest.dependencies);
   if (overrides) stagedManifest.overrides = overrides;
+  stagedManifest.dshCrew = {
+    ...(stagedManifest.dshCrew ?? {}),
+    payloadRewrite: payloadRewriteRecord({ source, dshVersion: TARGET_DSH_VERSION, now }),
+  };
   writeFileSync(join(stageDir, 'package.json'), JSON.stringify(stagedManifest, null, 2) + '\n');
 
   // Materialize dependencies: prefer replicating the exact bits the candidate
@@ -2881,7 +2922,7 @@ async function npxInstallInner({ home, log, sourceRoot, installer, ensureRuntime
     return { ok: true, repaired: true, version: manifest.version, path: health.pointer.path };
   }
 
-  const staged = stageCandidatePayload({ sourceRoot: candidateRoot, home, log, npmInstaller });
+  const staged = stageCandidatePayload({ sourceRoot: candidateRoot, home, log, npmInstaller, source: { kind: 'running', path: candidateRoot, version: manifest.version } });
   if (!staged.ok) {
     log(`✗ staging failed (${staged.code})${staged.detail ? `: ${Array.isArray(staged.detail) ? staged.detail.join('; ') : String(staged.detail)}` : ''}`);
     return { ok: false, error: `staging failed (${staged.code})` };
@@ -2979,7 +3020,7 @@ export function resolveUpdateCandidate({
     if (existsSync(join(value, 'package.json'))) {
       const manifest = readManifest(value);
       if (!manifest?.name || !manifest?.version) return { ok: false, code: 'CANDIDATE_MANIFEST_INVALID', detail: value };
-      return { ok: true, sourceRoot: value, version: manifest.version, cleanup: null };
+      return { ok: true, sourceRoot: value, version: manifest.version, cleanup: null, source: { kind: 'candidate', path: value } };
     }
     if (/\.tgz$/i.test(value)) {
       const tmpRoot = join(crewReleasesDir({ home }), `.candidate-${timestampStamp()}-${process.pid}`);
@@ -2997,6 +3038,7 @@ export function resolveUpdateCandidate({
         ok: true,
         sourceRoot: extracted.sourceRoot,
         version: manifest.version,
+        source: { kind: 'candidate', file: basename(value) },
         cleanup: () => rmSync(tmpRoot, { recursive: true, force: true }),
       };
     }
@@ -3041,6 +3083,7 @@ export function resolveUpdateCandidate({
       ok: true,
       sourceRoot: extracted.sourceRoot,
       version: manifest.version,
+      source: { kind: 'registry', spec: effectiveSpec, ...(typeof info.integrity === 'string' && info.integrity ? { integrity: info.integrity } : {}), ...(typeof info.filename === 'string' && info.filename ? { file: info.filename } : {}) },
       cleanup: () => rmSync(tmpDir, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -3097,7 +3140,7 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
   let resolved;
   if (launcherCanConverge) {
     log(`- newer launcher ${launcherManifest.version}; converging managed payload ${initialHealth.pointer.version} before registry resolution`);
-    resolved = { ok: true, sourceRoot: launcherRoot, version: launcherManifest.version, cleanup: null };
+    resolved = { ok: true, sourceRoot: launcherRoot, version: launcherManifest.version, cleanup: null, source: { kind: 'launcher', path: launcherRoot, version: launcherManifest.version } };
   } else {
     resolved = resolveUpdateCandidate({ candidate: explicitCandidate, spec, home, log, runner });
   }
@@ -3139,7 +3182,7 @@ async function npxUpdateInner({ home, log, sourceRoot, candidate, spec, installe
       log(`- updating managed payload ${health.pointer.version} -> ${manifest.version}`);
     }
 
-    const staged = stageCandidatePayload({ sourceRoot: resolved.sourceRoot, home, log, npmInstaller });
+    const staged = stageCandidatePayload({ sourceRoot: resolved.sourceRoot, home, log, npmInstaller, source: resolved.source });
     if (!staged.ok) {
       log(`✗ staging failed (${staged.code})${staged.detail ? `: ${Array.isArray(staged.detail) ? staged.detail.join('; ') : String(staged.detail)}` : ''}`);
       return { ok: false, error: `staging failed (${staged.code})` };

@@ -13,6 +13,15 @@ function runtimeManifest(manifest) {
   delete normalized.devDependencies;
   delete normalized.peerDependencies;
   delete normalized.peerDependenciesMeta;
+  // The install-form record is bookkeeping about the manifest, not a property of
+  // the shipped files: normalize it away so one payload keeps one digest before
+  // and after the CLI rewrite. Without this, `samePayloadContent` would report
+  // every rewritten payload as changed and the same-version repair path would
+  // never be reachable again.
+  if (normalized.dshCrew && typeof normalized.dshCrew === 'object') {
+    const { payloadRewrite, ...rest } = normalized.dshCrew;
+    normalized.dshCrew = rest;
+  }
   return canonical(normalized);
 }
 

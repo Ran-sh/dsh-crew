@@ -14,21 +14,35 @@ export function isDshCohortPackage(name) {
   return name === DSH_CLI_PACKAGE || name.startsWith(`${DSH_CLI_PACKAGE}-`);
 }
 
-// The packages a persisted Crew payload vendors, at TARGET_DSH_VERSION.
+// WHAT THIS LIST IS: the names a persisted Crew payload pins to
+// TARGET_DSH_VERSION when the plugin declares them. It is the payload's cohort
+// authority, and it answers one question — "which exact version does this
+// package resolve to inside a release?"
 //
-// This list — not `package.json`'s DSH peer keys — decides what the standalone
-// payload installs. The two answer different questions: a peer key declares
-// which hosts will load the plugin, so it carries a RANGE that a host gate
-// compares against the running version, while a released payload must resolve
-// ONE exact cohort, because a half-upgraded tree is the failure it exists to
-// prevent. Reading the payload cohort out of the peer block conflated them, so
-// widening a peer range silently unlocked the cohort: nothing stayed pinned,
-// `exactSpecOverrides` produced no overrides, and npm materialized the newest
-// matching release instead of the one the embedded runtime runs.
+// WHAT IT IS NOT: an inventory of everything that must exist at run time. The
+// runtime tree is a cohort of its own, and `src/dsh-cli-runtime.mjs` judges it
+// dynamically — it walks every installed @deepseek-ai/dsh* copy and compares it
+// against TARGET_DSH_VERSION, so a member it was never told about still fails
+// the reuse gate instead of drifting silently. Adding a name here does not make
+// the runtime install it; removing one does not excuse it from that judgement.
 //
-// Names here are the cohort of TARGET_DSH_VERSION. A package that exists only
-// in a later cohort (a rename, for example) belongs in the peer block for that
-// host and must NOT be added here until TARGET_DSH_VERSION moves with it.
+// Two boundary cases, recorded so they are not re-litigated:
+//   * @deepseek-ai/dsh-base and @deepseek-ai/dsh-web-app are PROFILE BUNDLES,
+//     named by CREW_PROFILE_DEFAULT_BUNDLES in src/dsh-cli-runtime.mjs. They
+//     belong to the runtime tree the profile composes, not to this plugin's
+//     peer set, so they are correctly absent here. A payload never vendors them.
+//   * @deepseek-ai/dsh-agent-presets is listed but currently inert: nothing in
+//     package.json declares it, and only a declared name is pinned. It stays
+//     because it is the 0.1.6-alpha.1 provider of the `agentPresets` service this
+//     plugin resolves, and because its name dies at 0.1.7 — a host that needs the
+//     provider must not get it from the peer block, so the only way it can ever
+//     be pinned to the runtime cohort is from this list.
+//
+// The list is authoritative wherever a member is declared: a peer range and an
+// explicit dependency both resolve to TARGET_DSH_VERSION in the staged payload.
+// A package that exists only in a later cohort — a rename, for example — belongs
+// in the peer block for that host and must NOT be added here until
+// TARGET_DSH_VERSION moves with it.
 export const DSH_COHORT_PACKAGES = Object.freeze([
   DSH_CLI_PACKAGE,
   '@deepseek-ai/dsh-agent',

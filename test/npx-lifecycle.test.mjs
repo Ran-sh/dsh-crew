@@ -60,6 +60,7 @@ import {
   collectExternalSpecifiers,
   exactSpecOverrides,
 } from '../src/install/npx-lifecycle.mjs';
+import { samePayloadContent } from '../src/install/payload-content.mjs';
 // Rendered by both install entries, so it lives with the install that produces
 // the result rather than with either caller.
 import { claudeIntegrationLine, crewDshHome } from '../src/install/install.mjs';
@@ -236,7 +237,10 @@ test('package exposes exactly one natural CLI executable backed by an existing s
 test('package, runtime identity, and changelog identify candidate 2.2.15', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.version, '2.2.15');
-  assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1 });
+  assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1, payloadRewrite: { schema: 1, rewritten: false } });
+  // The published form says so out loud, so a user pasting their package.json
+  // into a bug report names the shape instead of leaving it to be inferred.
+  assert.equal(manifest.dshCrew.payloadRewrite.rewritten, false);
   assert.equal(RUNTIME_VERSION, '2.2.15');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
@@ -357,7 +361,48 @@ test('copyProductionDependencyTree reports unresolved roots as missing', async (
 
 // ---------- staging / validation ----------
 
-test('staged payload strips peer/dev declarations, ships files, and validates from its own location', async () => {
+test('staging records which form a manifest is and where the candidate came from', async () => {
+  const t = tempHome();
+  try {
+    const sourceRoot = makeCandidate(t.dir);
+    // Declare the optional marker locally: the shared fixture must keep its peer
+    // REQUIRED, because another test asserts that a required host peer which
+    // cannot be materialized fails staging rather than degrading to a warning.
+    const manifestPath = join(sourceRoot, 'package.json');
+    const sourceManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    sourceManifest.peerDependenciesMeta = { '@ran-fake/host-peer': { optional: true } };
+    writeFileSync(manifestPath, JSON.stringify(sourceManifest, null, 2) + '\n');
+    const staged = stageCandidatePayload({
+      sourceRoot,
+      home: t.dir,
+      source: { kind: 'registry', spec: '@ran-sh/dsh-crew@latest', integrity: 'sha512-test-integrity', file: 'ran-sh-dsh-crew-0.3.3.tgz' },
+    });
+    assert.equal(staged.ok, true, 'staging failed: ' + JSON.stringify(staged));
+    const stagedManifest = JSON.parse(readFileSync(join(staged.stageDir, 'package.json'), 'utf8'));
+    const record = stagedManifest.dshCrew.payloadRewrite;
+    assert.deepEqual(stagedManifest.peerDependencies, { '@ran-fake/host-peer': '^9.0.0' });
+    assert.equal(stagedManifest.peerDependenciesMeta?.['@ran-fake/host-peer']?.optional, true, 'the optional marker travels with the declaration');
+    assert.equal(stagedManifest.devDependencies, undefined, 'dev declarations are not a payload input');
+    assert.equal(record.schema, 1);
+    assert.equal(record.rewritten, true);
+    assert.equal(record.source.kind, 'registry');
+    assert.equal(record.source.spec, '@ran-sh/dsh-crew@latest');
+    assert.equal(record.source.integrity, 'sha512-test-integrity');
+    assert.equal(record.source.file, 'ran-sh-dsh-crew-0.3.3.tgz');
+    assert.equal(record.targetDshVersion, '0.1.6-alpha.1');
+    assert.match(record.rewrittenAt, /^\d{4}-\d{2}-\d{2}T/, 'the rewrite time is recorded');
+    // A digest is a property of the shipped files, not of install bookkeeping,
+    // so the rewrite record must not move `samePayloadContent`.
+    const copy = join(t.dir, 'copy');
+    cpSync(staged.stageDir, copy, { recursive: true });
+    const copyManifest = JSON.parse(readFileSync(join(copy, 'package.json'), 'utf8'));
+    copyManifest.dshCrew.payloadRewrite = { schema: 1, rewritten: false };
+    writeFileSync(join(copy, 'package.json'), JSON.stringify(copyManifest, null, 2) + '\n');
+    assert.equal(samePayloadContent(staged.stageDir, copy), true, 'the rewrite record is outside the payload digest');
+  } finally { t.cleanup(); }
+});
+
+test('staged payload keeps the host peer declaration, strips dev declarations, ships files, and validates from its own location', async () => {
   const t = tempHome();
   try {
     const sourceRoot = makeCandidate(t.dir);
@@ -366,9 +411,20 @@ test('staged payload strips peer/dev declarations, ships files, and validates fr
     const stageManifest = JSON.parse(readFileSync(join(staged.stageDir, 'package.json'), 'utf8'));
     assert.equal(stageManifest.name, PKG_NAME);
     assert.equal(stageManifest.version, '0.3.3');
-    assert.equal(stageManifest.peerDependencies, undefined);
+    // The host gate returns undefined the moment a manifest has no
+    // `peerDependencies` key (`if (!Object.hasOwn(fields, "peerDependencies"))
+    // return void 0`), so an installed payload that dropped the declaration would
+    // silently stop being checked against the host it is mounting into.
+    assert.equal(Object.hasOwn(stageManifest, 'peerDependencies'), true, 'the host peer declaration must survive staging');
+    assert.deepEqual(stageManifest.peerDependencies, { '@ran-fake/host-peer': '^9.0.0' });
     assert.equal(stageManifest.devDependencies, undefined);
     assert.deepEqual(Object.keys(stageManifest.dependencies ?? {}).sort(), ['@ran-fake/host-peer', '@ran-fake/sdk', 'fake-zod']);
+    // Identity fields the payload lifecycle reads must survive the rewrite too.
+    assert.equal(stageManifest.dshCrew.payloadSchema, 2);
+    assert.equal(stageManifest.dshCrew.windowsSupervisorHandoff, 1);
+    assert.equal(stageManifest.dshCrew.payloadRewrite.rewritten, true);
+    assert.equal(stageManifest.dshCrew.payloadRewrite.targetDshVersion, '0.1.6-alpha.1');
+    assert.equal(stageManifest.dshCrew.payloadRewrite.source.kind, 'unknown', 'a caller that names no source is recorded as unknown, never guessed');
     for (const rel of ['cordis.patch.yml', 'src/server.mjs', 'src/hub/entry.mjs', 'lib/client.js', 'bin/dsh-crew.mjs', 'codex/agents/ds-worker.toml', '.claude-plugin/marketplace.json']) {
       assert.equal(existsSync(join(staged.stageDir, rel)), true, `${rel} must be staged`);
     }
