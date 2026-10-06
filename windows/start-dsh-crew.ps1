@@ -145,6 +145,60 @@ function Rotate-LaunchLog {
   } catch { }
 }
 
+# A Crew-launched Harness process resolves its `env:` credential references from
+# its own environment, and the launcher does not only run from a logon session.
+# A terminal, a scheduled task, or an automation/agent shell can start it with a
+# narrow environment, and then the Hub boots and answers every health check while
+# its first job fails with CREDENTIAL_MISSING — the failure arrives long after the
+# launch that caused it. The operator's persisted user scope is merged back in
+# before any Harness process starts, which is what a logon start already had.
+#
+# Only names this process does not define are added, so a logon launch is
+# unchanged and an explicitly exported value always wins over the registry. The
+# skip list is what must not be taken from the user scope alone: its Path is one
+# fragment of a real logon PATH (machine scope contributes the rest), and the rest
+# describe the running process rather than the operator's profile.
+$persistedEnvironmentSkip = @('Path', 'PATHEXT', 'ComSpec', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'PSModulePath')
+
+function Get-PersistedUserEnvironment {
+  $values = @{}
+  try {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+    if ($key) {
+      try {
+        foreach ($name in $key.GetValueNames()) {
+          if ([string]::IsNullOrWhiteSpace($name)) { continue }
+          # GetValue expands REG_EXPAND_SZ, which is what a logon session sees.
+          $values[$name] = [string] $key.GetValue($name)
+        }
+      } finally { $key.Dispose() }
+    }
+  } catch { }
+  return $values
+}
+
+function Import-PersistedUserEnvironment {
+  $added = @()
+  $persisted = Get-PersistedUserEnvironment
+  if (-not $persisted) { return $added }
+  foreach ($entry in $persisted.GetEnumerator()) {
+    $name = [string] $entry.Key
+    if (-not $name) { continue }
+    if ($persistedEnvironmentSkip -contains $name) { continue }
+    if ($null -ne [Environment]::GetEnvironmentVariable($name, 'Process')) { continue }
+    [Environment]::SetEnvironmentVariable($name, [string] $entry.Value, 'Process')
+    $added += $name
+  }
+  return $added
+}
+
+function Remove-ImportedUserEnvironment {
+  param([string[]] $Names)
+  foreach ($name in @($Names)) {
+    if ($name) { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
+  }
+}
+
 function Resolve-OfficialHarnessCommand {
   $shim = Get-Command dsh.cmd -CommandType Application -ErrorAction Stop | Select-Object -First 1
   $root = Join-Path (Split-Path -Parent $shim.Source) 'node_modules\@deepseek-ai\dsh'
@@ -487,14 +541,19 @@ function Open-OfficialFrontend {
     $stdout = Join-Path $logRoot ('dsh-official-web-{0}.out.log' -f $stamp)
     $stderr = Join-Path $logRoot ('dsh-official-web-{0}.err.log' -f $stamp)
     $previousHome = $env:DSH_HOME
+    $importedEnvironment = @()
     try {
       # The official application owns its normal state; no Crew plugin/profile
       # registration or repair is performed in this home by the launcher.
       $env:DSH_HOME = Join-Path $env:USERPROFILE '.dsh'
+      $importedEnvironment = Import-PersistedUserEnvironment
       $arguments = @(('"{0}"' -f $official.Entry), 'web', '--patch', ('"{0}"' -f $frontend.Path), '--host', '127.0.0.1', '--port', '3080')
       $process = Start-Process -FilePath $official.NodePath -ArgumentList $arguments -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    } finally { $env:DSH_HOME = $previousHome }
+    } finally {
+      $env:DSH_HOME = $previousHome
+      Remove-ImportedUserEnvironment -Names $importedEnvironment
+    }
     Write-LaunchLog ('Started official Harness on 3080; PID={0}. The official CLI opens the browser. Logs: {1}, {2}' -f $process.Id, $stdout, $stderr)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $nextProgress = (Get-Date).AddSeconds(5)
@@ -1306,8 +1365,10 @@ function Start-CrewService {
   $stdout = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.out.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
   $stderr = Join-Path $logRoot ('dsh-crew-{0}-{1}-{2}.err.log' -f $Service.Profile, $Service.Port, $serviceRunStamp)
   $previousHome = $env:DSH_HOME
+  $importedEnvironment = @()
   try {
     $env:DSH_HOME = $Service.Home
+    $importedEnvironment = Import-PersistedUserEnvironment
     $arguments = @('--profile', $Service.Profile, '--host', '127.0.0.1', '--port', [string] $Service.Port, '--no-open')
     $launchArguments = if ($dshCliIsNodeEntry) { @($dshCli) + $arguments } else { $arguments }
     $process = Start-Process -FilePath $dshCommand -ArgumentList $launchArguments -WindowStyle Hidden -PassThru `
@@ -1326,6 +1387,7 @@ function Start-CrewService {
     Write-LaunchLog ('Started {0} on port {1}; PID={2}; stdout={3}; stderr={4}' -f $Service.Profile, $Service.Port, $process.Id, $stdout, $stderr)
   } finally {
     $env:DSH_HOME = $previousHome
+    Remove-ImportedUserEnvironment -Names $importedEnvironment
   }
 }
 

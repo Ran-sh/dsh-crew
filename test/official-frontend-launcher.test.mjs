@@ -22,6 +22,7 @@ function launchScenario(initial, trusted = true) {
     `function Test-OfficialHarnessListener { param($OwnerPid,$Official) return $${trusted} }`,
     'function Test-OfficialWebReady { return $true }',
     'function Write-LaunchLog { param($Message,$Level) }',
+    'function Get-PersistedUserEnvironment { return @{} }',
     "function Start-Process { param($FilePath,$ArgumentList,$WindowStyle,[switch]$PassThru,$RedirectStandardOutput,$RedirectStandardError) $script:calls += [pscustomobject]@{file=$FilePath;args=$ArgumentList;style=$WindowStyle;dshHome=$env:DSH_HOME}; $script:occupied=$true; return [pscustomobject]@{Id=123;HasExited=$false} }",
     "$env:DSH_HOME='C:\\crew-home'",
     '$failed=$false; try { Open-OfficialFrontend -TimeoutSeconds 1 } catch { $failed=$true }',
