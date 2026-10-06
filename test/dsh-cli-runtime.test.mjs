@@ -111,6 +111,35 @@ test('ensureCrewDshRuntime installs only under the Crew home and is reusable', (
   } finally { t.cleanup(); }
 });
 
+// The installer runs from inside a DSH session as often as from a plain shell,
+// and there the ambient DSH_HOME is the official ~/.dsh. Injecting it makes the
+// assertion below mean something: asserting on an inherited environment only
+// proves anything on a machine that happens to export it, so a revert of the
+// scrub would leave CI green while an operator's install was pointed at the
+// official tree.
+test('the runtime install drops an inherited DSH_HOME before invoking the package manager', () => {
+  const t = tempHome();
+  try {
+    let invocation;
+    const result = ensureCrewDshRuntime({
+      home: t.dir,
+      env: { ...process.env, DSH_HOME: join(t.dir, 'official-dsh') },
+      findCommand: (name) => name === 'npm' ? 'npm' : null,
+      runner: (command, args, options) => {
+        invocation = { command, args, options };
+        const entry = crewDshRuntimeModule({ home: t.dir });
+        mkdirSync(join(entry, '..'), { recursive: true });
+        writeFileSync(entry, '// test entry\n');
+        writeFileSync(join(entry, '..', '..', 'package.json'), JSON.stringify({ name: DSH_CLI_PACKAGE, version: TARGET_DSH_VERSION }));
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(invocation.options.env.DSH_HOME, undefined);
+    assert.equal(invocation.args.includes(crewDshRuntimeRoot({ home: t.dir })), true);
+  } finally { t.cleanup(); }
+});
+
 test('ensureCrewDshRuntime refuses to reuse a stale-cohort runtime in place', () => {
   const t = tempHome();
   try {

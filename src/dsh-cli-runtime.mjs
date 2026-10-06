@@ -199,6 +199,23 @@ export function runResolvedDsh(cli, args = [], {
 }
 
 /**
+ * Environment for a package-manager child that installs Crew's own runtime.
+ *
+ * `--prefix`/`--dir` already pin the destination and scripts are disabled, so the
+ * child cannot be redirected by a variable — but it must not be *told* about the
+ * official Harness home either. Crew's installer is routinely run from inside a
+ * DSH session, whose ambient `DSH_HOME` is `~/.dsh`, and the contract these two
+ * installers carry is "installs only under the Crew home". Dropping the variable
+ * keeps that true by construction instead of by caller discipline, which is what
+ * the unit contract asserts and what an operator shell can silently break.
+ */
+function packageManagerEnv(env) {
+  const child = { ...env };
+  delete child.DSH_HOME;
+  return child;
+}
+
+/**
  * Install a reusable DSH CLI into Crew-owned state. This is the only helper
  * that may invoke a package manager, and callers must explicitly opt into it.
  *
@@ -266,11 +283,12 @@ export function ensureCrewDshRuntime({
     ? ['add', '--dir', runtimeRoot, '--ignore-scripts', packageSpec]
     : ['install', '--prefix', runtimeRoot, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
   const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const installEnv = packageManagerEnv(env);
   const runInstall = () => runner(invocation.command, invocation.args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: invocation.shell,
-    env: { ...env },
+    env: installEnv,
   });
   const result = runInstall();
   const cli = resolveDshCli({ home, env, platform, exists, findCommand, includeCompatibility: false, read });
@@ -457,11 +475,12 @@ export function installDshInto({
     ? ['add', '--dir', root, '--ignore-scripts', packageSpec]
     : ['install', '--prefix', root, '--no-package-lock', '--ignore-scripts', '--omit=dev', packageSpec];
   const invocation = buildDshInvocation(packageManager, packageArgs, { platform, comspec });
+  const installEnv = packageManagerEnv(env);
   const runInstall = () => runner(invocation.command, invocation.args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: invocation.shell,
-    env: { ...env },
+    env: installEnv,
   });
   const result = runInstall();
   if (result.status !== 0) {
