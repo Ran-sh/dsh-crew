@@ -4,6 +4,26 @@
 
 Future changes go here.
 
+## 2.2.17 — 2026-10-06
+
+- **The pinned DSH cohort moves to 0.2.0-rc.2.** The embedded runtime, the
+  vendored payload and the development mirror were all at 0.1.6-alpha.1, five
+  releases behind the registry's `latest`. The target is 0.2.0-rc.2 rather than
+  the newest tag `0.2.1-alpha.1`, which sits on the `alpha` tag with no host
+  running it and no upgrade cards behind it. The edges
+  `0.1.7-rc.1 -> 0.1.7-rc.2` (346 commits) and `0.2.0-rc.1 -> 0.2.0-rc.2` are
+  uncarded, so everything this plugin touches was re-derived from the tag and
+  from the published packages: all 24 cohort names exist at the new cohort
+  except `dsh-agent-presets`, whose live successor
+  `dsh-agent-preset-registry` now holds the cohort-list entry, the dev mirror
+  and a declared peer; every service the plugin resolves is present with the
+  expected provider; and the six `sdk-minimal` rows the worker overlay patches
+  still exist, are still unique, and still accept the overlay's config.
+  Installing this release runs the coordinated payload+runtime migration, and
+  the previous runtime is retained for rollback.
+- **A cohort bump is a one-file change again.** Assertions that restated the
+  cohort version now derive it from `TARGET_DSH_VERSION`, so the next bump does
+  not turn into spurious failures.
 ## 2.2.16 — 2026-10-06
 
 - **The installed manifest keeps its host peer declaration.**
