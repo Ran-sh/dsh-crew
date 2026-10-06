@@ -4,6 +4,22 @@
 
 Future changes go here.
 
+## 2.2.18 — 2026-10-06
+
+- **The runtime installer no longer hands the official Harness home to the
+  package manager.** `ensureCrewDshRuntime` and `installDshInto` built their
+  child environment with `{ ...env }`, so running an install from a DSH
+  session — whose ambient `DSH_HOME` is `~/.dsh` — forwarded that path to
+  npm/pnpm. `--prefix`/`--dir` and `--ignore-scripts` already made the
+  install harmless in practice, but "installs only under the Crew home" is the
+  installer's contract and it was held by caller discipline alone. The variable
+  is dropped now, which is also what let the unit contract go red in exactly the
+  environment Crew is developed in: CI never exports `DSH_HOME`, so the
+  assertion passed there for the wrong reason.
+- **The scrub is guarded by a test that injects `DSH_HOME` explicitly.**
+  Asserting on an inherited variable only proves something on a machine that
+  exports it.
+
 ## 2.2.17 — 2026-10-06
 
 - **The pinned DSH cohort moves to 0.2.0-rc.2.** The embedded runtime, the
