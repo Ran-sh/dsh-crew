@@ -235,14 +235,14 @@ test('package exposes exactly one natural CLI executable backed by an existing s
   assert.ok((manifest.files ?? []).includes('bin'), 'files must ship bin/');
 });
 
-test('package, runtime identity, and changelog identify candidate 2.2.18', async () => {
+test('package, runtime identity, and changelog identify candidate 2.2.19', async () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
-  assert.equal(manifest.version, '2.2.18');
+  assert.equal(manifest.version, '2.2.19');
   assert.deepEqual(manifest.dshCrew, { payloadSchema: 2, windowsSupervisorHandoff: 1, payloadRewrite: { schema: 1, rewritten: false } });
   // The published form says so out loud, so a user pasting their package.json
   // into a bug report names the shape instead of leaving it to be inferred.
   assert.equal(manifest.dshCrew.payloadRewrite.rewritten, false);
-  assert.equal(RUNTIME_VERSION, '2.2.18');
+  assert.equal(RUNTIME_VERSION, '2.2.19');
   const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, new RegExp(`^## ${manifest.version.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')} —`, 'm'));
 });

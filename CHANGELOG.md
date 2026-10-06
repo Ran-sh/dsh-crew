@@ -4,6 +4,26 @@
 
 Future changes go here.
 
+## 2.2.19 — 2026-10-06
+
+- **The launcher gives a Harness process the operator's persisted environment.**
+  The Hub resolves its `env:` credential references from its own environment, and
+  the launcher does not only run from a logon session: a terminal, a scheduled
+  task or an automation shell starts it with a narrow environment, and the Hub
+  then boots, answers every health check, and fails on the first job with
+  `CREDENTIAL_MISSING`. `dsh-crew update` restarts the service through that same
+  path, so an update run from such a context left a Hub that looked healthy while
+  every job it dispatched failed — minutes after the change that caused it. The
+  user scope is now merged in before the 3210 Hub and the 3080 frontend start,
+  adding only names the launch environment does not already define: a logon
+  launch behaves exactly as before, and an explicitly exported value still wins
+  over the registry. The skip list is what must not come from the user scope
+  alone — its `Path` is one fragment of a real logon PATH, and the rest describe
+  the running process rather than the operator's profile.
+- **The merge is pinned by tests that inject the user scope.** One covers the
+  add/skip/restore contract, one proves the service the launcher starts receives
+  the credential while the launcher's own environment is restored afterwards.
+
 ## 2.2.18 — 2026-10-06
 
 - **The runtime installer no longer hands the official Harness home to the
