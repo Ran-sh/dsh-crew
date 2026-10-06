@@ -4,7 +4,9 @@
 
 Future changes go here.
 
-### manifest consistency: the staged payload keeps its host peer declaration
+## 2.2.16 — 2026-10-06
+
+- **The installed manifest keeps its host peer declaration.**
 
 - **The CLI-written manifest no longer drops `peerDependencies`.** The host gate
   opens with `if (!Object.hasOwn(fields, "peerDependencies")) return void 0`, so an
